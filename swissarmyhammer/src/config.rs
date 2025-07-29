@@ -4,6 +4,7 @@
 //! and sensible defaults for all configurable constants throughout the application.
 
 use crate::common::env_loader::EnvLoader;
+use std::time::Duration;
 
 /// Configuration settings for the SwissArmyHammer application
 #[derive(Debug, Clone)]
@@ -34,6 +35,22 @@ pub struct Config {
     pub virtual_issue_number_base: u32,
     /// Virtual issue number range (default: 500_000)
     pub virtual_issue_number_range: u32,
+    /// Timeout for prompt execution in workflow actions (default: 3600 seconds)
+    pub prompt_timeout: Duration,
+    /// Timeout for user input in workflow actions (default: 300 seconds)
+    pub user_input_timeout: Duration,
+    /// Timeout for sub-workflow execution (default: 3600 seconds)
+    pub sub_workflow_timeout: Duration,
+    /// Maximum filename length for issue files (default: 100)
+    pub max_filename_length: usize,
+    /// Maximum workflow complexity for validation (default: 1000)
+    pub max_workflow_complexity: usize,
+    /// Whether to check encoding in validation (default: true)
+    pub check_encoding: bool,
+    /// Whether to check line endings in validation (default: true)
+    pub check_line_endings: bool,
+    /// Whether to check YAML typos in validation (default: true)
+    pub check_yaml_typos: bool,
 }
 
 impl Default for Config {
@@ -52,6 +69,14 @@ impl Default for Config {
             issue_number_digits: 6,
             virtual_issue_number_base: 500_000,
             virtual_issue_number_range: 500_000,
+            prompt_timeout: Duration::from_secs(3600),
+            user_input_timeout: Duration::from_secs(300),
+            sub_workflow_timeout: Duration::from_secs(3600),
+            max_filename_length: 100,
+            max_workflow_complexity: 1000,
+            check_encoding: true,
+            check_line_endings: true,
+            check_yaml_typos: true,
         }
     }
 }
@@ -76,6 +101,16 @@ impl Config {
             issue_number_digits: loader.load_parsed("ISSUE_NUMBER_DIGITS", 6),
             virtual_issue_number_base: loader.load_parsed("VIRTUAL_ISSUE_NUMBER_BASE", 500_000),
             virtual_issue_number_range: loader.load_parsed("VIRTUAL_ISSUE_NUMBER_RANGE", 500_000),
+            prompt_timeout: Duration::from_secs(loader.load_parsed("PROMPT_TIMEOUT", 3600)),
+            user_input_timeout: Duration::from_secs(loader.load_parsed("USER_INPUT_TIMEOUT", 300)),
+            sub_workflow_timeout: Duration::from_secs(
+                loader.load_parsed("SUB_WORKFLOW_TIMEOUT", 3600),
+            ),
+            max_filename_length: loader.load_parsed("MAX_FILENAME_LENGTH", 100),
+            max_workflow_complexity: loader.load_parsed("MAX_WORKFLOW_COMPLEXITY", 1000),
+            check_encoding: loader.load_parsed("CHECK_ENCODING", true),
+            check_line_endings: loader.load_parsed("CHECK_LINE_ENDINGS", true),
+            check_yaml_typos: loader.load_parsed("CHECK_YAML_TYPOS", true),
         }
     }
 

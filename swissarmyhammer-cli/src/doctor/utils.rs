@@ -1,7 +1,7 @@
 //! Utility functions for the doctor module
 
 use super::types::{DiskSpace, WorkflowCategory, WorkflowDirectory, WorkflowDirectoryInfo};
-use anyhow::Result;
+use crate::error::CliResult;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -42,7 +42,7 @@ claude mcp add --scope user  swissarmyhammer /path/to/swissarmyhammer serve"#
 
 /// Check disk space for a given path and return (available, total) as DiskSpace values
 #[cfg(unix)]
-pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
+pub fn check_disk_space(path: &Path) -> CliResult<(DiskSpace, DiskSpace)> {
     use std::process::Command;
 
     // Use df-like approach to check disk space
@@ -52,7 +52,10 @@ pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
         .output()?;
 
     if !output.status.success() {
-        anyhow::bail!("df command failed");
+        return Err(crate::error::CliError::new(
+            "df command failed",
+            crate::exit_codes::EXIT_ERROR,
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -72,12 +75,15 @@ pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
         }
     }
 
-    anyhow::bail!("Failed to parse df output")
+    Err(crate::error::CliError::new(
+        "Failed to parse df output",
+        crate::exit_codes::EXIT_ERROR,
+    ))
 }
 
 /// Check disk space for a given path - Windows/non-Unix implementation
 #[cfg(not(unix))]
-pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
+pub fn check_disk_space(path: &Path) -> CliResult<(DiskSpace, DiskSpace)> {
     #[cfg(windows)]
     {
         // Windows-specific implementation using WinAPI
@@ -94,9 +100,9 @@ pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
             ) -> i32;
         }
 
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("Invalid path encoding"))?;
+        let path_str = path.to_str().ok_or_else(|| {
+            crate::error::CliError::new("Invalid path encoding", crate::exit_codes::EXIT_ERROR)
+        })?;
         let wide: Vec<u16> = OsStr::new(path_str)
             .encode_wide()
             .chain(std::iter::once(0))
@@ -123,7 +129,10 @@ pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
                 DiskSpace::from_mb(total_mb),
             ))
         } else {
-            anyhow::bail!("Failed to get disk space information")
+            return Err(crate::error::CliError::new(
+                "Failed to get disk space information",
+                crate::exit_codes::EXIT_ERROR,
+            ));
         }
     }
 
@@ -136,31 +145,41 @@ pub fn check_disk_space(path: &Path) -> Result<(DiskSpace, DiskSpace)> {
                 // Path exists - return conservative estimates that indicate
                 // we cannot determine actual disk space
                 // Using 0 to indicate unknown rather than misleading values
-                Err(anyhow::anyhow!(
-                    "Disk space checking not implemented for this platform"
+                Err(crate::error::CliError::new(
+                    "Disk space checking not implemented for this platform",
+                    crate::exit_codes::EXIT_ERROR,
                 ))
             }
             Err(e) => {
-                anyhow::bail!("Failed to access path for disk space check: {}", e)
+                return Err(crate::error::CliError::new(
+                    format!("Failed to access path for disk space check: {}", e),
+                    crate::exit_codes::EXIT_ERROR,
+                ));
             }
         }
     }
 }
 
 /// Validate a path doesn't contain directory traversal sequences
-pub fn validate_path_no_traversal(path: &Path) -> Result<()> {
+pub fn validate_path_no_traversal(path: &Path) -> CliResult<()> {
     let path_str = path.to_string_lossy();
 
     // Check for common path traversal patterns
     if path_str.contains("..") || path_str.contains("./") || path_str.contains(".\\") {
-        anyhow::bail!("Path contains potential directory traversal: {:?}", path);
+        return Err(crate::error::CliError::new(
+            format!("Path contains potential directory traversal: {path:?}"),
+            crate::exit_codes::EXIT_ERROR,
+        ));
     }
 
     // Check components for any parent directory references
     for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
-                anyhow::bail!("Path contains parent directory reference: {:?}", path);
+                return Err(crate::error::CliError::new(
+                    format!("Path contains parent directory reference: {path:?}"),
+                    crate::exit_codes::EXIT_ERROR,
+                ));
             }
             std::path::Component::RootDir => {
                 // Allow absolute paths but log them for review

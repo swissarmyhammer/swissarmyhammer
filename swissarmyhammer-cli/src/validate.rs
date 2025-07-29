@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use swissarmyhammer::fs_utils::FileSystemUtils;
 use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationResult,
 };
@@ -150,16 +151,18 @@ impl Validator {
         // Load all workflows using the same logic as flow list
         // In test environments, this may fail due to missing directories, which is acceptable
         let load_result = resolver.load_all_workflows(&mut storage);
-        if load_result.is_err() {
-            // In test environment or when directories don't exist, just return without error
-            // This matches the behavior expected by the test
-            return Ok(());
-        }
-
-        // Get all loaded workflows
-        let workflows = storage
-            .list_workflows()
-            .context("Failed to retrieve loaded workflows from storage")?;
+        
+        // Get all loaded workflows (may be empty if load failed)
+        let workflows = match load_result {
+            Ok(_) => storage
+                .list_workflows()
+                .context("Failed to retrieve loaded workflows from storage")?,
+            Err(_) => {
+                // In test environment or when directories don't exist, continue with empty list
+                // but don't fail - this ensures consistent behavior between validation and flow list
+                Vec::new()
+            }
+        };
 
         // Validate each workflow
         for workflow in workflows {
@@ -219,7 +222,8 @@ impl Validator {
         result.files_checked += 1;
 
         // Read the workflow file
-        let content = match std::fs::read_to_string(workflow_path) {
+        let fs = FileSystemUtils::new();
+        let content = match fs.read_text(workflow_path) {
             Ok(content) => content,
             Err(e) => {
                 result.add_issue(ValidationIssue {
@@ -499,7 +503,8 @@ impl Validator {
         result.files_checked += 1;
 
         // Read the workflow file
-        let content = match std::fs::read_to_string(workflow_path) {
+        let fs = FileSystemUtils::new();
+        let content = match fs.read_text(workflow_path) {
             Ok(content) => content,
             Err(e) => {
                 result.add_issue(ValidationIssue {

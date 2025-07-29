@@ -1,4 +1,3 @@
-use anyhow::Result;
 use colored::*;
 use is_terminal::IsTerminal;
 use std::io;
@@ -8,6 +7,7 @@ use tabled::{
 };
 
 use crate::cli::{OutputFormat, PromptSource, PromptSourceArg, SearchCommands};
+use crate::error::CliResult;
 use swissarmyhammer::{
     prelude::{AdvancedSearchEngine, AdvancedSearchOptions},
     search::{FileIndexer, SearchQuery, SemanticConfig, SemanticSearcher, VectorStorage},
@@ -64,7 +64,7 @@ pub fn run_search_command(
     format: OutputFormat,
     highlight: bool,
     limit: Option<usize>,
-) -> Result<()> {
+) -> CliResult<()> {
     // Load all prompts from all sources
     let mut library = PromptLibrary::new();
     let mut resolver = PromptResolver::new();
@@ -166,7 +166,7 @@ pub fn run_search_command(
     Ok(())
 }
 
-fn display_table(results: &[SearchResult], full: bool) -> Result<()> {
+fn display_table(results: &[SearchResult], full: bool) -> CliResult<()> {
     if results.is_empty() {
         println!("No prompts found matching the search criteria.");
         return Ok(());
@@ -298,12 +298,13 @@ pub async fn run_search(subcommand: SearchCommands) -> i32 {
 }
 
 /// Run semantic indexing for the given patterns (globs or individual files)
-async fn run_semantic_index(patterns: &[String], force: bool) -> Result<()> {
+async fn run_semantic_index(patterns: &[String], force: bool) -> CliResult<()> {
     println!("{}", "🔍 Starting semantic search indexing...".cyan());
 
     if patterns.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No patterns or files provided for indexing. Please specify one or more glob patterns (like '**/*.rs') or file paths."
+        return Err(crate::error::CliError::new(
+            "No patterns or files provided for indexing. Please specify one or more glob patterns (like '**/*.rs') or file paths.",
+            crate::exit_codes::EXIT_ERROR
         ));
     }
 
@@ -371,7 +372,7 @@ async fn run_semantic_index(patterns: &[String], force: bool) -> Result<()> {
 }
 
 /// Run semantic query search
-async fn run_semantic_query(query: &str, limit: usize) -> Result<()> {
+async fn run_semantic_query(query: &str, limit: usize) -> CliResult<()> {
     println!("{}", "🔍 Starting semantic search query...".cyan());
     println!("Searching for: {}", query.bright_yellow());
     println!("Result limit: {}", limit.to_string().bright_yellow());

@@ -1,8 +1,9 @@
+use crate::error::CliResult;
 use tokio::signal;
 use tracing::info;
 
 #[allow(dead_code)]
-pub async fn setup_signal_handlers() -> anyhow::Result<()> {
+pub async fn setup_signal_handlers() -> CliResult<()> {
     tokio::spawn(async {
         let ctrl_c = async {
             signal::ctrl_c()

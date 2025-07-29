@@ -2,7 +2,7 @@
 
 use super::types::*;
 use super::utils::*;
-use anyhow::Result;
+use crate::error::CliResult;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ pub mod format_strings {
 /// - Binary version and build type
 /// - Execute permissions on Unix systems
 /// - Binary naming conventions
-pub fn check_installation(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_installation(checks: &mut Vec<Check>) -> CliResult<()> {
     // Check if running from cargo install vs standalone binary
     let current_exe = env::current_exe().unwrap_or_default();
     let exe_path = current_exe.to_string_lossy();
@@ -139,7 +139,7 @@ pub fn check_installation(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// Searches the system PATH for the swissarmyhammer executable
 /// and reports its location if found.
-pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_in_path(checks: &mut Vec<Check>) -> CliResult<()> {
     let path_var = env::var("PATH").unwrap_or_default();
     let paths: Vec<std::path::PathBuf> = env::split_paths(&path_var).collect();
 
@@ -185,7 +185,7 @@ pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// Verifies that swissarmyhammer is properly configured as an MCP server
 /// in Claude Code by running `claude mcp list` and checking the output.
-pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_claude_config(checks: &mut Vec<Check>) -> CliResult<()> {
     use std::process::Command;
 
     // First, manually check if claude is in PATH
@@ -294,7 +294,7 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
 /// - Built-in prompts (embedded in binary)
 /// - User prompts directory (~/.swissarmyhammer/prompts)
 /// - Local prompts directory (./.swissarmyhammer/prompts)
-pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_prompt_directories(checks: &mut Vec<Check>) -> CliResult<()> {
     // Check builtin prompts (embedded in binary)
     checks.push(Check {
         name: check_names::BUILTIN_PROMPTS.to_string(),
@@ -356,7 +356,7 @@ pub fn check_prompt_directories(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// Scans all markdown files in prompt directories and validates
 /// their YAML front matter for syntax errors.
-pub fn check_yaml_parsing(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_yaml_parsing(checks: &mut Vec<Check>) -> CliResult<()> {
     let mut yaml_errors = Vec::new();
 
     // Check all prompt directories
@@ -427,7 +427,7 @@ pub fn check_yaml_parsing(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// Verifies that the current directory is readable, which is
 /// essential for SwissArmyHammer operations.
-pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_file_permissions(checks: &mut Vec<Check>) -> CliResult<()> {
     // For now, just check that we can read the current directory
     match std::env::current_dir() {
         Ok(cwd) => {
@@ -457,7 +457,7 @@ pub fn check_file_permissions(checks: &mut Vec<Check>) -> Result<()> {
 /// - User workflows (~/.swissarmyhammer/workflows)
 /// - Local workflows (./.swissarmyhammer/workflows)
 /// - Run storage directory (~/.swissarmyhammer/runs)
-pub fn check_workflow_directories(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_workflow_directories(checks: &mut Vec<Check>) -> CliResult<()> {
     // Check workflow directories
     for dir_info in get_workflow_directories() {
         if dir_info.path.path().exists() {
@@ -509,7 +509,7 @@ pub fn check_workflow_directories(checks: &mut Vec<Check>) -> Result<()> {
 /// Ensures all workflow directories have appropriate read/write
 /// permissions for the current user. On Unix systems, checks for
 /// 700 (rwx------) permissions.
-pub fn check_workflow_permissions(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_workflow_permissions(checks: &mut Vec<Check>) -> CliResult<()> {
     let mut dirs_to_check = Vec::new();
 
     // Add workflow directories
@@ -608,7 +608,7 @@ pub fn check_workflow_permissions(checks: &mut Vec<Check>) -> Result<()> {
 ///
 /// Scans all .mermaid files in workflow directories and verifies
 /// they are readable and not empty.
-pub fn check_workflow_parsing(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_workflow_parsing(checks: &mut Vec<Check>) -> CliResult<()> {
     let mut workflow_errors = Vec::new();
 
     for dir_info in get_workflow_directories() {
@@ -678,7 +678,7 @@ pub fn check_workflow_parsing(checks: &mut Vec<Check>) -> Result<()> {
 /// - Exists and is accessible
 /// - Has write permissions
 /// - Has adequate disk space
-pub fn check_workflow_run_storage(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_workflow_run_storage(checks: &mut Vec<Check>) -> CliResult<()> {
     if let Some(home) = dirs::home_dir() {
         let run_storage = home.join(SWISSARMYHAMMER_DIR).join("runs");
 
@@ -699,7 +699,7 @@ pub fn check_workflow_run_storage(checks: &mut Vec<Check>) -> Result<()> {
 }
 
 /// Check if workflow run storage is writable
-fn check_run_storage_write_access(checks: &mut Vec<Check>, run_storage: &Path) -> Result<()> {
+fn check_run_storage_write_access(checks: &mut Vec<Check>, run_storage: &Path) -> CliResult<()> {
     let test_file = run_storage.join(".doctor_test");
     match fs::write(&test_file, "test") {
         Ok(_) => {
@@ -728,7 +728,7 @@ fn check_run_storage_write_access(checks: &mut Vec<Check>, run_storage: &Path) -
 }
 
 /// Check available disk space for workflow run storage
-fn check_run_storage_disk_space(checks: &mut Vec<Check>, run_storage: &Path) -> Result<()> {
+fn check_run_storage_disk_space(checks: &mut Vec<Check>, run_storage: &Path) -> CliResult<()> {
     match check_disk_space(run_storage) {
         Ok((available, _)) => {
             if available.is_low(LOW_DISK_SPACE_MB) {
@@ -767,7 +767,7 @@ fn check_run_storage_disk_space(checks: &mut Vec<Check>, run_storage: &Path) -> 
 /// Detects potential issues in the workflow system:
 /// - Name conflicts (same workflow name in multiple locations)
 /// - Circular dependencies (requires runtime analysis)
-pub fn check_workflow_dependencies(checks: &mut Vec<Check>) -> Result<()> {
+pub fn check_workflow_dependencies(checks: &mut Vec<Check>) -> CliResult<()> {
     let workflow_names = collect_workflow_names()?;
     check_name_conflicts(checks, &workflow_names);
     check_circular_dependencies(checks);
@@ -775,7 +775,7 @@ pub fn check_workflow_dependencies(checks: &mut Vec<Check>) -> Result<()> {
 }
 
 /// Collect all workflow names and their locations
-fn collect_workflow_names() -> Result<std::collections::HashMap<String, Vec<PathBuf>>> {
+fn collect_workflow_names() -> CliResult<std::collections::HashMap<String, Vec<PathBuf>>> {
     use std::collections::HashMap;
 
     let mut workflow_names = HashMap::new();

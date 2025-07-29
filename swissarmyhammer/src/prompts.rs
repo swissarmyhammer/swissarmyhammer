@@ -27,6 +27,7 @@
 //! assert_eq!(result, "Hello World!");
 //! ```
 
+use crate::fs_utils::FileSystemUtils;
 use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::{Result, SwissArmyHammerError, Template};
 use serde::{Deserialize, Serialize};
@@ -1288,7 +1289,8 @@ impl PromptLoader {
 
     /// Load a single prompt file with base path for relative naming
     fn load_file_with_base(&self, path: &Path, base_path: &Path) -> Result<Prompt> {
-        let content = std::fs::read_to_string(path)?;
+        let fs = FileSystemUtils::new();
+        let content = fs.read_text(path)?;
 
         let (metadata, template) = Self::parse_front_matter(&content)?;
 

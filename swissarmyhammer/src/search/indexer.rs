@@ -1,5 +1,6 @@
 //! File indexing logic for semantic search
 
+use crate::fs_utils::FileSystemUtils;
 use crate::search::{
     CodeChunk, CodeParser, EmbeddingEngine, FileChangeTracker, FileHasher, FileId, IndexedFile,
     ParserConfig, Result, SemanticError, VectorStorage,
@@ -349,9 +350,10 @@ impl FileIndexer {
 
         // Parse file into chunks with timing
         let read_start = std::time::Instant::now();
-        let content = std::fs::read_to_string(file_path).map_err(|e| {
+        let fs_utils = FileSystemUtils::new();
+        let content = fs_utils.read_text(file_path).map_err(|e| {
             SemanticError::FileSystem(std::io::Error::new(
-                e.kind(),
+                std::io::ErrorKind::Other,
                 format!(
                     "Failed to read content from file {}: {e}",
                     file_path.display()

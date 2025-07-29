@@ -27,7 +27,7 @@
 //! - 1: Some warnings detected
 //! - 2: Errors detected
 
-use anyhow::Result;
+use crate::error::CliResult;
 use colored::*;
 
 // Re-export types from submodules
@@ -65,7 +65,7 @@ impl Doctor {
     /// - 0: All checks passed
     /// - 1: Warnings detected
     /// - 2: Errors detected
-    pub fn run_diagnostics(&mut self) -> Result<i32> {
+    pub fn run_diagnostics(&mut self) -> CliResult<i32> {
         println!("{}", "🔨 SwissArmyHammer Doctor".bold().blue());
         println!("{}", "Running diagnostics...".dimmed());
         println!();
@@ -84,7 +84,7 @@ impl Doctor {
     }
 
     /// Run system checks
-    fn run_system_checks(&mut self) -> Result<()> {
+    fn run_system_checks(&mut self) -> CliResult<()> {
         checks::check_installation(&mut self.checks)?;
         checks::check_in_path(&mut self.checks)?;
         checks::check_file_permissions(&mut self.checks)?;
@@ -92,20 +92,20 @@ impl Doctor {
     }
 
     /// Run configuration checks
-    fn run_configuration_checks(&mut self) -> Result<()> {
+    fn run_configuration_checks(&mut self) -> CliResult<()> {
         checks::check_claude_config(&mut self.checks)?;
         Ok(())
     }
 
     /// Run prompt checks
-    fn run_prompt_checks(&mut self) -> Result<()> {
+    fn run_prompt_checks(&mut self) -> CliResult<()> {
         checks::check_prompt_directories(&mut self.checks)?;
         checks::check_yaml_parsing(&mut self.checks)?;
         Ok(())
     }
 
     /// Run workflow checks
-    fn run_workflow_checks(&mut self) -> Result<()> {
+    fn run_workflow_checks(&mut self) -> CliResult<()> {
         checks::check_workflow_directories(&mut self.checks)?;
         checks::check_workflow_permissions(&mut self.checks)?;
         checks::check_workflow_parsing(&mut self.checks)?;

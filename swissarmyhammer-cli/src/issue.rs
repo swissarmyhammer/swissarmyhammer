@@ -1,6 +1,7 @@
 use crate::cli::IssueCommands;
 use colored::*;
 use std::io::{self, Read};
+use swissarmyhammer::fs_utils::FileSystemUtils;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 
@@ -437,7 +438,8 @@ fn get_content_from_args(
             }
         }
         (None, Some(path)) => {
-            let content = std::fs::read_to_string(path)?;
+            let fs = FileSystemUtils::new();
+            let content = fs.read_text(&path)?;
             Ok(content.trim().to_string())
         }
         (Some(_), Some(_)) => Err("Cannot specify both --content and --file options".into()),

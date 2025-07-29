@@ -30,7 +30,6 @@ impl CliError {
     }
 
     /// Create a CLI error from a SwissArmyHammer error, with proper exit code handling for abort errors
-    #[allow(dead_code)]
     pub fn from_swissarmyhammer_error(error: swissarmyhammer::SwissArmyHammerError) -> Self {
         // Check if this is an abort error by examining the error message
         let error_msg = error.to_string();
@@ -62,6 +61,43 @@ impl CliError {
         }
 
         result
+    }
+}
+
+/// Automatically convert SwissArmyHammer errors to CLI errors
+impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
+    fn from(error: swissarmyhammer::SwissArmyHammerError) -> Self {
+        Self::from_swissarmyhammer_error(error)
+    }
+}
+
+/// Convert semantic search errors to CLI errors via SwissArmyHammerError
+impl From<swissarmyhammer::search::SemanticError> for CliError {
+    fn from(error: swissarmyhammer::search::SemanticError) -> Self {
+        // Convert SemanticError -> SwissArmyHammerError -> CliError
+        let core_error: swissarmyhammer::SwissArmyHammerError = error.into();
+        Self::from_swissarmyhammer_error(core_error)
+    }
+}
+
+/// Convert serde JSON errors to CLI errors
+impl From<serde_json::Error> for CliError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new(format!("JSON serialization error: {error}"), EXIT_ERROR)
+    }
+}
+
+/// Convert serde YAML errors to CLI errors
+impl From<serde_yaml::Error> for CliError {
+    fn from(error: serde_yaml::Error) -> Self {
+        Self::new(format!("YAML serialization error: {error}"), EXIT_ERROR)
+    }
+}
+
+/// Convert I/O errors to CLI errors
+impl From<std::io::Error> for CliError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(format!("I/O error: {error}"), EXIT_ERROR)
     }
 }
 

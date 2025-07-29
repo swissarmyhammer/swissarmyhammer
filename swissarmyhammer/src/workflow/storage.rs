@@ -1,6 +1,7 @@
 //! Storage abstractions and implementations for workflows and workflow runs
 
 use crate::file_loader::{FileSource, VirtualFileSystem};
+use crate::fs_utils::FileSystemUtils;
 use crate::workflow::{MermaidParser, Workflow, WorkflowName, WorkflowRun, WorkflowRunId};
 use crate::{Result, SwissArmyHammerError};
 use base64::{engine::general_purpose, Engine as _};
@@ -152,7 +153,8 @@ where
             }
 
             // Try to load and parse the JSON file
-            if let Ok(content) = std::fs::read_to_string(path) {
+            let fs = FileSystemUtils::new();
+            if let Ok(content) = fs.read_text(path) {
                 if let Ok(item) = serde_json::from_str::<T>(&content) {
                     if loader(item, path) {
                         // Loader returned true, meaning we should keep this item
@@ -594,7 +596,8 @@ impl WorkflowRunStorageBackend for FileSystemWorkflowRunStorage {
             return Err(SwissArmyHammerError::WorkflowRunNotFound(format!("{id:?}")));
         }
 
-        let content = std::fs::read_to_string(&path)?;
+        let fs = FileSystemUtils::new();
+        let content = fs.read_text(&path)?;
         let run: WorkflowRun = serde_json::from_str(&content)?;
         self.cache.insert(*id, run.clone());
 

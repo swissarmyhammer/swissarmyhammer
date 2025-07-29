@@ -3,6 +3,7 @@
 //! This module provides common utilities that can be used by both CLI and MCP implementations
 //! to ensure consistent behavior and reduce code duplication.
 
+use crate::fs_utils::FileSystemUtils;
 use crate::git::GitOperations;
 use crate::issues::{Issue, IssueStorage};
 use crate::{Result, SwissArmyHammerError};
@@ -46,7 +47,8 @@ impl ContentSource {
         match self {
             ContentSource::Direct(content) => Ok(content.clone()),
             ContentSource::File(path) => {
-                let content = std::fs::read_to_string(path).map_err(|e| {
+                let fs = FileSystemUtils::new();
+                let content = fs.read_text(path).map_err(|e| {
                     SwissArmyHammerError::Other(format!("Failed to read file {path:?}: {e}"))
                 })?;
                 Ok(content.trim().to_string())

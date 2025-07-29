@@ -491,6 +491,196 @@ pub async fn create_test_context() -> ToolContext {
     )
 }
 
+/// Guard that manages environment variables for semantic search tests
+///
+/// This sets up a controlled API key environment for testing semantic search
+/// functionality without requiring real API credentials. It combines TestHomeGuard
+/// with API key management for comprehensive test isolation.
+pub struct SemanticTestGuard {
+    _home_guard: TestHomeGuard,
+    original_api_key: Option<String>,
+}
+
+impl SemanticTestGuard {
+    /// Create a new semantic test guard with isolated environment
+    pub fn new() -> Self {
+        let home_guard = create_test_home_guard();
+        let original_api_key = std::env::var("NOMIC_API_KEY").ok();
+
+        // Set a test API key that allows the command to start but will fail gracefully
+        std::env::set_var("NOMIC_API_KEY", "test-key-for-semantic-integration-testing");
+
+        Self {
+            _home_guard: home_guard,
+            original_api_key,
+        }
+    }
+
+    /// Create a semantic test guard with a custom API key
+    pub fn with_api_key(api_key: &str) -> Self {
+        let home_guard = create_test_home_guard();
+        let original_api_key = std::env::var("NOMIC_API_KEY").ok();
+
+        std::env::set_var("NOMIC_API_KEY", api_key);
+
+        Self {
+            _home_guard: home_guard,
+            original_api_key,
+        }
+    }
+}
+
+impl Default for SemanticTestGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for SemanticTestGuard {
+    fn drop(&mut self) {
+        // Restore original API key environment variable
+        match &self.original_api_key {
+            Some(key) => std::env::set_var("NOMIC_API_KEY", key),
+            None => std::env::remove_var("NOMIC_API_KEY"),
+        }
+    }
+}
+
+/// Create a semantic test environment guard
+///
+/// This provides isolated environment setup for semantic search tests
+/// with proper cleanup and restoration of environment variables.
+pub fn create_semantic_test_guard() -> SemanticTestGuard {
+    SemanticTestGuard::new()
+}
+
+/// Unified test environment builder for consistent test setup
+///
+/// This builder provides a fluent interface for setting up test environments
+/// with various configurations, reducing duplication across different test scenarios.
+#[cfg(test)]
+pub struct TestEnvironmentBuilder {
+    use_temp_home: bool,
+    with_semantic_guard: bool,
+    create_prompts_dir: bool,
+    create_workflows_dir: bool,
+}
+
+#[cfg(test)]
+impl TestEnvironmentBuilder {
+    /// Create a new test environment builder
+    pub fn new() -> Self {
+        Self {
+            use_temp_home: false,
+            with_semantic_guard: false,
+            create_prompts_dir: false,
+            create_workflows_dir: false,
+        }
+    }
+
+    /// Use a temporary home directory instead of the standard test home
+    pub fn with_temp_home(mut self) -> Self {
+        self.use_temp_home = true;
+        self
+    }
+
+    /// Include semantic search environment setup
+    pub fn with_semantic_guard(mut self) -> Self {
+        self.with_semantic_guard = true;
+        self
+    }
+
+    /// Create prompts directory structure
+    pub fn with_prompts_dir(mut self) -> Self {
+        self.create_prompts_dir = true;
+        self
+    }
+
+    /// Create workflows directory structure
+    pub fn with_workflows_dir(mut self) -> Self {
+        self.create_workflows_dir = true;
+        self
+    }
+
+    /// Build the test environment
+    pub fn build(self) -> TestEnvironment {
+        if self.use_temp_home {
+            let temp_dir = create_temp_dir();
+            std::env::set_var("HOME", temp_dir.path());
+
+            let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
+            std::fs::create_dir_all(&swissarmyhammer_dir)
+                .expect("Failed to create .swissarmyhammer directory");
+
+            if self.create_prompts_dir {
+                let prompts_dir = swissarmyhammer_dir.join("prompts");
+                std::fs::create_dir_all(&prompts_dir).expect("Failed to create prompts directory");
+            }
+
+            if self.create_workflows_dir {
+                let workflows_dir = swissarmyhammer_dir.join("workflows");
+                std::fs::create_dir_all(&workflows_dir)
+                    .expect("Failed to create workflows directory");
+            }
+
+            TestEnvironment {
+                _temp_dir: Some(temp_dir),
+                _home_guard: None,
+                _semantic_guard: if self.with_semantic_guard {
+                    Some(SemanticTestGuard::new())
+                } else {
+                    None
+                },
+            }
+        } else {
+            TestEnvironment {
+                _temp_dir: None,
+                _home_guard: Some(create_test_home_guard()),
+                _semantic_guard: if self.with_semantic_guard {
+                    Some(SemanticTestGuard::new())
+                } else {
+                    None
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for TestEnvironmentBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A comprehensive test environment that manages all necessary guards and cleanup
+#[cfg(test)]
+pub struct TestEnvironment {
+    _temp_dir: Option<TempDir>,
+    _home_guard: Option<TestHomeGuard>,
+    _semantic_guard: Option<SemanticTestGuard>,
+}
+
+/// Create a test environment builder
+///
+/// # Example
+///
+/// ```no_run
+/// # use swissarmyhammer::test_utils::test_environment;
+/// #[test]
+/// fn test_with_semantic_search() {
+///     let _env = test_environment()
+///         .with_semantic_guard()
+///         .with_prompts_dir()
+///         .build();
+///     // Test code here
+/// }
+/// ```
+#[cfg(test)]
+pub fn test_environment() -> TestEnvironmentBuilder {
+    TestEnvironmentBuilder::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

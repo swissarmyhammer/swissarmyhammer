@@ -102,25 +102,11 @@ pub struct ActionTimeouts {
 
 impl Default for ActionTimeouts {
     fn default() -> Self {
+        let config = crate::config::Config::global();
         Self {
-            prompt_timeout: Duration::from_secs(
-                std::env::var("SWISSARMYHAMMER_PROMPT_TIMEOUT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600),
-            ), // 5 minutes default
-            user_input_timeout: Duration::from_secs(
-                std::env::var("SWISSARMYHAMMER_USER_INPUT_TIMEOUT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(300),
-            ), // 5 minutes default
-            sub_workflow_timeout: Duration::from_secs(
-                std::env::var("SWISSARMYHAMMER_SUB_WORKFLOW_TIMEOUT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600),
-            ), // 10 minutes default
+            prompt_timeout: config.prompt_timeout,
+            user_input_timeout: config.user_input_timeout,
+            sub_workflow_timeout: config.sub_workflow_timeout,
         }
     }
 }

@@ -2,8 +2,8 @@ use anyhow::{anyhow, Result};
 use colored::*;
 use dialoguer::{theme::ColorfulTheme, Input};
 use std::collections::HashMap;
-use std::fs;
 
+use swissarmyhammer::fs_utils::FileSystemUtils;
 use swissarmyhammer::PromptResolver;
 use swissarmyhammer::{Prompt, PromptLibrary};
 
@@ -96,7 +96,8 @@ impl TestRunner {
             (None, Some(path)) => {
                 // Test from file
                 // Load from file path
-                let content = std::fs::read_to_string(path)?;
+                let fs = FileSystemUtils::new();
+                let content = fs.read_text(std::path::Path::new(path))?;
                 // Parse the prompt from the file content
                 // For now, create a simple prompt from the content
                 Ok(swissarmyhammer::Prompt::new("test-prompt", content))
@@ -295,7 +296,8 @@ impl TestRunner {
 
         // Save to file if requested
         if let Some(path) = save_path {
-            fs::write(path, rendered)?;
+            let fs = FileSystemUtils::new();
+            fs.write_text(std::path::Path::new(path), rendered)?;
             println!("{}", format!("💾 Saved to: {path}").green());
         }
 

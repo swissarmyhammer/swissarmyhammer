@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::CliResult;
 use colored::*;
 use is_terminal::IsTerminal;
 use std::io::{self, Write};
@@ -33,7 +33,7 @@ pub fn run_list_command(
     source_filter: Option<PromptSourceArg>,
     category_filter: Option<String>,
     search_term: Option<String>,
-) -> Result<()> {
+) -> CliResult<()> {
     // Load all prompts from all sources
     let mut library = PromptLibrary::new();
     let mut resolver = PromptResolver::new();
@@ -146,7 +146,7 @@ fn display_table_to_writer<W: Write>(
     _verbose: bool,
     writer: &mut W,
     is_tty: bool,
-) -> Result<()> {
+) -> CliResult<()> {
     if prompt_infos.is_empty() {
         writeln!(writer, "No prompts found matching the criteria.")?;
         return Ok(());
@@ -213,7 +213,7 @@ fn display_table_to_writer<W: Write>(
     Ok(())
 }
 
-fn display_table(prompt_infos: &[PromptInfo], verbose: bool) -> Result<()> {
+fn display_table(prompt_infos: &[PromptInfo], verbose: bool) -> CliResult<()> {
     let mut stdout = io::stdout();
     let is_tty = stdout.is_terminal();
     display_table_to_writer(prompt_infos, verbose, &mut stdout, is_tty)

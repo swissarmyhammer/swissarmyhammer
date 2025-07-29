@@ -125,23 +125,12 @@ pub struct ValidationConfig {
 
 impl Default for ValidationConfig {
     fn default() -> Self {
+        let config = crate::config::Config::global();
         Self {
-            max_workflow_complexity: std::env::var("SWISSARMYHAMMER_MAX_WORKFLOW_COMPLEXITY")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1000),
-            check_encoding: std::env::var("SWISSARMYHAMMER_CHECK_ENCODING")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(true),
-            check_line_endings: std::env::var("SWISSARMYHAMMER_CHECK_LINE_ENDINGS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(true),
-            check_yaml_typos: std::env::var("SWISSARMYHAMMER_CHECK_YAML_TYPOS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(true),
+            max_workflow_complexity: config.max_workflow_complexity,
+            check_encoding: config.check_encoding,
+            check_line_endings: config.check_line_endings,
+            check_yaml_typos: config.check_yaml_typos,
         }
     }
 }

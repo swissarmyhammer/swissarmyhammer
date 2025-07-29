@@ -25,6 +25,7 @@
 //! appropriate levels (warn for security issues, debug for missing directories).
 
 use crate::directory_utils::{find_swissarmyhammer_dirs_upward, walk_files_with_extensions};
+use crate::fs_utils::FileSystemUtils;
 use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -291,7 +292,8 @@ impl VirtualFileSystem {
                         continue;
                     }
 
-                    if let Ok(content) = std::fs::read_to_string(&path) {
+                    let fs = FileSystemUtils::new();
+                    if let Ok(content) = fs.read_text(&path) {
                         let file_entry =
                             FileEntry::from_path_and_content(path, content, source.clone());
                         self.add_file(file_entry);

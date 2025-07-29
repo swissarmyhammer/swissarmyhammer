@@ -13,13 +13,15 @@ pub use swissarmyhammer::test_utils::ProcessGuard;
 // Re-export commonly used test utilities from the main crate
 #[allow(unused_imports)]
 pub use swissarmyhammer::test_utils::{
-    create_simple_test_prompt, create_test_home_guard, create_test_prompt_library,
-    create_test_prompts, get_test_home, get_test_swissarmyhammer_dir, TestHomeGuard,
+    create_semantic_test_guard, create_simple_test_prompt, create_test_home_guard,
+    create_test_prompt_library, create_test_prompts, get_test_home, get_test_swissarmyhammer_dir,
+    SemanticTestGuard, TestHomeGuard,
 };
 
 /// Create a temporary directory for testing
 ///
-/// This is a convenience wrapper that provides consistent error handling
+/// This is a convenience wrapper that provides consistent error handling.
+/// Note: Consider using swissarmyhammer::test_utils::create_temp_dir() for new code.
 #[allow(dead_code)]
 pub fn create_temp_dir() -> Result<TempDir> {
     Ok(TempDir::new()?)
@@ -111,52 +113,4 @@ pub fn setup_mcp_test_env() -> Result<(TempDir, PathBuf)> {
     Ok((temp_dir, prompts_dir))
 }
 
-/// Guard that manages test environment variables for semantic search tests
-///
-/// This sets up a controlled API key environment for testing semantic search
-/// functionality without requiring real API credentials.
-pub struct SemanticTestGuard {
-    _home_guard: TestHomeGuard,
-    original_api_key: Option<String>,
-}
-
-impl SemanticTestGuard {
-    /// Create a new semantic test guard with isolated environment
-    pub fn new() -> Self {
-        let home_guard = create_test_home_guard();
-        let original_api_key = std::env::var("NOMIC_API_KEY").ok();
-
-        // Set a test API key that allows the command to start but will fail gracefully
-        std::env::set_var("NOMIC_API_KEY", "test-key-for-cli-integration-testing");
-
-        Self {
-            _home_guard: home_guard,
-            original_api_key,
-        }
-    }
-}
-
-impl Default for SemanticTestGuard {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Drop for SemanticTestGuard {
-    fn drop(&mut self) {
-        // Restore original API key environment variable
-        match &self.original_api_key {
-            Some(key) => std::env::set_var("NOMIC_API_KEY", key),
-            None => std::env::remove_var("NOMIC_API_KEY"),
-        }
-    }
-}
-
-/// Create a semantic test environment guard
-///
-/// This provides isolated environment setup for semantic search tests
-/// with proper cleanup and restoration of environment variables.
-#[allow(dead_code)]
-pub fn create_semantic_test_guard() -> SemanticTestGuard {
-    SemanticTestGuard::new()
-}
+// SemanticTestGuard is now available from the main crate via the re-export above

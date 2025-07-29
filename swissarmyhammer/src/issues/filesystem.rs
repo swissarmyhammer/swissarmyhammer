@@ -1,6 +1,7 @@
 use crate::common::generate_monotonic_ulid_string;
 use crate::config::Config;
 use crate::error::{Result, SwissArmyHammerError};
+use crate::fs_utils::FileSystemUtils;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -153,7 +154,8 @@ impl FileSystemIssueStorage {
         let name = filename.to_string();
 
         // Read file content
-        let content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
+        let fs_utils = FileSystemUtils::new();
+        let content = fs_utils.read_text(path)?;
 
         // Determine if completed based on path - only mark as completed if directly in the
         // specific completed directory, not just any directory named "complete"
@@ -811,11 +813,9 @@ pub fn create_safe_filename(name: &str) -> String {
         return "unnamed".to_string();
     }
 
-    // Configurable length limit
-    let max_filename_length = std::env::var("SWISSARMYHAMMER_MAX_FILENAME_LENGTH")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100);
+    // Configurable length limit from Config
+    let config = crate::config::Config::global();
+    let max_filename_length = config.max_filename_length;
 
     // Check for path traversal attempts
     if name.contains("../") || name.contains("..\\") || name.contains("./") || name.contains(".\\")
@@ -1748,7 +1748,8 @@ mod tests {
         assert_eq!(updated_issue.completed, issue.completed);
 
         // Verify file was updated
-        let file_content = std::fs::read_to_string(&updated_issue.file_path).unwrap();
+        let fs_utils = FileSystemUtils::new();
+        let file_content = fs_utils.read_text(&updated_issue.file_path).unwrap();
         assert_eq!(file_content, updated_content);
     }
 
