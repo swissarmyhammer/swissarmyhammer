@@ -84,6 +84,7 @@ rand = { workspace = true }
 regex = { workspace = true }
 fuzzy-matcher = { workspace = true }
 once_cell = { workspace = true }
+liquid = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

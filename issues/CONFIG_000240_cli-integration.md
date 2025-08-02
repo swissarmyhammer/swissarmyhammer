@@ -63,3 +63,33 @@ Add CLI commands to validate, inspect, and debug sah.toml configurations, provid
 ## Next Steps
 
 After completion, proceed to CONFIG_000241_comprehensive-testing for implementing thorough test coverage of the configuration system.
+## Proposed Solution
+
+I will implement CLI configuration integration following the existing patterns and architecture:
+
+### 1. CLI Command Structure
+- Add `Config` command to the main CLI enum in `cli.rs`
+- Create config subcommands: `show`, `variables`, `test`, `env`
+- Support multiple output formats (table, json, yaml) for machine consumption
+
+### 2. Validation Extension  
+- Extend existing `validate` command to check sah.toml files automatically
+- Integrate configuration validation with existing validation infrastructure
+- Report TOML syntax errors, variable name compliance, and environment variable issues
+
+### 3. Implementation Files
+- Create `swissarmyhammer-cli/src/config.rs` for CLI command handlers
+- Create `swissarmyhammer/src/sah_config/cli_support.rs` for helper functions
+- Update main dispatch logic in `main.rs`
+
+### 4. Error Handling
+- Follow existing error handling patterns with helpful error messages
+- Use proper exit codes (0=success, 1=warnings, 2=errors)
+- Provide actionable suggestions for configuration problems
+
+### 5. Testing Strategy
+- Create comprehensive unit tests for all config commands
+- Test various configuration scenarios and error conditions
+- Follow TDD approach per project standards
+
+This approach leverages the existing sah_config module and follows established CLI patterns for consistency with other commands.
