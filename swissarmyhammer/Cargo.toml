@@ -43,6 +43,7 @@ dashmap = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
 ulid = { version = "1.1", features = ["serde"] }
+toml = "0.8"
 
 # Search functionality
 tantivy = { workspace = true }
