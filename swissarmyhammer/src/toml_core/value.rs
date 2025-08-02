@@ -281,7 +281,7 @@ fn substitute_env_vars_in_string(s: &str) -> Result<String, ConfigError> {
                                 var_name,
                                 "Environment variable not found and no default provided",
                             ));
-                            format!("${{{}}}", var_name) // Return original pattern
+                            format!("${{{var_name}}}") // Return original pattern
                         }
                     }
                 }

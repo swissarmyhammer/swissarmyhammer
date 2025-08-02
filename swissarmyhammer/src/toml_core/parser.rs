@@ -204,7 +204,7 @@ impl ConfigParser {
         values: &HashMap<String, ConfigValue>,
     ) -> Result<(), ConfigError> {
         for value in values.values() {
-            let depth = self.calculate_nesting_depth(value);
+            let depth = Self::calculate_nesting_depth(value);
             if depth > self.max_depth {
                 return Err(ConfigError::NestingTooDeep {
                     depth,
@@ -216,12 +216,12 @@ impl ConfigParser {
     }
 
     /// Calculate the maximum nesting depth of a ConfigValue
-    fn calculate_nesting_depth(&self, value: &ConfigValue) -> usize {
+    fn calculate_nesting_depth(value: &ConfigValue) -> usize {
         match value {
             ConfigValue::Table(table) => {
                 let max_child_depth = table
                     .values()
-                    .map(|v| self.calculate_nesting_depth(v))
+                    .map(Self::calculate_nesting_depth)
                     .max()
                     .unwrap_or(0);
                 1 + max_child_depth
@@ -229,7 +229,7 @@ impl ConfigParser {
             ConfigValue::Array(arr) => {
                 let max_child_depth = arr
                     .iter()
-                    .map(|v| self.calculate_nesting_depth(v))
+                    .map(Self::calculate_nesting_depth)
                     .max()
                     .unwrap_or(0);
                 max_child_depth // Arrays don't add to table nesting depth

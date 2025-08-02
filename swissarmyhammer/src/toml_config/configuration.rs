@@ -222,13 +222,12 @@ impl Configuration {
     /// Get all keys in the configuration (including nested keys with dot notation)
     pub fn keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
-        self.collect_keys("", &self.values, &mut keys);
+        Self::collect_keys("", &self.values, &mut keys);
         keys
     }
 
     /// Recursively collect all keys including nested ones
     fn collect_keys(
-        &self,
         prefix: &str,
         values: &HashMap<String, ConfigValue>,
         keys: &mut Vec<String>,
@@ -237,13 +236,13 @@ impl Configuration {
             let full_key = if prefix.is_empty() {
                 key.clone()
             } else {
-                format!("{}.{}", prefix, key)
+                format!("{prefix}.{key}")
             };
 
             keys.push(full_key.clone());
 
             if let ConfigValue::Table(table) = value {
-                self.collect_keys(&full_key, table, keys);
+                Self::collect_keys(&full_key, table, keys);
             }
         }
     }
@@ -321,7 +320,7 @@ fn validate_variable_name(name: &str) -> Result<(), ConfigError> {
         if !c.is_ascii_alphanumeric() && c != '_' && c != '.' {
             return Err(ConfigError::invalid_variable_name(
                 name.to_string(),
-                format!("Variable name contains invalid character: '{}'", c),
+                format!("Variable name contains invalid character: '{c}'"),
             ));
         }
     }
@@ -360,7 +359,6 @@ fn validate_variable_name(name: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn test_configuration_basic_operations() {

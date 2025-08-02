@@ -261,19 +261,19 @@ impl Configuration {
 
     /// Get the total number of configuration values (including nested ones)
     pub fn total_values(&self) -> usize {
-        self.count_values_recursive(&self.values)
+        Self::count_values_recursive(&self.values)
     }
 
     /// Recursively count all configuration values
-    fn count_values_recursive(&self, values: &HashMap<String, ConfigValue>) -> usize {
+    fn count_values_recursive(values: &HashMap<String, ConfigValue>) -> usize {
         let mut count = values.len();
         for value in values.values() {
             if let ConfigValue::Table(nested_table) = value {
-                count += self.count_values_recursive(nested_table);
+                count += Self::count_values_recursive(nested_table);
             } else if let ConfigValue::Array(arr) = value {
                 for item in arr {
                     if let ConfigValue::Table(table) = item {
-                        count += self.count_values_recursive(table);
+                        count += Self::count_values_recursive(table);
                     }
                 }
             }
@@ -302,13 +302,12 @@ impl Configuration {
     /// Get all keys in the configuration (including nested keys with dot notation)
     pub fn all_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
-        self.collect_keys_recursive(&self.values, String::new(), &mut keys);
+        Self::collect_keys_recursive(&self.values, String::new(), &mut keys);
         keys
     }
 
     /// Recursively collect all keys including nested ones
     fn collect_keys_recursive(
-        &self,
         values: &HashMap<String, ConfigValue>,
         prefix: String,
         keys: &mut Vec<String>,
@@ -317,13 +316,13 @@ impl Configuration {
             let full_key = if prefix.is_empty() {
                 key.clone()
             } else {
-                format!("{}.{}", prefix, key)
+                format!("{prefix}.{key}")
             };
 
             keys.push(full_key.clone());
 
             if let ConfigValue::Table(nested_table) = value {
-                self.collect_keys_recursive(nested_table, full_key, keys);
+                Self::collect_keys_recursive(nested_table, full_key, keys);
             }
         }
     }

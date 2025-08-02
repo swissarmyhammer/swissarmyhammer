@@ -12,8 +12,11 @@ pub enum ConfigError {
     /// TOML parsing error with detailed context
     #[error("TOML parse error at line {line}, column {column}: {message}")]
     TomlParse {
+        /// Line number where the error occurred
         line: usize,
+        /// Column number where the error occurred
         column: usize,
+        /// Error message describing the parsing issue
         message: String,
     },
 
@@ -23,11 +26,21 @@ pub enum ConfigError {
 
     /// File size validation error
     #[error("Configuration file is too large: {size} bytes (maximum: {max_size} bytes)")]
-    FileTooLarge { size: u64, max_size: u64 },
+    FileTooLarge {
+        /// Actual file size in bytes
+        size: u64,
+        /// Maximum allowed file size in bytes
+        max_size: u64,
+    },
 
     /// Nesting depth validation error
     #[error("Configuration nesting depth too deep: {depth} levels (maximum: {max_depth} levels)")]
-    NestingTooDeep { depth: usize, max_depth: usize },
+    NestingTooDeep {
+        /// Actual nesting depth encountered
+        depth: usize,
+        /// Maximum allowed nesting depth
+        max_depth: usize,
+    },
 
     /// UTF-8 encoding validation error
     #[error("Configuration file is not valid UTF-8: {0}")]
@@ -35,27 +48,55 @@ pub enum ConfigError {
 
     /// Environment variable substitution error
     #[error("Environment variable substitution failed for variable '{variable}': {reason}")]
-    EnvVarSubstitution { variable: String, reason: String },
+    EnvVarSubstitution {
+        /// Name of the environment variable that failed substitution
+        variable: String,
+        /// Reason why the substitution failed
+        reason: String,
+    },
 
     /// Invalid variable name error
     #[error("Invalid variable name '{name}': {reason}")]
-    InvalidVariableName { name: String, reason: String },
+    InvalidVariableName {
+        /// The invalid variable name
+        name: String,
+        /// Reason why the variable name is invalid
+        reason: String,
+    },
 
     /// Reserved variable name error
     #[error("Variable name '{name}' is reserved and cannot be used")]
-    ReservedVariableName { name: String },
+    ReservedVariableName {
+        /// The reserved variable name that was attempted to be used
+        name: String,
+    },
 
     /// String value too large error
     #[error("String value too large: {size} bytes (maximum: {max_size} bytes)")]
-    StringTooLarge { size: usize, max_size: usize },
+    StringTooLarge {
+        /// Actual string size in bytes
+        size: usize,
+        /// Maximum allowed string size in bytes
+        max_size: usize,
+    },
 
     /// Array too large error
     #[error("Array too large: {size} elements (maximum: {max_size} elements)")]
-    ArrayTooLarge { size: usize, max_size: usize },
+    ArrayTooLarge {
+        /// Actual array size in elements
+        size: usize,
+        /// Maximum allowed array size in elements
+        max_size: usize,
+    },
 
     /// Type coercion error
     #[error("Cannot coerce value of type {from_type} to {to_type}")]
-    TypeCoercion { from_type: String, to_type: String },
+    TypeCoercion {
+        /// Source type that could not be coerced
+        from_type: String,
+        /// Target type for the coercion attempt
+        to_type: String,
+    },
 
     /// Circular reference error
     #[error("Circular reference detected in configuration")]
@@ -63,7 +104,10 @@ pub enum ConfigError {
 
     /// Validation error with context
     #[error("Validation error: {message}")]
-    Validation { message: String },
+    Validation {
+        /// The validation error message
+        message: String,
+    },
 }
 
 impl ConfigError {

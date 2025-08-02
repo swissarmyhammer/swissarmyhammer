@@ -96,7 +96,7 @@ impl ConfigurationLoader {
     /// Searches for sah.toml starting from current directory and walking up
     /// to find the repository root (indicated by .git directory or filesystem root)
     pub fn load_from_repo_root(&self) -> Result<Option<Configuration>, ConfigurationError> {
-        let current_dir = std::env::current_dir().map_err(|e| ConfigurationError::Io(e))?;
+        let current_dir = std::env::current_dir().map_err(ConfigurationError::Io)?;
 
         let mut search_dir = current_dir.as_path();
 
@@ -124,7 +124,6 @@ impl ConfigurationLoader {
 
     /// Convert a TOML value to our ConfigValue representation
     fn toml_value_to_config_value(
-        &self,
         value: toml::Value,
     ) -> Result<ConfigValue, ConfigurationError> {
         match value {
@@ -135,14 +134,14 @@ impl ConfigurationLoader {
             toml::Value::Array(arr) => {
                 let mut config_array = Vec::new();
                 for item in arr {
-                    config_array.push(self.toml_value_to_config_value(item)?);
+                    config_array.push(Self::toml_value_to_config_value(item)?);
                 }
                 Ok(ConfigValue::Array(config_array))
             }
             toml::Value::Table(table) => {
                 let mut config_table = HashMap::new();
                 for (key, value) in table {
-                    config_table.insert(key, self.toml_value_to_config_value(value)?);
+                    config_table.insert(key, Self::toml_value_to_config_value(value)?);
                 }
                 Ok(ConfigValue::Table(config_table))
             }
@@ -162,14 +161,14 @@ impl ConfigurationLoader {
             toml::Value::Table(table) => {
                 let mut config_map = HashMap::new();
                 for (key, value) in table {
-                    config_map.insert(key, self.toml_value_to_config_value(value)?);
+                    config_map.insert(key, Self::toml_value_to_config_value(value)?);
                 }
                 Ok(config_map)
             }
             _ => {
                 // If the root is not a table, create a single entry
                 let mut config_map = HashMap::new();
-                config_map.insert("value".to_string(), self.toml_value_to_config_value(value)?);
+                config_map.insert("value".to_string(), Self::toml_value_to_config_value(value)?);
                 Ok(config_map)
             }
         }
@@ -274,17 +273,17 @@ port = 5432
 
         // Test string conversion
         let string_val = toml::Value::String("test".to_string());
-        let config_val = loader.toml_value_to_config_value(string_val)?;
+        let config_val = ConfigurationLoader::toml_value_to_config_value(string_val)?;
         assert_eq!(config_val, ConfigValue::String("test".to_string()));
 
         // Test integer conversion
         let int_val = toml::Value::Integer(42);
-        let config_val = loader.toml_value_to_config_value(int_val)?;
+        let config_val = ConfigurationLoader::toml_value_to_config_value(int_val)?;
         assert_eq!(config_val, ConfigValue::Integer(42));
 
         // Test boolean conversion
         let bool_val = toml::Value::Boolean(true);
-        let config_val = loader.toml_value_to_config_value(bool_val)?;
+        let config_val = ConfigurationLoader::toml_value_to_config_value(bool_val)?;
         assert_eq!(config_val, ConfigValue::Boolean(true));
 
         Ok(())

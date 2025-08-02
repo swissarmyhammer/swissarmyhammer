@@ -271,12 +271,11 @@ impl Validator {
         config: &Configuration,
         max_length: usize,
     ) -> Result<(), ValidationError> {
-        self.validate_string_lengths_recursive(config.values(), max_length)
+        Self::validate_string_lengths_recursive(config.values(), max_length)
     }
 
     /// Recursively validate string lengths in nested structures
     fn validate_string_lengths_recursive(
-        &self,
         values: &HashMap<String, ConfigValue>,
         max_length: usize,
     ) -> Result<(), ValidationError> {
@@ -300,12 +299,12 @@ impl Validator {
                                 });
                             }
                         } else if let ConfigValue::Table(table) = item {
-                            self.validate_string_lengths_recursive(table, max_length)?;
+                            Self::validate_string_lengths_recursive(table, max_length)?;
                         }
                     }
                 }
                 ConfigValue::Table(table) => {
-                    self.validate_string_lengths_recursive(table, max_length)?;
+                    Self::validate_string_lengths_recursive(table, max_length)?;
                 }
                 _ => {} // Other types don't need string length validation
             }
@@ -319,12 +318,11 @@ impl Validator {
         config: &Configuration,
         max_elements: usize,
     ) -> Result<(), ValidationError> {
-        self.validate_array_sizes_recursive(config.values(), max_elements)
+        Self::validate_array_sizes_recursive(config.values(), max_elements)
     }
 
     /// Recursively validate array sizes in nested structures
     fn validate_array_sizes_recursive(
-        &self,
         values: &HashMap<String, ConfigValue>,
         max_elements: usize,
     ) -> Result<(), ValidationError> {
@@ -340,12 +338,12 @@ impl Validator {
                     // Recursively check nested arrays
                     for item in arr {
                         if let ConfigValue::Table(table) = item {
-                            self.validate_array_sizes_recursive(table, max_elements)?;
+                            Self::validate_array_sizes_recursive(table, max_elements)?;
                         }
                     }
                 }
                 ConfigValue::Table(table) => {
-                    self.validate_array_sizes_recursive(table, max_elements)?;
+                    Self::validate_array_sizes_recursive(table, max_elements)?;
                 }
                 _ => {} // Other types don't need array size validation
             }
@@ -360,7 +358,7 @@ impl Validator {
         max_depth: usize,
     ) -> Result<(), ValidationError> {
         for value in config.values().values() {
-            let depth = self.calculate_nesting_depth(value);
+            let depth = Self::calculate_nesting_depth(value);
             if depth > max_depth {
                 return Err(ValidationError::NestingTooDeep { depth, max_depth });
             }
@@ -369,12 +367,12 @@ impl Validator {
     }
 
     /// Calculate the maximum nesting depth of a ConfigValue
-    fn calculate_nesting_depth(&self, value: &ConfigValue) -> usize {
+    fn calculate_nesting_depth(value: &ConfigValue) -> usize {
         match value {
             ConfigValue::Table(table) => {
                 let max_child_depth = table
                     .values()
-                    .map(|v| self.calculate_nesting_depth(v))
+                    .map(Self::calculate_nesting_depth)
                     .max()
                     .unwrap_or(0);
                 1 + max_child_depth
@@ -382,7 +380,7 @@ impl Validator {
             ConfigValue::Array(arr) => {
                 let max_child_depth = arr
                     .iter()
-                    .map(|v| self.calculate_nesting_depth(v))
+                    .map(Self::calculate_nesting_depth)
                     .max()
                     .unwrap_or(0);
                 max_child_depth // Arrays don't add to nesting depth for tables
@@ -397,7 +395,7 @@ impl Validator {
         config: &Configuration,
         max_count: usize,
     ) -> Result<(), ValidationError> {
-        let count = self.count_total_variables(config.values());
+        let count = Self::count_total_variables(config.values());
         if count > max_count {
             return Err(ValidationError::TooManyVariables { count, max_count });
         }
@@ -405,17 +403,17 @@ impl Validator {
     }
 
     /// Count the total number of variables (including nested ones)
-    fn count_total_variables(&self, values: &HashMap<String, ConfigValue>) -> usize {
+    fn count_total_variables(values: &HashMap<String, ConfigValue>) -> usize {
         let mut count = values.len();
         for value in values.values() {
             match value {
                 ConfigValue::Table(table) => {
-                    count += self.count_total_variables(table);
+                    count += Self::count_total_variables(table);
                 }
                 ConfigValue::Array(arr) => {
                     for item in arr {
                         if let ConfigValue::Table(table) = item {
-                            count += self.count_total_variables(table);
+                            count += Self::count_total_variables(table);
                         }
                     }
                 }
@@ -435,7 +433,7 @@ impl Validator {
             if !config.values().contains_key(var_name) {
                 return Err(ValidationError::RuleFailed {
                     rule: "RequiredVariables".to_string(),
-                    message: format!("Required variable '{}' is missing", var_name),
+                    message: format!("Required variable '{var_name}' is missing"),
                 });
             }
         }
@@ -452,7 +450,7 @@ impl Validator {
             if config.values().contains_key(var_name) {
                 return Err(ValidationError::RuleFailed {
                     rule: "ForbiddenVariables".to_string(),
-                    message: format!("Forbidden variable '{}' is present", var_name),
+                    message: format!("Forbidden variable '{var_name}' is present"),
                 });
             }
         }
