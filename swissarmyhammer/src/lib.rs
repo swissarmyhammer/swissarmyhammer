@@ -143,6 +143,9 @@ pub use memoranda::{
 /// Validation types and traits
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
 
+/// sah.toml configuration types and functionality
+pub use sah_config::{ConfigValue, Configuration, ConfigurationError, ValidationError};
+
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -151,6 +154,9 @@ pub mod error;
 
 /// Configuration management
 pub mod config;
+
+/// sah.toml configuration support
+pub mod sah_config;
 
 pub use config::Config;
 pub use error::{ErrorChainExt, ErrorContext, Result, SwissArmyHammerError};
@@ -183,6 +189,12 @@ pub mod prelude {
     pub use crate::search::{
         CodeChunk, EmbeddingEngine, FileIndexer, IndexingOptions, IndexingStats, Language,
         SemanticConfig, SemanticSearcher, SemanticUtils, VectorStorage,
+    };
+
+    // sah.toml configuration types for convenient access
+    pub use crate::sah_config::{
+        load_and_merge_repo_config, load_config, load_repo_config, merge_config_into_context,
+        validate_config_file, ConfigValue, Configuration, ConfigurationError, ValidationError,
     };
 
     // Common utilities for easy access

@@ -98,12 +98,6 @@ todo:
 
 ## CLI
 
-Add:
+DO NOT add this to the CLI, the todo system is just for the LLM.
 
-`sah todo add <list> --task --context`
-
-`sah todo complete <list> <id>`
-
-`sah todo show <list> <id>`
-
-Make sure to call the MCP tool like we do in other cli commands. DO NOT duplicate the MCP tool logic in CLI
+Users need to make issues.
