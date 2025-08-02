@@ -324,7 +324,10 @@ mod config_value_tests {
 
         #[test]
         fn test_configuration_key_validation(
-            key in "[a-zA-Z_][a-zA-Z0-9_]{0,30}",
+            key in "[a-zA-Z_][a-zA-Z0-9_]{0,30}".prop_filter("Reserved names should be excluded", |k| {
+                // Exclude Liquid reserved words
+                !matches!(k.as_str(), "for" | "if" | "unless" | "case" | "when" | "else" | "endif" | "endfor" | "endunless" | "endcase" | "break" | "continue" | "assign" | "capture" | "include")
+            }),
             value in "[a-zA-Z0-9_\\s]{1,50}"
         ) {
             let mut config = Configuration::new();
