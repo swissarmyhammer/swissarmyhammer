@@ -70,7 +70,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::{plugins::PluginRegistry, security, PromptLibrary, Result, SwissArmyHammerError};
+use crate::{plugins::PluginRegistry, sah_config, security, PromptLibrary, Result, SwissArmyHammerError};
 use liquid::{Object, Parser};
 use liquid_core::{Language, ParseTag, Renderable, Runtime, TagReflection, TagTokenIter};
 use std::borrow::Cow;
@@ -475,6 +475,53 @@ impl Template {
             .map_err(|e| SwissArmyHammerError::Template(e.to_string()))
     }
 
+    /// Render the template with given arguments and sah.toml configuration variables
+    ///
+    /// This method merges the provided arguments with sah.toml configuration variables
+    /// and environment variables, with the following precedence (highest to lowest):
+    /// 1. Provided arguments
+    /// 2. Environment variables
+    /// 3. sah.toml configuration variables
+    pub fn render_with_config(&self, args: &HashMap<String, String>) -> Result<String> {
+        let template = self
+            .parser
+            .parse(&self.template_str)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
+
+        let mut object = Object::new();
+
+        // First, initialize all template variables as nil so filters like | default work
+        let variables = extract_template_variables(&self.template_str);
+        for var in variables {
+            object.insert(var.into(), liquid::model::Value::Nil);
+        }
+
+        // Load and merge sah.toml configuration variables (lowest priority)
+        if let Ok(Some(config)) = sah_config::load_repo_config() {
+            let config_object = config.to_liquid_object();
+            for (key, value) in config_object.iter() {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+
+        // Add environment variables as template variables (medium priority)
+        for (key, value) in std::env::vars() {
+            object.insert(key.into(), liquid::model::Value::scalar(value));
+        }
+
+        // Finally, add provided arguments (highest priority)
+        for (key, value) in args {
+            object.insert(
+                key.clone().into(),
+                liquid::model::Value::scalar(value.clone()),
+            );
+        }
+
+        template
+            .render(&object)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))
+    }
+
     /// Get the raw template string
     pub fn raw(&self) -> &str {
         &self.template_str
@@ -561,6 +608,20 @@ impl TemplateEngine {
     ) -> Result<String> {
         let template = self.parse(template_str)?;
         template.render_with_env(args)
+    }
+
+    /// Render a template string with arguments and sah.toml configuration variables
+    ///
+    /// This method merges the provided arguments with sah.toml configuration variables,
+    /// with provided arguments taking precedence over configuration variables.
+    /// Configuration is loaded from the repository root if available.
+    pub fn render_with_config(
+        &self,
+        template_str: &str,
+        args: &HashMap<String, String>,
+    ) -> Result<String> {
+        let template = self.parse(template_str)?;
+        template.render_with_config(args)
     }
 
     /// Get a reference to the plugin registry, if any
@@ -863,5 +924,41 @@ mod tests {
 
         // Clean up
         env::remove_var("TEST_OVERRIDE");
+    }
+
+    #[test]
+    fn test_render_with_config_precedence() {
+        // Test variable precedence: config < env < args
+        // This test doesn't rely on actual file loading since that would require
+        // setting up filesystem fixtures. Instead, it tests the precedence logic
+        // in the template engine's render_with_config method.
+        
+        let template = Template::new("Project: {{project_name}}, Env: {{TEST_VAR}}, Arg: {{custom_arg}}").unwrap();
+        
+        // Set up environment variable
+        std::env::set_var("TEST_VAR", "env_value");
+        
+        let mut args = HashMap::new();
+        args.insert("custom_arg".to_string(), "arg_value".to_string());
+        args.insert("TEST_VAR".to_string(), "arg_override".to_string());
+        
+        let result = template.render_with_config(&args).unwrap();
+        
+        // Environment variable should be overridden by argument
+        assert!(result.contains("Env: arg_override"));
+        assert!(result.contains("Arg: arg_value"));
+        
+        // Clean up
+        std::env::remove_var("TEST_VAR");
+    }
+
+    #[test]
+    fn test_template_engine_render_with_config() {
+        let engine = TemplateEngine::new();
+        let mut args = HashMap::new();
+        args.insert("greeting".to_string(), "Hello".to_string());
+        
+        let result = engine.render_with_config("{{greeting}} World!", &args).unwrap();
+        assert_eq!(result, "Hello World!");
     }
 }
