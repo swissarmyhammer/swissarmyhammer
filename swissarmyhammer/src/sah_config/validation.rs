@@ -498,13 +498,11 @@ impl Validator {
         if path.is_absolute() {
             // Allow only if it's within expected directories
             let temp_dir_str = std::env::temp_dir().to_string_lossy().to_string();
-            let allowed_prefixes = [
-                "/tmp/",
-                "/var/tmp/",
-                temp_dir_str.as_str(),
-            ];
+            let allowed_prefixes = ["/tmp/", "/var/tmp/", temp_dir_str.as_str()];
 
-            let is_allowed = allowed_prefixes.iter().any(|prefix| path_str.starts_with(prefix));
+            let is_allowed = allowed_prefixes
+                .iter()
+                .any(|prefix| path_str.starts_with(prefix));
             if !is_allowed {
                 return Err(ValidationError::PathTraversalAttack {
                     path: path_str.to_string(),
@@ -517,7 +515,11 @@ impl Validator {
         for component in path.components() {
             if let std::path::Component::Normal(os_str) = component {
                 if let Some(name) = os_str.to_str() {
-                    if name.starts_with('.') && name != "." && name != ".." && !name.starts_with(".tmp") {
+                    if name.starts_with('.')
+                        && name != "."
+                        && name != ".."
+                        && !name.starts_with(".tmp")
+                    {
                         return Err(ValidationError::PathTraversalAttack {
                             path: path_str.to_string(),
                         });
@@ -537,10 +539,11 @@ impl Validator {
             return Ok(()); // File doesn't exist yet, which is fine
         }
 
-        let metadata = std::fs::metadata(path).map_err(|_| ValidationError::InsufficientPermissions {
-            path: path.to_string_lossy().to_string(),
-            reason: "Cannot read file metadata".to_string(),
-        })?;
+        let metadata =
+            std::fs::metadata(path).map_err(|_| ValidationError::InsufficientPermissions {
+                path: path.to_string_lossy().to_string(),
+                reason: "Cannot read file metadata".to_string(),
+            })?;
 
         let permissions = metadata.permissions();
         let mode = permissions.mode();
@@ -889,7 +892,7 @@ mod tests {
         let result = validator.validate_file_security(temp_file.path());
         // This should pass for a temporary file (now that we allow .tmp files)
         match result {
-            Ok(()) => {}, // Good
+            Ok(()) => {}                                      // Good
             Err(e) => println!("Validation failed: {:?}", e), // Debug output
         }
 

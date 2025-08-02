@@ -331,6 +331,35 @@ Examples:
         #[command(subcommand)]
         subcommand: SearchCommands,
     },
+    /// Configuration management commands
+    #[command(long_about = "
+Manage sah.toml configuration files with comprehensive CLI commands for validation, inspection, and debugging.
+Configuration files provide project-specific variables for template rendering.
+
+Basic usage:
+  swissarmyhammer config show                   # Display current configuration
+  swissarmyhammer config variables              # List all available variables
+  swissarmyhammer config test                   # Test template rendering with config
+  swissarmyhammer config env                    # Show environment variable usage
+
+Validation:
+  Validation is automatically included in 'sah validate' command
+
+Output formats:
+  --format table                               # Human-readable table format
+  --format json                                # JSON output for machine consumption
+  --format yaml                                # YAML output for scripting
+
+Examples:
+  swissarmyhammer config show --format json    # Output configuration as JSON
+  swissarmyhammer config variables             # List all configured variables
+  swissarmyhammer config test template.liquid  # Test template with current config
+  swissarmyhammer config env --missing         # Show missing environment variables
+")]
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -831,6 +860,45 @@ pub enum SearchCommands {
         /// Number of results to return
         #[arg(short, long, default_value = "10")]
         limit: usize,
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommands {
+    /// Display current configuration
+    Show {
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+    /// List all available variables
+    Variables {
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+        /// Show variable types and sources
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    /// Test template rendering with configuration
+    Test {
+        /// Template file to test (optional - uses stdin if not provided)
+        template: Option<String>,
+        /// Template variables as key=value pairs (overrides config)
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        variables: Vec<String>,
+        /// Show debug information
+        #[arg(short, long)]
+        debug: bool,
+    },
+    /// Show environment variable usage
+    Env {
+        /// Show only missing environment variables
+        #[arg(short, long)]
+        missing: bool,
         /// Output format
         #[arg(short, long, value_enum, default_value = "table")]
         format: OutputFormat,

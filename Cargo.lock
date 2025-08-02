@@ -5146,6 +5146,7 @@ dependencies = [
  "git2",
  "indicatif",
  "is-terminal",
+ "liquid",
  "nix",
  "notify",
  "once_cell",

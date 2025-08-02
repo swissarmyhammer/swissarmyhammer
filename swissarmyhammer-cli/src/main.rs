@@ -1,6 +1,7 @@
 use std::process;
 mod cli;
 mod completions;
+mod config;
 mod doctor;
 mod error;
 mod exit_codes;
@@ -159,6 +160,10 @@ async fn main() {
         Some(Commands::Search { subcommand }) => {
             tracing::info!("Running search command");
             run_search(subcommand).await
+        }
+        Some(Commands::Config { subcommand }) => {
+            tracing::info!("Running config command");
+            run_config(subcommand).await
         }
         None => {
             // This case is handled early above for performance
@@ -342,6 +347,18 @@ fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<Str
         Err(e) => {
             tracing::error!("Validate error: {}", e);
             EXIT_ERROR
+        }
+    }
+}
+
+async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
+    use config;
+
+    match config::handle_config_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            tracing::error!("Config error: {}", e);
+            EXIT_WARNING
         }
     }
 }

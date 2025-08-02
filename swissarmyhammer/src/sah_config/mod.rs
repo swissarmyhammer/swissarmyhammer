@@ -56,6 +56,18 @@ pub fn load_repo_config() -> Result<Option<Configuration>, ConfigurationError> {
     ConfigurationLoader::new()?.load_from_repo_root()
 }
 
+/// CLI-friendly version of load_repo_config that disables file path security validation
+/// but keeps content validation. This allows loading sah.toml files from any location
+/// which is appropriate for CLI tools.
+///
+/// # Returns
+/// * `Result<Option<Configuration>, ConfigurationError>` - The configuration if found, None if no file exists
+pub fn load_repo_config_for_cli() -> Result<Option<Configuration>, ConfigurationError> {
+    ConfigurationLoader::new()?
+        .with_validation(false) // Disable path security validation for CLI
+        .load_from_repo_root()
+}
+
 /// Validate a sah.toml configuration file
 ///
 /// # Arguments

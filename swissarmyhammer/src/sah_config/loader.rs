@@ -184,9 +184,7 @@ impl ConfigurationLoader {
     }
 
     /// Convert a TOML value to our ConfigValue representation
-    fn toml_value_to_config_value(
-        value: toml::Value,
-    ) -> Result<ConfigValue, ConfigurationError> {
+    fn toml_value_to_config_value(value: toml::Value) -> Result<ConfigValue, ConfigurationError> {
         match value {
             toml::Value::String(s) => Ok(ConfigValue::String(s)),
             toml::Value::Integer(i) => Ok(ConfigValue::Integer(i)),
@@ -229,7 +227,10 @@ impl ConfigurationLoader {
             _ => {
                 // If the root is not a table, create a single entry
                 let mut config_map = HashMap::new();
-                config_map.insert("value".to_string(), Self::toml_value_to_config_value(value)?);
+                config_map.insert(
+                    "value".to_string(),
+                    Self::toml_value_to_config_value(value)?,
+                );
                 Ok(config_map)
             }
         }
@@ -248,7 +249,10 @@ impl ConfigurationLoader {
     }
 
     /// Process environment variable substitution in configuration values
-    fn process_env_substitution(&self, values: &mut HashMap<String, ConfigValue>) -> Result<(), ConfigurationError> {
+    fn process_env_substitution(
+        &self,
+        values: &mut HashMap<String, ConfigValue>,
+    ) -> Result<(), ConfigurationError> {
         for value in values.values_mut() {
             self.process_env_substitution_recursive(value)?;
         }
@@ -256,7 +260,10 @@ impl ConfigurationLoader {
     }
 
     /// Recursively process environment variable substitution in nested structures
-    fn process_env_substitution_recursive(&self, value: &mut ConfigValue) -> Result<(), ConfigurationError> {
+    fn process_env_substitution_recursive(
+        &self,
+        value: &mut ConfigValue,
+    ) -> Result<(), ConfigurationError> {
         match value {
             ConfigValue::String(s) => {
                 *s = self.env_processor.substitute_variables(s)?;
@@ -396,7 +403,7 @@ port = 5432
     #[serial_test::serial]
     fn test_environment_variable_substitution() -> Result<(), Box<dyn std::error::Error>> {
         use std::env;
-        
+
         // Set up test environment variables
         env::set_var("TEST_DB_HOST", "production.example.com");
         env::set_var("TEST_DB_PORT", "5432");
@@ -411,7 +418,9 @@ debug = "${{TEST_DEBUG:-false}}"
 "#
         )?;
 
-        let loader = ConfigurationLoader::new()?.with_env_substitution(true).with_validation(false);
+        let loader = ConfigurationLoader::new()?
+            .with_env_substitution(true)
+            .with_validation(false);
         let config = loader.load_from_file(temp_file.path())?;
 
         // Check that environment variables were substituted
@@ -488,7 +497,7 @@ for = "invalid_reserved_name"
 
         // Should have cache metadata
         assert!(config.cache_metadata().is_some());
-        
+
         // Should have file path
         assert!(config.file_path().is_some());
         assert_eq!(config.file_path().unwrap(), temp_file.path());

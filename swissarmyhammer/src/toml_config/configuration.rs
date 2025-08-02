@@ -227,11 +227,7 @@ impl Configuration {
     }
 
     /// Recursively collect all keys including nested ones
-    fn collect_keys(
-        prefix: &str,
-        values: &HashMap<String, ConfigValue>,
-        keys: &mut Vec<String>,
-    ) {
+    fn collect_keys(prefix: &str, values: &HashMap<String, ConfigValue>, keys: &mut Vec<String>) {
         for (key, value) in values {
             let full_key = if prefix.is_empty() {
                 key.clone()

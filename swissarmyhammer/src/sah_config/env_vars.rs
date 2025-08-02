@@ -14,18 +14,18 @@ use thiserror::Error;
 pub enum EnvVarError {
     /// Required environment variable was not found
     #[error("Required environment variable '{name}' not found")]
-    RequiredVariableNotFound { 
+    RequiredVariableNotFound {
         /// The name of the missing environment variable
-        name: String 
+        name: String,
     },
 
     /// Environment variable name contains invalid characters
     #[error("Invalid environment variable name '{name}': {reason}")]
-    InvalidVariableName { 
+    InvalidVariableName {
         /// The invalid variable name
-        name: String, 
+        name: String,
         /// Reason why the name is invalid
-        reason: String 
+        reason: String,
     },
 
     /// Environment variable value cannot be converted to the expected type
@@ -74,14 +74,14 @@ impl EnvVarProcessor {
     /// # Examples
     /// ```
     /// use swissarmyhammer::sah_config::env_vars::EnvVarProcessor;
-    /// 
+    ///
     /// let processor = EnvVarProcessor::new()?;
-    /// 
+    ///
     /// // With default value
     /// std::env::remove_var("MISSING_VAR");
     /// let result = processor.substitute_variables("Database: ${MISSING_VAR:-localhost}")?;
     /// assert_eq!(result, "Database: localhost");
-    /// 
+    ///
     /// // With existing environment variable
     /// std::env::set_var("DB_HOST", "production.example.com");
     /// let result = processor.substitute_variables("Database: ${DB_HOST:-localhost}")?;
@@ -150,24 +150,26 @@ impl EnvVarProcessor {
 
     /// Convert a string value to integer
     pub fn convert_to_integer(&self, value: &str, var_name: &str) -> Result<i64, EnvVarError> {
-        value.trim().parse::<i64>().map_err(|_| {
-            EnvVarError::TypeConversionError {
+        value
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| EnvVarError::TypeConversionError {
                 name: var_name.to_string(),
                 value: value.to_string(),
                 expected_type: "integer".to_string(),
-            }
-        })
+            })
     }
 
     /// Convert a string value to float
     pub fn convert_to_float(&self, value: &str, var_name: &str) -> Result<f64, EnvVarError> {
-        value.trim().parse::<f64>().map_err(|_| {
-            EnvVarError::TypeConversionError {
+        value
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| EnvVarError::TypeConversionError {
                 name: var_name.to_string(),
                 value: value.to_string(),
                 expected_type: "float".to_string(),
-            }
-        })
+            })
     }
 
     /// Get environment variable value with optional default
@@ -316,9 +318,8 @@ mod tests {
         env::set_var("DB_PORT", "5432");
         env::remove_var("DB_NAME");
 
-        let result = processor.substitute_variables(
-            "Connection: ${DB_HOST}:${DB_PORT}/${DB_NAME:-myapp}",
-        )?;
+        let result = processor
+            .substitute_variables("Connection: ${DB_HOST}:${DB_PORT}/${DB_NAME:-myapp}")?;
         assert_eq!(result, "Connection: db.example.com:5432/myapp");
 
         // Clean up
@@ -365,7 +366,10 @@ mod tests {
 
         // Test invalid value
         let result = processor.convert_to_boolean("maybe", "TEST_VAR");
-        assert!(matches!(result, Err(EnvVarError::TypeConversionError { .. })));
+        assert!(matches!(
+            result,
+            Err(EnvVarError::TypeConversionError { .. })
+        ));
 
         Ok(())
     }
@@ -380,7 +384,10 @@ mod tests {
 
         // Test invalid value
         let result = processor.convert_to_integer("not_a_number", "TEST_VAR");
-        assert!(matches!(result, Err(EnvVarError::TypeConversionError { .. })));
+        assert!(matches!(
+            result,
+            Err(EnvVarError::TypeConversionError { .. })
+        ));
 
         Ok(())
     }
@@ -390,12 +397,21 @@ mod tests {
         let processor = EnvVarProcessor::new()?;
 
         assert_eq!(processor.convert_to_float("42.5", "TEST_VAR")?, 42.5);
-        assert_eq!(processor.convert_to_float("-123.456", "TEST_VAR")?, -123.456);
-        assert_eq!(processor.convert_to_float("  456.789  ", "TEST_VAR")?, 456.789);
+        assert_eq!(
+            processor.convert_to_float("-123.456", "TEST_VAR")?,
+            -123.456
+        );
+        assert_eq!(
+            processor.convert_to_float("  456.789  ", "TEST_VAR")?,
+            456.789
+        );
 
         // Test invalid value
         let result = processor.convert_to_float("not_a_number", "TEST_VAR");
-        assert!(matches!(result, Err(EnvVarError::TypeConversionError { .. })));
+        assert!(matches!(
+            result,
+            Err(EnvVarError::TypeConversionError { .. })
+        ));
 
         Ok(())
     }
@@ -451,9 +467,8 @@ mod tests {
 
         env::remove_var("TEST_SPECIAL_DEFAULT");
 
-        let result = processor.substitute_variables(
-            "Config: ${TEST_SPECIAL_DEFAULT:-http://localhost:8080/api}",
-        )?;
+        let result = processor
+            .substitute_variables("Config: ${TEST_SPECIAL_DEFAULT:-http://localhost:8080/api}")?;
         assert_eq!(result, "Config: http://localhost:8080/api");
 
         Ok(())
@@ -466,9 +481,8 @@ mod tests {
 
         env::set_var("TEST_REPEATED_VAR", "repeated_value");
 
-        let result = processor.substitute_variables(
-            "First: ${TEST_REPEATED_VAR}, Second: ${TEST_REPEATED_VAR}",
-        )?;
+        let result = processor
+            .substitute_variables("First: ${TEST_REPEATED_VAR}, Second: ${TEST_REPEATED_VAR}")?;
         assert_eq!(result, "First: repeated_value, Second: repeated_value");
 
         // Clean up

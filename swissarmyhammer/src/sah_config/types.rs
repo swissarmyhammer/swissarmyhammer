@@ -130,8 +130,8 @@ impl Configuration {
 
     /// Create a configuration with values and file path
     pub fn with_values(values: HashMap<String, ConfigValue>, file_path: Option<PathBuf>) -> Self {
-        Self { 
-            values, 
+        Self {
+            values,
             file_path,
             cache_metadata: None,
         }
@@ -139,12 +139,12 @@ impl Configuration {
 
     /// Create a configuration with values, file path, and cache metadata
     pub fn with_cache_metadata(
-        values: HashMap<String, ConfigValue>, 
+        values: HashMap<String, ConfigValue>,
         file_path: Option<PathBuf>,
-        cache_metadata: Option<CacheMetadata>
+        cache_metadata: Option<CacheMetadata>,
     ) -> Self {
-        Self { 
-            values, 
+        Self {
+            values,
             file_path,
             cache_metadata,
         }
@@ -386,22 +386,22 @@ mod tests {
     #[test]
     fn test_configuration_caching() {
         let mut config = Configuration::new();
-        
+
         // Initially no cache metadata
         assert!(config.cache_metadata().is_none());
         assert!(config.is_cache_valid()); // No cache = valid
         assert!(!config.is_cache_expired(3600)); // No cache = not expired
-        
+
         // Create dummy cache metadata
         let cache_metadata = CacheMetadata {
             last_modified: SystemTime::now(),
             file_size: 100,
             loaded_at: SystemTime::now(),
         };
-        
+
         config.set_cache_metadata(cache_metadata);
         assert!(config.cache_metadata().is_some());
-        
+
         // Cache age should be 0 (just created)
         let age = config.cache_age_seconds().unwrap_or(999);
         assert!(age <= 1); // Should be 0 or 1 second
@@ -410,12 +410,12 @@ mod tests {
     #[test]
     fn test_configuration_should_reload() {
         use std::time::{Duration, SystemTime};
-        
+
         let mut config = Configuration::new();
-        
+
         // No cache = should not reload
         assert!(!config.should_reload(300));
-        
+
         // Add cache metadata but no file path
         let past_time = SystemTime::now() - Duration::from_secs(10);
         let cache_metadata = CacheMetadata {
@@ -424,10 +424,10 @@ mod tests {
             loaded_at: past_time,
         };
         config.set_cache_metadata(cache_metadata);
-        
+
         // Still should not reload (no file path, so cache validity doesn't matter)
         assert!(!config.should_reload(300));
-        
+
         // Test with expired cache - should reload because TTL is less than age
         assert!(config.should_reload(5)); // TTL of 5 seconds but loaded 10 seconds ago
     }
