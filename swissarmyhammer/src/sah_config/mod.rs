@@ -15,7 +15,9 @@ pub mod validation;
 
 // Re-export the main types for easier access
 pub use loader::{ConfigurationError, ConfigurationLoader};
-pub use template_integration::{merge_config_into_context, load_and_merge_repo_config, substitute_env_vars};
+pub use template_integration::{
+    load_and_merge_repo_config, merge_config_into_context, substitute_env_vars,
+};
 pub use types::{ConfigValue, Configuration};
 pub use validation::{ValidationError, ValidationRule, Validator};
 

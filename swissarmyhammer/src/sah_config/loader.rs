@@ -17,18 +17,18 @@ pub enum ConfigurationError {
 
     /// Configuration file exceeds maximum allowed size
     #[error("File is too large: {size} bytes (max: {max_size} bytes)")]
-    FileTooLarge { 
+    FileTooLarge {
         /// Actual file size in bytes
-        size: u64, 
+        size: u64,
         /// Maximum allowed size in bytes
-        max_size: u64 
+        max_size: u64,
     },
 
     /// Configuration file was not found at the specified path
     #[error("Configuration file not found: {path}")]
-    FileNotFound { 
+    FileNotFound {
         /// Path where the file was expected
-        path: String 
+        path: String,
     },
 
     /// File contains invalid UTF-8 characters
