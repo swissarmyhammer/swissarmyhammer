@@ -650,8 +650,8 @@ impl Validator {
 
     /// Validate sah.toml configuration file if it exists
     fn validate_sah_config(&self, result: &mut ValidationResult) -> Result<()> {
-        use swissarmyhammer::sah_config::ValidationError as ConfigValidationError;
         use std::path::Path;
+        use swissarmyhammer::sah_config::ValidationError as ConfigValidationError;
 
         // Check for sah.toml in the current directory
         let config_path = Path::new("sah.toml");

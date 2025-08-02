@@ -8,10 +8,34 @@ use colored::*;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{self, Read};
-use swissarmyhammer::sah_config::{load_repo_config_for_cli, Configuration};
-use swissarmyhammer::template::TemplateEngine;
+use swissarmyhammer::sah_config::{load_repo_config_for_cli, ConfigValue, Configuration};
 
 use crate::cli::{ConfigCommands, OutputFormat};
+
+/// Convert a ConfigValue to a liquid::model::Value for template rendering
+///
+/// This function recursively converts our sah.toml ConfigValue representation
+/// to liquid values that support proper nested access in templates.
+fn config_value_to_liquid_value(config_value: &ConfigValue) -> liquid::model::Value {
+    match config_value {
+        ConfigValue::String(s) => liquid::model::Value::scalar(s.clone()),
+        ConfigValue::Integer(i) => liquid::model::Value::scalar(*i),
+        ConfigValue::Float(f) => liquid::model::Value::scalar(*f),
+        ConfigValue::Boolean(b) => liquid::model::Value::scalar(*b),
+        ConfigValue::Array(arr) => {
+            let liquid_array: Vec<liquid::model::Value> =
+                arr.iter().map(config_value_to_liquid_value).collect();
+            liquid::model::Value::Array(liquid_array)
+        }
+        ConfigValue::Table(table) => {
+            let mut liquid_object = liquid::model::Object::new();
+            for (key, value) in table {
+                liquid_object.insert(key.clone().into(), config_value_to_liquid_value(value));
+            }
+            liquid::model::Value::Object(liquid_object)
+        }
+    }
+}
 
 /// Handle all config-related commands
 pub async fn handle_config_command(command: ConfigCommands) -> Result<()> {
@@ -41,7 +65,10 @@ async fn show_config(format: OutputFormat) -> Result<()> {
                 OutputFormat::Json => println!("{{}}"),
                 OutputFormat::Yaml => println!("# No configuration file found"),
                 OutputFormat::Table => {
-                    println!("{}", "No sah.toml configuration file found in repository".yellow());
+                    println!(
+                        "{}",
+                        "No sah.toml configuration file found in repository".yellow()
+                    );
                     println!("Create a sah.toml file in the repository root to configure project variables.");
                 }
             }
@@ -84,10 +111,8 @@ async fn test_template(
 
     // Read template content
     let template_content = match template {
-        Some(ref file_path) => {
-            std::fs::read_to_string(file_path)
-                .with_context(|| format!("Failed to read template file: {}", file_path))?
-        }
+        Some(ref file_path) => std::fs::read_to_string(file_path)
+            .with_context(|| format!("Failed to read template file: {}", file_path))?,
         None => {
             // Read from stdin
             let mut content = String::new();
@@ -108,14 +133,11 @@ async fn test_template(
         }
     }
 
-    // Create template engine
-    let engine = TemplateEngine::new();
+    // Create template vars clone for liquid context
+    let template_vars_for_liquid = template_vars.clone();
 
     if debug {
         println!("{}", "Template variables (overrides):".bold());
-        for (key, value) in &template_vars {
-            println!("  {}: {}", key.cyan(), value);
-        }
         if let Some(ref config) = config {
             println!("{}", "Configuration variables:".bold());
             for (key, value) in config.values() {
@@ -129,38 +151,28 @@ async fn test_template(
         println!("{}", "Rendered output:".bold());
     }
 
-    // Convert configuration to string-based context for template rendering
-    let mut template_context = HashMap::new();
-    
-    // Add configuration variables as strings
+    // For config testing, use liquid directly to support proper nested access
+    let liquid_parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+    let liquid_template = liquid_parser
+        .parse(&template_content)
+        .map_err(|e| anyhow::anyhow!("Template parsing failed: {}", e))?;
+
+    // Create proper liquid context with nested structures
+    let mut liquid_context = liquid::model::Object::new();
+
+    // Add configuration variables as nested objects
     if let Some(ref config) = config {
         for (key, value) in config.values() {
-            let string_value = match value {
-                swissarmyhammer::sah_config::ConfigValue::String(s) => s.clone(),
-                swissarmyhammer::sah_config::ConfigValue::Integer(i) => i.to_string(),
-                swissarmyhammer::sah_config::ConfigValue::Float(f) => f.to_string(),
-                swissarmyhammer::sah_config::ConfigValue::Boolean(b) => b.to_string(),
-                swissarmyhammer::sah_config::ConfigValue::Array(arr) => {
-                    // For arrays, create a simple string representation
-                    format!("[{} items]", arr.len())
-                }
-                swissarmyhammer::sah_config::ConfigValue::Table(table) => {
-                    // For tables, create a simple string representation
-                    format!("{{{} keys}}", table.len())
-                }
-            };
-            template_context.insert(key.clone(), string_value);
+            liquid_context.insert(key.clone().into(), config_value_to_liquid_value(value));
         }
     }
-    
-    // Override with command line variables
-    for (key, value) in template_vars {
-        template_context.insert(key, value);
+
+    // Override with command line variables (as strings)
+    for (key, value) in template_vars_for_liquid {
+        liquid_context.insert(key.into(), liquid::model::Value::scalar(value));
     }
-    
-    // Render template
-    let template = engine.parse(&template_content)?;
-    match template.render(&template_context) {
+
+    match liquid_template.render(&liquid_context) {
         Ok(rendered) => {
             println!("{}", rendered);
         }
@@ -183,7 +195,9 @@ async fn show_env_vars(missing: bool, format: OutputFormat) -> Result<()> {
         }
         None => match format {
             OutputFormat::Json => println!("[]"),
-            OutputFormat::Yaml => println!("# No environment variables - no configuration file found"),
+            OutputFormat::Yaml => {
+                println!("# No environment variables - no configuration file found")
+            }
             OutputFormat::Table => {
                 println!("{}", "No configuration file found".yellow());
             }
@@ -224,7 +238,12 @@ fn display_configuration(config: &Configuration, format: OutputFormat) -> Result
                     swissarmyhammer::sah_config::ConfigValue::Array(_) => "array",
                     swissarmyhammer::sah_config::ConfigValue::Table(_) => "table",
                 };
-                println!("  {} {} {}", key.cyan(), type_str.dimmed(), format_config_value(&value));
+                println!(
+                    "  {} {} {}",
+                    key.cyan(),
+                    type_str.dimmed(),
+                    format_config_value(&value)
+                );
             }
         }
     }
@@ -322,12 +341,19 @@ fn display_env_vars(config: &Configuration, missing: bool, format: OutputFormat)
                 if missing {
                     println!("{}", "All environment variables are set".green());
                 } else {
-                    println!("{}", "No environment variables found in configuration".yellow());
+                    println!(
+                        "{}",
+                        "No environment variables found in configuration".yellow()
+                    );
                 }
             } else {
                 println!("{}", "Environment Variables:".bold());
                 for (name, default, current) in &filtered_vars {
-                    let status = if current.is_some() { "✓".green() } else { "✗".red() };
+                    let status = if current.is_some() {
+                        "✓".green()
+                    } else {
+                        "✗".red()
+                    };
                     let value = current.as_deref().unwrap_or("(not set)");
                     println!("  {} {} = {}", status, name.cyan(), value);
                     if let Some(default) = default {
@@ -361,7 +387,7 @@ fn extract_env_vars_from_value(
     env_vars: &mut Vec<(String, Option<String>, Option<String>)>,
 ) {
     use swissarmyhammer::sah_config::ConfigValue;
-    
+
     match value {
         ConfigValue::String(s) => {
             // Look for ${VAR} or ${VAR:-default} patterns
@@ -407,7 +433,7 @@ fn config_value_type_name(value: &swissarmyhammer::sah_config::ConfigValue) -> &
 /// Format a config value for display
 fn format_config_value(value: &swissarmyhammer::sah_config::ConfigValue) -> String {
     use swissarmyhammer::sah_config::ConfigValue;
-    
+
     match value {
         ConfigValue::String(s) => format!("\"{}\"", s),
         ConfigValue::Integer(i) => i.to_string(),
@@ -426,31 +452,51 @@ mod tests {
 
     #[test]
     fn test_config_value_type_name() {
-        assert_eq!(config_value_type_name(&ConfigValue::String("test".to_string())), "string");
+        assert_eq!(
+            config_value_type_name(&ConfigValue::String("test".to_string())),
+            "string"
+        );
         assert_eq!(config_value_type_name(&ConfigValue::Integer(42)), "integer");
-        assert_eq!(config_value_type_name(&ConfigValue::Float(3.14)), "float");
-        assert_eq!(config_value_type_name(&ConfigValue::Boolean(true)), "boolean");
+        assert_eq!(config_value_type_name(&ConfigValue::Float(2.5)), "float");
+        assert_eq!(
+            config_value_type_name(&ConfigValue::Boolean(true)),
+            "boolean"
+        );
         assert_eq!(config_value_type_name(&ConfigValue::Array(vec![])), "array");
-        assert_eq!(config_value_type_name(&ConfigValue::Table(HashMap::new())), "table");
+        assert_eq!(
+            config_value_type_name(&ConfigValue::Table(HashMap::new())),
+            "table"
+        );
     }
 
     #[test]
     fn test_format_config_value() {
-        assert_eq!(format_config_value(&ConfigValue::String("test".to_string())), "\"test\"");
+        assert_eq!(
+            format_config_value(&ConfigValue::String("test".to_string())),
+            "\"test\""
+        );
         assert_eq!(format_config_value(&ConfigValue::Integer(42)), "42");
-        assert_eq!(format_config_value(&ConfigValue::Float(3.14)), "3.14");
+        assert_eq!(format_config_value(&ConfigValue::Float(2.5)), "2.5");
         assert_eq!(format_config_value(&ConfigValue::Boolean(true)), "true");
-        assert_eq!(format_config_value(&ConfigValue::Array(vec![ConfigValue::String("a".to_string())])), "[1 items]");
-        assert_eq!(format_config_value(&ConfigValue::Table(HashMap::new())), "{0 keys}");
+        assert_eq!(
+            format_config_value(&ConfigValue::Array(vec![ConfigValue::String(
+                "a".to_string()
+            )])),
+            "[1 items]"
+        );
+        assert_eq!(
+            format_config_value(&ConfigValue::Table(HashMap::new())),
+            "{0 keys}"
+        );
     }
 
     #[test]
     fn test_extract_env_vars_simple() {
         let mut env_vars = Vec::new();
         let value = ConfigValue::String("${TEST_VAR}".to_string());
-        
+
         extract_env_vars_from_value(&value, &mut env_vars);
-        
+
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars[0].0, "TEST_VAR");
         assert_eq!(env_vars[0].1, None); // no default
@@ -460,9 +506,9 @@ mod tests {
     fn test_extract_env_vars_with_default() {
         let mut env_vars = Vec::new();
         let value = ConfigValue::String("${TEST_VAR:-default_value}".to_string());
-        
+
         extract_env_vars_from_value(&value, &mut env_vars);
-        
+
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars[0].0, "TEST_VAR");
         assert_eq!(env_vars[0].1, Some("default_value".to_string()));
@@ -472,11 +518,14 @@ mod tests {
     fn test_extract_env_vars_nested() {
         let mut env_vars = Vec::new();
         let mut table = HashMap::new();
-        table.insert("nested".to_string(), ConfigValue::String("${NESTED_VAR}".to_string()));
+        table.insert(
+            "nested".to_string(),
+            ConfigValue::String("${NESTED_VAR}".to_string()),
+        );
         let value = ConfigValue::Table(table);
-        
+
         extract_env_vars_from_value(&value, &mut env_vars);
-        
+
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars[0].0, "NESTED_VAR");
     }

@@ -3,9 +3,9 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
+use crate::sah_config;
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
-use crate::sah_config;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -2123,7 +2123,7 @@ pub fn parse_action_from_description_with_context(
 ) -> ActionResult<Option<Box<dyn Action>>> {
     // Create a mutable copy of the context to merge configuration variables
     let mut enhanced_context = context.clone();
-    
+
     // Load and merge sah.toml configuration variables into the context
     // This uses the existing template integration infrastructure
     if let Err(e) = sah_config::load_and_merge_repo_config(&mut enhanced_context) {

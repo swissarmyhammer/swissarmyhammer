@@ -70,7 +70,9 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::{plugins::PluginRegistry, sah_config, security, PromptLibrary, Result, SwissArmyHammerError};
+use crate::{
+    plugins::PluginRegistry, sah_config, security, PromptLibrary, Result, SwissArmyHammerError,
+};
 use liquid::{Object, Parser};
 use liquid_core::{Language, ParseTag, Renderable, Runtime, TagReflection, TagTokenIter};
 use std::borrow::Cow;
@@ -932,22 +934,24 @@ mod tests {
         // This test doesn't rely on actual file loading since that would require
         // setting up filesystem fixtures. Instead, it tests the precedence logic
         // in the template engine's render_with_config method.
-        
-        let template = Template::new("Project: {{project_name}}, Env: {{TEST_VAR}}, Arg: {{custom_arg}}").unwrap();
-        
+
+        let template =
+            Template::new("Project: {{project_name}}, Env: {{TEST_VAR}}, Arg: {{custom_arg}}")
+                .unwrap();
+
         // Set up environment variable
         std::env::set_var("TEST_VAR", "env_value");
-        
+
         let mut args = HashMap::new();
         args.insert("custom_arg".to_string(), "arg_value".to_string());
         args.insert("TEST_VAR".to_string(), "arg_override".to_string());
-        
+
         let result = template.render_with_config(&args).unwrap();
-        
+
         // Environment variable should be overridden by argument
         assert!(result.contains("Env: arg_override"));
         assert!(result.contains("Arg: arg_value"));
-        
+
         // Clean up
         std::env::remove_var("TEST_VAR");
     }
@@ -957,8 +961,10 @@ mod tests {
         let engine = TemplateEngine::new();
         let mut args = HashMap::new();
         args.insert("greeting".to_string(), "Hello".to_string());
-        
-        let result = engine.render_with_config("{{greeting}} World!", &args).unwrap();
+
+        let result = engine
+            .render_with_config("{{greeting}} World!", &args)
+            .unwrap();
         assert_eq!(result, "Hello World!");
     }
 }
