@@ -4,6 +4,8 @@
 //! integrating configuration variables with the liquid template engine, and validating
 //! configuration files.
 
+/// Environment variable processing for sah.toml files
+pub mod env_vars;
 /// Configuration file loading and parsing functionality
 pub mod loader;
 /// Template integration for merging configuration with Liquid context
@@ -14,11 +16,12 @@ pub mod types;
 pub mod validation;
 
 // Re-export the main types for easier access
+pub use env_vars::{EnvVarError, EnvVarProcessor};
 pub use loader::{ConfigurationError, ConfigurationLoader};
 pub use template_integration::{
     load_and_merge_repo_config, merge_config_into_context, substitute_env_vars,
 };
-pub use types::{ConfigValue, Configuration};
+pub use types::{CacheMetadata, ConfigValue, Configuration};
 pub use validation::{ValidationError, ValidationRule, Validator};
 
 /// Load and parse a sah.toml configuration file
@@ -39,7 +42,7 @@ pub use validation::{ValidationError, ValidationRule, Validator};
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn load_config(file_path: &std::path::Path) -> Result<Configuration, ConfigurationError> {
-    ConfigurationLoader::new().load_from_file(file_path)
+    ConfigurationLoader::new()?.load_from_file(file_path)
 }
 
 /// Load configuration from repository root
@@ -50,7 +53,7 @@ pub fn load_config(file_path: &std::path::Path) -> Result<Configuration, Configu
 /// # Returns
 /// * `Result<Option<Configuration>, ConfigurationError>` - The configuration if found, None if no file exists
 pub fn load_repo_config() -> Result<Option<Configuration>, ConfigurationError> {
-    ConfigurationLoader::new().load_from_repo_root()
+    ConfigurationLoader::new()?.load_from_repo_root()
 }
 
 /// Validate a sah.toml configuration file

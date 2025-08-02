@@ -125,7 +125,7 @@ pub fn load_and_merge_repo_config(
 ) -> Result<bool, crate::sah_config::loader::ConfigurationError> {
     use crate::sah_config::loader::ConfigurationLoader;
 
-    let loader = ConfigurationLoader::new();
+    let loader = ConfigurationLoader::new()?;
     match loader.load_from_repo_root()? {
         Some(config) => {
             merge_config_into_context(context, &config);

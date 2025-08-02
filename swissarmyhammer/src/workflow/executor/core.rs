@@ -709,7 +709,7 @@ impl WorkflowExecutor {
 
     /// Log an execution event
     pub fn log_event(&mut self, event_type: ExecutionEventType, details: String) {
-        tracing::info!("{}: {}", event_type, &details);
+        tracing::trace!("{}: {}", event_type, &details);
         let event = ExecutionEvent {
             timestamp: chrono::Utc::now(),
             event_type,
