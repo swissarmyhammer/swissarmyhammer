@@ -443,7 +443,7 @@ impl Prompt {
             }
         }
 
-        template.render(&render_args)
+        template.render_with_config(&render_args)
     }
 
     /// Renders the prompt template with partial support and environment variables
@@ -512,7 +512,7 @@ impl Prompt {
             }
         }
 
-        template.render_with_env(&render_args)
+        template.render_with_config(&render_args)
     }
 
     /// Adds an argument specification to the prompt.
@@ -776,9 +776,17 @@ impl Prompt {
             }
         }
 
-        // Check if all used variables are defined in arguments
+        // Check if all used variables are defined in arguments or sah.toml
         let defined_args: std::collections::HashSet<String> =
             self.arguments.iter().map(|arg| arg.name.clone()).collect();
+
+        // Also include variables from sah.toml configuration
+        let mut defined_config_vars = std::collections::HashSet::new();
+        if let Ok(Some(config)) = crate::sah_config::load_repo_config_for_cli() {
+            for key in config.values().keys() {
+                defined_config_vars.insert(key.clone());
+            }
+        }
 
         for used_var in &used_variables {
             // Skip if this variable is defined within the template
@@ -786,8 +794,8 @@ impl Prompt {
                 continue;
             }
 
-            // Check if it's defined in arguments
-            if !defined_args.contains(used_var) {
+            // Check if it's defined in arguments or sah.toml configuration
+            if !defined_args.contains(used_var) && !defined_config_vars.contains(used_var) {
                 issues.push(ValidationIssue {
                     level: ValidationLevel::Error,
                     file_path: file_path.to_path_buf(),
@@ -796,7 +804,7 @@ impl Prompt {
                     column: None,
                     message: format!("Undefined template variable: '{used_var}'"),
                     suggestion: Some(format!(
-                        "Add '{used_var}' to the arguments list or remove the template variable"
+                        "Add '{used_var}' to the arguments list, define it in sah.toml, or remove the template variable"
                     )),
                 });
             }

@@ -50,3 +50,21 @@ Summary:
 I do not expect a validation failure, as the variable `project_name` *is* defined -- in `sah.toml`
 
 Fix it.
+## Proposed Solution
+
+After analyzing the codebase, I found the root cause of the issue:
+
+1. **Problem**: The template validation logic in `swissarmyhammer/src/prompts.rs` only checks if template variables are defined in the prompt's arguments, but it doesn't consider variables that might be defined in `sah.toml`.
+
+2. **Current behavior**: When validating the `say-hello.md` prompt that uses `{{ project_name | default: "Swiss Army Hammer" }}`, the validator looks for `project_name` in the prompt's arguments list, but it's not there - it's defined in `sah.toml`.
+
+3. **Solution**: Modify the template validation logic to also consider variables defined in `sah.toml` when checking for undefined template variables.
+
+## Implementation Steps
+
+1. Update the `Prompt::validate()` method to load and consider `sah.toml` variables
+2. Modify the validation logic to check both prompt arguments AND sah.toml variables
+3. Ensure the fix works for both validation and actual template rendering
+4. Test the changes to ensure they work correctly
+
+The key file to modify is `/Users/wballard/github/swissarmyhammer/swissarmyhammer/src/prompts.rs` around line 400-450 where the "Undefined template variable" error is generated.

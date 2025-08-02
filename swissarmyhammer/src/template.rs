@@ -492,17 +492,22 @@ impl Template {
 
         let mut object = Object::new();
 
-        // First, initialize all template variables as nil so filters like | default work
-        let variables = extract_template_variables(&self.template_str);
-        for var in variables {
-            object.insert(var.into(), liquid::model::Value::Nil);
-        }
-
         // Load and merge sah.toml configuration variables (lowest priority)
-        if let Ok(Some(config)) = sah_config::load_repo_config() {
+        let mut config_vars = std::collections::HashSet::new();
+        if let Ok(Some(config)) = sah_config::load_repo_config_for_cli() {
             let config_object = config.to_liquid_object();
             for (key, value) in config_object.iter() {
+                config_vars.insert(key.clone());
                 object.insert(key.clone(), value.clone());
+            }
+        }
+
+        // Initialize remaining template variables as nil so filters like | default work
+        // But don't override variables that were already set from sah.toml
+        let variables = extract_template_variables(&self.template_str);
+        for var in variables {
+            if !config_vars.contains(var.as_str()) {
+                object.insert(var.into(), liquid::model::Value::Nil);
             }
         }
 
