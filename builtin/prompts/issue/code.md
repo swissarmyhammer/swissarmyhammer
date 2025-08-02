@@ -13,8 +13,6 @@ You job is to resolve an issue by coding a solution.
 ## Process
 
 {% render "issue/on_worktree" %}
-- Use the issue_current tool -- this issue is what you are coding
-- Use the issue_show tool to get the issue contents and file
 - Evaluate the issue, think deeply about it, and decide how you will implement as code
   - Describe your proposed solution and use issue_update to add it to the issue file
     - Create a new markdown section in the issue like:
@@ -28,3 +26,5 @@ You job is to resolve an issue by coding a solution.
 - Use Test Driven Development and implement your proposed solution on the issue feature branch
 - DO NOT commit to git
 - Report your progress
+
+{% render "review_format" %}
