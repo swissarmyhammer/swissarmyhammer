@@ -5,6 +5,7 @@
 
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
+use crate::sah_config;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -2120,8 +2121,20 @@ pub fn parse_action_from_description_with_context(
     description: &str,
     context: &HashMap<String, Value>,
 ) -> ActionResult<Option<Box<dyn Action>>> {
-    let rendered_description = if let Some(template_vars) = context.get("_template_vars") {
-        // Extract template variables from context
+    // Create a mutable copy of the context to merge configuration variables
+    let mut enhanced_context = context.clone();
+    
+    // Load and merge sah.toml configuration variables into the context
+    // This uses the existing template integration infrastructure
+    if let Err(e) = sah_config::load_and_merge_repo_config(&mut enhanced_context) {
+        tracing::debug!(
+            "Failed to load sah.toml configuration: {}. Continuing without config variables.",
+            e
+        );
+    }
+
+    let rendered_description = if let Some(template_vars) = enhanced_context.get("_template_vars") {
+        // Extract template variables from context (now includes config variables)
         if let Some(vars_map) = template_vars.as_object() {
             // Convert to liquid Object
             let mut liquid_vars = liquid::Object::new();
