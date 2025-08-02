@@ -89,6 +89,24 @@ pub enum ConfigError {
         max_size: usize,
     },
 
+    /// String too long error (alias for StringTooLarge for compatibility)
+    #[error("String too long: {length} characters (maximum: {max_length} characters)")]
+    StringTooLong {
+        /// Actual string length
+        length: usize,
+        /// Maximum allowed string length
+        max_length: usize,
+    },
+
+    /// Array too long error (alias for ArrayTooLarge for compatibility)
+    #[error("Array too long: {length} elements (maximum: {max_length} elements)")]
+    ArrayTooLong {
+        /// Actual array length in elements
+        length: usize,
+        /// Maximum allowed array length in elements
+        max_length: usize,
+    },
+
     /// Type coercion error
     #[error("Cannot coerce value of type {from_type} to {to_type}")]
     TypeCoercion {
@@ -155,6 +173,16 @@ impl ConfigError {
         Self::ArrayTooLarge { size, max_size }
     }
 
+    /// Create a string too long error
+    pub fn string_too_long(length: usize, max_length: usize) -> Self {
+        Self::StringTooLong { length, max_length }
+    }
+
+    /// Create an array too long error
+    pub fn array_too_long(length: usize, max_length: usize) -> Self {
+        Self::ArrayTooLong { length, max_length }
+    }
+
     /// Create a type coercion error
     pub fn type_coercion(from_type: String, to_type: String) -> Self {
         Self::TypeCoercion { from_type, to_type }
@@ -199,7 +227,17 @@ impl ConfigError {
 }
 
 /// Configuration validation limits and constants
-pub struct ValidationLimits;
+#[derive(Debug, Clone, Copy)]
+pub struct ValidationLimits {
+    /// Maximum file size in bytes
+    pub max_file_size: u64,
+    /// Maximum nesting depth
+    pub max_nesting_depth: usize,
+    /// Maximum string value size in bytes
+    pub max_string_length: usize,
+    /// Maximum array size in elements
+    pub max_array_length: usize,
+}
 
 impl ValidationLimits {
     /// Maximum file size in bytes (1MB)
@@ -213,6 +251,17 @@ impl ValidationLimits {
 
     /// Maximum array size (1000 elements)
     pub const MAX_ARRAY_SIZE: usize = 1_000;
+}
+
+impl Default for ValidationLimits {
+    fn default() -> Self {
+        Self {
+            max_file_size: Self::MAX_FILE_SIZE,
+            max_nesting_depth: Self::MAX_NESTING_DEPTH,
+            max_string_length: Self::MAX_STRING_SIZE,
+            max_array_length: Self::MAX_ARRAY_SIZE,
+        }
+    }
 }
 
 #[cfg(test)]

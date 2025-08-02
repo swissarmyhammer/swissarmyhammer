@@ -147,6 +147,28 @@ impl ConfigValue {
         }
     }
 
+    /// Attempt to coerce this value to an array
+    pub fn coerce_to_array(&self) -> Result<&Vec<ConfigValue>, ConfigError> {
+        match self {
+            ConfigValue::Array(arr) => Ok(arr),
+            _ => Err(ConfigError::type_coercion(
+                self.type_name().to_string(),
+                "array".to_string(),
+            )),
+        }
+    }
+
+    /// Attempt to coerce this value to a table
+    pub fn coerce_to_table(&self) -> Result<&HashMap<String, ConfigValue>, ConfigError> {
+        match self {
+            ConfigValue::Table(table) => Ok(table),
+            _ => Err(ConfigError::type_coercion(
+                self.type_name().to_string(),
+                "table".to_string(),
+            )),
+        }
+    }
+
     /// Validate this value against size and nesting limits
     pub fn validate(&self, current_depth: usize) -> Result<(), ConfigError> {
         if current_depth > ValidationLimits::MAX_NESTING_DEPTH {
