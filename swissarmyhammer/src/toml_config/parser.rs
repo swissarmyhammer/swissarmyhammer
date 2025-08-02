@@ -464,7 +464,7 @@ mod tests {
     fn test_toml_array_parsing() {
         let toml_content = r#"
             simple_array = ["item1", "item2", "item3"]
-            mixed_array = ["string", 42, true, 3.14]
+            mixed_array = ["string", 42, true, 3.15]
             
             [[table_array]]
             name = "first"
@@ -491,7 +491,7 @@ mod tests {
             assert_eq!(array[0], ConfigValue::String("string".to_string()));
             assert_eq!(array[1], ConfigValue::Integer(42));
             assert_eq!(array[2], ConfigValue::Boolean(true));
-            assert_eq!(array[3], ConfigValue::Float(3.14));
+            assert_eq!(array[3], ConfigValue::Float(3.15));
         } else {
             panic!("Expected array for mixed_array");
         }

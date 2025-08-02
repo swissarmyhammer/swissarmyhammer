@@ -324,7 +324,7 @@ mod tests {
         let string_val = ConfigValue::String("123".to_string());
         assert_eq!(string_val.coerce_to_integer().unwrap(), 123);
 
-        let float_val = ConfigValue::Float(3.14);
+        let float_val = ConfigValue::Float(3.15);
         assert_eq!(float_val.coerce_to_integer().unwrap(), 3);
 
         // Test boolean coercion

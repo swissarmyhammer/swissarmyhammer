@@ -146,7 +146,7 @@ impl Configuration {
         // Navigate through intermediate levels
         for part in &parts[1..parts.len() - 1] {
             let part_key = part.to_string();
-            
+
             // Ensure the key exists as a table or create it
             match current_table.get(&part_key) {
                 Some(ConfigValue::Table(_)) => {
