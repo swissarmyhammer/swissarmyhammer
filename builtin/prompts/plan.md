@@ -35,7 +35,7 @@ Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_ste
 - Review the existing memos and think deeply about how they apply to the plan.
 - Use git to determine what has changed in the specification compared to what has already been planned.
 - Review the existing code to determine what parts of the specification might already be implemented.
-- Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory
+- Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory.
 - Then, once you have a draft plan, break it down into small, iterative chunks that build on each other incrementally.
 - Look at these chunks and then go another round to break it into small steps.
 - From here you should have the foundation to provide an in order series of issue files that describes the work to do at each step

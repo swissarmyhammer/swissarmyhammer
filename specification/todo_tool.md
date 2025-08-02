@@ -33,7 +33,7 @@ todo:
 
 ## Tool Functions
 
-### Todo
+### Create
 
 **Purpose**: Add a new item to the todo list
 
@@ -48,7 +48,7 @@ todo:
 - Adds the item with `done: false` status
 - Appends to the existing todo list
 
-### Doing
+### Show
 
 **Purpose**: Retrieve the next todo item to work on
 
@@ -62,9 +62,9 @@ todo:
 - Enforces single-item focus to avoid context pollution
 - Returns the complete item with all fields
 
-### Done
+### Mark Complete
 
-**Purpose**: Mark a todo item as completed and remove it from the list
+**Purpose**: Mark a todo item as completed
 
 **Parameters**:
 - `todo_list` (required): Name/path of the todo list file
@@ -72,7 +72,7 @@ todo:
 
 **Behavior**:
 - Removes the specified item from the todo list
-- Preserves remaining incomplete items
+- Preserves items, leaving the full file is useful for watching status and debugging
 - Updates the todo list file
 
 ## Usage Patterns
@@ -86,8 +86,7 @@ todo:
 ## File Management
 
 - Todo lists are stored as `.yaml` files in `./swissarmyhammer/todo/`
-- Files should be added to `.gitignore` to prevent accidental commits
-- Recommended naming: `session-YYYYMMDD.yaml` or similar temporary naming conventions
+- `./swissarmyhammer/todo/` should be added to `.gitignore` to prevent accidental commits
 - Files can be safely deleted after development sessions complete
 
 ## Integration Notes
