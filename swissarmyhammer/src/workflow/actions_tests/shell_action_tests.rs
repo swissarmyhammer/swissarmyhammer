@@ -580,7 +580,7 @@ async fn test_shell_action_security_dangerous_pattern_warning() {
     ];
 
     for cmd in &dangerous_commands {
-        let action = ShellAction::new(cmd.to_string());
+        let _action = ShellAction::new(cmd.to_string());
 
         // Test security validation directly without executing the command
         // The validate_dangerous_patterns function should allow these but log warnings

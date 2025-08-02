@@ -4,8 +4,6 @@ description: Code up the code review
 ---
 
 
-## Guidelines
-
 {% render "principals" %}
 {% render "coding_standards" %}
 

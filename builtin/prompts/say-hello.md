@@ -16,6 +16,10 @@ arguments:
     description: The language to greet in
     required: false
     default: English
+  - name: project_name
+    description: The name of the project being greeted from
+    required: false
+    default: Swiss Army Hammer
 ---
 
 DO NOT run any tools to perform this task:
