@@ -71,7 +71,7 @@ todo:
 - `id` (required): ULID of the completed todo item
 
 **Behavior**:
-- Removes the specified item from the todo list
+- Marks the specified item from the todo list as done: true
 - Preserves items, leaving the full file is useful for watching status and debugging
 - Updates the todo list file
 
@@ -95,3 +95,15 @@ todo:
 - Issues are for long-term work items; todos are for immediate session management
 - Todo lists help maintain focus during complex multi-step implementations
 - The FIFO "next" pattern encourages completing tasks before starting new ones
+
+## CLI
+
+Add:
+
+`sah todo add <list> --task --context`
+
+`sah todo complete <list> <id>`
+
+`sah todo show <list> <id>`
+
+Make sure to call the MCP tool like we do in other cli commands. DO NOT duplicate the MCP tool logic in CLI
