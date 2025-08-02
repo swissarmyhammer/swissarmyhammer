@@ -11,63 +11,63 @@ pub enum ValidationError {
 
     /// Variable name is invalid according to naming rules
     #[error("Invalid variable name '{name}': {reason}")]
-    InvalidVariableName { 
+    InvalidVariableName {
         /// The invalid variable name
-        name: String, 
+        name: String,
         /// Reason why the name is invalid
-        reason: String 
+        reason: String,
     },
 
     /// Variable name is reserved and cannot be used
     #[error("Variable name '{name}' is reserved and cannot be used")]
-    ReservedVariableName { 
+    ReservedVariableName {
         /// The reserved variable name
-        name: String 
+        name: String,
     },
 
     /// String value exceeds maximum allowed length
     #[error("String value too long: {length} characters (max: {max_length})")]
-    StringTooLong { 
+    StringTooLong {
         /// Actual string length
-        length: usize, 
+        length: usize,
         /// Maximum allowed length
-        max_length: usize 
+        max_length: usize,
     },
 
     /// Array exceeds maximum allowed number of elements
     #[error("Array too large: {length} elements (max: {max_elements})")]
-    ArrayTooLarge { 
+    ArrayTooLarge {
         /// Actual number of elements
-        length: usize, 
+        length: usize,
         /// Maximum allowed elements
-        max_elements: usize 
+        max_elements: usize,
     },
 
     /// Configuration has too many levels of nesting
     #[error("Configuration nesting too deep: {depth} levels (max: {max_depth})")]
-    NestingTooDeep { 
+    NestingTooDeep {
         /// Actual nesting depth
-        depth: usize, 
+        depth: usize,
         /// Maximum allowed depth
-        max_depth: usize 
+        max_depth: usize,
     },
 
     /// Configuration has too many variables
     #[error("Too many configuration variables: {count} (max: {max_count})")]
-    TooManyVariables { 
+    TooManyVariables {
         /// Actual number of variables
-        count: usize, 
+        count: usize,
         /// Maximum allowed variables
-        max_count: usize 
+        max_count: usize,
     },
 
     /// Custom validation rule failed
     #[error("Validation rule failed: {rule} - {message}")]
-    RuleFailed { 
+    RuleFailed {
         /// Name of the failed rule
-        rule: String, 
+        rule: String,
         /// Error message from the rule
-        message: String 
+        message: String,
     },
 }
 

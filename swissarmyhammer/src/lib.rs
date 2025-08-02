@@ -146,6 +146,12 @@ pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationRe
 /// sah.toml configuration types and functionality
 pub use sah_config::{ConfigValue, Configuration, ConfigurationError, ValidationError};
 
+/// Core configuration data structures and TOML parsing
+pub use toml_config::{
+    ConfigError, ConfigParser, ConfigValue as CoreConfigValue, Configuration as CoreConfiguration,
+    ValidationLimits,
+};
+
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -157,6 +163,9 @@ pub mod config;
 
 /// sah.toml configuration support
 pub mod sah_config;
+
+/// Core TOML configuration data structures and parsing
+pub mod toml_config;
 
 pub use config::Config;
 pub use error::{ErrorChainExt, ErrorContext, Result, SwissArmyHammerError};
@@ -195,6 +204,14 @@ pub mod prelude {
     pub use crate::sah_config::{
         load_and_merge_repo_config, load_config, load_repo_config, merge_config_into_context,
         validate_config_file, ConfigValue, Configuration, ConfigurationError, ValidationError,
+    };
+
+    // Core configuration data structures for convenient access
+    pub use crate::toml_config::{
+        load_config as load_core_config, load_repo_config_wrapper as load_core_repo_config,
+        parse_toml_string, validate_config_file as validate_core_config_file, ConfigError,
+        ConfigParser, ConfigValue as CoreConfigValue, Configuration as CoreConfiguration,
+        ValidationLimits,
     };
 
     // Common utilities for easy access

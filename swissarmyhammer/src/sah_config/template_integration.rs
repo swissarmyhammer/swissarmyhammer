@@ -163,11 +163,11 @@ pub fn load_and_merge_repo_config(
 pub fn substitute_env_vars(config: &mut Configuration) {
     // Create a new configuration with processed values
     let mut new_values = HashMap::new();
-    
+
     for (key, value) in config.values() {
         new_values.insert(key.clone(), substitute_env_vars_in_value(value.clone()));
     }
-    
+
     // Replace the configuration with the processed version
     *config = Configuration::with_values(new_values, config.file_path().cloned());
 }
