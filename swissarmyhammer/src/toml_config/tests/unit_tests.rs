@@ -264,6 +264,114 @@ mod config_value_tests {
             let deserialized: ConfigValue = serde_json::from_value(json).unwrap();
             assert_eq!(value, deserialized);
         }
+
+        #[test]
+        fn test_config_value_liquid_conversion_consistency(
+            s in "[a-zA-Z0-9_\\s]{1,50}",
+            i in -1000000i64..1000000i64,
+            f in -1000000.0f64..1000000.0f64,
+            b in any::<bool>()
+        ) {
+            // Test that liquid conversion is consistent
+            let string_value = ConfigValue::String(s.clone());
+            let liquid_string = string_value.to_liquid_value();
+            let expected_string = string_value.coerce_to_string().unwrap();
+            assert_eq!(liquid_string, liquid::model::Value::scalar(expected_string));
+            
+            let int_value = ConfigValue::Integer(i);
+            let liquid_int = int_value.to_liquid_value();
+            assert_eq!(liquid_int, liquid::model::Value::scalar(i));
+            
+            if f.is_finite() {
+                let float_value = ConfigValue::Float(f);
+                let liquid_float = float_value.to_liquid_value();
+                assert_eq!(liquid_float, liquid::model::Value::scalar(f));
+            }
+            
+            let bool_value = ConfigValue::Boolean(b);
+            let liquid_bool = bool_value.to_liquid_value();
+            assert_eq!(liquid_bool, liquid::model::Value::scalar(b));
+        }
+
+        #[test]
+        fn test_environment_variable_pattern_matching(
+            var_name in "[A-Z][A-Z0-9_]{0,30}",
+            default_value in "[a-zA-Z0-9_]{0,20}"
+        ) {
+            // Test that environment variable patterns are parsed correctly
+            let pattern_with_default = format!("${{{var_name}:-{default_value}}}");
+            let pattern_without_default = format!("${{{var_name}}}");
+            
+            let mut value_with_default = ConfigValue::String(pattern_with_default.clone());
+            let mut value_without_default = ConfigValue::String(pattern_without_default.clone());
+            
+            // If environment variable doesn't exist, substitution should use default or fail
+            if std::env::var(&var_name).is_err() {
+                // With default should succeed and use the default value
+                let result_with_default = value_with_default.substitute_env_vars();
+                if result_with_default.is_ok() {
+                    assert_eq!(value_with_default.coerce_to_string().unwrap(), default_value);
+                } else {
+                    // If substitution fails, the original pattern should remain
+                    assert_eq!(value_with_default.coerce_to_string().unwrap(), pattern_with_default);
+                }
+                
+                // Without default should fail
+                let result_without_default = value_without_default.substitute_env_vars();
+                assert!(result_without_default.is_err(), "Environment variable substitution should fail when variable doesn't exist and no default is provided");
+            }
+        }
+
+        #[test]
+        fn test_configuration_key_validation(
+            key in "[a-zA-Z_][a-zA-Z0-9_]{0,30}",
+            value in "[a-zA-Z0-9_\\s]{1,50}"
+        ) {
+            let mut config = Configuration::new();
+            
+            // Valid key should work
+            config.insert(key.clone(), ConfigValue::String(value.clone()));
+            let validation_result = config.validate();
+            assert!(validation_result.is_ok(), "Valid key '{}' should pass validation", key);
+            
+            // Test some specific invalid keys
+            let invalid_keys = vec!["123invalid", "invalid-key", "invalid space"];
+            for invalid_key in invalid_keys {
+                let mut invalid_config = Configuration::new();
+                invalid_config.insert(invalid_key.to_string(), ConfigValue::String(value.clone()));
+                let validation_result = invalid_config.validate();
+                assert!(validation_result.is_err(), "Invalid key '{}' should fail validation", invalid_key);
+            }
+        }
+
+        #[test]
+        fn test_dot_notation_consistency(
+            section1 in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
+            section2 in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
+            key in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
+            value in "[a-zA-Z0-9_\\s]{1,20}"
+        ) {
+            let mut config = Configuration::new();
+            
+            // Set value using dot notation
+            let dot_key = format!("{}.{}.{}", section1, section2, key);
+            config.set(dot_key.clone(), ConfigValue::String(value.clone()));
+            
+            // Retrieve using dot notation should work
+            assert_eq!(
+                config.get(&dot_key),
+                Some(&ConfigValue::String(value.clone()))
+            );
+            
+            // Check that intermediate tables were created
+            assert!(config.contains_key(&section1));
+            assert!(config.contains_key(&format!("{}.{}", section1, section2)));
+            
+            // Remove using dot notation should work
+            let removed = config.remove(&dot_key);
+            assert_eq!(removed, Some(ConfigValue::String(value)));
+            assert!(!config.contains_key(&dot_key));
+        }
     }
 }
 
