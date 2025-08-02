@@ -74,6 +74,10 @@ pub mod configuration;
 /// TOML parser with validation and error handling
 pub mod parser;
 
+/// Comprehensive test suite for configuration system
+#[cfg(test)]
+pub mod tests;
+
 // Re-export main types for easier access
 pub use configuration::Configuration;
 pub use error::{ConfigError, ValidationLimits};
@@ -179,7 +183,7 @@ pub fn parse_toml_string(contents: &str) -> Result<Configuration, ConfigError> {
 }
 
 #[cfg(test)]
-mod tests {
+mod module_tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;

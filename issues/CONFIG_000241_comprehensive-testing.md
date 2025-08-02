@@ -79,3 +79,67 @@ Implement comprehensive test coverage for the sah.toml configuration system, inc
 ## Next Steps
 
 After completion, proceed to LOG_000242_liquid-rendering-fix for addressing the current issue with Log action template rendering.
+## Proposed Solution
+
+After analyzing the existing sah.toml configuration system, I will implement comprehensive test coverage following the TDD approach and existing testing patterns. The solution will be structured in multiple test modules:
+
+### Test Architecture Overview
+
+1. **Unit Tests** - Test individual components in isolation
+   - `swissarmyhammer/src/toml_config/tests/unit_tests.rs` - Core component tests
+   - Tests for ConfigValue enum conversion and serialization  
+   - Tests for Configuration struct with nested tables and dot notation
+   - Tests for TOML parsing with various valid and invalid inputs
+   - Tests for environment variable substitution with different scenarios
+   - Tests for error handling and error message quality
+
+2. **Integration Tests** - Test end-to-end workflows
+   - `swissarmyhammer/src/toml_config/tests/integration_tests.rs` - End-to-end tests
+   - Test configuration loading from file system
+   - Test template integration with configuration variables
+   - Test workflow execution with configuration variables available
+   - Test file discovery from different directory structures
+
+3. **Security and Validation Tests**
+   - `swissarmyhammer/src/toml_config/tests/security_tests.rs` - Security validation
+   - Test file size limits (1MB maximum)
+   - Test depth limits (10 levels maximum)  
+   - Test path traversal prevention
+   - Test malformed TOML handling
+   - Test invalid environment variable syntax
+
+4. **CLI Integration Tests**
+   - `swissarmyhammer-cli/tests/config_cli_tests.rs` - CLI command tests
+   - Test all CLI configuration management commands
+   - Test output formatting (Table, JSON, YAML)
+   - Test error scenarios and help messages
+
+### Test Data Strategy
+
+- Create sample sah.toml files with various complexity levels in test data directories
+- Generate invalid TOML files for error testing
+- Create large configuration files for performance testing
+- Set up environment variable test scenarios with proper cleanup
+
+### Property-Based Testing
+
+- Use proptest crate for complex scenarios where applicable
+- Test configuration serialization/deserialization round-trips
+- Test environment variable substitution with generated inputs
+- Test nested structure access with random data
+
+### Implementation Steps
+
+1. Create test module structure and basic test infrastructure
+2. Implement unit tests for ConfigValue enum and type conversions
+3. Implement unit tests for Configuration struct operations
+4. Implement parser tests with valid/invalid TOML inputs
+5. Implement environment variable substitution tests
+6. Implement security validation tests
+7. Implement error scenario tests
+8. Implement integration tests for file loading
+9. Implement template integration tests
+10. Implement CLI integration tests
+11. Ensure >90% test coverage across all configuration modules
+
+This comprehensive approach will ensure the sah.toml configuration system is robust, secure, and well-tested across all use cases.
