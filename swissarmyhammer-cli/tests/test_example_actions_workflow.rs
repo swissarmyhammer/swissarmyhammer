@@ -473,3 +473,34 @@ async fn test_debug_cel_expressions() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_branch1_liquid_template_rendering() -> Result<()> {
+    // Test that the Branch1 log message properly renders {{branch_value}} with liquid templating
+    use swissarmyhammer::workflow::{Action, LogAction, LogLevel};
+
+    // Create the exact log action from Branch1 in example-actions.md
+    let log_action = LogAction::new(
+        "Branch 1 selected: {{branch_value}} contains Hello".to_string(),
+        LogLevel::Info,
+    );
+
+    // Create context that simulates what the BranchDecision state would have set
+    let mut context = HashMap::new();
+    context.insert("branch_value".to_string(), json!("Hello from workflow"));
+    context.insert("example_var".to_string(), json!("Hello from workflow"));
+    context.insert("is_error".to_string(), json!(false));
+
+    // Execute the log action
+    let result = log_action.execute(&mut context).await?;
+
+    // Verify the liquid template was rendered correctly
+    let expected_message = "Branch 1 selected: Hello from workflow contains Hello";
+    assert_eq!(result.as_str().unwrap(), expected_message);
+
+    println!("✅ Liquid template rendering test passed!");
+    println!("Original: Branch 1 selected: {{{{branch_value}}}} contains Hello");
+    println!("Rendered: {}", result.as_str().unwrap());
+
+    Ok(())
+}

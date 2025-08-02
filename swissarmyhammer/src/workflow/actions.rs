@@ -793,8 +793,8 @@ impl VariableSubstitution for LogAction {}
 #[async_trait::async_trait]
 impl Action for LogAction {
     async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
-        // Substitute variables in message
-        let message = self.substitute_string(&self.message, context);
+        // Render message with liquid templating (supports {{variable}} syntax)
+        let message = render_with_liquid_template(&self.message, context);
 
         match self.level {
             LogLevel::Info => tracing::info!("{}", message),
@@ -937,6 +937,38 @@ fn substitute_variables_in_string(input: &str, context: &HashMap<String, Value>)
     parser
         .substitute_variables_safe(input, context)
         .unwrap_or_else(|_| input.to_string())
+}
+
+/// Helper function to render text with liquid templating
+/// Supports both {{variable}} liquid syntax and ${variable} fallback
+fn render_with_liquid_template(input: &str, context: &HashMap<String, Value>) -> String {
+    // Convert context to liquid Object
+    let mut liquid_vars = liquid::Object::new();
+    for (key, value) in context {
+        // Skip internal keys that shouldn't be exposed to templates
+        if key.starts_with('_') {
+            continue;
+        }
+        liquid_vars.insert(
+            key.clone().into(),
+            liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
+        );
+    }
+
+    // Try liquid template rendering first (supports {{variable}} syntax)
+    let liquid_rendered = match liquid::ParserBuilder::with_stdlib()
+        .build()
+        .and_then(|parser| parser.parse(input))
+    {
+        Ok(template) => match template.render(&liquid_vars) {
+            Ok(rendered) => rendered,
+            Err(_) => input.to_string(),
+        },
+        Err(_) => input.to_string(),
+    };
+
+    // Apply fallback variable substitution for any remaining ${variable} syntax
+    substitute_variables_in_string(&liquid_rendered, context)
 }
 
 impl SubWorkflowAction {

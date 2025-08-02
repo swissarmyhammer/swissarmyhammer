@@ -26,19 +26,20 @@ Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_ste
 - DO make sure that each step builds on the previous prompts, and ends with wiring things together
 - DO NOT leave hanging or orphaned code that isn't integrated into a previous step
 - Each issue you create that is a step in the plan should include the phrase "Refer to ./specification/<specific plan file read>"
+- Iterate until you feel that the steps are right sized for this project.
 
 ## Process
 
 - Review the exisiting `./specification` directory and determine what is to be planned.
 - Review the existing `./issues` directory and determine what has already been planned.
+- Review the existing memos and think deeply about how they apply to the plan.
 - Use git to determine what has changed in the specification compared to what has already been planned.
 - Review the existing code to determine what parts of the specification might already be implemented.
-- Draft a detailed, step-by-step plan to meet the specification.
-- If anything is ambiguous, STOP and ask the user clarifying questions.
-- Then, once you have a solid plan, break it down into small, iterative chunks that build on each other incrementally.
+- Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory.
+- Then, once you have a draft plan, break it down into small, iterative chunks that build on each other incrementally.
 - Look at these chunks and then go another round to break it into small steps.
 - From here you should have the foundation to provide an in order series of issue files that describes the work to do at each step
+- Review the results and make sure that the steps are small enough to be implemented safely, but big enough to move the project forward
 - When creating issue steps for the plan, make sure to prefix and number them padded with 0's so they run in order
   - Example, assuming your spec is called `FOO`, make issue files called `FOO_<nnnnnn>_name.md`
-- Review the results and make sure that the steps are small enough to be implemented safely, but big enough to move the project forward
-- Iterate until you feel that the steps are right sized for this project.
+  - Use the issue_create tool

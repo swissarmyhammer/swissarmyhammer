@@ -32,6 +32,55 @@ mod tests {
         assert_eq!(prompt_action.arguments.get("language").unwrap(), "French");
     }
 
+    #[tokio::test]
+    async fn test_log_action_liquid_template_rendering() {
+        use crate::workflow::actions::{Action, LogAction, LogLevel};
+
+        // Create a LogAction with liquid template syntax
+        let log_action = LogAction::new(
+            "Branch 1 selected: {{branch_value}} contains Hello".to_string(),
+            LogLevel::Info,
+        );
+
+        // Create context with the branch_value variable
+        let mut context = HashMap::new();
+        context.insert("branch_value".to_string(), json!("Hello from workflow"));
+
+        // Execute the action
+        let result = log_action.execute(&mut context).await.unwrap();
+
+        // Verify the result contains the rendered message
+        assert_eq!(
+            result.as_str().unwrap(),
+            "Branch 1 selected: Hello from workflow contains Hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_log_action_fallback_variable_substitution() {
+        use crate::workflow::actions::{Action, LogAction, LogLevel};
+
+        // Create a LogAction with both liquid and ${} syntax
+        let log_action = LogAction::new(
+            "Liquid: {{liquid_var}}, Fallback: ${fallback_var}".to_string(),
+            LogLevel::Info,
+        );
+
+        // Create context with variables
+        let mut context = HashMap::new();
+        context.insert("liquid_var".to_string(), json!("liquid_value"));
+        context.insert("fallback_var".to_string(), json!("fallback_value"));
+
+        // Execute the action
+        let result = log_action.execute(&mut context).await.unwrap();
+
+        // Verify both template types work
+        assert_eq!(
+            result.as_str().unwrap(),
+            "Liquid: liquid_value, Fallback: fallback_value"
+        );
+    }
+
     #[test]
     fn test_action_parsing_with_default_values() {
         let mut context = HashMap::new();
