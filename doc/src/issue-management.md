@@ -96,10 +96,10 @@ your-project/
 
 ### issue_create
 
-Create a new issue with automatic numbering.
+Create a new issue with automatic ULID generation.
 
 **Parameters:**
-- `name` (required): Issue name for filename
+- `name` (optional): Issue name for filename - if omitted, uses auto-generated ULID
 - `content` (required): Markdown content
 
 **Example:**
@@ -113,19 +113,29 @@ Create a new issue with automatic numbering.
 }
 ```
 
+**Example (auto-generated name):**
+```json
+{
+  "tool": "issue_create",
+  "arguments": {
+    "content": "# Quick Bug Fix\n\nFix the navigation issue in the header."
+  }
+}
+```
+
 ### issue_work
 
 Start working on an issue by creating and switching to a work branch.
 
 **Parameters:**
-- `number` (required): Issue number to work on
+- `name` (required): Issue name (full filename without .md extension) to work on
 
 **Example:**
 ```json
 {
   "tool": "issue_work",
   "arguments": {
-    "number": 1
+    "name": "implement_dashboard"
   }
 }
 ```
@@ -135,16 +145,16 @@ Start working on an issue by creating and switching to a work branch.
 Update an existing issue's content.
 
 **Parameters:**
-- `number` (required): Issue number to update
+- `name` (required): Issue name to update
 - `content` (required): New or additional content
-- `append` (optional): If true, append to existing content
+- `append` (optional): If true, append to existing content (default: false)
 
 **Example:**
 ```json
 {
   "tool": "issue_update",
   "arguments": {
-    "number": 1,
+    "name": "implement_dashboard",
     "content": "## Progress Update\n\nCompleted user profile display component.",
     "append": true
   }
@@ -156,14 +166,14 @@ Update an existing issue's content.
 Mark an issue as complete, moving it to the completed directory.
 
 **Parameters:**
-- `number` (required): Issue number to complete
+- `name` (required): Issue name to complete
 
 **Example:**
 ```json
 {
   "tool": "issue_mark_complete",
   "arguments": {
-    "number": 1
+    "name": "implement_dashboard"
   }
 }
 ```
@@ -225,14 +235,46 @@ Check if all issues in the project are completed.
 Merge completed issue work back to the main branch.
 
 **Parameters:**
-- `number` (required): Issue number to merge
+- `name` (required): Issue name to merge
+- `delete_branch` (optional): Whether to delete the branch after merging (default: false)
 
 **Example:**
 ```json
 {
   "tool": "issue_merge",
   "arguments": {
-    "number": 1
+    "name": "implement_dashboard"
+  }
+}
+```
+
+**Example (with branch deletion):**
+```json
+{
+  "tool": "issue_merge",
+  "arguments": {
+    "name": "implement_dashboard",
+    "delete_branch": true
+  }
+}
+```
+
+### issue_list
+
+List all available issues with their status and metadata.
+
+**Parameters:**
+- `show_completed` (optional): Include completed issues in the list (default: false)
+- `show_active` (optional): Include active issues in the list (default: true)  
+- `format` (optional): Output format - "table", "json", or "markdown" (default: "table")
+
+**Example:**
+```json
+{
+  "tool": "issue_list",
+  "arguments": {
+    "show_completed": true,
+    "format": "json"
   }
 }
 ```

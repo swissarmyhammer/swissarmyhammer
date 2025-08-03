@@ -28,12 +28,12 @@ Always put mcp.log and semantic.db in the .gitignore.
 - YOU STRONGLY prefer simple, clean, maintainable solutions over clever or complex ones. Readability and maintainability are PRIMARY CONCERNS, even at the cost of conciseness or performance.
 - YOU MUST NEVER refer to temporal context in comments (like "recently refactored" "moved") or code. Comments should be evergreen and describe the code as it is. If you name something "new" or "enhanced" or "improved", you've probably made a mistake and MUST STOP and ask me what to do.
 - ACTUALLY DO THE WORK:
-  - NEVER put stubs or TODO in the code, that is the user's job -- your job is to do
+  - NEVER put stubs or TODO in the code
+  - NEVER create placeholders
+  - NEVER create a 'dummy' to replace a library for testing
   - NEVER comment out or stub because of a failing test -- actually FIX the problem
   - NEVER hard code when you need to get real data
   - NEVER mock
-- NEVER make a placeholder - just do the actual work
-- NEVER stub or make a TODO - just do the work
 
 ### Temporary Files
 
