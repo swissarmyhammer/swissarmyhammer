@@ -72,7 +72,7 @@ impl McpTool for ShowIssueTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Name of the issue to show. Use 'current' to show the issue for the current git branch."
+                    "description": "Name of the issue to show. Use 'current' to show the issue for the current git branch. Use 'next' to show the next pending issue."
                 },
                 "raw": {
                     "type": "boolean",
@@ -107,11 +107,11 @@ impl McpTool for ShowIssueTool {
 
         tracing::debug!("Showing issue: {}", request.name);
 
-        // Handle special "current" parameter
-        let issue_name = if request.name == "current" {
+        // Handle special parameters
+        let issue = if request.name == "current" {
             // Get current issue name from git branch
             let git_ops = context.git_ops.lock().await;
-            match git_ops.as_ref() {
+            let issue_name = match git_ops.as_ref() {
                 Some(ops) => match ops.current_branch() {
                     Ok(branch) => {
                         let config = Config::global();
@@ -132,23 +132,50 @@ impl McpTool for ShowIssueTool {
                         "Git operations not available",
                     ));
                 }
+            };
+
+            // Find the current issue in storage
+            let issue_storage = context.issue_storage.read().await;
+            let all_issues = issue_storage
+                .list_issues()
+                .await
+                .map_err(|e| McpErrorHandler::handle_error(e, "list issues"))?;
+
+            all_issues
+                .into_iter()
+                .find(|i| i.name == issue_name)
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("Issue '{}' not found", issue_name), None)
+                })?
+        } else if request.name == "next" {
+            // Get next pending issue
+            let issue_storage = context.issue_storage.read().await;
+            match issue_storage.get_next_issue().await {
+                Ok(Some(next_issue)) => next_issue,
+                Ok(None) => {
+                    return Ok(BaseToolImpl::create_success_response(
+                        "No pending issues found. All issues are completed!",
+                    ));
+                }
+                Err(e) => {
+                    return Err(McpErrorHandler::handle_error(e, "get next issue"));
+                }
             }
         } else {
-            request.name.clone()
+            // Regular issue name lookup
+            let issue_storage = context.issue_storage.read().await;
+            let all_issues = issue_storage
+                .list_issues()
+                .await
+                .map_err(|e| McpErrorHandler::handle_error(e, "list issues"))?;
+
+            all_issues
+                .into_iter()
+                .find(|i| i.name == request.name)
+                .ok_or_else(|| {
+                    McpError::invalid_params(format!("Issue '{}' not found", request.name), None)
+                })?
         };
-
-        let issue_storage = context.issue_storage.read().await;
-        let all_issues = issue_storage
-            .list_issues()
-            .await
-            .map_err(|e| McpErrorHandler::handle_error(e, "list issues"))?;
-
-        let issue = all_issues
-            .into_iter()
-            .find(|i| i.name == issue_name)
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("Issue '{}' not found", issue_name), None)
-            })?;
 
         let response = if request.raw.unwrap_or(false) {
             issue.content
@@ -156,7 +183,7 @@ impl McpTool for ShowIssueTool {
             Self::format_issue_display(&issue)
         };
 
-        tracing::info!("Showed issue {}", issue_name);
+        tracing::info!("Showed issue {}", issue.name);
         Ok(BaseToolImpl::create_success_response(&response))
     }
 }
