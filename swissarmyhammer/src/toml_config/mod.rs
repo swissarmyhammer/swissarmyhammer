@@ -235,14 +235,11 @@ mod module_tests {
             config.get("name").unwrap().coerce_to_string().unwrap(),
             "StringTest"
         );
-        assert_eq!(
-            config
-                .get("settings.debug")
-                .unwrap()
-                .coerce_to_boolean()
-                .unwrap(),
-            true
-        );
+        assert!(config
+            .get("settings.debug")
+            .unwrap()
+            .coerce_to_boolean()
+            .unwrap());
         assert_eq!(
             config
                 .get("settings.timeout")
@@ -386,14 +383,11 @@ mod module_tests {
                 .unwrap(),
             5
         );
-        assert_eq!(
-            config
-                .get("build.optimized")
-                .unwrap()
-                .coerce_to_boolean()
-                .unwrap(),
-            true
-        );
+        assert!(config
+            .get("build.optimized")
+            .unwrap()
+            .coerce_to_boolean()
+            .unwrap());
 
         // Test deeply nested values
         assert_eq!(
@@ -412,14 +406,11 @@ mod module_tests {
                 .unwrap(),
             5432
         );
-        assert_eq!(
-            config
-                .get("database.replica.readonly")
-                .unwrap()
-                .coerce_to_boolean()
-                .unwrap(),
-            true
-        );
+        assert!(config
+            .get("database.replica.readonly")
+            .unwrap()
+            .coerce_to_boolean()
+            .unwrap());
 
         // Test liquid conversion
         let liquid_object = config.to_liquid_object();

@@ -11,7 +11,7 @@ use tempfile::TempDir;
 #[test]
 fn test_end_to_end_config_loading() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create a complex configuration file using multiline string
     let config_content = concat!(
         "# Project metadata\n",
@@ -100,22 +100,25 @@ fn test_end_to_end_config_loading() {
         "api_docs = \"https://docs.swissarmyhammer.dev/api\"\n",
         "guides = \"https://guides.swissarmyhammer.dev\"\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     // Set up environment variables for testing
-    std::env::set_var("DATABASE_URL", "postgresql://prod.example.com:5432/swissarmyhammer");
+    std::env::set_var(
+        "DATABASE_URL",
+        "postgresql://prod.example.com:5432/swissarmyhammer",
+    );
     std::env::set_var("API_KEY", "prod_api_key_xyz789");
     std::env::set_var("DEBUG", "true");
     std::env::set_var("GITHUB_TOKEN", "ghp_test_token_123");
-    
+
     // Load and parse configuration
     let mut config = parse_config_string(config_content).unwrap();
-    
+
     // Perform environment variable substitution
     config.substitute_env_vars().unwrap();
-    
+
     // Test basic metadata
     assert_eq!(
         config.get("name"),
@@ -127,13 +130,17 @@ fn test_end_to_end_config_loading() {
     );
     assert_eq!(
         config.get("description"),
-        Some(&ConfigValue::String("A flexible prompt and workflow management tool".to_string()))
+        Some(&ConfigValue::String(
+            "A flexible prompt and workflow management tool".to_string()
+        ))
     );
-    
+
     // Test environment variable substitution
     assert_eq!(
         config.get("database_url"),
-        Some(&ConfigValue::String("postgresql://prod.example.com:5432/swissarmyhammer".to_string()))
+        Some(&ConfigValue::String(
+            "postgresql://prod.example.com:5432/swissarmyhammer".to_string()
+        ))
     );
     assert_eq!(
         config.get("api_key"),
@@ -143,7 +150,7 @@ fn test_end_to_end_config_loading() {
         config.get("debug_mode"),
         Some(&ConfigValue::String("true".to_string()))
     );
-    
+
     // Test arrays
     if let Some(ConfigValue::Array(keywords)) = config.get("keywords") {
         assert_eq!(keywords.len(), 4);
@@ -154,7 +161,7 @@ fn test_end_to_end_config_loading() {
     } else {
         panic!("Expected array for keywords");
     }
-    
+
     // Test nested structures
     assert_eq!(
         config.get("team.lead"),
@@ -165,16 +172,25 @@ fn test_end_to_end_config_loading() {
         config.get("team.contact.email"),
         Some(&ConfigValue::String("team@swissarmyhammer.dev".to_string()))
     );
-    
+
     // Test deeply nested structures
     assert_eq!(
         config.get("database.primary.host"),
         Some(&ConfigValue::String("localhost".to_string()))
     );
-    assert_eq!(config.get("database.primary.port"), Some(&ConfigValue::Integer(5432)));
-    assert_eq!(config.get("database.primary.ssl"), Some(&ConfigValue::Boolean(true)));
-    assert_eq!(config.get("database.replica.readonly"), Some(&ConfigValue::Boolean(true)));
-    
+    assert_eq!(
+        config.get("database.primary.port"),
+        Some(&ConfigValue::Integer(5432))
+    );
+    assert_eq!(
+        config.get("database.primary.ssl"),
+        Some(&ConfigValue::Boolean(true))
+    );
+    assert_eq!(
+        config.get("database.replica.readonly"),
+        Some(&ConfigValue::Boolean(true))
+    );
+
     // Test build configuration array
     if let Some(ConfigValue::Array(targets)) = config.get("build.targets") {
         assert_eq!(targets.len(), 3);
@@ -184,24 +200,30 @@ fn test_end_to_end_config_loading() {
     } else {
         panic!("Expected array for build.targets");
     }
-    
+
     // Test feature flags
-    assert_eq!(config.get("features.new_ui"), Some(&ConfigValue::Boolean(true)));
-    assert_eq!(config.get("features.beta_features"), Some(&ConfigValue::Boolean(false)));
-    
+    assert_eq!(
+        config.get("features.new_ui"),
+        Some(&ConfigValue::Boolean(true))
+    );
+    assert_eq!(
+        config.get("features.beta_features"),
+        Some(&ConfigValue::Boolean(false))
+    );
+
     // Test services with environment variables
     assert_eq!(
         config.get("services.github.token"),
         Some(&ConfigValue::String("ghp_test_token_123".to_string()))
     );
-    
+
     // Test configuration validation
     assert!(config.validate().is_ok());
-    
+
     // Test liquid object conversion
     let liquid_object = config.to_liquid_object();
     assert!(!liquid_object.is_empty());
-    
+
     // Clean up environment variables
     std::env::remove_var("DATABASE_URL");
     std::env::remove_var("API_KEY");
@@ -242,41 +264,49 @@ fn test_template_integration() {
         "port = 5432\n",
         "name = \"awesome_db\"\n"
     );
-    
+
     let mut config = parse_config_string(config_content).unwrap();
     config.substitute_env_vars().unwrap();
-    
+
     // Create a liquid template parser
     let liquid_parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
-    
+
     // Test simple variable substitution
-    let template1 = liquid_parser.parse("Project: {{ project_name }} v{{ version }}").unwrap();
+    let template1 = liquid_parser
+        .parse("Project: {{ project_name }} v{{ version }}")
+        .unwrap();
     let liquid_context = config.to_liquid_object();
     let result1 = template1.render(&liquid_context).unwrap();
     assert_eq!(result1, "Project: MyAwesomeProject v1.2.3");
-    
+
     // Test nested object access
-    let template2 = liquid_parser.parse("Build target: {{ build.target }}").unwrap();
+    let template2 = liquid_parser
+        .parse("Build target: {{ build.target }}")
+        .unwrap();
     let result2 = template2.render(&liquid_context).unwrap();
     assert_eq!(result2, "Build target: x86_64-unknown-linux-gnu");
-    
+
     // Test boolean values
-    let template3 = liquid_parser.parse("Optimized: {{ build.optimized }}").unwrap();
+    let template3 = liquid_parser
+        .parse("Optimized: {{ build.optimized }}")
+        .unwrap();
     let result3 = template3.render(&liquid_context).unwrap();
     assert_eq!(result3, "Optimized: true");
-    
+
     // Test array iteration
     let template4 = liquid_parser.parse(
         "Keywords: {% for keyword in keywords %}{{ keyword }}{% unless forloop.last %}, {% endunless %}{% endfor %}"
     ).unwrap();
     let result4 = template4.render(&liquid_context).unwrap();
     assert_eq!(result4, "Keywords: rust, cli, awesome");
-    
+
     // Test array size
-    let template5 = liquid_parser.parse("Team size: {{ team.members | size }} people").unwrap();
+    let template5 = liquid_parser
+        .parse("Team size: {{ team.members | size }} people")
+        .unwrap();
     let result5 = template5.render(&liquid_context).unwrap();
     assert_eq!(result5, "Team size: 3 people");
-    
+
     // Test conditional rendering
     let template6 = liquid_parser.parse(
         "{% if build.optimized %}This is an optimized build{% else %}This is a debug build{% endif %}"
@@ -289,12 +319,12 @@ fn test_template_integration() {
 #[test]
 fn test_file_discovery_from_different_directories() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create repository structure
     let repo_root = temp_dir.path();
     let git_dir = repo_root.join(".git");
     fs::create_dir(&git_dir).unwrap();
-    
+
     // Create sah.toml in repo root
     let config_path = repo_root.join("sah.toml");
     let config_content = concat!(
@@ -306,28 +336,28 @@ fn test_file_discovery_from_different_directories() {
         "language = \"rust\"\n"
     );
     fs::write(&config_path, config_content).unwrap();
-    
+
     // Create nested directory structure
     let src_dir = repo_root.join("src");
     fs::create_dir(&src_dir).unwrap();
-    
+
     let module_dir = src_dir.join("module");
     fs::create_dir(&module_dir).unwrap();
-    
+
     let deep_dir = module_dir.join("deep");
     fs::create_dir(&deep_dir).unwrap();
-    
+
     let tests_dir = repo_root.join("tests");
     fs::create_dir(&tests_dir).unwrap();
-    
+
     let integration_dir = tests_dir.join("integration");
     fs::create_dir(&integration_dir).unwrap();
-    
+
     // Test discovery from different directories
     let original_dir = std::env::current_dir().unwrap();
-    
+
     // Test from repository root
-    std::env::set_current_dir(&repo_root).unwrap();
+    std::env::set_current_dir(repo_root).unwrap();
     let result = load_repo_config();
     assert!(result.is_ok());
     if let Ok(Some(config)) = result {
@@ -338,7 +368,7 @@ fn test_file_discovery_from_different_directories() {
     } else {
         panic!("Should find config from repo root");
     }
-    
+
     // Test from src directory
     std::env::set_current_dir(&src_dir).unwrap();
     let result = load_repo_config();
@@ -351,7 +381,7 @@ fn test_file_discovery_from_different_directories() {
     } else {
         panic!("Should find config from src directory");
     }
-    
+
     // Test from deeply nested directory
     std::env::set_current_dir(&deep_dir).unwrap();
     let result = load_repo_config();
@@ -364,7 +394,7 @@ fn test_file_discovery_from_different_directories() {
     } else {
         panic!("Should find config from deep directory");
     }
-    
+
     // Test from tests directory
     std::env::set_current_dir(&tests_dir).unwrap();
     let result = load_repo_config();
@@ -377,7 +407,7 @@ fn test_file_discovery_from_different_directories() {
     } else {
         panic!("Should find config from tests directory");
     }
-    
+
     // Test from integration tests directory
     std::env::set_current_dir(&integration_dir).unwrap();
     let result = load_repo_config();
@@ -390,14 +420,14 @@ fn test_file_discovery_from_different_directories() {
     } else {
         panic!("Should find config from integration directory");
     }
-    
+
     // Test from directory without .git (should return None)
     let non_repo_dir = TempDir::new().unwrap();
     std::env::set_current_dir(non_repo_dir.path()).unwrap();
     let result = load_repo_config();
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
-    
+
     // Restore original directory
     std::env::set_current_dir(original_dir).unwrap();
 }

@@ -112,7 +112,7 @@ async fn test_template(
     // Read template content
     let template_content = match template {
         Some(ref file_path) => std::fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read template file: {}", file_path))?,
+            .with_context(|| format!("Failed to read template file: {file_path}"))?,
         None => {
             // Read from stdin
             let mut content = String::new();
@@ -174,7 +174,7 @@ async fn test_template(
 
     match liquid_template.render(&liquid_context) {
         Ok(rendered) => {
-            println!("{}", rendered);
+            println!("{rendered}");
         }
         Err(e) => {
             anyhow::bail!("Template rendering failed: {}", e);
@@ -242,7 +242,7 @@ fn display_configuration(config: &Configuration, format: OutputFormat) -> Result
                     "  {} {} {}",
                     key.cyan(),
                     type_str.dimmed(),
-                    format_config_value(&value)
+                    format_config_value(value)
                 );
             }
         }
@@ -274,7 +274,7 @@ fn display_variables(config: &Configuration, format: OutputFormat, verbose: bool
         OutputFormat::Yaml => {
             if verbose {
                 for (key, value) in config.values() {
-                    println!("- name: {}", key);
+                    println!("- name: {key}");
                     println!("  type: {}", config_value_type_name(value));
                     println!("  value: {}", serde_yaml::to_string(value)?);
                 }
@@ -328,9 +328,9 @@ fn display_env_vars(config: &Configuration, missing: bool, format: OutputFormat)
         }
         OutputFormat::Yaml => {
             for (name, default, current) in &filtered_vars {
-                println!("- name: {}", name);
+                println!("- name: {name}");
                 if let Some(default) = default {
-                    println!("  default: {}", default);
+                    println!("  default: {default}");
                 }
                 println!("  current: {}", current.as_deref().unwrap_or("null"));
                 println!("  missing: {}", current.is_none());
@@ -371,7 +371,7 @@ fn display_env_vars(config: &Configuration, missing: bool, format: OutputFormat)
 fn extract_env_vars(config: &Configuration) -> Vec<(String, Option<String>, Option<String>)> {
     let mut env_vars = Vec::new();
 
-    for (_, value) in config.values() {
+    for value in config.values().values() {
         extract_env_vars_from_value(value, &mut env_vars);
     }
 
@@ -409,7 +409,7 @@ fn extract_env_vars_from_value(
             }
         }
         ConfigValue::Table(table) => {
-            for (_, nested_value) in table {
+            for nested_value in table.values() {
                 extract_env_vars_from_value(nested_value, env_vars);
             }
         }
@@ -435,7 +435,7 @@ fn format_config_value(value: &swissarmyhammer::sah_config::ConfigValue) -> Stri
     use swissarmyhammer::sah_config::ConfigValue;
 
     match value {
-        ConfigValue::String(s) => format!("\"{}\"", s),
+        ConfigValue::String(s) => format!("\"{s}\""),
         ConfigValue::Integer(i) => i.to_string(),
         ConfigValue::Float(f) => f.to_string(),
         ConfigValue::Boolean(b) => b.to_string(),

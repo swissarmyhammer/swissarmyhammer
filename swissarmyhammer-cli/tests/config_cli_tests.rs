@@ -11,20 +11,19 @@ use tempfile::TempDir;
 #[test]
 fn test_config_show_no_file() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(&["config", "show"]);
-    
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("No sah.toml configuration file found"));
+    cmd.current_dir(temp_dir.path()).args(["config", "show"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "No sah.toml configuration file found",
+    ));
 }
 
 #[test]
 fn test_config_show_with_file() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create a sample configuration file
     let config_content = concat!(
         "name = \"TestProject\"\n",
@@ -35,14 +34,13 @@ fn test_config_show_with_file() {
         "host = \"localhost\"\n",
         "port = 5432\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(&["config", "show"]);
-    
+    cmd.current_dir(temp_dir.path()).args(["config", "show"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("Configuration Variables:"))
@@ -55,7 +53,7 @@ fn test_config_show_with_file() {
 #[test]
 fn test_config_show_json_format() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = concat!(
         "name = \"JSONTest\"\n",
         "version = \"2.0.0\"\n",
@@ -63,14 +61,14 @@ fn test_config_show_json_format() {
         "[settings]\n",
         "enabled = true\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "show", "--format", "json"]);
-    
+        .args(["config", "show", "--format", "json"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"name\": \"JSONTest\""))
@@ -81,7 +79,7 @@ fn test_config_show_json_format() {
 #[test]
 fn test_config_show_yaml_format() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = concat!(
         "name = \"YAMLTest\"\n",
         "version = \"3.0.0\"\n",
@@ -89,14 +87,14 @@ fn test_config_show_yaml_format() {
         "[build]\n",
         "optimized = false\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "show", "--format", "yaml"]);
-    
+        .args(["config", "show", "--format", "yaml"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("name: YAMLTest"))
@@ -107,20 +105,20 @@ fn test_config_show_yaml_format() {
 #[test]
 fn test_config_variables_no_file() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "variables"]);
-    
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("No configuration variables available"));
+        .args(["config", "variables"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "No configuration variables available",
+    ));
 }
 
 #[test]
 fn test_config_variables_with_file() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = concat!(
         "project_name = \"VarTest\"\n",
         "author = \"Test Author\"\n",
@@ -129,14 +127,14 @@ fn test_config_variables_with_file() {
         "[metadata]\n",
         "created = \"2023-01-01\"\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "variables"]);
-    
+        .args(["config", "variables"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("Available Variables:"))
@@ -149,21 +147,21 @@ fn test_config_variables_with_file() {
 #[test]
 fn test_config_variables_verbose() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = concat!(
         "name = \"VerboseTest\"\n",
         "count = 42\n",
         "active = true\n",
         "items = [\"a\", \"b\", \"c\"]\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "variables", "--verbose"]);
-    
+        .args(["config", "variables", "--verbose"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("name"))
@@ -179,19 +177,16 @@ fn test_config_variables_verbose() {
 #[test]
 fn test_config_variables_json_format() {
     let temp_dir = TempDir::new().unwrap();
-    
-    let config_content = concat!(
-        "service = \"TestService\"\n",
-        "port = 8080\n"
-    );
-    
+
+    let config_content = concat!("service = \"TestService\"\n", "port = 8080\n");
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "variables", "--format", "json"]);
-    
+        .args(["config", "variables", "--format", "json"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"service\""))
@@ -201,22 +196,19 @@ fn test_config_variables_json_format() {
 #[test]
 fn test_config_test_template_from_stdin() {
     let temp_dir = TempDir::new().unwrap();
-    
-    let config_content = concat!(
-        "app_name = \"TemplateTest\"\n",
-        "version = \"1.5.0\"\n"
-    );
-    
+
+    let config_content = concat!("app_name = \"TemplateTest\"\n", "version = \"1.5.0\"\n");
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let template_content = "App: {{ app_name }} v{{ version }}";
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test"])
+        .args(["config", "test"])
         .write_stdin(template_content);
-    
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("App: TemplateTest v1.5.0"));
@@ -225,47 +217,41 @@ fn test_config_test_template_from_stdin() {
 #[test]
 fn test_config_test_template_from_file() {
     let temp_dir = TempDir::new().unwrap();
-    
-    let config_content = concat!(
-        "service_name = \"FileTemplateTest\"\n",
-        "port = 9000\n"
-    );
-    
+
+    let config_content = concat!("service_name = \"FileTemplateTest\"\n", "port = 9000\n");
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let template_content = "Service {{ service_name }} running on port {{ port }}";
     let template_path = temp_dir.path().join("template.txt");
     fs::write(&template_path, template_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test", template_path.to_str().unwrap()]);
-    
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Service FileTemplateTest running on port 9000"));
+        .args(["config", "test", template_path.to_str().unwrap()]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Service FileTemplateTest running on port 9000",
+    ));
 }
 
 #[test]
 fn test_config_test_with_variable_overrides() {
     let temp_dir = TempDir::new().unwrap();
-    
-    let config_content = concat!(
-        "name = \"OverrideTest\"\n",
-        "env = \"development\"\n"
-    );
-    
+
+    let config_content = concat!("name = \"OverrideTest\"\n", "env = \"development\"\n");
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let template_content = "{{ name }} in {{ env }} mode";
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test", "--var", "env=production"])
+        .args(["config", "test", "--var", "env=production"])
         .write_stdin(template_content);
-    
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("OverrideTest in production mode"));
@@ -274,22 +260,19 @@ fn test_config_test_with_variable_overrides() {
 #[test]
 fn test_config_test_debug_mode() {
     let temp_dir = TempDir::new().unwrap();
-    
-    let config_content = concat!(
-        "debug_app = \"DebugTest\"\n",
-        "level = \"info\"\n"
-    );
-    
+
+    let config_content = concat!("debug_app = \"DebugTest\"\n", "level = \"info\"\n");
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let template_content = "{{ debug_app }}: {{ level }}";
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test", "--debug"])
+        .args(["config", "test", "--debug"])
         .write_stdin(template_content);
-    
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("Template variables (overrides):"))
@@ -303,11 +286,10 @@ fn test_config_test_debug_mode() {
 #[test]
 fn test_config_env_no_file() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(&["config", "env"]);
-    
+    cmd.current_dir(temp_dir.path()).args(["config", "env"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("No configuration file found"));
@@ -316,27 +298,26 @@ fn test_config_env_no_file() {
 #[test]
 fn test_config_env_with_variables() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Set up test environment variable
     std::env::set_var("TEST_CONFIG_VAR", "test_value");
-    
+
     let config_content = concat!(
         "name = \"EnvTest\"\n",
         "database_url = \"${TEST_CONFIG_VAR}\"\n",
         "fallback = \"${MISSING_VAR:-default_value}\"\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(&["config", "env"]);
-    
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("No environment variables found in configuration"));
-    
+    cmd.current_dir(temp_dir.path()).args(["config", "env"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "No environment variables found in configuration",
+    ));
+
     // Clean up
     std::env::remove_var("TEST_CONFIG_VAR");
 }
@@ -344,27 +325,27 @@ fn test_config_env_with_variables() {
 #[test]
 fn test_config_env_missing_only() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Set up one test environment variable but not the other
     std::env::set_var("SET_VAR", "present");
-    
+
     let config_content = concat!(
         "name = \"MissingTest\"\n",
         "set_var = \"${SET_VAR}\"\n",
         "missing_var = \"${MISSING_VAR:-default}\"\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "env", "--missing"]);
-    
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("All environment variables are set"));
-    
+        .args(["config", "env", "--missing"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "All environment variables are set",
+    ));
+
     // Clean up
     std::env::remove_var("SET_VAR");
 }
@@ -372,19 +353,19 @@ fn test_config_env_missing_only() {
 #[test]
 fn test_config_env_json_format() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = concat!(
         "name = \"JSONEnvTest\"\n",
         "api_key = \"${API_KEY:-default_key}\"\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "env", "--format", "json"]);
-    
+        .args(["config", "env", "--format", "json"]);
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("[]"));
@@ -393,18 +374,18 @@ fn test_config_env_json_format() {
 #[test]
 fn test_config_invalid_template_syntax() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = "name = \"InvalidTest\"\n";
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let invalid_template = "{{ unclosed tag";
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test"])
+        .args(["config", "test"])
         .write_stdin(invalid_template);
-    
+
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Template parsing failed"));
@@ -413,15 +394,15 @@ fn test_config_invalid_template_syntax() {
 #[test]
 fn test_config_missing_template_file() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = "name = \"MissingFileTest\"\n";
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test", "nonexistent.txt"]);
-    
+        .args(["config", "test", "nonexistent.txt"]);
+
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Failed to read template file"));
@@ -430,18 +411,18 @@ fn test_config_missing_template_file() {
 #[test]
 fn test_config_invalid_variable_format() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = "name = \"InvalidVarTest\"\n";
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let template_content = "{{ name }}";
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test", "--var", "invalid_format"])
+        .args(["config", "test", "--var", "invalid_format"])
         .write_stdin(template_content);
-    
+
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Invalid variable format"));
@@ -450,7 +431,7 @@ fn test_config_invalid_variable_format() {
 #[test]
 fn test_config_complex_template_with_nested_access() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     let config_content = concat!(
         "app_name = \"ComplexTest\"\n",
         "features = [\"auth\", \"api\", \"web\"]\n",
@@ -462,22 +443,22 @@ fn test_config_complex_template_with_nested_access() {
         "[team]\n",
         "members = [\"Alice\", \"Bob\", \"Carol\"]\n"
     );
-    
+
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
-    
+
     let template_content = concat!(
         "Application: {{ app_name }}\n",
         "Database: {{ database.host }}:{{ database.port }}\n",
         "Features: {% for feature in features %}{{ feature }}{% unless forloop.last %}, {% endunless %}{% endfor %}\n",
         "Team Size: {{ team.members | size }} members"
     );
-    
+
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.current_dir(temp_dir.path())
-        .args(&["config", "test"])
+        .args(["config", "test"])
         .write_stdin(template_content);
-    
+
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("Application: ComplexTest"))
