@@ -1,55 +1,41 @@
-# SwissArmyHammer Implementation Plan
+# DRAFT PLAN: Remove issue_current and issue_next Tools
 
-## Current State Analysis
+## Overview
+This plan removes two redundant MCP tools (`issue_current` and `issue_next`) and consolidates their functionality into the existing `issue_show` tool with special parameter handling.
 
-After reviewing the codebase, I can see that:
-- Most core specifications have been implemented and moved to `specification/complete/`
-- There is one remaining specification: `specification/issue_current.md`
-- All previous issues have been completed (244 total)
-- Recent commits show completion of configuration and logging improvements
+## Analysis
+- Current state: Two separate tools for getting current/next issues
+- Desired state: Single `issue_show` tool with `"current"` and `"next"` special parameters
+- Impact: 4 builtin prompt files need updating, 2 tool implementations need removal
+- Benefits: Reduced API surface, consistent interface, less maintenance burden
 
-## Remaining Specification to Implement
+## High-Level Steps
 
-### Issue Current Tool Refactor (`specification/issue_current.md`)
-- **Purpose**: Remove `issue_current` and `issue_next` tools, consolidate into enhanced `issue_show` tool
-- **Key Changes**: 
-  - Enhance `issue_show` to accept "current" and "next" as special name parameters
-  - Update 4 builtin prompt files to use new syntax
-  - Remove old tool implementations
-- **Complexity**: Medium - touches existing tools and builtin prompts
+### Phase 1: Preparation and Analysis
+1. **Audit Current Usage**: Search codebase for all references to `issue_current` and `issue_next`
+2. **Understand Current Implementation**: Read and analyze the logic in both tools to be removed
+3. **Identify Test Coverage**: Find all tests that need updating
 
-## Implementation Plan Structure
+### Phase 2: Core Implementation
+4. **Enhance issue_show Tool**: Add special parameter handling for "current" and "next"
+5. **Update Tool Description**: Document new functionality in description.md
+6. **Add Comprehensive Tests**: Test new functionality and edge cases
 
-This will be broken into small, incremental steps following the established patterns in the codebase:
+### Phase 3: Migration and Cleanup  
+7. **Update Builtin Prompts**: Replace tool calls in 4 prompt files
+8. **Remove Old Tools**: Delete tool implementations and registry entries
+9. **Update Tests**: Fix any broken tests from removed tools
 
-1. **Research Phase**: Understand current tool implementations and usage
-2. **Enhancement Phase**: Extend `issue_show` tool with new functionality  
-3. **Migration Phase**: Update builtin prompts to use new syntax
-4. **Cleanup Phase**: Remove deprecated tools and update registry
-5. **Testing Phase**: Comprehensive testing of new functionality
-6. **Documentation Phase**: Update tool descriptions and help text
+### Phase 4: Verification
+10. **Integration Testing**: Verify workflows still function correctly
+11. **Final Cleanup**: Remove any remaining dead code or references
 
-## Step Size Guidelines
+## Risk Analysis
+- Low risk: Functionality is being consolidated, not removed
+- Main risk: Breaking existing workflows that use the prompts
+- Mitigation: Thorough testing of updated prompts before cleanup
 
-- Each step should result in <500 lines of code changed
-- Each step should be testable and runnable
-- Each step should build incrementally on previous work
-- No orphaned or hanging code that isn't integrated
-
-## Integration Points
-
-- MCP tool system registration and discovery
-- Git branch parsing logic 
-- Issue file system interaction
-- Builtin prompt template processing
-- Error handling consistency
-- Testing patterns
-
-## Benefits of This Approach
-
-1. **Reduced API surface**: Two fewer MCP tools to maintain
-2. **Consistent interface**: All issue querying goes through `issue_show`
-3. **Simplified mental model**: One tool for showing issues with different behaviors
-4. **Maintainability**: Less code duplication, fewer tools to test
-
-This focused approach will complete the remaining specification while maintaining the high quality standards established in the existing codebase.
+## Size Estimation
+- Small to medium sized changes
+- Most work is in consolidation rather than new feature development
+- Should be implementable in incremental steps
