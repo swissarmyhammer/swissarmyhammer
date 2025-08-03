@@ -1,0 +1,25 @@
+tools:
+
+- Task
+  - Bash
+    - use https://github.com/QwenLM/qwen-code/blob/main/packages/core/src/tools/shell.ts for inspiration and description
+  - File (this is a new tool group noun parallel to issues)
+    - Read
+      - use https://github.com/QwenLM/qwen-code/blob/main/packages/core/src/tools/read-file.ts for inspiration and description
+    - Edit
+      - use https://github.com/cline/cline/blob/main/src/core/tools/editTool.ts for inspiration and description
+    - Write
+      - use https://github.com/cline/cline/blob/main/src/core/tools/writeTool.ts for inspiration and description
+    - Glob
+      - use https://github.com/QwenLM/qwen-code/blob/main/packages/core/src/tools/glob.ts for inspiration and description
+    - Grep
+      - use https://github.com/cline/cline/blob/main/src/core/tools/grepTool.ts for inspiration and description
+      - implement the actual search with ripgrep
+  - WebFetch
+    - use https://github.com/cline/cline/blob/main/src/core/tools/webFetchTool.ts for inspiration and description
+    - use https://github.com/swissarmyhammer/markdowndown for the actual fetch and render
+    - direct page read
+  - WebSearch
+    - use SearXNG search API https://docs.searxng.org/dev/search_api.html
+    - https://searx.space/#help-html-grade -- public metasearch for SearXNG hosting to find A+, A+ instances to query with the API
+    - fetch the returned URLs with markdowndown to provide content and context, arrange this in an organized markdown

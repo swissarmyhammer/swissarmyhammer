@@ -1,48 +1,55 @@
-# Todo Tool Implementation Plan
-
-## Overview
-This plan implements the Todo Tool specification which provides ephemeral task management capabilities through MCP tools. The todo system is designed exclusively for LLM use during development sessions and is not exposed through the CLI.
+# SwissArmyHammer Implementation Plan
 
 ## Current State Analysis
-- No existing todo tool implementation found in codebase
-- Specification exists at `./specification/todo_tool.md`
-- Need to implement MCP tools following the established patterns
-- Use existing architecture patterns from issues and memoranda tools
 
-## Key Requirements
-1. YAML-based file format with ULID identifiers
-2. Three core MCP tools: create, show, mark_complete
-3. File storage in `./swissarmyhammer/todo/` (gitignored)
-4. Sequential ULID generation for task ordering
-5. FIFO "next" item retrieval pattern
-6. NO CLI integration (LLM-only)
+After reviewing the codebase, I can see that:
+- Most core specifications have been implemented and moved to `specification/complete/`
+- There is one remaining specification: `specification/issue_current.md`
+- All previous issues have been completed (244 total)
+- Recent commits show completion of configuration and logging improvements
 
-## Implementation Strategy
-Following established MCP tool patterns:
-- Use `src/mcp/tools/todo/` directory structure
-- Implement `create/`, `show/`, `mark_complete/` submodules
-- Follow YAML storage patterns similar to other tools
-- Leverage existing error handling and validation patterns
-- Implement proper test coverage
+## Remaining Specification to Implement
 
-## Technical Considerations
-- ULID generation for sequential ordering
-- YAML serialization/deserialization with serde
-- File system operations with proper error handling
-- Directory creation and gitignore management
-- Thread-safe file operations
-- Validation for required fields
+### Issue Current Tool Refactor (`specification/issue_current.md`)
+- **Purpose**: Remove `issue_current` and `issue_next` tools, consolidate into enhanced `issue_show` tool
+- **Key Changes**: 
+  - Enhance `issue_show` to accept "current" and "next" as special name parameters
+  - Update 4 builtin prompt files to use new syntax
+  - Remove old tool implementations
+- **Complexity**: Medium - touches existing tools and builtin prompts
+
+## Implementation Plan Structure
+
+This will be broken into small, incremental steps following the established patterns in the codebase:
+
+1. **Research Phase**: Understand current tool implementations and usage
+2. **Enhancement Phase**: Extend `issue_show` tool with new functionality  
+3. **Migration Phase**: Update builtin prompts to use new syntax
+4. **Cleanup Phase**: Remove deprecated tools and update registry
+5. **Testing Phase**: Comprehensive testing of new functionality
+6. **Documentation Phase**: Update tool descriptions and help text
+
+## Step Size Guidelines
+
+- Each step should result in <500 lines of code changed
+- Each step should be testable and runnable
+- Each step should build incrementally on previous work
+- No orphaned or hanging code that isn't integrated
 
 ## Integration Points
-- MCP server tool registration
-- Error handling through SwissArmyHammerError
-- File path validation and security
-- ULID generation utilities
-- YAML processing utilities
 
-## Testing Strategy
-- Unit tests for each tool function
-- Integration tests for file operations
-- Property-based testing for ULID ordering
-- Error condition testing
-- File system isolation for tests
+- MCP tool system registration and discovery
+- Git branch parsing logic 
+- Issue file system interaction
+- Builtin prompt template processing
+- Error handling consistency
+- Testing patterns
+
+## Benefits of This Approach
+
+1. **Reduced API surface**: Two fewer MCP tools to maintain
+2. **Consistent interface**: All issue querying goes through `issue_show`
+3. **Simplified mental model**: One tool for showing issues with different behaviors
+4. **Maintainability**: Less code duplication, fewer tools to test
+
+This focused approach will complete the remaining specification while maintaining the high quality standards established in the existing codebase.

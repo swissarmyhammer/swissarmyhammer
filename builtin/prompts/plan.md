@@ -41,5 +41,5 @@ Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_ste
 - From here you should have the foundation to provide an in order series of issue files that describes the work to do at each step
 - Review the results and make sure that the steps are small enough to be implemented safely, but big enough to move the project forward
 - When creating issue steps for the plan, make sure to prefix and number them padded with 0's so they run in order
-  - Example, assuming your spec is called `FOO`, make issue files called `FOO_<nnnnnn>_name.md`
-  - Use the issue_create tool
+  - Example, assuming your spec is called `FOO`, make issue files called `FOO_<nnnnnn>_name.md`, so that your plan steps are in order
+  - Use the issue_create tool, specifying the name, again making sure they are named so that they run in order
