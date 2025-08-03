@@ -223,7 +223,7 @@ impl EnvVarProcessor {
             if !ch.is_ascii_alphanumeric() && ch != '_' {
                 return Err(EnvVarError::InvalidVariableName {
                     name: name.to_string(),
-                    reason: format!("Invalid character '{}' at position {}", ch, i),
+                    reason: format!("Invalid character '{ch}' at position {i}"),
                 });
             }
         }

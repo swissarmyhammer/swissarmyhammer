@@ -790,8 +790,7 @@ mod tests {
             let result = validator.validate_file_path(path);
             assert!(
                 matches!(result, Err(ValidationError::PathTraversalAttack { .. })),
-                "Failed to detect path traversal in: {}",
-                bad_path
+                "Failed to detect path traversal in: {bad_path}"
             );
         }
 
@@ -803,8 +802,7 @@ mod tests {
             let result = validator.validate_file_path(path);
             assert!(
                 result.is_ok(),
-                "False positive path traversal detection for: {}",
-                good_path
+                "False positive path traversal detection for: {good_path}"
             );
         }
     }
@@ -821,8 +819,7 @@ mod tests {
             let result = validator.validate_file_path(path);
             assert!(
                 matches!(result, Err(ValidationError::PathTraversalAttack { .. })),
-                "Failed to detect hidden file/directory: {}",
-                hidden_path
+                "Failed to detect hidden file/directory: {hidden_path}"
             );
         }
     }
@@ -839,8 +836,7 @@ mod tests {
             let result = validator.validate_file_path(path);
             assert!(
                 matches!(result, Err(ValidationError::PathTraversalAttack { .. })),
-                "Failed to detect dangerous absolute path: {}",
-                bad_path
+                "Failed to detect dangerous absolute path: {bad_path}"
             );
         }
 
@@ -893,7 +889,7 @@ mod tests {
         // This should pass for a temporary file (now that we allow .tmp files)
         match result {
             Ok(()) => {}                                      // Good
-            Err(e) => println!("Validation failed: {:?}", e), // Debug output
+            Err(e) => println!("Validation failed: {e:?}"), // Debug output
         }
 
         // Test with a path traversal attempt

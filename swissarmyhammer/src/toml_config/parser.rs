@@ -274,7 +274,7 @@ mod tests {
         let result = parse_config_string(invalid_toml);
         assert!(result.is_err());
         let error = result.unwrap_err();
-        println!("Actual error: {:?}", error);
+        println!("Actual error: {error:?}");
         assert!(error.is_parse_error());
     }
 

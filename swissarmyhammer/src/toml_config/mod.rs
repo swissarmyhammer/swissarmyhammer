@@ -235,13 +235,12 @@ mod module_tests {
             config.get("name").unwrap().coerce_to_string().unwrap(),
             "StringTest"
         );
-        assert_eq!(
+        assert!(
             config
                 .get("settings.debug")
                 .unwrap()
                 .coerce_to_boolean()
-                .unwrap(),
-            true
+                .unwrap()
         );
         assert_eq!(
             config
@@ -386,13 +385,12 @@ mod module_tests {
                 .unwrap(),
             5
         );
-        assert_eq!(
+        assert!(
             config
                 .get("build.optimized")
                 .unwrap()
                 .coerce_to_boolean()
-                .unwrap(),
-            true
+                .unwrap()
         );
 
         // Test deeply nested values
@@ -412,13 +410,12 @@ mod module_tests {
                 .unwrap(),
             5432
         );
-        assert_eq!(
+        assert!(
             config
                 .get("database.replica.readonly")
                 .unwrap()
                 .coerce_to_boolean()
-                .unwrap(),
-            true
+                .unwrap()
         );
 
         // Test liquid conversion
