@@ -2,6 +2,7 @@
 //!
 //! This module provides the ShowIssueTool for displaying specific issues through the MCP protocol.
 
+use crate::config::Config;
 use crate::issues::Issue;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
@@ -71,7 +72,7 @@ impl McpTool for ShowIssueTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Name of the issue to show"
+                    "description": "Name of the issue to show. Use 'current' to show the issue for the current git branch."
                 },
                 "raw": {
                     "type": "boolean",
@@ -102,8 +103,39 @@ impl McpTool for ShowIssueTool {
         // Validate issue name is not empty
         McpValidation::validate_not_empty(&request.name, "issue name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate issue name"))?;
+        
 
         tracing::debug!("Showing issue: {}", request.name);
+
+        // Handle special "current" parameter
+        let issue_name = if request.name == "current" {
+            // Get current issue name from git branch
+            let git_ops = context.git_ops.lock().await;
+            match git_ops.as_ref() {
+                Some(ops) => match ops.current_branch() {
+                    Ok(branch) => {
+                        let config = Config::global();
+                        if let Some(issue_name) = branch.strip_prefix(&config.issue_branch_prefix) {
+                            issue_name.to_string()
+                        } else {
+                            return Ok(BaseToolImpl::create_success_response(&format!(
+                                "Not on an issue branch. Current branch: {branch}"
+                            )));
+                        }
+                    }
+                    Err(e) => {
+                        return Err(McpErrorHandler::handle_error(e, "get current branch"));
+                    }
+                },
+                None => {
+                    return Ok(BaseToolImpl::create_success_response(
+                        "Git operations not available",
+                    ));
+                }
+            }
+        } else {
+            request.name.clone()
+        };
 
         let issue_storage = context.issue_storage.read().await;
         let all_issues = issue_storage
@@ -113,9 +145,9 @@ impl McpTool for ShowIssueTool {
 
         let issue = all_issues
             .into_iter()
-            .find(|i| i.name == request.name)
+            .find(|i| i.name == issue_name)
             .ok_or_else(|| {
-                McpError::invalid_params(format!("Issue '{}' not found", request.name), None)
+                McpError::invalid_params(format!("Issue '{}' not found", issue_name), None)
             })?;
 
         let response = if request.raw.unwrap_or(false) {
@@ -124,7 +156,7 @@ impl McpTool for ShowIssueTool {
             Self::format_issue_display(&issue)
         };
 
-        tracing::info!("Showed issue {}", request.name);
+        tracing::info!("Showed issue {}", issue_name);
         Ok(BaseToolImpl::create_success_response(&response))
     }
 }
