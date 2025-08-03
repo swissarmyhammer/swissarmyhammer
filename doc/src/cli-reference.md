@@ -28,9 +28,14 @@ swissarmyhammer [COMMAND] [OPTIONS]
 | Command | Description |
 |---------|-------------|
 | [`serve`](./cli-serve.md) | Run as MCP server for Claude Code integration |
-| [`search`](./cli-search.md) | Search and discover prompts with powerful filtering |
-| [`test`](./cli-test.md) | Interactively test prompts with arguments |
 | [`doctor`](./cli-doctor.md) | Diagnose configuration and setup issues |
+| [`prompt`](./cli-prompt.md) | Manage and test prompts |
+| [`flow`](./cli-flow.md) | Execute and manage workflows |
+| [`issue`](./cli-issue.md) | Issue management commands |
+| [`memo`](./cli-memoranda.md) | Memoranda (memo) management commands |
+| [`search`](./cli-search.md) | Semantic search commands |
+| [`config`](./cli-config.md) | Configuration management commands |
+| [`validate`](./cli-validate.md) | Validate prompt files and workflows |
 | [`completion`](./cli-completion.md) | Generate shell completion scripts |
 
 ## Quick Examples
@@ -41,37 +46,73 @@ swissarmyhammer [COMMAND] [OPTIONS]
 swissarmyhammer serve
 ```
 
-### Search for Prompts
+### Prompt Management
 ```bash
-# Search for code-related prompts
-swissarmyhammer search code
+# List all available prompts
+swissarmyhammer prompt list
 
-# Search with regex in descriptions
-swissarmyhammer search --regex "test.*unit" --in description
+# Test a prompt interactively
+swissarmyhammer prompt test code-review
+
+# Search for prompts
+swissarmyhammer prompt search "code review"
 ```
 
-### Test a Prompt
+### Issue Management
 ```bash
-# Interactively test a prompt
-swissarmyhammer test code-review
+# List all issues
+swissarmyhammer issue list
 
-# Test with predefined arguments
-swissarmyhammer test code-review --arg code="fn main() { println!(\"Hello\"); }"
+# Create a new issue
+swissarmyhammer issue create --name "feature-auth" --content "# Authentication Feature\n\nImplement user authentication"
+
+# Start working on an issue
+swissarmyhammer issue work feature-auth
+
+# Mark issue as complete
+swissarmyhammer issue mark-complete feature-auth
 ```
 
-### Check Setup
+### Memoranda (Notes)
 ```bash
-# Diagnose any configuration issues
+# List all memos
+swissarmyhammer memo list
+
+# Create a new memo
+swissarmyhammer memo create --title "Meeting Notes" --content "# Team Meeting\n\n- Discussed roadmap"
+
+# Search memos
+swissarmyhammer memo search "roadmap"
+```
+
+### Semantic Search
+```bash
+# Index files for semantic search
+swissarmyhammer search index "**/*.rs"
+
+# Query the index
+swissarmyhammer search query "error handling"
+```
+
+### Workflow Execution
+```bash
+# List available workflows
+swissarmyhammer flow list
+
+# Run a workflow
+swissarmyhammer flow run deploy-staging
+```
+
+### Configuration and Validation
+```bash
+# Check system configuration
 swissarmyhammer doctor
-```
 
-### Generate Shell Completions
-```bash
-# Generate Bash completions
+# Validate all prompts and workflows
+swissarmyhammer validate
+
+# Generate shell completions
 swissarmyhammer completion bash > ~/.bash_completion.d/swissarmyhammer
-
-# Generate Zsh completions
-swissarmyhammer completion zsh > ~/.zfunc/_swissarmyhammer
 ```
 
 ## Exit Codes
@@ -85,10 +126,23 @@ swissarmyhammer completion zsh > ~/.zfunc/_swissarmyhammer
 
 ## Configuration
 
-SwissArmyHammer looks for prompts in these directories (in order):
+SwissArmyHammer looks for content in these directories (in order):
 
+### Prompts and Workflows
 1. Built-in prompts (embedded in the binary)
 2. User prompts: `~/.swissarmyhammer/prompts/`
 3. Local prompts: `./.swissarmyhammer/prompts/` (current directory)
+4. User workflows: `~/.swissarmyhammer/workflows/`
+5. Local workflows: `./.swissarmyhammer/workflows/` (current directory)
+
+### Issues and Memoranda
+- Issues: `~/.swissarmyhammer/issues/` and `./.swissarmyhammer/issues/`
+- Memoranda: `~/.swissarmyhammer/memoranda/` and `./.swissarmyhammer/memoranda/`
+- Search index: `~/.swissarmyhammer/search.db` and `./.swissarmyhammer/search.db`
+
+### Global Options
+- `--verbose, -v` - Enable verbose logging
+- `--debug, -d` - Enable debug logging  
+- `--quiet, -q` - Suppress all output except errors
 
 For detailed command documentation, see the individual command pages linked in the table above.

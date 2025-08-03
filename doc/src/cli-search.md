@@ -1,211 +1,199 @@
-# search - Search and Discover Prompts
+# search - Semantic Code Search
 
-The `search` command provides powerful functionality to find prompts in your collection using various search strategies and filters.
+The `search` command provides powerful semantic search functionality for indexing and searching code files using vector embeddings and TreeSitter parsing.
 
 ## Synopsis
 
 ```bash
-swissarmyhammer search [OPTIONS] [QUERY]
+swissarmyhammer search [SUBCOMMAND] [OPTIONS]
 ```
 
 ## Description
 
-Search through your prompt collection using fuzzy matching, regular expressions, or exact text matching. The search can target specific fields and provides relevance-ranked results.
+SwissArmyHammer's search system uses advanced vector embeddings and TreeSitter code parsing to provide semantic code search capabilities. Index your codebase and perform intelligent queries that understand code semantics, not just keyword matching.
 
-## Arguments
+## Subcommands
 
-- `QUERY` - Search term or pattern (optional if using filters)
+| Subcommand | Description |
+|------------|-------------|
+| [`index`](#index) | Index files for semantic search using TreeSitter |
+| [`query`](#query) | Perform semantic search with vector similarity |
 
-## Options
+---
 
-### Search Strategy
-- `--case-sensitive, -c` - Enable case-sensitive matching
-- `--regex, -r` - Use regular expressions instead of fuzzy matching
-- `--fuzzy` - Use fuzzy string matching (default for simple queries)
-- `--semantic` - Use AI-powered semantic search with embeddings
-- `--hybrid` - Combine fuzzy, full-text, and semantic search results
-- `--full, -f` - Show full prompt content in results
+## index
 
-### Field Targeting
-- `--in FIELD` - Search in specific field (title, description, content, all)
-  - `title` - Search only in prompt titles
-  - `description` - Search only in prompt descriptions
-  - `content` - Search only in prompt content/body
-  - `all` - Search in all fields (default)
+Index files for semantic search using vector embeddings and TreeSitter parsing.
 
-### Filtering
-- `--source SOURCE` - Filter by prompt source (builtin, user, local)
-- `--has-arg ARG` - Show prompts that have a specific argument
-- `--no-args` - Show prompts with no arguments
-- `--language LANG` - Filter by programming language (for semantic search)
+### Usage
 
-### Semantic Search Options
-- `--threshold FLOAT` - Similarity threshold for semantic search (0.0-1.0)
-- `--model MODEL` - Embedding model to use for semantic search
-- `--include-structure` - Include code structure in semantic analysis
-- `--include-docs` - Include documentation and comments in search
-- `--code-only` - Search only code content, exclude comments
-
-### Output Control
-- `--limit, -l N` - Limit results to N prompts (default: 20)
-- `--json` - Output results in JSON format
-
-## Examples
-
-### Basic Search
 ```bash
-# Find prompts containing "code"
-swissarmyhammer search code
-
-# Case-sensitive search
-swissarmyhammer search --case-sensitive "Code Review"
+swissarmyhammer search index <PATTERNS>... [OPTIONS]
 ```
 
-### Field-Specific Search
+### Arguments
+
+- `<PATTERNS>...` - Glob patterns or files to index (e.g., "**/*.rs", "src/**/*.py")
+
+### Options
+
+- `--force` - Force re-indexing of all files, even if unchanged
+
+### Supported Languages
+
+- Rust (.rs)
+- Python (.py) 
+- TypeScript (.ts)
+- JavaScript (.js)
+- Dart (.dart)
+
+Files that fail to parse with TreeSitter are indexed as plain text.
+
+### Examples
+
 ```bash
-# Search only in titles
-swissarmyhammer search --in title "review"
+# Index all Rust files
+swissarmyhammer search index "**/*.rs"
 
-# Search only in descriptions
-swissarmyhammer search --in description "debugging"
+# Index multiple file types
+swissarmyhammer search index "**/*.rs" "**/*.py" "**/*.ts"
 
-# Search in content/body
-swissarmyhammer search --in content "TODO"
+# Force re-index all files
+swissarmyhammer Search index "**/*.rs" --force
+
+# Index specific files
+swissarmyhammer search index "src/main.rs" "src/lib.rs"
 ```
 
-### Regular Expression Search
-```bash
-# Find prompts with "test" followed by any word
-swissarmyhammer search --regex "test\s+\w+"
+---
 
-# Find prompts starting with specific pattern
-swissarmyhammer search --regex "^(debug|fix|analyze)"
+## query
+
+Perform semantic search with vector similarity across the indexed codebase.
+
+### Usage
+
+```bash
+swissarmyhammer search query <QUERY> [OPTIONS]
 ```
 
-### Advanced Filtering
-```bash
-# Find built-in prompts only
-swissarmyhammer search --source builtin
+### Arguments
 
-# Find prompts with "code" argument
-swissarmyhammer search --has-arg code
+- `<QUERY>` - Search query string
 
-# Find prompts without any arguments
-swissarmyhammer search --no-args
+### Options
 
-# Combine filters
-swissarmyhammer search review --source user --has-arg language
-```
+- `--limit <N>` - Number of results to return (default: 10)
 
-### Output Options
-```bash
-# Show full content of matching prompts
-swissarmyhammer search code --full
+### Examples
 
-# Limit to 5 results
-swissarmyhammer search --limit 5 test
-
-# Get JSON output for scripting
-swissarmyhammer search --json "data analysis"
-```
-
-### Semantic Search Examples
 ```bash
 # Basic semantic search
-swissarmyhammer search --semantic "error handling patterns"
+swissarmyhammer search query "error handling"
 
-# Language-specific semantic search
-swissarmyhammer search --semantic "async functions" --language rust
+# Search for async patterns  
+swissarmyhammer search query "async function implementation"
 
-# High-precision semantic search
-swissarmyhammer search --semantic "database connection" --threshold 0.8
+# Search with limited results
+swissarmyhammer search query "database connection" --limit 5
 
-# Hybrid search combining all strategies
-swissarmyhammer search --hybrid "authentication middleware"
+# Search for specific patterns
+swissarmyhammer search query "trait implementation"
+swissarmyhammer search query "unit tests"
+swissarmyhammer search query "HTTP client setup"
+```
 
-# Semantic search with specific model
-swissarmyhammer search --semantic "testing patterns" --model all-mpnet-base-v2
+## Complete Workflow Example
 
-# Code-only semantic search
-swissarmyhammer search --semantic "sorting algorithm" --code-only
+```bash
+# 1. Index your Rust project
+swissarmyhammer search index "**/*.rs"
+
+# 2. Search for error handling patterns
+swissarmyhammer search query "error handling patterns"
+
+# 3. Search for async/await usage
+swissarmyhammer search query "async await tokio"
+
+# 4. Find test implementations
+swissarmyhammer search query "unit tests assert"
+
+# 5. Re-index after making changes
+swissarmyhammer search index "**/*.rs" --force
 ```
 
 ## Output Format
 
-### Default Output
+### Index Output
 ```
-Found 3 prompts matching "code":
-
-📝 code-review (builtin)
-   Review code for best practices and potential issues
-   Arguments: code, language (optional)
-
-🔧 debug-code (user)
-   Help debug programming issues and errors
-   Arguments: error, context (optional)
-
-📊 analyze-performance (local)
-   Analyze code performance and suggest optimizations
-   Arguments: code, language, metrics (optional)
+Successfully indexed 45 files
+📁 Indexed files: 45
+⏭️ Skipped files: 3
+📦 Total chunks: 234
+⏱️ Execution time: 1.234s
 ```
 
-### JSON Output
-```json
-{
-  "query": "code",
-  "results": [
-    {
-      "id": "code-review",
-      "title": "Code Review Helper",
-      "description": "Review code for best practices and potential issues",
-      "source": "builtin",
-      "path": "/builtin/review/code.md",
-      "arguments": [
-        {"name": "code", "required": true},
-        {"name": "language", "required": false, "default": "auto-detect"}
-      ],
-      "score": 0.95
-    }
-  ],
-  "total_found": 3
-}
+### Query Output
+```
+🔍 Search Results for "error handling"
+
+📄 src/error.rs:42-48 (87% similarity)
+Language: rust, Type: Function
+Excerpt: fn handle_error(e: Error) -> Result<()> { ... }
+
+📄 src/lib.rs:123-135 (82% similarity) 
+Language: rust, Type: Implementation
+Excerpt: impl ErrorHandler for MyStruct { ... }
+
+📄 tests/error_tests.rs:15-25 (75% similarity)
+Language: rust, Type: Function
+Excerpt: #[test] fn test_error_propagation() { ... }
+
+Total results: 3, Execution time: 123ms
 ```
 
-## Search Scoring
+## Architecture and Storage
 
-Results are ranked by relevance using these factors:
+### Index Storage
+- Index stored in `.swissarmyhammer/search.db` (DuckDB database)
+- Automatically added to .gitignore
+- Contains file content, embeddings, and metadata
 
-1. **Exact matches** score higher than partial matches
-2. **Title matches** score higher than description or content matches
-3. **Multiple field matches** increase the overall score
-4. **Argument name matches** are considered for relevance
+### Embedding Model
+- Uses nomic-embed-code model for high-quality code embeddings
+- Model downloaded on first use (~100MB)
+- Cached locally for subsequent runs
 
-## Performance
+### TreeSitter Parsing
+- Parses code into semantic chunks (functions, classes, etc.)
+- Preserves code structure and context
+- Falls back to plain text for unsupported languages
 
-- Search is optimized with an in-memory index
-- Fuzzy matching uses efficient algorithms
-- Results are cached for repeated queries
-- Large prompt collections are handled efficiently
+## Performance Notes
 
-## Integration with Other Commands
+- **First-time indexing**: Downloads embedding model, may take several minutes
+- **Subsequent runs**: Uses cached model for faster startup
+- **Query performance**: Fast after initial model loading
+- **Index updates**: Only changed files are re-indexed unless `--force` is used
 
-Search integrates well with other SwissArmyHammer commands:
+## Prerequisites
 
-```bash
-# Find and test a prompt
-PROMPT=$(swissarmyhammer search --json code | jq -r '.results[0].id')
-swissarmyhammer test "$PROMPT"
+Files must be indexed before querying. If no results are found:
 
-# Export search results
-swissarmyhammer search debug --limit 5 | \
-  grep -o '\w\+-\w\+' | \
-  xargs swissarmyhammer export
-```
+1. Check that files have been indexed with `search index`
+2. Verify the search query is relevant to indexed content
+3. Ensure supported file types are being indexed
+
+## Use Cases
+
+- **Code Discovery**: Find similar functions or patterns in large codebases
+- **Learning**: Discover how certain concepts are implemented
+- **Refactoring**: Find all instances of similar code patterns
+- **Documentation**: Locate examples of specific functionality
+- **Code Review**: Find related code that might be affected by changes
 
 ## See Also
 
-- [`test`](./cli-test.md) - Test prompts found through search
-- [`export`](./cli-export.md) - Export specific prompts
-- [Search Guide](./search-guide.md) - Advanced search strategies
-- [Search Architecture](./search-architecture.md) - Technical architecture details
-- [Index Management](./index-management.md) - Managing search indices
+- [Search Architecture](./search-architecture.md) - Technical implementation details
+- [Search Guide](./search-guide.md) - Advanced usage patterns
+- [API Reference](./api-reference.md) - Programmatic access to search functionality

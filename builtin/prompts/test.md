@@ -17,11 +17,12 @@ The goal is to have:
 - Always run tests using a command line tool appropriate for the project
 - YOU MUST debug the code to make all tests pass, only change tests as a last resort
 - Always have an extended timeout running tests of 10 minutes for the first try
-- If individual tests are taking longer than 10 seconds, identify the slow tests and speed them up
+- If individual tests are identified as slow
   - check if any tests are hanging and correct them
-  - identify the slowest test and speed it up
-  - DO NOT just put a timeout in a test, make it pass and be faster. think.
-- Corrections should be constructive, meaning 'just deleting code' is not an acceptable fix
+  - speed the tests up so they are no longer slow
+    - this may require decomposing a large slow test into multiple smaller tests
+- Corrections should be constructive
+  - do not comment out or ignore failing tests
 - Feel free to refactor
 
 ### Rust

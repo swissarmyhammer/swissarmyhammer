@@ -38,19 +38,51 @@ Follow the [Calcutron](https://github.com/swissarmyhammer/calcutron) sample to g
 - **📁 File-based Management** - Store prompts and sub agent workflows as markdown files with YAML front matter
 - **🔄 Live Reloading** - Changes are automatically detected and reloaded
 - **🎨 Liquid Templates** - Use Liquid templating with variables, conditionals, loops, and custom filters to make templates and workflows
-- **⚡ MCP Integration** - Works seamlessly with Claude Code via Model Context Protocol
+- **⚡ MCP Integration** - Works seamlessly with Claude Code via Model Context Protocol with comprehensive tool suite
 - **🗂️ Organized Hierarchy** - Built-in, user, and local prompt directories with override precedence
 - **🛠️ Developer Tools** - Rich CLI with diagnostics, validation, and shell completions
 - **📚 Rust Library** - Use as a dependency in your own Rust projects with comprehensive API
 - **🔍 Built-in Library** - 20+ ready-to-use prompts for common development tasks
 - **🔧 Workflow Engine** - Advanced state-based workflow execution with Mermaid diagrams
-- **🔍 Advanced Search** - Vector search with fuzzy matching and relevance scoring
-- **Git-based workflow** with automatic branch management
+- **📝 Issue Management** - Git-integrated issue tracking with automatic branch management
+- **💾 Memoranda System** - Note-taking and knowledge management with full-text search
+- **🔍 Semantic Search** - Vector-based search with TreeSitter parsing and embedding models
+- **🎯 Extensible Architecture** - Plugin system and tool registry for custom functionality
 
 ### Common Commands
 
 ```bash
+# Get help
 sah --help
+
+# Run as MCP server (default when invoked via stdio)
+sah serve
+
+# Check configuration and diagnose issues
+sah doctor
+
+# Manage prompts
+sah prompt list
+sah prompt test my-prompt --var task="help me"
+
+# Execute workflows
+sah flow run my-workflow
+
+# Issue management
+sah issue list
+sah issue create --name "feature-xyz" --content "# Feature XYZ\n\nImplement new feature"
+sah issue work feature-xyz
+
+# Memoranda (notes) management
+sah memo list
+sah memo create --title "Meeting Notes" --content "# Team Meeting\n\n- Discussed roadmap"
+
+# Semantic search
+sah search index "**/*.rs"
+sah search query "error handling"
+
+# Validate configurations
+sah validate
 ```
 
 ### Standard Locations
@@ -77,15 +109,27 @@ sah --help
 ├── prompts/
 │   ├── code-review.md       # Personal code review prompt
 │   └── daily-standup.md     # Your daily standup template
-└── workflows/
-    └── release-process.md   # Your release workflow
+├── workflows/
+│   └── release-process.md   # Your release workflow
+├── memoranda/               # Personal notes and documentation
+│   ├── project-notes.md
+│   └── meeting-logs.md
+├── issues/                  # Issue tracking (managed automatically)
+│   ├── active/
+│   └── complete/
+└── search.db               # Semantic search index (auto-generated)
 
 ./my-project/                # Project directory
 └── .swissarmyhammer/        # Local directory
     ├── prompts/
     │   └── api-docs.md      # Project-specific API documentation prompt
-    └── workflows/
-        └── ci-cd.md         # Project CI/CD workflow
+    ├── workflows/
+    │   └── ci-cd.md         # Project CI/CD workflow
+    ├── memoranda/           # Project-specific notes
+    │   └── architecture.md
+    └── issues/              # Project issues
+        ├── active/
+        └── complete/
 ```
 
 ## 🚀 Quick Start
@@ -123,6 +167,35 @@ EOF
 ```
 
 That's it! Your prompt is now available in Claude Code. You can use it via MCP with `/helper`.
+
+## 🔧 MCP Tools
+
+SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
+
+### Issue Management Tools
+- `issue_create` - Create new issues with automatic numbering
+- `issue_list` - List all active and completed issues  
+- `issue_show` - Display issue details (supports `current` and `next`)
+- `issue_work` - Switch to work branch for an issue
+- `issue_update` - Update issue content
+- `issue_mark_complete` - Mark issues as completed
+- `issue_merge` - Merge issue branches back to main
+- `issue_all_complete` - Check if all issues are completed
+
+### Memoranda (Notes) Tools
+- `memo_create` - Create new memos with ULID identifiers
+- `memo_list` - List all available memos
+- `memo_get` - Retrieve memo by ID
+- `memo_search` - Search memos by content
+- `memo_update` - Update existing memo content
+- `memo_delete` - Delete memos
+- `memo_get_all_context` - Get all memos for AI context
+
+### Semantic Search Tools
+- `search_index` - Index files for semantic search using TreeSitter
+- `search_query` - Perform semantic search with vector similarity
+
+All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses.
 
 ## 📖 Documentation
 
