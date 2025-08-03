@@ -2,8 +2,8 @@
 
 use super::server::McpServer;
 use super::types::{
-    AllCompleteRequest, CreateIssueRequest, CurrentIssueRequest, MarkCompleteRequest,
-    MergeIssueRequest, UpdateIssueRequest, WorkIssueRequest,
+    AllCompleteRequest, CreateIssueRequest, MarkCompleteRequest, MergeIssueRequest,
+    UpdateIssueRequest, WorkIssueRequest,
 };
 use super::utils::validate_issue_name;
 use crate::prompts::Prompt;
@@ -326,12 +326,6 @@ async fn test_mcp_server_tool_schemas_are_valid() {
     assert!(
         update_schema.is_ok(),
         "UpdateIssueRequest schema should be valid"
-    );
-
-    let current_schema = serde_json::to_value(schemars::schema_for!(CurrentIssueRequest));
-    assert!(
-        current_schema.is_ok(),
-        "CurrentIssueRequest schema should be valid"
     );
 
     let work_schema = serde_json::to_value(schemars::schema_for!(WorkIssueRequest));

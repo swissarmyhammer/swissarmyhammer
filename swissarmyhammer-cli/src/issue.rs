@@ -179,8 +179,8 @@ async fn merge_issue(
 }
 
 async fn show_current_issue(context: &CliToolContext) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![]);
-    let result = context.execute_tool("issue_current", args).await?;
+    let args = context.create_arguments(vec![("name", json!("current"))]);
+    let result = context.execute_tool("issue_show", args).await?;
 
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
@@ -222,8 +222,8 @@ fn get_content_from_args(
 }
 
 async fn show_next_issue(context: &CliToolContext) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![]);
-    let result = context.execute_tool("issue_next", args).await?;
+    let args = context.create_arguments(vec![("name", json!("next"))]);
+    let result = context.execute_tool("issue_show", args).await?;
 
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())

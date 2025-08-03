@@ -87,19 +87,19 @@ async fn test_all_issue_tools_execution() -> Result<()> {
     let result = context.execute_tool("issue_create", create_args).await;
     assert!(result.is_ok(), "issue_create should succeed: {result:?}");
 
-    // Test issue_current (might not have current issue, but should not error on tool level)
-    let current_args = context.create_arguments(vec![]);
-    let result = context.execute_tool("issue_current", current_args).await;
+    // Test issue_show current (might not have current issue, but should not error on tool level)
+    let current_args = context.create_arguments(vec![("name", json!("current"))]);
+    let result = context.execute_tool("issue_show", current_args).await;
     // This might succeed or fail depending on branch, but tool should be callable
     assert!(
         result.is_ok() || result.is_err(),
-        "issue_current should be callable"
+        "issue_show current should be callable"
     );
 
-    // Test issue_next
-    let next_args = context.create_arguments(vec![]);
-    let result = context.execute_tool("issue_next", next_args).await;
-    assert!(result.is_ok(), "issue_next should succeed: {result:?}");
+    // Test issue_show next
+    let next_args = context.create_arguments(vec![("name", json!("next"))]);
+    let result = context.execute_tool("issue_show", next_args).await;
+    assert!(result.is_ok(), "issue_show next should succeed: {result:?}");
 
     // Test issue_all_complete
     let all_complete_args = context.create_arguments(vec![]);

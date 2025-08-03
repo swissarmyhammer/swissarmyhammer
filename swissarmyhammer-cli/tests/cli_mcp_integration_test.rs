@@ -167,8 +167,8 @@ async fn test_issue_workflow_integration() {
     );
 
     // 2. Try to get the next issue (should include our created issue)
-    let next_args = context.create_arguments(vec![]);
-    let next_result = context.execute_tool("issue_next", next_args).await;
+    let next_args = context.create_arguments(vec![("name", json!("next"))]);
+    let next_result = context.execute_tool("issue_show", next_args).await;
 
     // Note: This might fail if there are no pending issues, which is fine for this test
     // We're mainly testing that the tool can be called without errors
@@ -177,12 +177,12 @@ async fn test_issue_workflow_integration() {
             assert_eq!(
                 result.is_error,
                 Some(false),
-                "issue_next should not report error when successful"
+                "issue_show next should not report error when successful"
             );
         }
         Err(e) => {
             // This is acceptable - might be no pending issues
-            println!("issue_next returned error (acceptable): {e}");
+            println!("issue_show next returned error (acceptable): {e}");
         }
     }
 }

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 /// Test performance characteristics of configuration operations
-mod performance_tests {
+mod tests {
     use super::*;
 
     #[test]
@@ -91,9 +91,7 @@ mod performance_tests {
         // 4000 access operations should complete quickly (< 10ms)
         assert!(access_duration < Duration::from_millis(10));
 
-        println!(
-            "Performed 4000 dot notation accesses in {access_duration:?}"
-        );
+        println!("Performed 4000 dot notation accesses in {access_duration:?}");
     }
 
     #[test]
@@ -115,9 +113,7 @@ mod performance_tests {
         // 100,000 contains_key operations should be fast (< 500ms)
         assert!(contains_duration < Duration::from_millis(500));
 
-        println!(
-            "Performed 100,000 contains_key operations in {contains_duration:?}"
-        );
+        println!("Performed 100,000 contains_key operations in {contains_duration:?}");
     }
 
     #[test]
@@ -189,9 +185,7 @@ mod performance_tests {
         // Verify conversion worked
         assert!(!liquid_object.is_empty());
 
-        println!(
-            "Converted configuration to liquid object in {conversion_duration:?}"
-        );
+        println!("Converted configuration to liquid object in {conversion_duration:?}");
     }
 
     #[test]
@@ -254,9 +248,7 @@ mod performance_tests {
         assert!(concurrent_duration < Duration::from_millis(100));
         assert!(total_accesses > 0);
 
-        println!(
-            "Performed {total_accesses} concurrent accesses in {concurrent_duration:?}"
-        );
+        println!("Performed {total_accesses} concurrent accesses in {concurrent_duration:?}");
     }
 
     fn create_complex_config_content(num_sections: usize) -> String {
@@ -544,7 +536,7 @@ mod caching_tests {
 
     #[test]
     fn test_repeated_access_patterns() {
-        let config = performance_tests::create_large_nested_config(50);
+        let config = tests::create_large_nested_config(50);
 
         // Test that repeated access to same keys doesn't degrade performance
         let frequently_accessed_keys = [
@@ -568,9 +560,7 @@ mod caching_tests {
         // Repeated access should remain fast (no performance degradation)
         assert!(repeated_access_duration < Duration::from_millis(20));
 
-        println!(
-            "Performed 6000 repeated accesses in {repeated_access_duration:?}"
-        );
+        println!("Performed 6000 repeated accesses in {repeated_access_duration:?}");
     }
 
     #[test]
@@ -654,8 +644,7 @@ mod caching_tests {
 
         for i in 0..100 {
             std::env::set_var(format!("CACHE_TEST_{i}"), format!("value_{i}"));
-            values.push(ConfigValue::String(format!("${{CACHE_TEST_{i}}}"
-            )));
+            values.push(ConfigValue::String(format!("${{CACHE_TEST_{i}}}")));
         }
 
         let start = Instant::now();
@@ -679,8 +668,6 @@ mod caching_tests {
             std::env::remove_var(format!("CACHE_TEST_{i}"));
         }
 
-        println!(
-            "Performed 100 environment substitutions in {substitution_duration:?}"
-        );
+        println!("Performed 100 environment substitutions in {substitution_duration:?}");
     }
 }

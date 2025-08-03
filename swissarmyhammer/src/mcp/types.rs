@@ -179,13 +179,6 @@ pub struct UpdateIssueRequest {
     pub append: bool,
 }
 
-/// Request to get current issue
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct CurrentIssueRequest {
-    /// Which branch to check (optional, defaults to current)
-    pub branch: Option<String>,
-}
-
 /// Request to work on an issue
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WorkIssueRequest {
@@ -201,12 +194,6 @@ pub struct MergeIssueRequest {
     /// Whether to delete the branch after merging (default: false)
     #[serde(default)]
     pub delete_branch: bool,
-}
-
-/// Request to get the next issue to work on
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct NextIssueRequest {
-    // No parameters needed - returns first pending issue alphabetically
 }
 
 #[cfg(test)]
