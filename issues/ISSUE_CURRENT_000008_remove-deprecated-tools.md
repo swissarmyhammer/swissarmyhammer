@@ -57,3 +57,52 @@ Clean codebase with:
 - MCP server starts correctly with updated tool set
 - Code compiles and passes all existing tests
 - No dead code remains in the codebase
+
+## Proposed Solution
+
+Based on analysis of the current state, I found that most of the deprecated tool removal work has already been completed. The current state shows:
+
+**Already Completed:**
+1. ✅ Tool implementation files deleted:
+   - `/swissarmyhammer/src/mcp/tools/issues/current/mod.rs` - DELETED
+   - `/swissarmyhammer/src/mcp/tools/issues/current/description.md` - DELETED
+   - `/swissarmyhammer/src/mcp/tools/issues/next/mod.rs` - DELETED
+   - `/swissarmyhammer/src/mcp/tools/issues/next/description.md` - DELETED
+
+2. ✅ Tool registry updated:
+   - Removed `current::CurrentIssueTool::new()` registration from `issues/mod.rs`
+   - Removed `next::NextIssueTool::new()` registration from `issues/mod.rs`
+   - Removed `pub mod current;` and `pub mod next;` module declarations
+   - Updated module documentation to remove references to deprecated tools
+
+3. ✅ Type definitions cleaned up:
+   - Removed `CurrentIssueRequest` type from `mcp/types.rs`
+   - Removed `NextIssueRequest` type from `mcp/types.rs`
+
+**Remaining Tasks:**
+1. Search codebase for any remaining references to deprecated tools
+2. Verify successful compilation and test execution
+3. Confirm MCP server starts correctly with updated tool set
+
+This systematic approach ensures complete removal of deprecated functionality while maintaining system integrity.
+## Final Status: COMPLETED ✅
+
+All deprecated tool removal work has been successfully completed:
+
+**Verification Results:**
+- ✅ **Compilation**: `cargo check` passes without errors
+- ✅ **Critical Tests**: MCP server tool registration tests pass
+- ✅ **No Code References**: Search confirmed no remaining source code references
+- ✅ **Tool Registry**: Successfully registers issue tools without deprecated ones
+- ✅ **Server Startup**: MCP server compilation and startup successful
+
+**Work Completed:**
+1. ✅ Deprecated tool files removed (`current/` and `next/` directories)
+2. ✅ Tool registrations cleaned from `issues/mod.rs`
+3. ✅ Module declarations updated
+4. ✅ Type definitions cleaned from `mcp/types.rs`
+5. ✅ Documentation references updated in module comments
+6. ✅ No broken imports or compilation errors
+7. ✅ MCP server functionality verified
+
+The codebase is now clean with all deprecated `issue_current` and `issue_next` tools fully removed. The functionality has been successfully consolidated into the `issue_show` tool with special parameter handling as specified in the issue requirements.

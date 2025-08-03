@@ -62,18 +62,14 @@
 //! - **mark_complete**: Mark issues as completed and archive them
 //! - **all_complete**: Check if all pending issues are completed
 //! - **update**: Modify existing issue content and metadata
-//! - **current**: Get the currently active issue based on git branch
 //! - **work**: Switch to or create a work branch for an issue
 //! - **merge**: Merge completed issue work back to main branch
-//! - **next**: Get the next pending issue to work on
 
 pub mod all_complete;
 pub mod create;
-pub mod current;
 pub mod list;
 pub mod mark_complete;
 pub mod merge;
-pub mod next;
 pub mod show;
 pub mod update;
 pub mod work;
@@ -88,8 +84,6 @@ pub fn register_issue_tools(registry: &mut ToolRegistry) {
     registry.register(all_complete::AllCompleteIssueTool::new());
     registry.register(show::ShowIssueTool::new());
     registry.register(update::UpdateIssueTool::new());
-    registry.register(current::CurrentIssueTool::new());
     registry.register(work::WorkIssueTool::new());
     registry.register(merge::MergeIssueTool::new());
-    registry.register(next::NextIssueTool::new());
 }

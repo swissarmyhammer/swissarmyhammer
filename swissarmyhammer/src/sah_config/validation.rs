@@ -888,7 +888,7 @@ mod tests {
         let result = validator.validate_file_security(temp_file.path());
         // This should pass for a temporary file (now that we allow .tmp files)
         match result {
-            Ok(()) => {}                                      // Good
+            Ok(()) => {}                                    // Good
             Err(e) => println!("Validation failed: {e:?}"), // Debug output
         }
 

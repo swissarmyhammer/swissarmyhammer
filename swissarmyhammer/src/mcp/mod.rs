@@ -31,8 +31,8 @@ pub use types::{GetPromptRequest, ListPromptsRequest};
 
 #[cfg(test)]
 pub use types::{
-    AllCompleteRequest, CreateIssueRequest, CurrentIssueRequest, IssueName, MarkCompleteRequest,
-    MergeIssueRequest, UpdateIssueRequest, WorkIssueRequest,
+    AllCompleteRequest, CreateIssueRequest, IssueName, MarkCompleteRequest, MergeIssueRequest,
+    UpdateIssueRequest, WorkIssueRequest,
 };
 #[cfg(test)]
 pub use utils::validate_issue_name;

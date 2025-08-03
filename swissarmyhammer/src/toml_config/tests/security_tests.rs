@@ -126,9 +126,7 @@ fn test_nesting_depth_limits() {
             "Error should report correct depth comparison"
         );
     } else {
-        panic!(
-            "Expected NestingTooDeep error, got: {validation_result:?}"
-        );
+        panic!("Expected NestingTooDeep error, got: {validation_result:?}");
     }
 }
 
@@ -172,9 +170,7 @@ fn test_path_traversal_prevention() {
             }
             Err(other) => {
                 // Other errors are also acceptable as they indicate the operation was rejected
-                println!(
-                    "Path traversal attempt '{attempt}' rejected with: {other:?}"
-                );
+                println!("Path traversal attempt '{attempt}' rejected with: {other:?}");
             }
         }
     }
@@ -243,15 +239,11 @@ fn test_malformed_toml_handling() {
                 // Expected error types
             }
             Err(other) => {
-                println!(
-                    "Malformed TOML '{description}' produced unexpected error: {other:?}"
-                );
+                println!("Malformed TOML '{description}' produced unexpected error: {other:?}");
                 // Still acceptable as long as it fails
             }
             Ok(_) => {
-                panic!(
-                    "Malformed TOML '{description}' should not parse successfully"
-                );
+                panic!("Malformed TOML '{description}' should not parse successfully");
             }
         }
     }
@@ -302,9 +294,7 @@ fn test_invalid_environment_variable_syntax() {
                 }
                 Err(_) => {
                     // If substitution fails, that's also acceptable for clearly invalid syntax
-                    println!(
-                        "Invalid env var syntax '{description}' rejected during substitution"
-                    );
+                    println!("Invalid env var syntax '{description}' rejected during substitution");
                 }
             }
         }
@@ -567,26 +557,20 @@ fn test_content_filtering() {
                 let validation_result = config.validate();
 
                 if validation_result.is_err() {
-                    println!(
-                        "Potentially dangerous content '{key}' rejected during validation"
-                    );
+                    println!("Potentially dangerous content '{key}' rejected during validation");
                 } else {
                     // If validation passes, ensure the content is properly handled
-                    if let Some(parsed_value) = config.get(key) {
-                        if let ConfigValue::String(s) = parsed_value {
-                            // Ensure string length is reasonable
-                            assert!(
-                                s.len() < ValidationLimits::default().max_string_length,
-                                "String length should be within limits"
-                            );
-                        }
+                    if let Some(ConfigValue::String(s)) = config.get(key) {
+                        // Ensure string length is reasonable
+                        assert!(
+                            s.len() < ValidationLimits::default().max_string_length,
+                            "String length should be within limits"
+                        );
                     }
                 }
             }
             Err(_) => {
-                println!(
-                    "Potentially dangerous content '{key}' rejected during parsing"
-                );
+                println!("Potentially dangerous content '{key}' rejected during parsing");
                 // Rejection is acceptable
             }
         }
