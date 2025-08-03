@@ -103,7 +103,6 @@ impl McpTool for ShowIssueTool {
         // Validate issue name is not empty
         McpValidation::validate_not_empty(&request.name, "issue name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate issue name"))?;
-        
 
         tracing::debug!("Showing issue: {}", request.name);
 
@@ -118,7 +117,7 @@ impl McpTool for ShowIssueTool {
                         if let Some(issue_name) = branch.strip_prefix(&config.issue_branch_prefix) {
                             issue_name.to_string()
                         } else {
-                            return Ok(BaseToolImpl::create_success_response(&format!(
+                            return Ok(BaseToolImpl::create_success_response(format!(
                                 "Not on an issue branch. Current branch: {branch}"
                             )));
                         }
@@ -145,7 +144,7 @@ impl McpTool for ShowIssueTool {
                 .into_iter()
                 .find(|i| i.name == issue_name)
                 .ok_or_else(|| {
-                    McpError::invalid_params(format!("Issue '{}' not found", issue_name), None)
+                    McpError::invalid_params(format!("Issue '{issue_name}' not found"), None)
                 })?
         } else if request.name == "next" {
             // Get next pending issue

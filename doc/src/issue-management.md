@@ -18,7 +18,7 @@ SwissArmyHammer's issue management system provides a lightweight, git-friendly w
   - [issue_work](#issue_work)
   - [issue_update](#issue_update)
   - [issue_mark_complete](#issue_mark_complete)
-  - [issue_current](#issue_current)
+  - [issue_show](#issue_show)
   - [issue_all_complete](#issue_all_complete)
   - [issue_merge](#issue_merge)
 - [CLI Commands Reference](#cli-commands-reference)
@@ -168,18 +168,41 @@ Mark an issue as complete, moving it to the completed directory.
 }
 ```
 
-### issue_current
+### issue_show
 
-Get the current issue based on the active git branch.
+Display details of a specific issue by name, or use special parameters to get current/next issues.
 
 **Parameters:**
-- `branch` (optional): Specific branch to check
+- `name` (required): Name of the issue to show, or special values:
+  - `"current"`: Show the issue for the current git branch
+  - `"next"`: Show the next pending issue alphabetically
+- `raw` (optional): Show raw content only without formatting (default: false)
 
-**Example:**
+**Examples:**
 ```json
 {
-  "tool": "issue_current",
-  "arguments": {}
+  "tool": "issue_show",
+  "arguments": {
+    "name": "FEATURE_000123_user-auth"
+  }
+}
+```
+
+```json
+{
+  "tool": "issue_show",
+  "arguments": {
+    "name": "current"
+  }
+}
+```
+
+```json
+{
+  "tool": "issue_show",
+  "arguments": {
+    "name": "next"
+  }
 }
 ```
 
