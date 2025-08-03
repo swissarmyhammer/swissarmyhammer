@@ -631,7 +631,7 @@ mod edge_case_tests {
         let array_toml = r#"
             empty_array = []
             single_item = ["alone"]
-            mixed_types = ["string", 42, true, 3.14]
+            mixed_types = ["string", 42, true, 2.71]
             nested_arrays = [["a", "b"], ["c", "d"]]
             trailing_comma = ["item1", "item2",]
         "#;
@@ -665,7 +665,7 @@ mod edge_case_tests {
         assert_eq!(mixed[0], ConfigValue::String("string".to_string()));
         assert_eq!(mixed[1], ConfigValue::Integer(42));
         assert_eq!(mixed[2], ConfigValue::Boolean(true));
-        assert_eq!(mixed[3], ConfigValue::Float(3.14));
+        assert_eq!(mixed[3], ConfigValue::Float(2.71));
     }
 
     #[test]

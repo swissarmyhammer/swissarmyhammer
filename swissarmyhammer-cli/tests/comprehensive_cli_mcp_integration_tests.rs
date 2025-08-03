@@ -87,7 +87,15 @@ async fn test_all_issue_tools_execution() -> Result<()> {
     let result = context.execute_tool("issue_create", create_args).await;
     assert!(result.is_ok(), "issue_create should succeed: {result:?}");
 
-    // Test issue_show current (might not have current issue, but should not error on tool level)
+    // Test issue_show with regular issue name
+    let show_args = context.create_arguments(vec![("name", json!("comprehensive_test_issue"))]);
+    let result = context.execute_tool("issue_show", show_args).await;
+    assert!(
+        result.is_ok(),
+        "issue_show should succeed with regular name: {result:?}"
+    );
+
+    // Test issue_show current (enhanced functionality)
     let current_args = context.create_arguments(vec![("name", json!("current"))]);
     let result = context.execute_tool("issue_show", current_args).await;
     // This might succeed or fail depending on branch, but tool should be callable
@@ -96,7 +104,7 @@ async fn test_all_issue_tools_execution() -> Result<()> {
         "issue_show current should be callable"
     );
 
-    // Test issue_show next
+    // Test issue_show next (enhanced functionality)
     let next_args = context.create_arguments(vec![("name", json!("next"))]);
     let result = context.execute_tool("issue_show", next_args).await;
     assert!(result.is_ok(), "issue_show next should succeed: {result:?}");
@@ -646,6 +654,238 @@ async fn test_mcp_error_boundaries() -> Result<()> {
         result.is_ok(),
         "Context should recover after error: {result:?}"
     );
+
+    Ok(())
+}
+
+/// Test comprehensive issue_show functionality with enhanced parameters
+#[tokio::test]
+async fn test_issue_show_comprehensive() -> Result<()> {
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let context = CliToolContext::new_with_dir(&temp_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Create multiple test issues for comprehensive testing
+    let issue_names = vec!["ALPHA_ISSUE_001", "BETA_ISSUE_002", "CHARLIE_ISSUE_003"];
+
+    for name in &issue_names {
+        let create_args = context.create_arguments(vec![
+            ("name", json!(name)),
+            (
+                "content",
+                json!(format!("# {}\n\nComprehensive test issue.", name)),
+            ),
+        ]);
+        let result = context.execute_tool("issue_create", create_args).await;
+        assert!(
+            result.is_ok(),
+            "Should create test issue {name}: {result:?}"
+        );
+    }
+
+    // Test issue_show with regular issue names
+    for name in &issue_names {
+        let show_args = context.create_arguments(vec![("name", json!(name))]);
+        let result = context.execute_tool("issue_show", show_args).await;
+        assert!(
+            result.is_ok(),
+            "issue_show should work with regular name {name}: {result:?}"
+        );
+
+        // Verify response contains issue information
+        let call_result = result.unwrap();
+        let content =
+            swissarmyhammer_cli::mcp_integration::response_formatting::extract_text_content(
+                &call_result,
+            );
+        if let Some(text) = content {
+            assert!(
+                text.contains(name),
+                "Response should contain issue name: {text}"
+            );
+        }
+    }
+
+    // Test issue_show next (should return first alphabetically)
+    let next_args = context.create_arguments(vec![("name", json!("next"))]);
+    let result = context.execute_tool("issue_show", next_args).await;
+    assert!(result.is_ok(), "issue_show next should succeed: {result:?}");
+
+    let call_result = result.unwrap();
+    let content = swissarmyhammer_cli::mcp_integration::response_formatting::extract_text_content(
+        &call_result,
+    );
+    if let Some(text) = content {
+        assert!(
+            text.contains("ALPHA_ISSUE_001"),
+            "Next should return first alphabetically: {text}"
+        );
+    }
+
+    // Test issue_show current (might not be on issue branch or might find different issue)
+    let current_args = context.create_arguments(vec![("name", json!("current"))]);
+    let result = context.execute_tool("issue_show", current_args).await;
+    // This might succeed with a message about not being on an issue branch, or find a different issue
+    match result {
+        Ok(_) => {
+            // Success - either found current issue or indicated not on issue branch
+        }
+        Err(e) => {
+            // This could happen if the current branch maps to a non-existent issue
+            println!("issue_show current returned error (acceptable): {e}");
+        }
+    }
+
+    // Test raw parameter functionality
+    let raw_args = context.create_arguments(vec![
+        ("name", json!("ALPHA_ISSUE_001")),
+        ("raw", json!(true)),
+    ]);
+    let result = context.execute_tool("issue_show", raw_args).await;
+    assert!(
+        result.is_ok(),
+        "issue_show with raw=true should succeed: {result:?}"
+    );
+
+    let call_result = result.unwrap();
+    let content = swissarmyhammer_cli::mcp_integration::response_formatting::extract_text_content(
+        &call_result,
+    );
+    if let Some(text) = content {
+        // Raw content should not have formatting emojis
+        assert!(
+            !text.contains("🔄") && !text.contains("✅"),
+            "Raw response should not contain emojis: {text}"
+        );
+        assert!(
+            text.contains("ALPHA_ISSUE_001"),
+            "Raw response should contain content"
+        );
+    }
+
+    // Test error handling with nonexistent issue
+    let error_args = context.create_arguments(vec![("name", json!("NONEXISTENT_ISSUE"))]);
+    let result = context.execute_tool("issue_show", error_args).await;
+    assert!(
+        result.is_err(),
+        "issue_show should fail for nonexistent issue"
+    );
+
+    // Test parameter validation with empty name
+    let empty_args = context.create_arguments(vec![("name", json!(""))]);
+    let result = context.execute_tool("issue_show", empty_args).await;
+    assert!(result.is_err(), "issue_show should fail with empty name");
+
+    Ok(())
+}
+
+/// Test issue_show performance and edge cases
+#[tokio::test]
+async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let context = CliToolContext::new_with_dir(&temp_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Create many issues for performance testing (with rate limiting tolerance)
+    for i in 0..20 {
+        let create_args = context.create_arguments(vec![
+            ("name", json!(format!("PERF_TEST_{:03}", i))),
+            (
+                "content",
+                json!(format!("# Performance Test {}\n\nTesting performance.", i)),
+            ),
+        ]);
+        let result = context.execute_tool("issue_create", create_args).await;
+        if result.is_err() {
+            let error = result.unwrap_err();
+            if error.to_string().contains("rate limit") {
+                // Rate limiting is expected during performance testing
+                println!("Rate limited at issue {i} (expected during performance test)");
+                break;
+            } else {
+                panic!("Should create performance test issue {i}: {error:?}");
+            }
+        }
+    }
+
+    // Test performance of next parameter
+    let start_time = std::time::Instant::now();
+    let next_args = context.create_arguments(vec![("name", json!("next"))]);
+    let result = context.execute_tool("issue_show", next_args).await;
+    let elapsed = start_time.elapsed();
+
+    // Should succeed if we have any issues, or indicate no pending issues if none were created
+    match result {
+        Ok(_) => {
+            assert!(
+                elapsed < std::time::Duration::from_millis(2000),
+                "issue_show next should be reasonably fast: {elapsed:?}"
+            );
+        }
+        Err(e) => {
+            // This could happen if rate limiting prevented creating enough issues
+            println!("issue_show next failed (might be due to rate limiting): {e}");
+        }
+    }
+
+    // Test with very large content (only if not rate limited)
+    let large_content = "A".repeat(5000);
+    let large_args = context.create_arguments(vec![
+        ("name", json!("LARGE_CONTENT_TEST")),
+        (
+            "content",
+            json!(format!("# Large Content Test\n\n{}", large_content)),
+        ),
+    ]);
+    let result = context.execute_tool("issue_create", large_args).await;
+
+    if result.is_ok() {
+        let show_large_args = context.create_arguments(vec![("name", json!("LARGE_CONTENT_TEST"))]);
+        let show_result = context.execute_tool("issue_show", show_large_args).await;
+        assert!(show_result.is_ok(), "Should show large content efficiently");
+    } else {
+        println!("Large content test skipped due to rate limiting");
+    }
+
+    // Test concurrent access to issue_show (skip if rate limited)
+    println!("Testing concurrent access to issue_show...");
+    let mut success_count = 0;
+    let mut handles = vec![];
+
+    for i in 0..3 {
+        // Reduce to 3 to avoid rate limiting
+        let context_clone = CliToolContext::new_with_dir(&temp_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let handle = tokio::spawn(async move {
+            let args = context_clone.create_arguments(vec![("name", json!("next"))]);
+            (i, context_clone.execute_tool("issue_show", args).await)
+        });
+        handles.push(handle);
+    }
+
+    // Wait for all concurrent operations
+    for handle in handles {
+        let (i, result) = handle.await?;
+        match result {
+            Ok(call_result) => {
+                assert_eq!(
+                    call_result.is_error,
+                    Some(false),
+                    "Concurrent issue_show {i} should succeed"
+                );
+                success_count += 1;
+            }
+            Err(e) => {
+                // This could happen if rate limiting occurs
+                println!("Concurrent issue_show {i} returned error (might be rate limiting): {e}");
+            }
+        }
+    }
+
+    println!("Concurrent tests: {success_count} out of 3 succeeded");
 
     Ok(())
 }

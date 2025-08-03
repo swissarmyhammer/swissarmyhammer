@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 /// Test performance characteristics of configuration operations
-mod tests {
+mod perf_tests {
     use super::*;
 
     #[test]
@@ -30,11 +30,7 @@ mod tests {
         assert!(!config.is_empty());
         assert!(config.len() > 900); // Should have most of the generated items
 
-        println!(
-            "Parsed {} config items in {:?}",
-            config.len(),
-            parse_duration
-        );
+        println!("Parsed {} config items in {parse_duration:?}", config.len());
     }
 
     #[test]
@@ -62,9 +58,8 @@ mod tests {
         assert!(config.contains_key("section_100"));
 
         println!(
-            "Loaded large config file ({} bytes) in {:?}",
-            large_content.len(),
-            total_duration
+            "Loaded large config file ({} bytes) in {total_duration:?}",
+            large_content.len()
         );
     }
 
@@ -99,7 +94,7 @@ mod tests {
         let config = create_large_nested_config(100);
 
         let test_keys: Vec<String> = (0..100)
-            .map(|i| format!("section_{i}.subsection_{}.item_{}", i % 50, i % 10))
+            .map(|i| format!("section_{}.subsection_{}.item_{}", i, i % 50, i % 10))
             .collect();
 
         let start = Instant::now();
@@ -202,7 +197,7 @@ mod tests {
         // Should have generated many keys including nested ones
         assert!(keys.len() > 1000);
 
-        println!("Generated {} keys in {:?}", keys.len(), keys_duration);
+        println!("Generated {} keys in {keys_duration:?}", keys.len());
     }
 
     #[test]
@@ -511,14 +506,13 @@ mod caching_tests {
             parsed_configs.push(config);
 
             // Verify each config was parsed correctly
-            let expected_name = i + 1;
             assert_eq!(
                 parsed_configs[i]
                     .get("name")
                     .unwrap()
                     .coerce_to_string()
                     .unwrap(),
-                format!("Config{expected_name}")
+                format!("Config{}", i + 1)
             );
         }
 
@@ -528,15 +522,14 @@ mod caching_tests {
         assert!(reuse_duration < Duration::from_millis(10));
 
         println!(
-            "Parsed {} configs with reused parser in {:?}",
-            configs.len(),
-            reuse_duration
+            "Parsed {} configs with reused parser in {reuse_duration:?}",
+            configs.len()
         );
     }
 
     #[test]
     fn test_repeated_access_patterns() {
-        let config = tests::create_large_nested_config(50);
+        let config = perf_tests::create_large_nested_config(50);
 
         // Test that repeated access to same keys doesn't degrade performance
         let frequently_accessed_keys = [

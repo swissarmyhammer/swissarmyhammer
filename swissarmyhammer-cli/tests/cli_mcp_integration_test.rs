@@ -166,7 +166,7 @@ async fn test_issue_workflow_integration() {
         create_result.err()
     );
 
-    // 2. Try to get the next issue (should include our created issue)
+    // 2. Try to get the next issue using enhanced issue_show (should include our created issue)
     let next_args = context.create_arguments(vec![("name", json!("next"))]);
     let next_result = context.execute_tool("issue_show", next_args).await;
 
@@ -185,6 +185,42 @@ async fn test_issue_workflow_integration() {
             println!("issue_show next returned error (acceptable): {e}");
         }
     }
+
+    // 3. Test issue_show current (enhanced functionality)
+    let current_args = context.create_arguments(vec![("name", json!("current"))]);
+    let current_result = context.execute_tool("issue_show", current_args).await;
+
+    // This should succeed but might indicate we're not on an issue branch
+    match current_result {
+        Ok(result) => {
+            assert_eq!(
+                result.is_error,
+                Some(false),
+                "issue_show current should not report error when successful"
+            );
+        }
+        Err(e) => {
+            // This could happen if git operations fail
+            println!("issue_show current returned error (might be acceptable): {e}");
+        }
+    }
+
+    // 4. Test issue_show with regular issue name
+    let show_args = context.create_arguments(vec![("name", json!("workflow_test"))]);
+    let show_result = context.execute_tool("issue_show", show_args).await;
+
+    assert!(
+        show_result.is_ok(),
+        "issue_show with regular name should succeed: {:?}",
+        show_result.err()
+    );
+
+    let show_call_result = show_result.unwrap();
+    assert_eq!(
+        show_call_result.is_error,
+        Some(false),
+        "issue_show should not report error when showing existing issue"
+    );
 }
 
 #[test]

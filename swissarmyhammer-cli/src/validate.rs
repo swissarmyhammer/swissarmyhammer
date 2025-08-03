@@ -187,8 +187,7 @@ impl Validator {
 
             // Create a path that includes the source location for better debugging
             let workflow_path = PathBuf::from(format!(
-                "workflow:{}:{}",
-                source_location,
+                "workflow:{source_location}:{}",
                 workflow.name.as_str()
             ));
 

@@ -547,7 +547,7 @@ fn test_content_filtering() {
     ];
 
     for (key, value) in potentially_dangerous_content {
-        let toml_content = format!("{} = \"{}\"", key, value.replace('"', "\\\""));
+        let toml_content = format!("{key} = \"{}\"", value.replace('"', "\\\""));
 
         let result = parser.parse_string(&toml_content, None);
 

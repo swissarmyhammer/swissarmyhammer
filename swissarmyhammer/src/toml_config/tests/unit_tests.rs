@@ -50,14 +50,11 @@ mod config_value_tests {
 
     #[test]
     fn test_config_value_float_operations() {
-        let value = ConfigValue::Float(std::f64::consts::PI);
+        let value = ConfigValue::Float(3.15);
 
         // Test coercion
-        assert_eq!(value.coerce_to_float().unwrap(), std::f64::consts::PI);
-        assert_eq!(
-            value.coerce_to_string().unwrap(),
-            std::f64::consts::PI.to_string()
-        );
+        assert_eq!(value.coerce_to_float().unwrap(), 3.15);
+        assert_eq!(value.coerce_to_string().unwrap(), "3.15");
         // Float to integer coercion is supported with truncation
         assert_eq!(value.coerce_to_integer().unwrap(), 3);
         // Float to boolean coercion is not supported
@@ -65,10 +62,7 @@ mod config_value_tests {
 
         // Test liquid conversion
         let liquid_value = value.to_liquid_value();
-        assert_eq!(
-            liquid_value,
-            liquid::model::Value::scalar(std::f64::consts::PI)
-        );
+        assert_eq!(liquid_value, liquid::model::Value::scalar(3.15));
     }
 
     #[test]
