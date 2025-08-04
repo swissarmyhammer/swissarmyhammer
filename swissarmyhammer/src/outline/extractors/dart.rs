@@ -23,29 +23,92 @@ impl DartExtractor {
         let language = tree_sitter_dart::language().into();
         let mut queries = HashMap::new();
 
-        // Define a single combined Tree-sitter query for all Dart constructs
-        // This avoids HashMap key conflicts when multiple constructs map to the same OutlineNodeType
-        let combined_query = r#"
-            (lambda_expression) @function
-            (class_definition) @class  
-            (mixin_declaration) @mixin
-            (extension_declaration) @extension
-            (enum_declaration) @enum
-            (getter_signature) @getter
-            (initialized_variable_definition) @variable
-            (const_builtin) @const
-            (type_alias) @type_alias
-            (library_name) @library
-            (import_or_export) @import
-        "#;
+        // Define Tree-sitter queries for Dart constructs
+        // Using the actual node names from tree-sitter-dart grammar
+        let query_definitions = vec![
+            // Classes
+            (
+                OutlineNodeType::Class,
+                r#"(class_definition) @class"#,
+            ),
+            // Mixins
+            (
+                OutlineNodeType::Interface,
+                r#"(mixin_declaration) @mixin"#,
+            ),
+            // Extensions
+            (
+                OutlineNodeType::Interface,
+                r#"(extension_declaration) @extension"#,
+            ),
+            // Enums
+            (
+                OutlineNodeType::Enum,
+                r#"(enum_declaration) @enum"#,
+            ),
+            // Functions
+            (
+                OutlineNodeType::Function,
+                r#"(function_signature) @function"#,
+            ),
+            // Method signatures
+            (
+                OutlineNodeType::Method,
+                r#"(method_signature) @method"#,
+            ),
+            // Getter signatures
+            (
+                OutlineNodeType::Property,
+                r#"(getter_signature) @getter"#,
+            ),
+            // Setter signatures
+            (
+                OutlineNodeType::Property,
+                r#"(setter_signature) @setter"#,
+            ),
+            // Constructor signatures
+            (
+                OutlineNodeType::Method,
+                r#"(constructor_signature) @constructor"#,
+            ),
+            // Factory constructor signatures
+            (
+                OutlineNodeType::Method,
+                r#"(factory_constructor_signature) @factory"#,
+            ),
+            // Type aliases
+            (
+                OutlineNodeType::TypeAlias,
+                r#"(type_alias) @type_alias"#,
+            ),
+            // Variables
+            (
+                OutlineNodeType::Variable,
+                r#"(initialized_variable_definition) @variable"#,
+            ),
+            // Libraries
+            (
+                OutlineNodeType::Module,
+                r#"(library_name) @library"#,
+            ),
+            // Imports
+            (
+                OutlineNodeType::Import,
+                r#"(import_or_export) @import"#,
+            ),
+        ];
 
-        // Compile the combined query
-        let query = Query::new(&language, combined_query).map_err(|e| {
-            OutlineError::TreeSitter(format!("Failed to compile Dart combined query: {}", e))
-        })?;
-        
-        // Store the single query - we'll handle the different capture types in extract_symbols
-        queries.insert(OutlineNodeType::Function, query); // Use a dummy key since we only have one query
+        // Compile all queries
+        for (node_type, query_str) in query_definitions {
+            let query = Query::new(&language, query_str).map_err(|e| {
+                OutlineError::TreeSitter(format!(
+                    "Failed to compile {:?} query: {}",
+                    node_type, e
+                ))
+            })?;
+            queries.insert(node_type, query);
+        }
+
 
         Ok(Self { queries })
     }
@@ -471,48 +534,6 @@ impl DartExtractor {
         signature
     }
 
-    /// Map Tree-sitter capture name to OutlineNodeType
-    fn capture_name_to_node_type(&self, capture_name: &str) -> OutlineNodeType {
-        match capture_name {
-            "function" => OutlineNodeType::Function,
-            "class" => OutlineNodeType::Class,
-            "mixin" => OutlineNodeType::Interface, // Use Interface for mixins
-            "extension" => OutlineNodeType::Interface, // Use Interface for extensions
-            "enum" => OutlineNodeType::Enum,
-            "getter" => OutlineNodeType::Property,
-            "variable" => OutlineNodeType::Property,
-            "const" => OutlineNodeType::Constant,
-            "type_alias" => OutlineNodeType::TypeAlias,
-            "library" => OutlineNodeType::Module,
-            "import" => OutlineNodeType::Import,
-            _ => OutlineNodeType::Function, // Default fallback
-        }
-    }
-
-    /// Build signature based on capture name and node
-    fn build_signature_for_capture(&self, name: &str, capture_name: &str, node: &Node, source: &str) -> Option<String> {
-        match capture_name {
-            "function" => {
-                // For lambda_expression, find the function_signature child
-                let mut result = None;
-                for child in node.children(&mut node.walk()) {
-                    if child.kind() == "function_signature" {
-                        result = Some(self.build_function_signature(name, &child, source));
-                        break;
-                    }
-                }
-                result
-            }
-            "class" => Some(self.build_class_signature(name, node, source)),
-            "mixin" => Some(self.build_mixin_signature(name, node, source)),
-            "extension" => Some(self.build_extension_signature(name, node, source)),
-            "enum" => Some(self.build_enum_signature(name, node, source)),
-            "getter" => Some(format!("{} get {}", 
-                self.extract_return_type(node, source).unwrap_or_else(|| "dynamic".to_string()),
-                name)),
-            _ => None,
-        }
-    }
 }
 
 impl SymbolExtractor for DartExtractor {
@@ -520,51 +541,103 @@ impl SymbolExtractor for DartExtractor {
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
 
-        // Get the single combined query
-        let query = self.queries.values().next().ok_or_else(|| {
-            OutlineError::TreeSitter("No query found in DartExtractor".to_string())
-        })?;
+        // Process each query type
+        for (node_type, query) in &self.queries {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(query, root_node, source.as_bytes());
 
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(query, root_node, source.as_bytes());
+            while let Some(query_match) = matches.next() {
+                // Get the main captured node (should be the only capture)
+                if let Some(capture) = query_match.captures.first() {
+                    let node = &capture.node;
+                    
+                    if let Some(name) = self.extract_name_from_node(node, source) {
+                        let (start_line, end_line) = self.get_line_range(node);
+                        let mut outline_node = OutlineNode::new(
+                            name.clone(),
+                            node_type.clone(),
+                            start_line,
+                            end_line,
+                            (node.start_byte(), node.end_byte()),
+                        );
 
-        while let Some(query_match) = matches.next() {
-            // Process each capture in the match
-            for capture in query_match.captures {
-                let node = &capture.node;
-                let capture_name = query.capture_names()[capture.index as usize];
-                
-                // Map capture name to OutlineNodeType
-                let node_type = self.capture_name_to_node_type(capture_name);
-                
-                if let Some(name) = self.extract_name_from_node(node, source) {
-                    let (start_line, end_line) = self.get_line_range(node);
-                    let mut outline_node = OutlineNode::new(
-                        name.clone(),
-                        node_type.clone(),
-                        start_line,
-                        end_line,
-                        (node.start_byte(), node.end_byte()),
-                    );
+                        // Add signature based on node type and kind
+                        let signature = match node_type {
+                            OutlineNodeType::Function => {
+                                Some(self.build_function_signature(&name, node, source))
+                            }
+                            OutlineNodeType::Method => {
+                                match node.kind() {
+                                    "constructor_signature" => {
+                                        Some(self.build_constructor_signature(&name, node, source))
+                                    }
+                                    "factory_constructor_signature" => {
+                                        Some(self.build_factory_signature(&name, node, source))
+                                    }
+                                    _ => Some(self.build_function_signature(&name, node, source))
+                                }
+                            }
+                            OutlineNodeType::Class => {
+                                Some(self.build_class_signature(&name, node, source))
+                            }
+                            OutlineNodeType::Interface => {
+                                match node.kind() {
+                                    "mixin_declaration" => {
+                                        Some(self.build_mixin_signature(&name, node, source))
+                                    }
+                                    "extension_declaration" => {
+                                        Some(self.build_extension_signature(&name, node, source))
+                                    }
+                                    _ => None
+                                }
+                            }
+                            OutlineNodeType::Enum => {
+                                Some(self.build_enum_signature(&name, node, source))
+                            }
+                            OutlineNodeType::Property => {
+                                match node.kind() {
+                                    "getter_signature" => {
+                                        Some(format!("{} get {}", 
+                                            self.extract_return_type(node, source).unwrap_or_else(|| "dynamic".to_string()),
+                                            name))
+                                    }
+                                    "setter_signature" => {
+                                        Some(format!("set {} {}", name, self.extract_function_parameters(node, source)))
+                                    }
+                                    _ => None
+                                }
+                            }
+                            OutlineNodeType::Variable => {
+                                Some(format!("var {}", name))
+                            }
+                            OutlineNodeType::TypeAlias => {
+                                Some(format!("typedef {}", name))
+                            }
+                            OutlineNodeType::Module => {
+                                Some(format!("library {}", name))
+                            }
+                            OutlineNodeType::Import => {
+                                Some(format!("import {}", name))
+                            }
+                            _ => None,
+                        };
 
-                    // Add signature based on capture name and node kind
-                    let signature = self.build_signature_for_capture(&name, capture_name, node, source);
+                        if let Some(sig) = signature {
+                            outline_node = outline_node.with_signature(sig);
+                        }
 
-                    if let Some(sig) = signature {
-                        outline_node = outline_node.with_signature(sig);
+                        // Add visibility
+                        if let Some(visibility) = self.parse_visibility(node, source) {
+                            outline_node = outline_node.with_visibility(visibility);
+                        }
+
+                        // Add documentation
+                        if let Some(docs) = self.extract_dartdoc_comments(node, source) {
+                            outline_node = outline_node.with_documentation(docs);
+                        }
+
+                        symbols.push(outline_node);
                     }
-
-                    // Add visibility
-                    if let Some(visibility) = self.parse_visibility(node, source) {
-                        outline_node = outline_node.with_visibility(visibility);
-                    }
-
-                    // Add documentation
-                    if let Some(docs) = self.extract_dartdoc_comments(node, source) {
-                        outline_node = outline_node.with_documentation(docs);
-                    }
-
-                    symbols.push(outline_node);
                 }
             }
         }
@@ -620,22 +693,25 @@ impl SymbolExtractor for DartExtractor {
 
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
         vec![
-            // Functions
-            ("(lambda_expression) @function", OutlineNodeType::Function),
             // Classes
             ("(class_definition) @class", OutlineNodeType::Class),
             // Mixins
-            ("(mixin_declaration) @mixin", OutlineNodeType::Class),
+            ("(mixin_declaration) @mixin", OutlineNodeType::Interface),
             // Extensions
-            ("(extension_declaration) @extension", OutlineNodeType::Class),
+            ("(extension_declaration) @extension", OutlineNodeType::Interface),
             // Enums
             ("(enum_declaration) @enum", OutlineNodeType::Enum),
-            // Getters
-            ("(getter_signature) @getter", OutlineNodeType::Property),
+            // Functions
+            ("(function_signature) @function", OutlineNodeType::Function),
+            // Methods
+            ("(method_signature) @method", OutlineNodeType::Method),
+            ("(constructor_signature) @constructor", OutlineNodeType::Method),
+            ("(factory_constructor_signature) @factory", OutlineNodeType::Method),
             // Properties
-            ("(initialized_variable_definition) @variable", OutlineNodeType::Property),
-            // Constants
-            ("(const_builtin) @const", OutlineNodeType::Constant),
+            ("(getter_signature) @getter", OutlineNodeType::Property),
+            ("(setter_signature) @setter", OutlineNodeType::Property),
+            // Variables
+            ("(initialized_variable_definition) @variable", OutlineNodeType::Variable),
             // Type aliases
             ("(type_alias) @type_alias", OutlineNodeType::TypeAlias),
             // Libraries
@@ -659,6 +735,10 @@ mod tests {
     #[test]
     fn test_dart_extractor_creation() {
         let extractor = DartExtractor::new();
+        match &extractor {
+            Ok(_) => println!("✅ DartExtractor created successfully"),
+            Err(e) => println!("❌ Failed to create DartExtractor: {:?}", e),
+        }
         assert!(extractor.is_ok());
     }
 
