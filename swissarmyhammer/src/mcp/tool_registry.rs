@@ -473,6 +473,12 @@ pub fn register_search_tools(registry: &mut ToolRegistry) {
     search::register_search_tools(registry);
 }
 
+/// Register all outline-related tools with the registry
+pub fn register_outline_tools(registry: &mut ToolRegistry) {
+    use crate::mcp::tools::outline;
+    outline::register_outline_tools(registry);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

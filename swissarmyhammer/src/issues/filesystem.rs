@@ -665,7 +665,10 @@ impl IssueStorage for FileSystemIssueStorage {
     async fn get_next_issue(&self) -> Result<Option<Issue>> {
         let all_issues = self.list_issues().await?;
         // Filter to pending issues and sort alphabetically by name
-        let mut pending_issues: Vec<Issue> = all_issues.into_iter().filter(|issue| !issue.completed).collect();
+        let mut pending_issues: Vec<Issue> = all_issues
+            .into_iter()
+            .filter(|issue| !issue.completed)
+            .collect();
         pending_issues.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(pending_issues.into_iter().next())
     }

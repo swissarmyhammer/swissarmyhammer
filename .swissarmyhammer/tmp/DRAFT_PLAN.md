@@ -1,41 +1,91 @@
-# DRAFT PLAN: Remove issue_current and issue_next Tools
+# Draft Plan: Outline Tool Implementation
 
 ## Overview
-This plan removes two redundant MCP tools (`issue_current` and `issue_next`) and consolidates their functionality into the existing `issue_show` tool with special parameter handling.
+Implementation of the outline tool as specified in `./specification/outline_tool.md`. This tool provides structured code overviews using Tree-sitter parsing across multiple programming languages (Rust, TypeScript, JavaScript, Dart, Python).
 
-## Analysis
-- Current state: Two separate tools for getting current/next issues
-- Desired state: Single `issue_show` tool with `"current"` and `"next"` special parameters
-- Impact: 4 builtin prompt files need updating, 2 tool implementations need removal
-- Benefits: Reduced API surface, consistent interface, less maintenance burden
+## Current State Analysis
+- MCP tools follow established pattern in `src/mcp/tools/` with noun/verb structure
+- Existing search tools use Tree-sitter and are in `src/mcp/tools/search/`
+- Tree-sitter parsing infrastructure already exists in `src/search/parser.rs`
+- DuckDB storage infrastructure exists in `src/search/storage.rs`
+- Multi-language parsing capabilities already implemented
 
-## High-Level Steps
+## Requirements from Specification
+1. Tree-sitter parsing for multiple languages (Rust, TS, JS, Dart, Python)
+2. Hierarchical YAML output structure mirroring file system
+3. Extracts: types, functions, methods, properties, docs, signatures, line numbers
+4. Glob pattern input with gitignore respect
+5. Error handling for parsing failures
+6. Language-specific handling for constructs
+7. MCP tool integration following existing patterns
 
-### Phase 1: Preparation and Analysis
-1. **Audit Current Usage**: Search codebase for all references to `issue_current` and `issue_next`
-2. **Understand Current Implementation**: Read and analyze the logic in both tools to be removed
-3. **Identify Test Coverage**: Find all tests that need updating
+## Architecture Analysis
+The outline tool should:
+- Leverage existing Tree-sitter infrastructure from search module
+- Create new MCP tool under `src/mcp/tools/outline/` following established patterns
+- Reuse gitignore handling and file discovery logic
+- Generate YAML output instead of search indexing
+- Extract detailed symbol information including signatures and documentation
 
-### Phase 2: Core Implementation
-4. **Enhance issue_show Tool**: Add special parameter handling for "current" and "next"
-5. **Update Tool Description**: Document new functionality in description.md
-6. **Add Comprehensive Tests**: Test new functionality and edge cases
+## Implementation Strategy
 
-### Phase 3: Migration and Cleanup  
-7. **Update Builtin Prompts**: Replace tool calls in 4 prompt files
-8. **Remove Old Tools**: Delete tool implementations and registry entries
-9. **Update Tests**: Fix any broken tests from removed tools
+### Phase 1: Core Infrastructure Setup
+1. Create MCP tool structure following established patterns
+2. Set up basic outline data structures and types
+3. Implement file discovery with gitignore respect
+4. Create YAML output formatting infrastructure
 
-### Phase 4: Verification
-10. **Integration Testing**: Verify workflows still function correctly
-11. **Final Cleanup**: Remove any remaining dead code or references
+### Phase 2: Tree-sitter Integration
+5. Extend existing Tree-sitter parser for outline extraction
+6. Implement language-specific symbol extraction
+7. Create hierarchical symbol tree building
+8. Add signature and documentation extraction
 
-## Risk Analysis
-- Low risk: Functionality is being consolidated, not removed
-- Main risk: Breaking existing workflows that use the prompts
-- Mitigation: Thorough testing of updated prompts before cleanup
+### Phase 3: Output Generation
+9. Implement file system hierarchy mirroring in YAML
+10. Create detailed symbol information formatting
+11. Add error handling and reporting
+12. Implement comprehensive testing
 
-## Size Estimation
-- Small to medium sized changes
-- Most work is in consolidation rather than new feature development
-- Should be implementable in incremental steps
+### Phase 4: Integration and Polish
+13. Register tool with MCP server
+14. Add CLI integration if needed
+15. Create comprehensive documentation
+16. Performance optimization and cleanup
+
+## Implementation Breakdown
+
+### Small Incremental Steps
+
+1. **Project Setup & Tool Structure** - Create MCP tool directory structure, basic types
+2. **File Discovery** - Implement glob pattern processing with gitignore integration
+3. **Tree-sitter Core Integration** - Extend parser for outline-specific extraction
+4. **Rust Language Support** - Implement Rust-specific symbol extraction
+5. **TypeScript/JavaScript Support** - Implement TS/JS symbol extraction
+6. **Dart Language Support** - Implement Dart symbol extraction  
+7. **Python Language Support** - Implement Python symbol extraction
+8. **Hierarchical Structure Builder** - Build nested symbol trees
+9. **YAML Output Formatter** - Generate structured YAML output
+10. **Signature Extraction** - Extract function/method signatures
+11. **Documentation Extraction** - Extract and format documentation comments
+12. **Error Handling** - Robust error handling for parsing failures
+13. **Testing Infrastructure** - Comprehensive unit and integration tests
+14. **MCP Registration** - Register tool with MCP server
+15. **Performance Optimization** - Optimize for large codebases
+
+Each step should be small enough to implement safely (< 500 lines of code) and build incrementally on previous steps.
+
+## Dependencies
+- Existing Tree-sitter infrastructure in `src/search/`
+- MCP tool patterns from `src/mcp/tools/`
+- YAML serialization capabilities (serde_yaml)
+- File system utilities from existing codebase
+- Gitignore processing from existing search tools
+
+## Success Criteria
+- Tool generates accurate YAML outlines for all supported languages
+- Respects gitignore patterns correctly
+- Provides rich symbol information (signatures, docs, locations)
+- Follows established MCP tool patterns
+- Comprehensive test coverage
+- Performance suitable for large codebases
