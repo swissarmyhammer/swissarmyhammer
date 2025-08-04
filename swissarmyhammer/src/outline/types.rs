@@ -156,3 +156,188 @@ impl FileDiscoveryReport {
         )
     }
 }
+
+/// Type of outline node representing different code constructs
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OutlineNodeType {
+    /// Function definition
+    Function,
+    /// Method definition within a class/impl/trait
+    Method,
+    /// Class definition
+    Class,
+    /// Struct definition (Rust)
+    Struct,
+    /// Enum definition
+    Enum,
+    /// Interface definition (TypeScript)
+    Interface,
+    /// Trait definition (Rust)
+    Trait,
+    /// Implementation block (Rust)
+    Impl,
+    /// Module/namespace definition
+    Module,
+    /// Property/field definition
+    Property,
+    /// Constant definition
+    Constant,
+    /// Variable definition
+    Variable,
+    /// Type alias definition
+    TypeAlias,
+}
+
+/// Visibility modifier for code elements
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Visibility {
+    /// Public visibility
+    Public,
+    /// Private visibility (default in most languages)
+    Private,
+    /// Protected visibility
+    Protected,
+    /// Package/crate visibility (Rust pub(crate))
+    Package,
+    /// Module visibility (Rust pub(super))
+    Module,
+    /// Custom visibility path (Rust pub(in path))
+    Custom(String),
+}
+
+/// A single node in the code outline tree
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlineNode {
+    /// Name of the code element
+    pub name: String,
+    /// Type of the code element
+    pub node_type: OutlineNodeType,
+    /// Starting line number (1-based)
+    pub start_line: usize,
+    /// Ending line number (1-based)
+    pub end_line: usize,
+    /// Function/method signature with types (optional)
+    pub signature: Option<String>,
+    /// Type information for properties/variables (optional)
+    pub type_info: Option<String>,
+    /// Documentation comment text (optional)
+    pub documentation: Option<String>,
+    /// Visibility modifier (optional)
+    pub visibility: Option<Visibility>,
+    /// Child nodes for nested structures
+    pub children: Vec<OutlineNode>,
+}
+
+impl OutlineNode {
+    /// Create a new outline node with basic information
+    pub fn new(
+        name: String,
+        node_type: OutlineNodeType,
+        start_line: usize,
+        end_line: usize,
+    ) -> Self {
+        Self {
+            name,
+            node_type,
+            start_line,
+            end_line,
+            signature: None,
+            type_info: None,
+            documentation: None,
+            visibility: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// Set the signature for this node
+    pub fn with_signature(mut self, signature: String) -> Self {
+        self.signature = Some(signature);
+        self
+    }
+
+    /// Set the type information for this node
+    pub fn with_type_info(mut self, type_info: String) -> Self {
+        self.type_info = Some(type_info);
+        self
+    }
+
+    /// Set the documentation for this node
+    pub fn with_documentation(mut self, documentation: String) -> Self {
+        self.documentation = Some(documentation);
+        self
+    }
+
+    /// Set the visibility for this node
+    pub fn with_visibility(mut self, visibility: Visibility) -> Self {
+        self.visibility = Some(visibility);
+        self
+    }
+
+    /// Add a child node
+    pub fn add_child(mut self, child: OutlineNode) -> Self {
+        self.children.push(child);
+        self
+    }
+
+    /// Add multiple child nodes
+    pub fn with_children(mut self, children: Vec<OutlineNode>) -> Self {
+        self.children.extend(children);
+        self
+    }
+}
+
+/// Complete outline for a single file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileOutline {
+    /// Path to the source file
+    pub file_path: PathBuf,
+    /// Programming language
+    pub language: Language,
+    /// Root-level symbols in the file
+    pub symbols: Vec<OutlineNode>,
+}
+
+impl FileOutline {
+    /// Create a new file outline
+    pub fn new(file_path: PathBuf, language: Language) -> Self {
+        Self {
+            file_path,
+            language,
+            symbols: Vec::new(),
+        }
+    }
+
+    /// Add a symbol to this file outline
+    pub fn add_symbol(mut self, symbol: OutlineNode) -> Self {
+        self.symbols.push(symbol);
+        self
+    }
+
+    /// Add multiple symbols to this file outline
+    pub fn with_symbols(mut self, symbols: Vec<OutlineNode>) -> Self {
+        self.symbols.extend(symbols);
+        self
+    }
+}
+
+/// Trait for extracting symbols from source code using Tree-sitter
+pub trait SymbolExtractor: Send + Sync {
+    /// Extract symbols from a Tree-sitter syntax tree
+    fn extract_symbols(&self, tree: &tree_sitter::Tree, source: &str) -> crate::outline::Result<Vec<OutlineNode>>;
+    
+    /// Extract documentation comment for a specific node
+    fn extract_documentation(&self, node: &tree_sitter::Node, source: &str) -> Option<String>;
+    
+    /// Extract signature information for a function/method node
+    fn extract_signature(&self, node: &tree_sitter::Node, source: &str) -> Option<String>;
+    
+    /// Extract visibility modifier from a node
+    fn extract_visibility(&self, node: &tree_sitter::Node, source: &str) -> Option<Visibility>;
+    
+    /// Build hierarchical relationships between symbols
+    fn build_hierarchy(&self, symbols: Vec<OutlineNode>) -> Vec<OutlineNode> {
+        // Default implementation returns symbols as-is
+        // Language-specific extractors can override this
+        symbols
+    }
+}
