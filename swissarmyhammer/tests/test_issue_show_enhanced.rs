@@ -7,7 +7,7 @@ use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::process::Command;
 use std::sync::Arc;
-use swissarmyhammer::common::rate_limiter::get_rate_limiter;
+use swissarmyhammer::common::rate_limiter::MockRateLimiter;
 use swissarmyhammer::config::Config;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
@@ -73,7 +73,7 @@ impl IssueShowTestEnvironment {
             issue_storage.clone(),
             git_ops.clone(),
             memo_storage,
-            get_rate_limiter().clone(),
+            Arc::new(MockRateLimiter),
         );
 
         let tool = ShowIssueTool::new();
@@ -708,7 +708,7 @@ async fn test_issue_show_concurrent_access() {
             env.issue_storage.clone(),
             env.git_ops.clone(),
             memo_storage,
-            get_rate_limiter().clone(),
+            Arc::new(MockRateLimiter),
         );
 
         let handle = tokio::spawn(async move {
