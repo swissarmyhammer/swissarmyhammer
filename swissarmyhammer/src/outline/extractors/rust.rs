@@ -4,7 +4,8 @@
 //! supporting structs, enums, traits, impls, functions, methods, constants,
 //! and their associated documentation, visibility, and signature information.
 
-use crate::outline::types::{OutlineNode, OutlineNodeType, SymbolExtractor, Visibility};
+use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
+use crate::outline::parser::SymbolExtractor;
 use crate::outline::{OutlineError, Result};
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
@@ -362,6 +363,7 @@ impl SymbolExtractor for RustExtractor {
                             node_type.clone(),
                             start_line,
                             end_line,
+                            (node.start_byte(), node.end_byte()),
                         );
 
                         // Add signature based on node type
@@ -460,6 +462,29 @@ impl SymbolExtractor for RustExtractor {
         // For now, return symbols as-is
         // TODO: Build proper hierarchical relationships for impl blocks, modules, etc.
         symbols
+    }
+
+    fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
+        vec![
+            // Functions
+            ("(function_item) @function", OutlineNodeType::Function),
+            // Structs  
+            ("(struct_item) @struct", OutlineNodeType::Struct),
+            // Enums
+            ("(enum_item) @enum", OutlineNodeType::Enum),
+            // Traits
+            ("(trait_item) @trait", OutlineNodeType::Trait),
+            // Impl blocks
+            ("(impl_item) @impl", OutlineNodeType::Impl),
+            // Constants
+            ("(const_item) @const", OutlineNodeType::Constant),
+            // Static items
+            ("(static_item) @static", OutlineNodeType::Variable),
+            // Type aliases
+            ("(type_item) @type_alias", OutlineNodeType::TypeAlias),
+            // Modules
+            ("(mod_item) @module", OutlineNodeType::Module),
+        ]
     }
 }
 

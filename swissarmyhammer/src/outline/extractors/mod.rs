@@ -5,5 +5,9 @@
 //! code outlines.
 
 pub mod rust;
+pub mod typescript;
+pub mod javascript;
 
 pub use rust::RustExtractor;
+pub use typescript::TypeScriptExtractor;
+pub use javascript::JavaScriptExtractor;

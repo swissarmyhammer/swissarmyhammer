@@ -159,7 +159,7 @@ impl FileDiscoveryReport {
 }
 
 /// Type of symbol node in the outline tree
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OutlineNodeType {
     /// Function definition
     Function,
@@ -173,6 +173,10 @@ pub enum OutlineNodeType {
     Enum,
     /// Interface definition (TypeScript, Dart)
     Interface,
+    /// Trait definition (Rust)
+    Trait,
+    /// Implementation block (Rust)
+    Impl,
     /// Module or namespace
     Module,
     /// Property or field
@@ -198,6 +202,10 @@ pub enum Visibility {
     Protected,
     /// Package/internal visibility
     Package,
+    /// Module-level visibility
+    Module,
+    /// Custom visibility scope
+    Custom(String),
 }
 
 /// A symbol node in the outline tree
@@ -345,7 +353,8 @@ impl OutlineTree {
                 OutlineNodeType::Function | OutlineNodeType::Method => stats.functions += 1,
                 OutlineNodeType::Class | OutlineNodeType::Struct => stats.classes += 1,
                 OutlineNodeType::Enum => stats.enums += 1,
-                OutlineNodeType::Interface => stats.interfaces += 1,
+                OutlineNodeType::Interface | OutlineNodeType::Trait => stats.interfaces += 1,
+                OutlineNodeType::Impl => stats.classes += 1, // Count impls as classes
                 OutlineNodeType::Module => stats.modules += 1,
                 OutlineNodeType::Constant => stats.constants += 1,
                 OutlineNodeType::Variable => stats.variables += 1,
