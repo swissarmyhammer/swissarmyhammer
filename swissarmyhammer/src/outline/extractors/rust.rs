@@ -4,8 +4,8 @@
 //! supporting structs, enums, traits, impls, functions, methods, constants,
 //! and their associated documentation, visibility, and signature information.
 
-use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
@@ -25,51 +25,21 @@ impl RustExtractor {
         // Define Tree-sitter queries for each Rust construct
         // Using simpler patterns that are known to work from the search module
         let query_definitions = vec![
-            (
-                OutlineNodeType::Function,
-                r#"(function_item) @function"#,
-            ),
-            (
-                OutlineNodeType::Struct,
-                r#"(struct_item) @struct"#,
-            ),
-            (
-                OutlineNodeType::Enum,
-                r#"(enum_item) @enum"#,
-            ),
-            (
-                OutlineNodeType::Trait,
-                r#"(trait_item) @trait"#,
-            ),
-            (
-                OutlineNodeType::Impl,
-                r#"(impl_item) @impl"#,
-            ),
-            (
-                OutlineNodeType::Constant,
-                r#"(const_item) @const"#,
-            ),
-            (
-                OutlineNodeType::Variable,
-                r#"(static_item) @static"#,
-            ),
-            (
-                OutlineNodeType::TypeAlias,
-                r#"(type_item) @type_alias"#,
-            ),
-            (
-                OutlineNodeType::Module,
-                r#"(mod_item) @module"#,
-            ),
+            (OutlineNodeType::Function, r#"(function_item) @function"#),
+            (OutlineNodeType::Struct, r#"(struct_item) @struct"#),
+            (OutlineNodeType::Enum, r#"(enum_item) @enum"#),
+            (OutlineNodeType::Trait, r#"(trait_item) @trait"#),
+            (OutlineNodeType::Impl, r#"(impl_item) @impl"#),
+            (OutlineNodeType::Constant, r#"(const_item) @const"#),
+            (OutlineNodeType::Variable, r#"(static_item) @static"#),
+            (OutlineNodeType::TypeAlias, r#"(type_item) @type_alias"#),
+            (OutlineNodeType::Module, r#"(mod_item) @module"#),
         ];
 
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!(
-                    "Failed to compile {:?} query: {}",
-                    node_type, e
-                ))
+                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
             })?;
             queries.insert(node_type, query);
         }
@@ -174,8 +144,8 @@ impl RustExtractor {
         if let Some(return_type_node) = node.child_by_field_name("return_type") {
             return Some(self.get_node_text(&return_type_node, source));
         }
-        
-        // Fallback: search for any type annotation in children 
+
+        // Fallback: search for any type annotation in children
         for child in node.children(&mut node.walk()) {
             if child.kind() == "type_annotation" {
                 return Some(self.get_node_text(&child, source));
@@ -227,7 +197,7 @@ impl RustExtractor {
         // Look backwards from the node's line to find documentation comments
         for line_idx in (0..node_line).rev() {
             let line = lines.get(line_idx)?.trim();
-            
+
             if line.starts_with("///") {
                 // Rust doc comment
                 let doc_content = line.strip_prefix("///")?.trim();
@@ -261,13 +231,13 @@ impl RustExtractor {
         let mut signature = String::new();
         signature.push_str("fn ");
         signature.push_str(name);
-        
+
         if let Some(gen) = generics {
             signature.push_str(&gen);
         }
-        
+
         signature.push_str(&params);
-        
+
         if let Some(ret) = return_type {
             signature.push_str(" -> ");
             signature.push_str(&ret.strip_prefix(": ").unwrap_or(&ret));
@@ -281,7 +251,7 @@ impl RustExtractor {
         let mut signature = String::new();
         signature.push_str("struct ");
         signature.push_str(name);
-        
+
         if let Some(generics) = self.extract_generics(node, source) {
             signature.push_str(&generics);
         }
@@ -294,7 +264,7 @@ impl RustExtractor {
         let mut signature = String::new();
         signature.push_str("enum ");
         signature.push_str(name);
-        
+
         if let Some(generics) = self.extract_generics(node, source) {
             signature.push_str(&generics);
         }
@@ -307,7 +277,7 @@ impl RustExtractor {
         let mut signature = String::new();
         signature.push_str("trait ");
         signature.push_str(name);
-        
+
         if let Some(generics) = self.extract_generics(node, source) {
             signature.push_str(&generics);
         }
@@ -319,7 +289,7 @@ impl RustExtractor {
     fn build_impl_signature(&self, node: &Node, source: &str) -> String {
         let mut signature = String::new();
         signature.push_str("impl");
-        
+
         if let Some(generics) = self.extract_generics(node, source) {
             signature.push(' ');
             signature.push_str(&generics);
@@ -355,7 +325,7 @@ impl SymbolExtractor for RustExtractor {
                 // Get the main captured node (should be the only capture)
                 if let Some(capture) = query_match.captures.first() {
                     let node = &capture.node;
-                    
+
                     if let Some(name) = self.extract_name_from_node(node, source) {
                         let (start_line, end_line) = self.get_line_range(node);
                         let mut outline_node = OutlineNode::new(
@@ -380,9 +350,7 @@ impl SymbolExtractor for RustExtractor {
                             OutlineNodeType::Trait => {
                                 Some(self.build_trait_signature(&name, node, source))
                             }
-                            OutlineNodeType::Impl => {
-                                Some(self.build_impl_signature(node, source))
-                            }
+                            OutlineNodeType::Impl => Some(self.build_impl_signature(node, source)),
                             _ => None,
                         };
 
@@ -447,9 +415,7 @@ impl SymbolExtractor for RustExtractor {
                     None
                 }
             }
-            "impl_item" => {
-                Some(self.build_impl_signature(node, source))
-            }
+            "impl_item" => Some(self.build_impl_signature(node, source)),
             _ => None,
         }
     }
@@ -468,7 +434,7 @@ impl SymbolExtractor for RustExtractor {
         vec![
             // Functions
             ("(function_item) @function", OutlineNodeType::Function),
-            // Structs  
+            // Structs
             ("(struct_item) @struct", OutlineNodeType::Struct),
             // Enums
             ("(enum_item) @enum", OutlineNodeType::Enum),
@@ -515,22 +481,31 @@ pub fn hello_world() -> String {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let func = &symbols[0];
         assert_eq!(func.name, "hello_world");
         assert_eq!(func.node_type, OutlineNodeType::Function);
         assert_eq!(func.visibility, Some(Visibility::Public));
-        assert!(func.signature.as_ref().unwrap().contains("fn hello_world()"));
+        assert!(func
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("fn hello_world()"));
         assert!(func.signature.as_ref().unwrap().contains("-> String"));
-        assert_eq!(func.documentation.as_ref().unwrap(), "This is a test function");
+        assert_eq!(
+            func.documentation.as_ref().unwrap(),
+            "This is a test function"
+        );
     }
 
-    #[test] 
+    #[test]
     fn test_extract_struct() {
         let extractor = RustExtractor::new().unwrap();
         let source = r#"
@@ -542,18 +517,27 @@ pub struct Person {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let struct_node = &symbols[0];
         assert_eq!(struct_node.name, "Person");
         assert_eq!(struct_node.node_type, OutlineNodeType::Struct);
         assert_eq!(struct_node.visibility, Some(Visibility::Public));
-        assert!(struct_node.signature.as_ref().unwrap().contains("struct Person"));
-        assert_eq!(struct_node.documentation.as_ref().unwrap(), "A simple struct");
+        assert!(struct_node
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("struct Person"));
+        assert_eq!(
+            struct_node.documentation.as_ref().unwrap(),
+            "A simple struct"
+        );
     }
 
     #[test]
@@ -569,11 +553,13 @@ pub enum Color {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let enum_node = &symbols[0];
         assert_eq!(enum_node.name, "Color");
@@ -593,17 +579,23 @@ pub trait Display {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let trait_node = &symbols[0];
         assert_eq!(trait_node.name, "Display");
         assert_eq!(trait_node.node_type, OutlineNodeType::Trait);
         assert_eq!(trait_node.visibility, Some(Visibility::Public));
-        assert!(trait_node.signature.as_ref().unwrap().contains("trait Display"));
+        assert!(trait_node
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("trait Display"));
     }
 
     #[test]
@@ -625,13 +617,15 @@ pub fn initialize() {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 3);
-        
+
         // Check that we got the expected symbol types
         let types: Vec<&OutlineNodeType> = symbols.iter().map(|s| &s.node_type).collect();
         assert!(types.contains(&&OutlineNodeType::Constant));
@@ -727,17 +721,20 @@ pub struct ProcessError {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_rust::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         // Should extract multiple symbol types
         assert!(!symbols.is_empty());
-        
+
         // Check that we got various types
-        let types: std::collections::HashSet<&OutlineNodeType> = symbols.iter().map(|s| &s.node_type).collect();
-        
+        let types: std::collections::HashSet<&OutlineNodeType> =
+            symbols.iter().map(|s| &s.node_type).collect();
+
         // Verify we extracted different kinds of symbols
         let expected_types = vec![
             OutlineNodeType::Constant,
@@ -750,11 +747,15 @@ pub struct ProcessError {
             OutlineNodeType::Module,
             OutlineNodeType::TypeAlias,
         ];
-        
+
         for expected in expected_types {
-            assert!(types.contains(&expected), "Missing symbol type: {:?}", expected);
+            assert!(
+                types.contains(&expected),
+                "Missing symbol type: {:?}",
+                expected
+            );
         }
-        
+
         // Check specific symbols exist with correct names
         let names: Vec<&String> = symbols.iter().map(|s| &s.name).collect();
         assert!(names.contains(&&"MAX_SIZE".to_string()));
@@ -765,26 +766,35 @@ pub struct ProcessError {
         assert!(names.contains(&&"utils".to_string()));
         assert!(names.contains(&&"ProcessResult".to_string()));
         assert!(names.contains(&&"ProcessError".to_string()));
-        
+
         // Check that public visibility is detected
-        let public_symbols: Vec<&OutlineNode> = symbols.iter()
+        let public_symbols: Vec<&OutlineNode> = symbols
+            .iter()
             .filter(|s| s.visibility == Some(Visibility::Public))
             .collect();
         assert!(!public_symbols.is_empty());
-        
+
         // Check that some signatures contain generics
         let has_generics = symbols.iter().any(|s| {
-            s.signature.as_ref().map_or(false, |sig| sig.contains("<") && sig.contains(">"))
+            s.signature
+                .as_ref()
+                .map_or(false, |sig| sig.contains("<") && sig.contains(">"))
         });
         assert!(has_generics, "Should find symbols with generic parameters");
-        
+
         // Check that some documentation was extracted
         let has_docs = symbols.iter().any(|s| s.documentation.is_some());
         assert!(has_docs, "Should find symbols with documentation");
-        
-        println!("Successfully extracted {} symbols from complex Rust code", symbols.len());
+
+        println!(
+            "Successfully extracted {} symbols from complex Rust code",
+            symbols.len()
+        );
         for symbol in &symbols {
-            println!("  {:?} '{}' at line {}", symbol.node_type, symbol.name, symbol.start_line);
+            println!(
+                "  {:?} '{}' at line {}",
+                symbol.node_type, symbol.name, symbol.start_line
+            );
         }
     }
 }

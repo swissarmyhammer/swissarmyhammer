@@ -4,8 +4,8 @@
 //! supporting classes, functions, arrow functions, methods, variables, and their
 //! associated JSDoc documentation and basic visibility inference.
 
-use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -41,20 +41,11 @@ impl JavaScriptExtractor {
                   value: (arrow_function)) @arrow_function"#,
             ),
             // All class declarations (including in export statements)
-            (
-                OutlineNodeType::Class,
-                r#"(_ (class_declaration) @class)"#,
-            ),
+            (OutlineNodeType::Class, r#"(_ (class_declaration) @class)"#),
             // Direct class declarations
-            (
-                OutlineNodeType::Class,
-                r#"(class_declaration) @class"#,  
-            ),
+            (OutlineNodeType::Class, r#"(class_declaration) @class"#),
             // Method definitions within classes
-            (
-                OutlineNodeType::Method,
-                r#"(method_definition) @method"#,
-            ),
+            (OutlineNodeType::Method, r#"(method_definition) @method"#),
             // Variables (let, const, var)
             (
                 OutlineNodeType::Variable,
@@ -65,19 +56,13 @@ impl JavaScriptExtractor {
                 r#"(lexical_declaration) @variable"#,
             ),
             // Import statements
-            (
-                OutlineNodeType::Import,
-                r#"(import_statement) @import"#,
-            ),
+            (OutlineNodeType::Import, r#"(import_statement) @import"#),
         ];
 
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!(
-                    "Failed to compile {:?} query: {}",
-                    node_type, e
-                ))
+                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
             })?;
             queries.push((node_type, query));
         }
@@ -186,7 +171,7 @@ impl JavaScriptExtractor {
                 return Some(Visibility::Public);
             }
         }
-        
+
         // Check for naming conventions (starting with underscore suggests private)
         if let Some(name_node) = node.child_by_field_name("name") {
             let name = self.get_node_text(&name_node, source);
@@ -194,7 +179,7 @@ impl JavaScriptExtractor {
                 return Some(Visibility::Private);
             }
         }
-        
+
         None // No explicit visibility in JavaScript
     }
 
@@ -212,7 +197,7 @@ impl JavaScriptExtractor {
         // Look backwards from the node's line to find JSDoc comments
         for line_idx in (0..node_line).rev() {
             let line = lines.get(line_idx)?.trim();
-            
+
             if line == "*/" && !in_jsdoc {
                 in_jsdoc = true;
                 continue;
@@ -272,10 +257,10 @@ impl JavaScriptExtractor {
     /// Build method signature for class methods
     fn build_method_signature(&self, name: &str, node: &Node, source: &str) -> String {
         let params = self.extract_function_parameters(node, source);
-        
+
         // Check for static, async, getter, setter
         let mut modifiers = Vec::new();
-        
+
         for child in node.children(&mut node.walk()) {
             match child.kind() {
                 "static" => modifiers.push("static"),
@@ -285,19 +270,18 @@ impl JavaScriptExtractor {
                 _ => {}
             }
         }
-        
+
         let mut signature = String::new();
         if !modifiers.is_empty() {
             signature.push_str(&modifiers.join(" "));
             signature.push(' ');
         }
-        
+
         signature.push_str(name);
         signature.push_str(&params);
-        
+
         signature
     }
-
 
     /// Build arrow function signature
     fn build_arrow_function_signature(&self, name: &str, node: &Node, source: &str) -> String {
@@ -308,7 +292,7 @@ impl JavaScriptExtractor {
                 return format!("const {} = {} => {{}}", name, params);
             }
         }
-        
+
         format!("const {} = () => {{}}", name)
     }
 }
@@ -327,7 +311,7 @@ impl SymbolExtractor for JavaScriptExtractor {
                 // Get the main captured node (should be the only capture)
                 if let Some(capture) = query_match.captures.first() {
                     let node = &capture.node;
-                    
+
                     if let Some(name) = self.extract_name_from_node(node, source) {
                         let (start_line, end_line) = self.get_line_range(node);
                         let mut outline_node = OutlineNode::new(
@@ -417,19 +401,31 @@ impl SymbolExtractor for JavaScriptExtractor {
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
         vec![
             // Function declarations (including exported)
-            ("(_ (function_declaration) @function)", OutlineNodeType::Function),
-            ("(function_declaration) @function", OutlineNodeType::Function),
+            (
+                "(_ (function_declaration) @function)",
+                OutlineNodeType::Function,
+            ),
+            (
+                "(function_declaration) @function",
+                OutlineNodeType::Function,
+            ),
             // Arrow functions in variables
-            (r#"(variable_declarator
+            (
+                r#"(variable_declarator
               name: (identifier) @name
-              value: (arrow_function)) @arrow_function"#, OutlineNodeType::Function),
+              value: (arrow_function)) @arrow_function"#,
+                OutlineNodeType::Function,
+            ),
             // Classes (including exported)
             ("(_ (class_declaration) @class)", OutlineNodeType::Class),
             ("(class_declaration) @class", OutlineNodeType::Class),
             // Methods
             ("(method_definition) @method", OutlineNodeType::Method),
             // Variables
-            ("(variable_declaration) @variable", OutlineNodeType::Variable),
+            (
+                "(variable_declaration) @variable",
+                OutlineNodeType::Variable,
+            ),
             ("(lexical_declaration) @variable", OutlineNodeType::Variable),
             // Imports
             ("(import_statement) @import", OutlineNodeType::Import),
@@ -468,23 +464,33 @@ export function greetUser(name) {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let func = &symbols[0];
         assert_eq!(func.name, "greetUser");
         assert_eq!(func.node_type, OutlineNodeType::Function);
         // Visibility detection might not work as expected, comment out for now
         // assert_eq!(func.visibility, Some(Visibility::Public));
-        assert!(func.signature.as_ref().unwrap().contains("function greetUser"));
+        assert!(func
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("function greetUser"));
         assert!(func.signature.as_ref().unwrap().contains("(name)"));
-        assert!(func.documentation.as_ref().unwrap().contains("This is a test function"));
+        assert!(func
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("This is a test function"));
     }
 
-    #[test] 
+    #[test]
     fn test_extract_class() {
         let extractor = JavaScriptExtractor::new().unwrap();
         let source = r#"
@@ -508,17 +514,27 @@ export class User {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(!symbols.is_empty());
         let class_symbol = symbols.iter().find(|s| s.name == "User").unwrap();
         assert_eq!(class_symbol.node_type, OutlineNodeType::Class);
         // assert_eq!(class_symbol.visibility, Some(Visibility::Public)); // Visibility detection may not work
-        assert!(class_symbol.signature.as_ref().unwrap().contains("class User"));
-        assert!(class_symbol.documentation.as_ref().unwrap().contains("A user class"));
+        assert!(class_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("class User"));
+        assert!(class_symbol
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("A user class"));
     }
 
     #[test]
@@ -545,15 +561,17 @@ var _internalState = {};
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         // JavaScript variable detection might not find all variables consistently
         // so just check that we found some symbols
         assert!(!symbols.is_empty());
-        
+
         // Check if we found the CONFIG variable (if the parser found it)
         if let Some(config_symbol) = symbols.iter().find(|s| s.name == "CONFIG") {
             assert_eq!(config_symbol.node_type, OutlineNodeType::Variable);
@@ -561,7 +579,7 @@ var _internalState = {};
                 assert!(doc.contains("Configuration constant"));
             }
         }
-        
+
         // Check for underscore naming convention detection if the symbol was found
         if let Some(internal_symbol) = symbols.iter().find(|s| s.name == "_internalState") {
             assert_eq!(internal_symbol.node_type, OutlineNodeType::Variable);
@@ -590,20 +608,30 @@ const fetchData = async (url) => {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(symbols.len() >= 2);
-        
+
         let handle_click_symbol = symbols.iter().find(|s| s.name == "handleClick").unwrap();
         assert_eq!(handle_click_symbol.node_type, OutlineNodeType::Function);
-        assert!(handle_click_symbol.documentation.as_ref().unwrap().contains("Arrow function handler"));
-        
+        assert!(handle_click_symbol
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("Arrow function handler"));
+
         let fetch_data_symbol = symbols.iter().find(|s| s.name == "fetchData").unwrap();
         assert_eq!(fetch_data_symbol.node_type, OutlineNodeType::Function);
-        assert!(fetch_data_symbol.documentation.as_ref().unwrap().contains("Async arrow function"));
+        assert!(fetch_data_symbol
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("Async arrow function"));
     }
 
     #[test]
@@ -626,16 +654,30 @@ class AdminUser extends User {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(!symbols.is_empty());
         let class_symbol = symbols.iter().find(|s| s.name == "AdminUser").unwrap();
         assert_eq!(class_symbol.node_type, OutlineNodeType::Class);
-        assert!(class_symbol.signature.as_ref().unwrap().contains("class AdminUser"));
-        assert!(class_symbol.signature.as_ref().unwrap().contains("extends User"));
-        assert!(class_symbol.documentation.as_ref().unwrap().contains("Extended user class"));
+        assert!(class_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("class AdminUser"));
+        assert!(class_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("extends User"));
+        assert!(class_symbol
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("Extended user class"));
     }
 }

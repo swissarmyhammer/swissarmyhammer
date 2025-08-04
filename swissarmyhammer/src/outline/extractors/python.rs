@@ -4,8 +4,8 @@
 //! supporting classes, functions, methods, properties, decorators, async functions,
 //! and their associated documentation, type hints, and signature information.
 
-use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
@@ -30,10 +30,7 @@ impl PythonExtractor {
                 r#"(function_definition) @function"#,
             ),
             // Class definitions
-            (
-                OutlineNodeType::Class,
-                r#"(class_definition) @class"#,
-            ),
+            (OutlineNodeType::Class, r#"(class_definition) @class"#),
             // Variable assignments at module level
             (
                 OutlineNodeType::Variable,
@@ -41,10 +38,7 @@ impl PythonExtractor {
                   left: (identifier) @var_name) @variable"#,
             ),
             // Import statements
-            (
-                OutlineNodeType::Import,
-                r#"(import_statement) @import"#,
-            ),
+            (OutlineNodeType::Import, r#"(import_statement) @import"#),
             // Import from statements
             (
                 OutlineNodeType::Import,
@@ -55,10 +49,7 @@ impl PythonExtractor {
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!(
-                    "Failed to compile {:?} query: {}",
-                    node_type, e
-                ))
+                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
             })?;
             queries.insert(node_type, query);
         }
@@ -116,10 +107,10 @@ impl PythonExtractor {
     /// Extract Python function signature with type hints
     fn extract_function_signature(&self, node: &Node, source: &str) -> Option<String> {
         let node_text = self.get_node_text(node, source);
-        
+
         // Find the function definition line(s) - everything up to the final ':'
         let mut signature_lines = Vec::new();
-        
+
         for line in node_text.lines() {
             let trimmed = line.trim();
             if trimmed.ends_with(':') {
@@ -137,11 +128,11 @@ impl PythonExtractor {
                 signature_lines.push(trimmed);
             }
         }
-        
+
         if signature_lines.is_empty() {
             return None;
         }
-        
+
         // Join the lines with a space
         let signature = signature_lines.join(" ");
         Some(signature)
@@ -150,11 +141,11 @@ impl PythonExtractor {
     /// Extract Python class signature with inheritance
     fn extract_class_signature(&self, node: &Node, source: &str) -> Option<String> {
         let node_text = self.get_node_text(node, source);
-        
+
         // Extract the class definition line
         let first_line = node_text.lines().next()?;
         let signature = first_line.trim();
-        
+
         // Clean up to include just the class declaration
         if let Some(colon_pos) = signature.find(':') {
             Some(signature[..=colon_pos].to_string())
@@ -230,7 +221,7 @@ impl PythonExtractor {
     /// Clean up a docstring by removing quotes and formatting
     fn clean_docstring(&self, docstring: &str) -> String {
         let mut cleaned = docstring.trim();
-        
+
         // Remove triple quotes
         if cleaned.starts_with("\"\"\"") && cleaned.ends_with("\"\"\"") {
             cleaned = &cleaned[3..cleaned.len() - 3];
@@ -241,11 +232,11 @@ impl PythonExtractor {
         } else if cleaned.starts_with('\'') && cleaned.ends_with('\'') {
             cleaned = &cleaned[1..cleaned.len() - 1];
         }
-        
+
         // Clean up whitespace and return first line or first sentence
         let cleaned = cleaned.trim();
         let first_line = cleaned.lines().next().unwrap_or("").trim();
-        
+
         // If the first line ends with a period, use just that
         if first_line.ends_with('.') {
             first_line.to_string()
@@ -273,7 +264,6 @@ impl PythonExtractor {
             Some(Visibility::Public)
         }
     }
-
 }
 
 impl SymbolExtractor for PythonExtractor {
@@ -290,7 +280,7 @@ impl SymbolExtractor for PythonExtractor {
                 // Get the main captured node (should be the only capture)
                 if let Some(capture) = query_match.captures.first() {
                     let node = &capture.node;
-                    
+
                     if let Some(name) = self.extract_name_from_node(node, source) {
                         let (start_line, end_line) = self.get_line_range(node);
                         let mut outline_node = OutlineNode::new(
@@ -351,18 +341,12 @@ impl SymbolExtractor for PythonExtractor {
     fn extract_signature(&self, node: &Node, source: &str) -> Option<String> {
         if let Some(name) = self.extract_name_from_node(node, source) {
             match node.kind() {
-                "function_definition" => {
-                    Some(self.build_function_signature(&name, node, source))
-                }
-                "class_definition" => {
-                    Some(self.build_class_signature(&name, node, source))
-                }
+                "function_definition" => Some(self.build_function_signature(&name, node, source)),
+                "class_definition" => Some(self.build_class_signature(&name, node, source)),
                 "import_statement" | "import_from_statement" => {
                     Some(self.build_import_signature(node, source))
                 }
-                "assignment" => {
-                    Some(self.build_variable_signature(node, source))
-                }
+                "assignment" => Some(self.build_variable_signature(node, source)),
                 _ => None,
             }
         } else {
@@ -391,10 +375,16 @@ impl SymbolExtractor for PythonExtractor {
             // Classes
             ("(class_definition) @class", OutlineNodeType::Class),
             // Variables
-            ("(assignment left: (identifier) @var_name) @variable", OutlineNodeType::Variable),
+            (
+                "(assignment left: (identifier) @var_name) @variable",
+                OutlineNodeType::Variable,
+            ),
             // Imports
             ("(import_statement) @import", OutlineNodeType::Import),
-            ("(import_from_statement) @import_from", OutlineNodeType::Import),
+            (
+                "(import_from_statement) @import_from",
+                OutlineNodeType::Import,
+            ),
         ]
     }
 }
@@ -425,18 +415,27 @@ def hello_world() -> str:
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let func = &symbols[0];
         assert_eq!(func.name, "hello_world");
         assert_eq!(func.node_type, OutlineNodeType::Function);
         assert_eq!(func.visibility, Some(Visibility::Public));
-        assert!(func.signature.as_ref().unwrap().contains("def hello_world() -> str:"));
-        assert_eq!(func.documentation.as_ref().unwrap(), "This is a test function.");
+        assert!(func
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("def hello_world() -> str:"));
+        assert_eq!(
+            func.documentation.as_ref().unwrap(),
+            "This is a test function."
+        );
     }
 
     #[test]
@@ -449,16 +448,22 @@ async def fetch_data(url: str) -> dict:
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let func = &symbols[0];
         assert_eq!(func.name, "fetch_data");
         assert_eq!(func.node_type, OutlineNodeType::Function);
-        assert!(func.signature.as_ref().unwrap().contains("async def fetch_data(url: str) -> dict:"));
+        assert!(func
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("async def fetch_data(url: str) -> dict:"));
     }
 
     #[test]
@@ -476,21 +481,27 @@ class Person:
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         // Should find the class
-        let classes: Vec<&OutlineNode> = symbols.iter()
+        let classes: Vec<&OutlineNode> = symbols
+            .iter()
             .filter(|s| s.node_type == OutlineNodeType::Class)
             .collect();
         assert_eq!(classes.len(), 1);
-        
+
         let class = classes[0];
         assert_eq!(class.name, "Person");
         assert!(class.signature.as_ref().unwrap().contains("class Person:"));
-        assert_eq!(class.documentation.as_ref().unwrap(), "A simple person class.");
+        assert_eq!(
+            class.documentation.as_ref().unwrap(),
+            "A simple person class."
+        );
     }
 
     #[test]
@@ -509,19 +520,23 @@ class TestClass:
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         // Check visibility detection
-        let public_symbols: Vec<&OutlineNode> = symbols.iter()
+        let public_symbols: Vec<&OutlineNode> = symbols
+            .iter()
             .filter(|s| s.visibility == Some(Visibility::Public))
             .collect();
-        let private_symbols: Vec<&OutlineNode> = symbols.iter()
+        let private_symbols: Vec<&OutlineNode> = symbols
+            .iter()
             .filter(|s| s.visibility == Some(Visibility::Private))
             .collect();
-        
+
         // Should have public class and dunder method as public, private method as private
         assert!(!public_symbols.is_empty());
         assert!(!private_symbols.is_empty());
@@ -537,12 +552,15 @@ from collections import defaultdict
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
-        let imports: Vec<&OutlineNode> = symbols.iter()
+
+        let imports: Vec<&OutlineNode> = symbols
+            .iter()
             .filter(|s| s.node_type == OutlineNodeType::Import)
             .collect();
         assert!(!imports.is_empty());
@@ -561,16 +579,19 @@ CONFIG = {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
-        let variables: Vec<&OutlineNode> = symbols.iter()
+
+        let variables: Vec<&OutlineNode> = symbols
+            .iter()
             .filter(|s| s.node_type == OutlineNodeType::Variable)
             .collect();
         assert!(!variables.is_empty());
-        
+
         let names: Vec<&String> = variables.iter().map(|s| &s.name).collect();
         assert!(names.contains(&&"VERSION".to_string()));
         assert!(names.contains(&&"DEBUG".to_string()));
@@ -647,24 +668,25 @@ DEFAULT_PERMISSIONS = ["read", "write"]
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_python::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         // Should extract multiple symbol types
         assert!(!symbols.is_empty());
-        
+
         // Check that we got various types
-        let types: std::collections::HashSet<&OutlineNodeType> = symbols.iter()
-            .map(|s| &s.node_type)
-            .collect();
-        
+        let types: std::collections::HashSet<&OutlineNodeType> =
+            symbols.iter().map(|s| &s.node_type).collect();
+
         assert!(types.contains(&OutlineNodeType::Class));
         assert!(types.contains(&OutlineNodeType::Function));
         assert!(types.contains(&OutlineNodeType::Import));
         assert!(types.contains(&OutlineNodeType::Variable));
-        
+
         // Check specific symbols exist with correct names
         let names: Vec<&String> = symbols.iter().map(|s| &s.name).collect();
         assert!(names.contains(&&"User".to_string()));
@@ -673,20 +695,31 @@ DEFAULT_PERMISSIONS = ["read", "write"]
         assert!(names.contains(&&"create_user_factory".to_string()));
         assert!(names.contains(&&"VERSION".to_string()));
         assert!(names.contains(&&"DEFAULT_PERMISSIONS".to_string()));
-        
+
         // Check that some documentation was extracted
         let has_docs = symbols.iter().any(|s| s.documentation.is_some());
         assert!(has_docs, "Should find symbols with documentation");
-        
+
         // Check that async functions are detected
-        let async_functions: Vec<&OutlineNode> = symbols.iter()
-            .filter(|s| s.signature.as_ref().map_or(false, |sig| sig.contains("async def")))
+        let async_functions: Vec<&OutlineNode> = symbols
+            .iter()
+            .filter(|s| {
+                s.signature
+                    .as_ref()
+                    .map_or(false, |sig| sig.contains("async def"))
+            })
             .collect();
         assert!(!async_functions.is_empty(), "Should find async functions");
-        
-        println!("Successfully extracted {} symbols from complex Python code", symbols.len());
+
+        println!(
+            "Successfully extracted {} symbols from complex Python code",
+            symbols.len()
+        );
         for symbol in &symbols {
-            println!("  {:?} '{}' at line {}", symbol.node_type, symbol.name, symbol.start_line);
+            println!(
+                "  {:?} '{}' at line {}",
+                symbol.node_type, symbol.name, symbol.start_line
+            );
         }
     }
 }
