@@ -136,12 +136,6 @@ impl PythonExtractor {
         decorators
     }
 
-    /// Check if a function is a property-like decorator
-    fn is_property_decorator(&self, decorators: &[String]) -> bool {
-        decorators
-            .iter()
-            .any(|d| matches!(d.as_str(), "property" | "classmethod" | "staticmethod"))
-    }
 
     /// Extract Python function signature with type hints
     fn extract_function_signature(&self, node: &Node, source: &str) -> Option<String> {
