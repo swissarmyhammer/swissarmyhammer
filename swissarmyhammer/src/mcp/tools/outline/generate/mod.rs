@@ -264,7 +264,7 @@ fn convert_outline_node(
         line: internal_node.start_line as u32,
         signature: internal_node.signature,
         doc: internal_node.documentation,
-        type_info: internal_node.visibility.map(|v| format!("{:?}", v)),
+        type_info: internal_node.visibility.map(|v| format!("{v:?}")),
         children: None, // TODO: Implement hierarchical structure
     })
 }

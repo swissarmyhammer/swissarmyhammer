@@ -109,8 +109,7 @@ impl OutlineParser {
         // Check if we have an extractor for this language
         let extractor = self.extractors.get(&language).ok_or_else(|| {
             crate::outline::OutlineError::LanguageDetection(format!(
-                "No symbol extractor available for language: {:?}",
-                language
+                "No symbol extractor available for language: {language:?}"
             ))
         })?;
 
@@ -149,8 +148,7 @@ impl OutlineParser {
 
         parser.set_language(&tree_sitter_language).map_err(|e| {
             crate::outline::OutlineError::TreeSitter(format!(
-                "Failed to set parser language for {:?}: {}",
-                language, e
+                "Failed to set parser language for {language:?}: {e}"
             ))
         })?;
 
@@ -287,7 +285,7 @@ pub mod inner {
         let result = parser.parse_file(file_path, rust_code);
 
         if let Err(ref e) = result {
-            println!("Error: {:?}", e);
+            println!("Error: {e:?}");
         }
         assert!(result.is_ok());
         let outline = result.unwrap();
@@ -322,12 +320,12 @@ pub mod inner {
             "Should find test_function and private_helper"
         );
         // Should find TestStruct
-        assert!(structs.len() >= 1, "Should find TestStruct");
+        assert!(!structs.is_empty(), "Should find TestStruct");
         // Should find TestEnum
-        assert!(enums.len() >= 1, "Should find TestEnum");
+        assert!(!enums.is_empty(), "Should find TestEnum");
         // Should find constants
         assert!(
-            constants.len() >= 1,
+            !constants.is_empty(),
             "Should find MAX_BUFFER_SIZE or COUNTER"
         );
         // Should find imports (may or may not depending on Tree-sitter query success)

@@ -112,7 +112,7 @@ impl TypeScriptExtractor {
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
+                OutlineError::TreeSitter(format!("Failed to compile {node_type:?} query: {e}"))
             })?;
             queries.push((node_type, query));
         }
@@ -432,12 +432,12 @@ impl TypeScriptExtractor {
 
     /// Build enum signature
     fn build_enum_signature(&self, name: &str, _node: &Node, _source: &str) -> String {
-        format!("enum {}", name)
+        format!("enum {name}")
     }
 
     /// Build namespace signature
     fn build_namespace_signature(&self, name: &str, _node: &Node, _source: &str) -> String {
-        format!("namespace {}", name)
+        format!("namespace {name}")
     }
 
     /// Build method signature
@@ -546,7 +546,7 @@ impl TypeScriptExtractor {
                 signature.push_str(" => ");
 
                 if let Some(ret) = return_type {
-                    signature.push_str(&ret.trim_start_matches(':').trim());
+                    signature.push_str(ret.trim_start_matches(':').trim());
                 } else {
                     signature.push_str("void");
                 }
@@ -555,7 +555,7 @@ impl TypeScriptExtractor {
             }
         }
 
-        format!("const {} = () => void", name)
+        format!("const {name} = () => void")
     }
 }
 
@@ -659,18 +659,10 @@ impl SymbolExtractor for TypeScriptExtractor {
                 None
             }
             "method_definition" | "method_signature" => {
-                if let Some(name) = self.extract_name_from_node(node, source) {
-                    Some(self.build_method_signature(&name, node, source))
-                } else {
-                    None
-                }
+                self.extract_name_from_node(node, source).map(|name| self.build_method_signature(&name, node, source))
             }
             "property_signature" => {
-                if let Some(name) = self.extract_name_from_node(node, source) {
-                    Some(self.build_property_signature(&name, node, source))
-                } else {
-                    None
-                }
+                self.extract_name_from_node(node, source).map(|name| self.build_property_signature(&name, node, source))
             }
             "class_declaration" | "abstract_class_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {

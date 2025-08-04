@@ -7,20 +7,19 @@
 use crate::outline::parser::SymbolExtractor;
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
-use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// Python symbol extractor using Tree-sitter
 pub struct PythonExtractor {
-    /// Tree-sitter queries for different symbol types
-    queries: HashMap<OutlineNodeType, Query>,
+    /// Tree-sitter queries with their associated node types
+    queries: Vec<(OutlineNodeType, Query)>,
 }
 
 impl PythonExtractor {
     /// Create a new Python extractor with compiled queries
     pub fn new() -> Result<Self> {
         let language = tree_sitter_python::LANGUAGE.into();
-        let mut queries = HashMap::new();
+        let mut queries = Vec::new();
 
         // Define Tree-sitter queries for each Python construct
         let query_definitions = vec![
@@ -29,8 +28,20 @@ impl PythonExtractor {
                 OutlineNodeType::Function,
                 r#"(function_definition) @function"#,
             ),
+            // Decorated functions (functions with decorators like @property, @classmethod)
+            (
+                OutlineNodeType::Function,
+                r#"(decorated_definition
+                  definition: (function_definition) @decorated_function)"#,
+            ),
             // Class definitions
             (OutlineNodeType::Class, r#"(class_definition) @class"#),
+            // Decorated classes (classes with decorators like @dataclass)
+            (
+                OutlineNodeType::Class,
+                r#"(decorated_definition
+                  definition: (class_definition) @decorated_class)"#,
+            ),
             // Variable assignments at module level
             (
                 OutlineNodeType::Variable,
@@ -49,9 +60,9 @@ impl PythonExtractor {
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
+                OutlineError::TreeSitter(format!("Failed to compile {node_type:?} query: {e}"))
             })?;
-            queries.insert(node_type, query);
+            queries.push((node_type, query));
         }
 
         Ok(Self { queries })
@@ -102,6 +113,34 @@ impl PythonExtractor {
         }
 
         None
+    }
+
+    /// Extract decorators from a decorated definition
+    fn extract_decorators(&self, node: &Node, source: &str) -> Vec<String> {
+        let mut decorators = Vec::new();
+
+        if node.kind() == "decorated_definition" {
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if child.kind() == "decorator" {
+                        let decorator_text = self.get_node_text(&child, source);
+                        // Remove the @ symbol and extract just the decorator name
+                        if let Some(name) = decorator_text.strip_prefix('@') {
+                            decorators.push(name.split('(').next().unwrap_or(name).to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        decorators
+    }
+
+    /// Check if a function is a property-like decorator
+    fn is_property_decorator(&self, decorators: &[String]) -> bool {
+        decorators
+            .iter()
+            .any(|d| matches!(d.as_str(), "property" | "classmethod" | "staticmethod"))
     }
 
     /// Extract Python function signature with type hints
@@ -156,26 +195,60 @@ impl PythonExtractor {
 
     /// Build Python function signature from components
     fn build_function_signature(&self, name: &str, node: &Node, source: &str) -> String {
-        if let Some(sig) = self.extract_function_signature(node, source) {
+        // Check if this is a decorated definition
+        let parent_node = node.parent().filter(|&parent| parent.kind() == "decorated_definition");
+
+        let mut signature = if let Some(sig) = self.extract_function_signature(node, source) {
             sig
         } else {
             // Check if this is an async function by looking at the text
             let node_text = self.get_node_text(node, source);
             if node_text.trim_start().starts_with("async def") {
-                format!("async def {}(...):", name)
+                format!("async def {name}(...):")
             } else {
-                format!("def {}(...):", name)
+                format!("def {name}(...):")
+            }
+        };
+
+        // Add decorator prefix if this is a decorated function
+        if let Some(parent) = parent_node {
+            let decorators = self.extract_decorators(&parent, source);
+            if !decorators.is_empty() {
+                let decorator_prefix = decorators
+                    .first()
+                    .map(|d| format!("@{d} "))
+                    .unwrap_or_default();
+                signature = format!("{decorator_prefix}{signature}");
             }
         }
+
+        signature
     }
 
     /// Build Python class signature with inheritance
     fn build_class_signature(&self, name: &str, node: &Node, source: &str) -> String {
-        if let Some(sig) = self.extract_class_signature(node, source) {
+        // Check if this is a decorated definition
+        let parent_node = node.parent().filter(|&parent| parent.kind() == "decorated_definition");
+
+        let mut signature = if let Some(sig) = self.extract_class_signature(node, source) {
             sig
         } else {
-            format!("class {}:", name)
+            format!("class {name}:")
+        };
+
+        // Add decorator prefix if this is a decorated class (e.g., @dataclass)
+        if let Some(parent) = parent_node {
+            let decorators = self.extract_decorators(&parent, source);
+            if !decorators.is_empty() {
+                let decorator_prefix = decorators
+                    .first()
+                    .map(|d| format!("@{d} "))
+                    .unwrap_or_default();
+                signature = format!("{decorator_prefix}{signature}");
+            }
         }
+
+        signature
     }
 
     /// Generate signature for import statements
@@ -271,7 +344,7 @@ impl SymbolExtractor for PythonExtractor {
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
 
-        // Process each query type
+        // Process each query
         for (node_type, query) in &self.queries {
             let mut cursor = QueryCursor::new();
             let mut matches = cursor.matches(query, root_node, source.as_bytes());
@@ -599,6 +672,120 @@ CONFIG = {
     }
 
     #[test]
+    fn test_extract_decorated_functions_and_classes() {
+        let extractor = PythonExtractor::new().unwrap();
+        let source = r#"
+@dataclass
+class User:
+    """User data model."""
+    name: str
+    email: str
+    
+    @property
+    def display_name(self) -> str:
+        """Get formatted display name."""
+        return f"{self.name} ({self.email})"
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'User':
+        """Create user from dictionary."""
+        return cls(data['name'], data['email'])
+    
+    @staticmethod
+    def validate_email(email: str) -> bool:
+        """Validate email format."""
+        return '@' in email
+
+@pytest.fixture
+def sample_user():
+    """Sample user for testing."""
+    return User("John", "john@example.com")
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+
+        println!(
+            "Successfully extracted {} symbols from decorated Python code",
+            symbols.len()
+        );
+        for symbol in &symbols {
+            println!(
+                "  {:?} '{}' at line {}",
+                symbol.node_type, symbol.name, symbol.start_line
+            );
+            if let Some(sig) = &symbol.signature {
+                println!("    Signature: {sig}");
+            }
+            if let Some(doc) = &symbol.documentation {
+                println!("    Doc: {doc}");
+            }
+        }
+
+        // Should find decorated class
+        let decorated_classes: Vec<&OutlineNode> = symbols
+            .iter()
+            .filter(|s| {
+                s.node_type == OutlineNodeType::Class
+                    && s.signature
+                        .as_ref()
+                        .is_some_and(|sig| sig.contains("@dataclass"))
+            })
+            .collect();
+        assert!(
+            !decorated_classes.is_empty(),
+            "Should find @dataclass decorated class"
+        );
+
+        // Should find property methods
+        let property_methods: Vec<&OutlineNode> = symbols
+            .iter()
+            .filter(|s| {
+                s.signature
+                    .as_ref()
+                    .is_some_and(|sig| sig.contains("@property"))
+            })
+            .collect();
+        assert!(
+            !property_methods.is_empty(),
+            "Should find @property decorated methods"
+        );
+
+        // Should find classmethod
+        let class_methods: Vec<&OutlineNode> = symbols
+            .iter()
+            .filter(|s| {
+                s.signature
+                    .as_ref()
+                    .is_some_and(|sig| sig.contains("@classmethod"))
+            })
+            .collect();
+        assert!(
+            !class_methods.is_empty(),
+            "Should find @classmethod decorated methods"
+        );
+
+        // Should find staticmethod
+        let static_methods: Vec<&OutlineNode> = symbols
+            .iter()
+            .filter(|s| {
+                s.signature
+                    .as_ref()
+                    .is_some_and(|sig| sig.contains("@staticmethod"))
+            })
+            .collect();
+        assert!(
+            !static_methods.is_empty(),
+            "Should find @staticmethod decorated methods"
+        );
+    }
+
+    #[test]
     fn test_extract_complex_python_code() {
         let extractor = PythonExtractor::new().unwrap();
         let source = r#"
@@ -706,7 +893,7 @@ DEFAULT_PERMISSIONS = ["read", "write"]
             .filter(|s| {
                 s.signature
                     .as_ref()
-                    .map_or(false, |sig| sig.contains("async def"))
+                    .is_some_and(|sig| sig.contains("async def"))
             })
             .collect();
         assert!(!async_functions.is_empty(), "Should find async functions");

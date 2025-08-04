@@ -62,7 +62,7 @@ impl JavaScriptExtractor {
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
+                OutlineError::TreeSitter(format!("Failed to compile {node_type:?} query: {e}"))
             })?;
             queries.push((node_type, query));
         }
@@ -289,11 +289,11 @@ impl JavaScriptExtractor {
         if let Some(arrow_func) = node.child_by_field_name("value") {
             if arrow_func.kind() == "arrow_function" {
                 let params = self.extract_function_parameters(&arrow_func, source);
-                return format!("const {} = {} => {{}}", name, params);
+                return format!("const {name} = {params} => {{}}");
             }
         }
 
-        format!("const {} = () => {{}}", name)
+        format!("const {name} = () => {{}}")
     }
 }
 

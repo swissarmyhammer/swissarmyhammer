@@ -39,7 +39,7 @@ impl RustExtractor {
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!("Failed to compile {:?} query: {}", node_type, e))
+                OutlineError::TreeSitter(format!("Failed to compile {node_type:?} query: {e}"))
             })?;
             queries.insert(node_type, query);
         }
@@ -96,11 +96,11 @@ impl RustExtractor {
                     let type_name = self.get_node_text(&child, source);
                     if !found_trait && !found_type {
                         // First type_identifier might be a trait
-                        impl_name = format!("impl {}", type_name);
+                        impl_name = format!("impl {type_name}");
                         found_trait = true;
                     } else if found_trait && !found_type {
                         // Second type_identifier is the type being implemented for
-                        impl_name = format!("{} for {}", impl_name, type_name);
+                        impl_name = format!("{impl_name} for {type_name}");
                         found_type = true;
                     }
                 }
@@ -109,9 +109,9 @@ impl RustExtractor {
                     let generic_text = self.get_node_text(&child, source);
                     if !found_type {
                         if found_trait {
-                            impl_name = format!("{} for {}", impl_name, generic_text);
+                            impl_name = format!("{impl_name} for {generic_text}");
                         } else {
-                            impl_name = format!("impl {}", generic_text);
+                            impl_name = format!("impl {generic_text}");
                         }
                         found_type = true;
                     }
@@ -240,7 +240,7 @@ impl RustExtractor {
 
         if let Some(ret) = return_type {
             signature.push_str(" -> ");
-            signature.push_str(&ret.strip_prefix(": ").unwrap_or(&ret));
+            signature.push_str(ret.strip_prefix(": ").unwrap_or(&ret));
         }
 
         signature
@@ -297,13 +297,10 @@ impl RustExtractor {
 
         // Look for trait and type names in the impl
         for child in node.children(&mut node.walk()) {
-            match child.kind() {
-                "type_identifier" => {
-                    let type_name = self.get_node_text(&child, source);
-                    signature.push(' ');
-                    signature.push_str(&type_name);
-                }
-                _ => {}
+            if child.kind() == "type_identifier" {
+                let type_name = self.get_node_text(&child, source);
+                signature.push(' ');
+                signature.push_str(&type_name);
             }
         }
 
@@ -751,8 +748,7 @@ pub struct ProcessError {
         for expected in expected_types {
             assert!(
                 types.contains(&expected),
-                "Missing symbol type: {:?}",
-                expected
+                "Missing symbol type: {expected:?}"
             );
         }
 
@@ -778,7 +774,7 @@ pub struct ProcessError {
         let has_generics = symbols.iter().any(|s| {
             s.signature
                 .as_ref()
-                .map_or(false, |sig| sig.contains("<") && sig.contains(">"))
+                .is_some_and(|sig| sig.contains("<") && sig.contains(">"))
         });
         assert!(has_generics, "Should find symbols with generic parameters");
 
