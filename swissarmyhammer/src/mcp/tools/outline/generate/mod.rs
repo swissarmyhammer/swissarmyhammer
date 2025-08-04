@@ -179,12 +179,44 @@ impl McpTool for OutlineGenerateTool {
         let supported_files =
             crate::outline::FileDiscovery::filter_supported_files(discovered_files);
 
-        // TODO: Implement actual Tree-sitter parsing and outline generation
-        // For now, create a basic response with file discovery results
+        // Process all supported files and generate outline
+        let outline_parser = crate::outline::OutlineParser::new(
+            crate::outline::OutlineParserConfig::default()
+        ).map_err(|e| McpError::internal_error(format!("Failed to create outline parser: {e}"), None))?;
+        
+        let mut outline_nodes = Vec::new();
+        let mut total_symbols = 0;
+
+        for discovered_file in &supported_files {
+            tracing::debug!("Processing file: {}", discovered_file.path.display());
+            
+            // Read file content
+            let content = match std::fs::read_to_string(&discovered_file.path) {
+                Ok(content) => content,
+                Err(e) => {
+                    tracing::warn!("Failed to read file {}: {}", discovered_file.path.display(), e);
+                    continue;
+                }
+            };
+
+            match outline_parser.parse_file(&discovered_file.path, &content) {
+                Ok(outline_tree) => {
+                    for node in outline_tree.symbols {
+                        outline_nodes.push(convert_outline_node(node, &discovered_file.path)?);
+                        total_symbols += 1;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse file {}: {}", discovered_file.path.display(), e);
+                    // Continue processing other files
+                }
+            }
+        }
+
         let response = OutlineResponse {
-            outline: vec![], // TODO: Generate actual outline nodes
+            outline: outline_nodes,
             files_processed: supported_files.len(),
-            symbols_found: 0, // TODO: Count actual symbols
+            symbols_found: total_symbols,
             execution_time_ms: start_time.elapsed().as_millis() as u64,
         };
 
@@ -206,6 +238,46 @@ impl McpTool for OutlineGenerateTool {
         };
 
         Ok(BaseToolImpl::create_success_response(formatted_output))
+    }
+}
+
+/// Convert internal OutlineNode to MCP tool OutlineNode
+fn convert_outline_node(
+    internal_node: crate::outline::types::OutlineNode,
+    _file_path: &std::path::Path,
+) -> Result<OutlineNode, McpError> {
+    let kind = convert_outline_node_type(&internal_node.node_type);
+    
+    Ok(OutlineNode {
+        name: internal_node.name,
+        kind,
+        line: internal_node.start_line as u32,
+        signature: internal_node.signature,
+        doc: internal_node.documentation,
+        type_info: internal_node.visibility.map(|v| format!("{:?}", v)),
+        children: None, // TODO: Implement hierarchical structure
+    })
+}
+
+/// Convert internal OutlineNodeType to MCP tool OutlineKind
+fn convert_outline_node_type(node_type: &crate::outline::types::OutlineNodeType) -> OutlineKind {
+    use crate::outline::types::OutlineNodeType;
+    
+    match node_type {
+        OutlineNodeType::Class => OutlineKind::Class,
+        OutlineNodeType::Interface => OutlineKind::Interface,
+        OutlineNodeType::Struct => OutlineKind::Struct,
+        OutlineNodeType::Enum => OutlineKind::Enum,
+        OutlineNodeType::Function => OutlineKind::Function,
+        OutlineNodeType::Method => OutlineKind::Method,
+        OutlineNodeType::Property => OutlineKind::Property,
+        OutlineNodeType::Variable => OutlineKind::Variable,
+        OutlineNodeType::Module => OutlineKind::Module,
+        OutlineNodeType::TypeAlias => OutlineKind::TypeAlias,
+        OutlineNodeType::Trait => OutlineKind::Trait,
+        OutlineNodeType::Constant => OutlineKind::Constant,
+        OutlineNodeType::Import => OutlineKind::Import,
+        OutlineNodeType::Impl => OutlineKind::Other, // Map Impl to Other as no direct equivalent
     }
 }
 

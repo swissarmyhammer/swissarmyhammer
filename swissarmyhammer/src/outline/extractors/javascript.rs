@@ -7,32 +7,53 @@
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::parser::SymbolExtractor;
 use crate::outline::{OutlineError, Result};
-use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// JavaScript symbol extractor using Tree-sitter
 pub struct JavaScriptExtractor {
     /// Tree-sitter queries for different symbol types
-    queries: HashMap<OutlineNodeType, Query>,
+    queries: Vec<(OutlineNodeType, Query)>,
 }
 
 impl JavaScriptExtractor {
     /// Create a new JavaScript extractor with compiled queries
     pub fn new() -> Result<Self> {
         let language = tree_sitter_javascript::LANGUAGE.into();
-        let mut queries = HashMap::new();
+        let mut queries = Vec::new();
 
         // Define Tree-sitter queries for each JavaScript construct
         let query_definitions = vec![
-            // Function declarations
+            // Function declarations in export statements
             (
                 OutlineNodeType::Function,
-                r#"(function_declaration) @function"#,
+                r#"(export_statement (function_declaration) @function)"#,
             ),
-            // Classes
+            // Direct function declarations (not in export statements)
+            (
+                OutlineNodeType::Function,
+                r#"(program (function_declaration) @function)"#,
+            ),
+            // Arrow functions in variable assignments
+            (
+                OutlineNodeType::Function,
+                r#"(variable_declarator
+                  name: (identifier) @name
+                  value: (arrow_function)) @arrow_function"#,
+            ),
+            // All class declarations (including in export statements)
+            (
+                OutlineNodeType::Class,
+                r#"(_ (class_declaration) @class)"#,
+            ),
+            // Direct class declarations
             (
                 OutlineNodeType::Class,
                 r#"(class_declaration) @class"#,  
+            ),
+            // Method definitions within classes
+            (
+                OutlineNodeType::Method,
+                r#"(method_definition) @method"#,
             ),
             // Variables (let, const, var)
             (
@@ -58,7 +79,7 @@ impl JavaScriptExtractor {
                     node_type, e
                 ))
             })?;
-            queries.insert(node_type, query);
+            queries.push((node_type, query));
         }
 
         Ok(Self { queries })
@@ -78,9 +99,23 @@ impl JavaScriptExtractor {
 
     /// Extract the name from a JavaScript node
     fn extract_name_from_node(&self, node: &Node, source: &str) -> Option<String> {
+        // Handle arrow function assignments
+        if node.kind() == "variable_declarator" {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                return Some(self.get_node_text(&name_node, source));
+            }
+        }
+
         // Try to find the name field first
         if let Some(name_node) = node.child_by_field_name("name") {
             return Some(self.get_node_text(&name_node, source));
+        }
+
+        // For method definitions, look for the key field
+        if node.kind() == "method_definition" {
+            if let Some(key_node) = node.child_by_field_name("key") {
+                return Some(self.get_node_text(&key_node, source));
+            }
         }
 
         // For variable declarations, find the identifier in the declarator
@@ -90,7 +125,7 @@ impl JavaScriptExtractor {
 
         // Fallback: look for identifier children
         for child in node.children(&mut node.walk()) {
-            if child.kind() == "identifier" {
+            if child.kind() == "identifier" || child.kind() == "property_identifier" {
                 return Some(self.get_node_text(&child, source));
             }
         }
@@ -233,6 +268,49 @@ impl JavaScriptExtractor {
 
         signature
     }
+
+    /// Build method signature for class methods
+    fn build_method_signature(&self, name: &str, node: &Node, source: &str) -> String {
+        let params = self.extract_function_parameters(node, source);
+        
+        // Check for static, async, getter, setter
+        let mut modifiers = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "static" => modifiers.push("static"),
+                "async" => modifiers.push("async"),
+                "get" => modifiers.push("get"),
+                "set" => modifiers.push("set"),
+                _ => {}
+            }
+        }
+        
+        let mut signature = String::new();
+        if !modifiers.is_empty() {
+            signature.push_str(&modifiers.join(" "));
+            signature.push(' ');
+        }
+        
+        signature.push_str(name);
+        signature.push_str(&params);
+        
+        signature
+    }
+
+
+    /// Build arrow function signature
+    fn build_arrow_function_signature(&self, name: &str, node: &Node, source: &str) -> String {
+        // For arrow functions, we need to find the arrow_function node
+        if let Some(arrow_func) = node.child_by_field_name("value") {
+            if arrow_func.kind() == "arrow_function" {
+                let params = self.extract_function_parameters(&arrow_func, source);
+                return format!("const {} = {} => {{}}", name, params);
+            }
+        }
+        
+        format!("const {} = () => {{}}", name)
+    }
 }
 
 impl SymbolExtractor for JavaScriptExtractor {
@@ -261,11 +339,17 @@ impl SymbolExtractor for JavaScriptExtractor {
                         );
 
                         // Add signature based on node type
-                        let signature = match node_type {
-                            OutlineNodeType::Function => {
+                        let signature = match (node_type, node.kind()) {
+                            (OutlineNodeType::Function, "function_declaration") => {
                                 Some(self.build_function_signature(&name, node, source))
                             }
-                            OutlineNodeType::Class => {
+                            (OutlineNodeType::Function, "variable_declarator") => {
+                                Some(self.build_arrow_function_signature(&name, node, source))
+                            }
+                            (OutlineNodeType::Method, _) => {
+                                Some(self.build_method_signature(&name, node, source))
+                            }
+                            (OutlineNodeType::Class, _) => {
                                 Some(self.build_class_signature(&name, node, source))
                             }
                             _ => None,
@@ -332,10 +416,18 @@ impl SymbolExtractor for JavaScriptExtractor {
 
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
         vec![
-            // Function declarations
+            // Function declarations (including exported)
+            ("(_ (function_declaration) @function)", OutlineNodeType::Function),
             ("(function_declaration) @function", OutlineNodeType::Function),
-            // Classes
+            // Arrow functions in variables
+            (r#"(variable_declarator
+              name: (identifier) @name
+              value: (arrow_function)) @arrow_function"#, OutlineNodeType::Function),
+            // Classes (including exported)
+            ("(_ (class_declaration) @class)", OutlineNodeType::Class),
             ("(class_declaration) @class", OutlineNodeType::Class),
+            // Methods
+            ("(method_definition) @method", OutlineNodeType::Method),
             // Variables
             ("(variable_declaration) @variable", OutlineNodeType::Variable),
             ("(lexical_declaration) @variable", OutlineNodeType::Variable),
@@ -506,11 +598,11 @@ const fetchData = async (url) => {
         assert!(symbols.len() >= 2);
         
         let handle_click_symbol = symbols.iter().find(|s| s.name == "handleClick").unwrap();
-        assert_eq!(handle_click_symbol.node_type, OutlineNodeType::Variable);
+        assert_eq!(handle_click_symbol.node_type, OutlineNodeType::Function);
         assert!(handle_click_symbol.documentation.as_ref().unwrap().contains("Arrow function handler"));
         
         let fetch_data_symbol = symbols.iter().find(|s| s.name == "fetchData").unwrap();
-        assert_eq!(fetch_data_symbol.node_type, OutlineNodeType::Variable);
+        assert_eq!(fetch_data_symbol.node_type, OutlineNodeType::Function);
         assert!(fetch_data_symbol.documentation.as_ref().unwrap().contains("Async arrow function"));
     }
 
