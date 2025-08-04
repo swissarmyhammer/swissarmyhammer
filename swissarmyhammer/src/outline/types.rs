@@ -2,7 +2,7 @@
 
 use crate::search::types::Language;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A discovered file ready for outline processing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,13 +128,13 @@ impl FileDiscoveryReport {
     }
 
     /// Add a skipped file due to size
-    pub fn add_skipped_size(&mut self, _path: &PathBuf, size: u64) {
+    pub fn add_skipped_size(&mut self, _path: &Path, size: u64) {
         self.files_skipped_size += 1;
         self.total_bytes += size;
     }
 
     /// Add a skipped file due to gitignore
-    pub fn add_skipped_ignored(&mut self, _path: &PathBuf) {
+    pub fn add_skipped_ignored(&mut self, _path: &Path) {
         self.files_skipped_ignored += 1;
     }
 

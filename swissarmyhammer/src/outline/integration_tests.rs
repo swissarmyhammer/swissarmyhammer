@@ -15,13 +15,18 @@ mod tests {
         fs::create_dir_all(&src_dir)?;
 
         // Create Rust files
-        fs::write(src_dir.join("main.rs"), r#"
+        fs::write(
+            src_dir.join("main.rs"),
+            r#"
             fn main() {
                 println!("Hello, world!");
             }
-        "#)?;
+        "#,
+        )?;
 
-        fs::write(src_dir.join("lib.rs"), r#"
+        fs::write(
+            src_dir.join("lib.rs"),
+            r#"
             pub mod utils;
             
             pub struct Calculator {
@@ -38,9 +43,12 @@ mod tests {
                     self
                 }
             }
-        "#)?;
+        "#,
+        )?;
 
-        fs::write(src_dir.join("utils.rs"), r#"
+        fs::write(
+            src_dir.join("utils.rs"),
+            r#"
             pub fn format_number(n: f64) -> String {
                 format!("{:.2}", n)
             }
@@ -52,10 +60,13 @@ mod tests {
                 Multiply,
                 Divide,
             }
-        "#)?;
+        "#,
+        )?;
 
         // Create Python files
-        fs::write(temp_dir.path().join("script.py"), r#"
+        fs::write(
+            temp_dir.path().join("script.py"),
+            r#"
             def hello_world():
                 """Print hello world message."""
                 print("Hello, world!")
@@ -67,7 +78,8 @@ mod tests {
                 def add(self, value):
                     self.value += value
                     return self
-        "#)?;
+        "#,
+        )?;
 
         // Create files to be ignored
         fs::write(temp_dir.path().join("README.md"), "# Test Project")?;
@@ -84,25 +96,46 @@ mod tests {
 
         // Verify results
         assert!(files.len() >= 4, "Should discover at least 4 files");
-        assert!(report.supported_files >= 4, "Should have at least 4 supported files");
+        assert!(
+            report.supported_files >= 4,
+            "Should have at least 4 supported files"
+        );
         assert_eq!(report.errors.len(), 0, "Should have no errors");
 
         // Check that we found both Rust and Python files
-        let rust_files: Vec<_> = files.iter().filter(|f| f.extension() == Some("rs")).collect();
-        let python_files: Vec<_> = files.iter().filter(|f| f.extension() == Some("py")).collect();
+        let rust_files: Vec<_> = files
+            .iter()
+            .filter(|f| f.extension() == Some("rs"))
+            .collect();
+        let python_files: Vec<_> = files
+            .iter()
+            .filter(|f| f.extension() == Some("py"))
+            .collect();
 
         assert_eq!(rust_files.len(), 3, "Should find 3 Rust files");
         assert_eq!(python_files.len(), 1, "Should find 1 Python file");
 
         // Check specific files
-        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "main.rs"));
-        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "lib.rs"));
-        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "utils.rs"));
-        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "script.py"));
+        assert!(files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "main.rs"));
+        assert!(files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "lib.rs"));
+        assert!(files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "utils.rs"));
+        assert!(files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "script.py"));
 
         // Should not find non-code files
-        assert!(!files.iter().any(|f| f.path.file_name().unwrap() == "README.md"));
-        assert!(!files.iter().any(|f| f.path.file_name().unwrap() == "config.json"));
+        assert!(!files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "README.md"));
+        assert!(!files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "config.json"));
 
         println!("Discovery report: {}", report.summary());
 
@@ -117,11 +150,14 @@ mod tests {
         fs::create_dir_all(temp_dir.path().join(".git"))?;
 
         // Create .gitignore
-        fs::write(temp_dir.path().join(".gitignore"), r#"
+        fs::write(
+            temp_dir.path().join(".gitignore"),
+            r#"
             target/
             *.tmp
             .env
-        "#)?;
+        "#,
+        )?;
 
         // Create files
         fs::write(temp_dir.path().join("main.rs"), "fn main() {}")?;
@@ -145,7 +181,10 @@ mod tests {
         assert_eq!(code_files[0].path.file_name().unwrap(), "main.rs");
 
         // Check that ignored files were properly skipped
-        assert!(report.files_skipped_ignored > 0, "Should have skipped ignored files");
+        assert!(
+            report.files_skipped_ignored > 0,
+            "Should have skipped ignored files"
+        );
 
         Ok(())
     }

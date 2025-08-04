@@ -58,7 +58,7 @@ pub fn get_relative_path(path: &Path, base: &Path) -> String {
 /// Check if a path is likely a temporary or generated file
 pub fn is_likely_generated_file(path: &Path) -> bool {
     let path_str = path.to_string_lossy().to_lowercase();
-    
+
     // Common generated file patterns
     path_str.contains("target/")
         || path_str.contains("node_modules/")
@@ -126,10 +126,12 @@ mod tests {
         assert_eq!(get_relative_path(other, base), "/other/file.rs");
     }
 
-    #[test]  
+    #[test]
     fn test_is_likely_generated_file() {
         assert!(is_likely_generated_file(Path::new("target/debug/main")));
-        assert!(is_likely_generated_file(Path::new("node_modules/lib/index.js")));
+        assert!(is_likely_generated_file(Path::new(
+            "node_modules/lib/index.js"
+        )));
         assert!(is_likely_generated_file(Path::new("dist/bundle.js")));
         assert!(is_likely_generated_file(Path::new("build/output.o")));
         assert!(is_likely_generated_file(Path::new(".git/config")));

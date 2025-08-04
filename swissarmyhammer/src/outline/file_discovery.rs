@@ -2,7 +2,9 @@
 
 use crate::outline::{
     types::{DiscoveredFile, FileDiscoveryConfig, FileDiscoveryReport},
-    utils::{get_relative_path, is_likely_generated_file, matches_glob_pattern, parse_glob_pattern},
+    utils::{
+        get_relative_path, is_likely_generated_file, matches_glob_pattern, parse_glob_pattern,
+    },
     OutlineError, Result,
 };
 use crate::search::parser::LanguageRegistry;
@@ -160,19 +162,19 @@ impl FileDiscovery {
     ) -> Result<()> {
         // Check if the file matches the glob pattern
         let relative_path = get_relative_path(path, base_dir);
-        if !matches_glob_pattern(Path::new(&relative_path), file_pattern)
-            .map_err(|e| OutlineError::InvalidGlobPattern {
+        if !matches_glob_pattern(Path::new(&relative_path), file_pattern).map_err(|e| {
+            OutlineError::InvalidGlobPattern {
                 pattern: file_pattern.to_string(),
                 message: e.to_string(),
-            })?
-        {
+            }
+        })? {
             return Ok(());
         }
 
         // Skip likely generated files even if not in gitignore
         if is_likely_generated_file(path) {
             tracing::debug!("Skipping likely generated file: {}", path.display());
-            report.add_skipped_ignored(&path.to_path_buf());
+            report.add_skipped_ignored(path);
             return Ok(());
         }
 
@@ -197,14 +199,14 @@ impl FileDiscovery {
                     file_size,
                     max_size
                 );
-                report.add_skipped_size(&path.to_path_buf(), file_size);
+                report.add_skipped_size(path, file_size);
                 return Ok(());
             }
         }
 
         // Detect language
         let language = self.language_registry.detect_language(path);
-        
+
         // Only include supported languages unless we're including all files
         if matches!(language, Language::Unknown) {
             tracing::debug!("Skipping unsupported file type: {}", path.display());
@@ -234,21 +236,26 @@ impl FileDiscovery {
     /// Get supported file patterns based on language registry
     pub fn supported_patterns() -> Vec<String> {
         vec![
-            "**/*.rs".to_string(),    // Rust
-            "**/*.py".to_string(),    // Python
-            "**/*.ts".to_string(),    // TypeScript
-            "**/*.js".to_string(),    // JavaScript
-            "**/*.dart".to_string(),  // Dart
+            "**/*.rs".to_string(),   // Rust
+            "**/*.py".to_string(),   // Python
+            "**/*.ts".to_string(),   // TypeScript
+            "**/*.js".to_string(),   // JavaScript
+            "**/*.dart".to_string(), // Dart
         ]
     }
 
     /// Filter discovered files to only include supported languages
     pub fn filter_supported_files(files: Vec<DiscoveredFile>) -> Vec<DiscoveredFile> {
-        files.into_iter().filter(|file| file.is_supported()).collect()
+        files
+            .into_iter()
+            .filter(|file| file.is_supported())
+            .collect()
     }
 
     /// Get statistics about discovered files grouped by language
-    pub fn get_language_statistics(files: &[DiscoveredFile]) -> std::collections::HashMap<Language, usize> {
+    pub fn get_language_statistics(
+        files: &[DiscoveredFile],
+    ) -> std::collections::HashMap<Language, usize> {
         let mut stats = std::collections::HashMap::new();
         for file in files {
             *stats.entry(file.language.clone()).or_insert(0) += 1;
@@ -294,7 +301,10 @@ mod tests {
         let patterns = vec![];
         let discovery = FileDiscovery::new(patterns);
         assert!(discovery.is_err());
-        assert!(discovery.unwrap_err().to_string().contains("At least one pattern"));
+        assert!(discovery
+            .unwrap_err()
+            .to_string()
+            .contains("At least one pattern"));
     }
 
     #[test]
@@ -309,7 +319,7 @@ mod tests {
         assert!(FileDiscovery::validate_glob_pattern("**/*.rs").is_ok());
         assert!(FileDiscovery::validate_glob_pattern("src/**/*.py").is_ok());
         assert!(FileDiscovery::validate_glob_pattern("*.{ts,js}").is_ok());
-        
+
         assert!(FileDiscovery::validate_glob_pattern("").is_err());
         assert!(FileDiscovery::validate_glob_pattern("[invalid").is_err());
     }
@@ -326,8 +336,12 @@ mod tests {
 
         // Should find main.rs and src/module.rs
         assert_eq!(files.len(), 2);
-        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "main.rs"));
-        assert!(files.iter().any(|f| f.path.file_name().unwrap() == "module.rs"));
+        assert!(files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "main.rs"));
+        assert!(files
+            .iter()
+            .any(|f| f.path.file_name().unwrap() == "module.rs"));
 
         // All files should be Rust language
         assert!(files.iter().all(|f| f.language == Language::Rust));
@@ -365,11 +379,11 @@ mod tests {
     #[test]
     fn test_file_size_limits() -> Result<()> {
         let temp_dir = TempDir::new().map_err(OutlineError::FileSystem)?;
-        
+
         // Create a large file
         let large_content = "x".repeat(1000);
         fs::write(temp_dir.path().join("large.rs"), large_content)?;
-        
+
         let pattern = format!("{}/*.rs", temp_dir.path().display());
         let config = FileDiscoveryConfig::new().with_max_file_size(500); // 500 bytes limit
         let discovery = FileDiscovery::with_config(vec![pattern], config)?;
@@ -396,7 +410,7 @@ mod tests {
         // Create files
         fs::write(temp_dir.path().join("main.rs"), "fn main() {}")?;
         fs::write(temp_dir.path().join("temp.tmp"), "temporary")?;
-        
+
         // Create target directory
         let target_dir = temp_dir.path().join("target");
         fs::create_dir_all(&target_dir)?;
@@ -408,7 +422,10 @@ mod tests {
         let (files, _report) = discovery.discover_files()?;
 
         // Should only find main.rs (temp.tmp and target/build.rs should be ignored)
-        let rs_files: Vec<_> = files.iter().filter(|f| f.extension() == Some("rs")).collect();
+        let rs_files: Vec<_> = files
+            .iter()
+            .filter(|f| f.extension() == Some("rs"))
+            .collect();
         assert_eq!(rs_files.len(), 1);
         assert!(rs_files[0].path.file_name().unwrap() == "main.rs");
 

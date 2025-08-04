@@ -176,7 +176,8 @@ impl McpTool for OutlineGenerateTool {
         tracing::info!("File discovery report: {}", discovery_report.summary());
 
         // Filter to only supported files for outline generation
-        let supported_files = crate::outline::FileDiscovery::filter_supported_files(discovered_files);
+        let supported_files =
+            crate::outline::FileDiscovery::filter_supported_files(discovered_files);
 
         // TODO: Implement actual Tree-sitter parsing and outline generation
         // For now, create a basic response with file discovery results
