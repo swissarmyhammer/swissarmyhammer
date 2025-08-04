@@ -66,6 +66,9 @@ pub mod search;
 /// Advanced search functionality
 pub mod search_advanced;
 
+/// Outline generation functionality for Tree-sitter based code analysis
+pub mod outline;
+
 /// Plugin system for extensibility
 pub mod plugins;
 
@@ -209,6 +212,11 @@ pub mod prelude {
     pub use crate::search::{
         CodeChunk, EmbeddingEngine, FileIndexer, IndexingOptions, IndexingStats, Language,
         SemanticConfig, SemanticSearcher, SemanticUtils, VectorStorage,
+    };
+
+    // Outline generation types for convenient access
+    pub use crate::outline::{
+        DiscoveredFile, FileDiscovery, FileDiscoveryConfig, FileDiscoveryReport, OutlineError,
     };
 
     // sah.toml configuration types for convenient access

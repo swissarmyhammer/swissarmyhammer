@@ -150,13 +150,41 @@ impl McpTool for OutlineGenerateTool {
 
         tracing::debug!("Generating outline for patterns: {:?}", request.patterns);
 
+        let start_time = std::time::Instant::now();
+
+        // Use the new file discovery functionality
+        let file_discovery = match crate::outline::FileDiscovery::new(request.patterns.clone()) {
+            Ok(discovery) => discovery,
+            Err(e) => {
+                return Err(McpError::invalid_params(
+                    format!("Failed to create file discovery: {e}"),
+                    None,
+                ));
+            }
+        };
+
+        let (discovered_files, discovery_report) = match file_discovery.discover_files() {
+            Ok(result) => result,
+            Err(e) => {
+                return Err(McpError::internal_error(
+                    format!("File discovery failed: {e}"),
+                    None,
+                ));
+            }
+        };
+
+        tracing::info!("File discovery report: {}", discovery_report.summary());
+
+        // Filter to only supported files for outline generation
+        let supported_files = crate::outline::FileDiscovery::filter_supported_files(discovered_files);
+
         // TODO: Implement actual Tree-sitter parsing and outline generation
-        // For now, return a placeholder response
+        // For now, create a basic response with file discovery results
         let response = OutlineResponse {
-            outline: vec![],
-            files_processed: 0,
-            symbols_found: 0,
-            execution_time_ms: 0,
+            outline: vec![], // TODO: Generate actual outline nodes
+            files_processed: supported_files.len(),
+            symbols_found: 0, // TODO: Count actual symbols
+            execution_time_ms: start_time.elapsed().as_millis() as u64,
         };
 
         // Format output based on requested format

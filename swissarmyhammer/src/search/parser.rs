@@ -33,6 +33,7 @@ pub struct LanguageDefinition {
 }
 
 /// Registry of supported languages with their definitions
+#[derive(Debug)]
 pub struct LanguageRegistry {
     definitions: HashMap<Language, LanguageDefinition>,
     extension_map: HashMap<String, Language>,
