@@ -169,3 +169,81 @@ Example query structure:
 ## Notes
 
 This step establishes the core parsing engine for the outline tool. The parser should be robust and extensible to support additional languages in the future. Consider performance implications as this will be used on potentially large codebases.
+
+## Proposed Solution
+
+After analyzing the existing codebase, I'll extend the search module's Tree-sitter parser infrastructure to support outline extraction. The key differences from search parsing are:
+
+### 1. Outline-Specific Data Structures
+```rust
+// Core outline structures building on search Language enum
+pub struct OutlineNode {
+    pub name: String,
+    pub node_type: OutlineNodeType,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub children: Vec<Box<OutlineNode>>,
+    pub signature: Option<String>,
+    pub documentation: Option<String>,
+    pub visibility: Option<Visibility>,
+}
+
+pub enum OutlineNodeType {
+    Function,
+    Method,
+    Class,
+    Struct,
+    Enum,
+    Interface,
+    Module,
+    Property,
+    Constant,
+    Variable,
+}
+
+pub struct OutlineTree {
+    pub root: OutlineNode,
+    pub file_path: PathBuf,
+    pub language: Language,
+    pub symbols: Vec<OutlineNode>,
+}
+```
+
+### 2. Parser Architecture
+```rust
+pub struct OutlineParser {
+    code_parser: CodeParser,  // Reuse existing search parser
+    extractors: HashMap<Language, Box<dyn SymbolExtractor>>,
+}
+
+pub trait SymbolExtractor: Send + Sync {
+    fn extract_symbols(&self, tree: &Tree, source: &str) -> Vec<OutlineNode>;
+    fn extract_documentation(&self, node: &Node, source: &str) -> Option<String>;
+    fn extract_signature(&self, node: &Node, source: &str) -> Option<String>;
+    fn extract_hierarchical_structure(&self, nodes: Vec<OutlineNode>) -> Vec<OutlineNode>;
+}
+```
+
+### 3. Enhanced Tree-sitter Queries
+Unlike search queries that focus on chunking, outline queries will capture:
+- Detailed symbol metadata (names, types, visibility)
+- Hierarchical relationships (classes contain methods)
+- Documentation comments
+- Function signatures with parameters and return types
+
+### 4. Implementation Steps
+1. **Create outline-specific types** extending search Language enum
+2. **Build OutlineParser wrapper** around existing CodeParser
+3. **Implement SymbolExtractor trait** with language-specific implementations  
+4. **Define comprehensive Tree-sitter queries** for symbol extraction
+5. **Add hierarchical relationship building** to organize symbols
+6. **Implement comprehensive error handling** with graceful degradation
+7. **Create extensive unit and integration tests**
+
+### 5. Integration Points
+- **Reuse search/parser.rs** infrastructure for Tree-sitter setup
+- **Extend search/types.rs** Language enum for consistency
+- **Build on existing** query patterns and error handling
+- **Share Tree-sitter language** configurations and parsers
+
+This approach maximizes code reuse while providing outline-specific functionality focused on symbol extraction rather than search indexing.
