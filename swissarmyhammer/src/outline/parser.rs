@@ -5,7 +5,7 @@
 //! symbol information rather than creating search indexes.
 
 use crate::outline::{OutlineNode, OutlineNodeType, OutlineTree, Result, Visibility};
-use crate::outline::extractors::{RustExtractor, TypeScriptExtractor, JavaScriptExtractor};
+use crate::outline::extractors::{RustExtractor, TypeScriptExtractor, JavaScriptExtractor, PythonExtractor};
 use crate::search::parser::{CodeParser, ParserConfig};
 use crate::search::types::Language;
 use std::collections::HashMap;
@@ -90,7 +90,8 @@ impl OutlineParser {
         extractors.insert(Language::Rust, Box::new(RustExtractor::new()?));
         extractors.insert(Language::TypeScript, Box::new(TypeScriptExtractor::new()?));
         extractors.insert(Language::JavaScript, Box::new(JavaScriptExtractor::new()?));
-        // TODO: Add Python and Dart extractors when implemented
+        extractors.insert(Language::Python, Box::new(PythonExtractor::new()?));
+        // TODO: Add Dart extractor when implemented
         
         Ok(Self {
             code_parser,
@@ -355,8 +356,8 @@ pub mod inner {
         assert!(supported.contains(&Language::Rust));
         assert!(supported.contains(&Language::TypeScript));
         assert!(supported.contains(&Language::JavaScript));
-        // TODO: Add when Python and Dart extractors are implemented
-        // assert!(supported.contains(&Language::Python));
+        assert!(supported.contains(&Language::Python));
+        // TODO: Add when Dart extractor is implemented
         // assert!(supported.contains(&Language::Dart));
     }
 }
