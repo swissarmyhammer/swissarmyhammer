@@ -1,6 +1,7 @@
 //! Core data structures for outline generation functionality
 
 use crate::search::types::Language;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +154,250 @@ impl FileDiscoveryReport {
             self.files_skipped_size + self.files_skipped_ignored,
             self.errors.len(),
             self.total_bytes as f64 / (1024.0 * 1024.0)
+        )
+    }
+}
+
+/// Type of symbol node in the outline tree
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutlineNodeType {
+    /// Function definition
+    Function,
+    /// Method within a class or impl block
+    Method,
+    /// Class definition
+    Class,
+    /// Struct definition
+    Struct,
+    /// Enum definition
+    Enum,
+    /// Interface definition (TypeScript, Dart)
+    Interface,
+    /// Module or namespace
+    Module,
+    /// Property or field
+    Property,
+    /// Constant definition
+    Constant,
+    /// Variable definition
+    Variable,
+    /// Type alias
+    TypeAlias,
+    /// Import or use statement
+    Import,
+}
+
+/// Visibility modifier for symbols
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Visibility {
+    /// Public visibility
+    Public,
+    /// Private visibility
+    Private,
+    /// Protected visibility
+    Protected,
+    /// Package/internal visibility
+    Package,
+}
+
+/// A symbol node in the outline tree
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlineNode {
+    /// Symbol name
+    pub name: String,
+    /// Type of symbol
+    pub node_type: OutlineNodeType,
+    /// Starting line number (1-based)
+    pub start_line: usize,
+    /// Ending line number (1-based)
+    pub end_line: usize,
+    /// Child symbols (methods in class, etc.)
+    pub children: Vec<Box<OutlineNode>>,
+    /// Function/method signature
+    pub signature: Option<String>,
+    /// Documentation comment
+    pub documentation: Option<String>,
+    /// Visibility modifier
+    pub visibility: Option<Visibility>,
+    /// Source code range in bytes
+    pub source_range: (usize, usize),
+}
+
+impl OutlineNode {
+    /// Create a new outline node
+    pub fn new(
+        name: String,
+        node_type: OutlineNodeType,
+        start_line: usize,
+        end_line: usize,
+        source_range: (usize, usize),
+    ) -> Self {
+        Self {
+            name,
+            node_type,
+            start_line,
+            end_line,
+            children: Vec::new(),
+            signature: None,
+            documentation: None,
+            visibility: None,
+            source_range,
+        }
+    }
+
+    /// Add a child node
+    pub fn add_child(&mut self, child: OutlineNode) {
+        self.children.push(Box::new(child));
+    }
+
+    /// Set the signature
+    pub fn with_signature(mut self, signature: String) -> Self {
+        self.signature = Some(signature);
+        self
+    }
+
+    /// Set the documentation
+    pub fn with_documentation(mut self, documentation: String) -> Self {
+        self.documentation = Some(documentation);
+        self
+    }
+
+    /// Set the visibility
+    pub fn with_visibility(mut self, visibility: Visibility) -> Self {
+        self.visibility = Some(visibility);
+        self
+    }
+
+    /// Get all symbols in this node and its children (depth-first)
+    pub fn all_symbols(&self) -> Vec<&OutlineNode> {
+        let mut symbols = vec![self];
+        for child in &self.children {
+            symbols.extend(child.all_symbols());
+        }
+        symbols
+    }
+
+    /// Check if this node contains a specific line
+    pub fn contains_line(&self, line: usize) -> bool {
+        line >= self.start_line && line <= self.end_line
+    }
+}
+
+/// Complete outline tree for a file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlineTree {
+    /// File path this outline represents
+    pub file_path: PathBuf,
+    /// Detected programming language
+    pub language: Language,
+    /// Root symbols (top-level functions, classes, etc.)
+    pub symbols: Vec<OutlineNode>,
+    /// Parse timestamp
+    pub parsed_at: DateTime<Utc>,
+}
+
+impl OutlineTree {
+    /// Create a new outline tree
+    pub fn new(file_path: PathBuf, language: Language, symbols: Vec<OutlineNode>) -> Self {
+        Self {
+            file_path,
+            language,
+            symbols,
+            parsed_at: Utc::now(),
+        }
+    }
+
+    /// Get all symbols in the tree (flattened)
+    pub fn all_symbols(&self) -> Vec<&OutlineNode> {
+        self.symbols.iter().flat_map(|s| s.all_symbols()).collect()
+    }
+
+    /// Find symbols by name
+    pub fn find_symbols_by_name(&self, name: &str) -> Vec<&OutlineNode> {
+        self.all_symbols()
+            .into_iter()
+            .filter(|s| s.name == name)
+            .collect()
+    }
+
+    /// Find symbols by type
+    pub fn find_symbols_by_type(&self, node_type: &OutlineNodeType) -> Vec<&OutlineNode> {
+        self.all_symbols()
+            .into_iter()
+            .filter(|s| &s.node_type == node_type)
+            .collect()
+    }
+
+    /// Find the symbol containing a specific line
+    pub fn find_symbol_at_line(&self, line: usize) -> Option<&OutlineNode> {
+        self.all_symbols()
+            .into_iter()
+            .find(|s| s.contains_line(line))
+    }
+
+    /// Get summary statistics
+    pub fn stats(&self) -> OutlineStats {
+        let all_symbols = self.all_symbols();
+        let mut stats = OutlineStats::new();
+
+        for symbol in &all_symbols {
+            match symbol.node_type {
+                OutlineNodeType::Function | OutlineNodeType::Method => stats.functions += 1,
+                OutlineNodeType::Class | OutlineNodeType::Struct => stats.classes += 1,
+                OutlineNodeType::Enum => stats.enums += 1,
+                OutlineNodeType::Interface => stats.interfaces += 1,
+                OutlineNodeType::Module => stats.modules += 1,
+                OutlineNodeType::Constant => stats.constants += 1,
+                OutlineNodeType::Variable => stats.variables += 1,
+                OutlineNodeType::Property => stats.properties += 1,
+                OutlineNodeType::TypeAlias => stats.type_aliases += 1,
+                OutlineNodeType::Import => stats.imports += 1,
+            }
+        }
+
+        stats.total = all_symbols.len();
+        stats
+    }
+}
+
+/// Statistics about an outline tree
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OutlineStats {
+    /// Total number of symbols
+    pub total: usize,
+    /// Number of functions/methods
+    pub functions: usize,
+    /// Number of classes/structs
+    pub classes: usize,
+    /// Number of enums
+    pub enums: usize,
+    /// Number of interfaces
+    pub interfaces: usize,
+    /// Number of modules
+    pub modules: usize,
+    /// Number of constants
+    pub constants: usize,
+    /// Number of variables
+    pub variables: usize,
+    /// Number of properties
+    pub properties: usize,
+    /// Number of type aliases
+    pub type_aliases: usize,
+    /// Number of imports
+    pub imports: usize,
+}
+
+impl OutlineStats {
+    /// Create new empty stats
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Format as summary string
+    pub fn summary(&self) -> String {
+        format!(
+            "{} total symbols: {} functions, {} classes, {} enums, {} imports",
+            self.total, self.functions, self.classes, self.enums, self.imports
         )
     }
 }

@@ -7,6 +7,7 @@
 use thiserror::Error;
 
 pub mod file_discovery;
+pub mod parser;
 pub mod types;
 pub mod utils;
 
@@ -56,6 +57,7 @@ impl From<crate::error::SwissArmyHammerError> for OutlineError {
 }
 
 pub use file_discovery::*;
+pub use parser::*;
 pub use types::*;
 pub use utils::*;
 
