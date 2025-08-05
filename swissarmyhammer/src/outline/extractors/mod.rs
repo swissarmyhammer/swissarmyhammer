@@ -4,12 +4,12 @@
 //! languages, implementing the SymbolExtractor trait to generate structured
 //! code outlines.
 
+pub mod dart;
+pub mod javascript;
 pub mod rust;
 pub mod typescript;
-pub mod javascript;
-pub mod dart;
 
+pub use dart::DartExtractor;
+pub use javascript::JavaScriptExtractor;
 pub use rust::RustExtractor;
 pub use typescript::TypeScriptExtractor;
-pub use javascript::JavaScriptExtractor;
-pub use dart::DartExtractor;

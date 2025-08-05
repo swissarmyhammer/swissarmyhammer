@@ -180,21 +180,27 @@ impl McpTool for OutlineGenerateTool {
             crate::outline::FileDiscovery::filter_supported_files(discovered_files);
 
         // Process all supported files and generate outline
-        let outline_parser = crate::outline::OutlineParser::new(
-            crate::outline::OutlineParserConfig::default()
-        ).map_err(|e| McpError::internal_error(format!("Failed to create outline parser: {e}"), None))?;
-        
+        let outline_parser =
+            crate::outline::OutlineParser::new(crate::outline::OutlineParserConfig::default())
+                .map_err(|e| {
+                    McpError::internal_error(format!("Failed to create outline parser: {e}"), None)
+                })?;
+
         let mut outline_nodes = Vec::new();
         let mut total_symbols = 0;
 
         for discovered_file in &supported_files {
             tracing::debug!("Processing file: {}", discovered_file.path.display());
-            
+
             // Read file content
             let content = match std::fs::read_to_string(&discovered_file.path) {
                 Ok(content) => content,
                 Err(e) => {
-                    tracing::warn!("Failed to read file {}: {}", discovered_file.path.display(), e);
+                    tracing::warn!(
+                        "Failed to read file {}: {}",
+                        discovered_file.path.display(),
+                        e
+                    );
                     continue;
                 }
             };
@@ -207,7 +213,11 @@ impl McpTool for OutlineGenerateTool {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to parse file {}: {}", discovered_file.path.display(), e);
+                    tracing::warn!(
+                        "Failed to parse file {}: {}",
+                        discovered_file.path.display(),
+                        e
+                    );
                     // Continue processing other files
                 }
             }
@@ -247,14 +257,14 @@ fn convert_outline_node(
     _file_path: &std::path::Path,
 ) -> Result<OutlineNode, McpError> {
     let kind = convert_outline_node_type(&internal_node.node_type);
-    
+
     Ok(OutlineNode {
         name: internal_node.name,
         kind,
         line: internal_node.start_line as u32,
         signature: internal_node.signature,
         doc: internal_node.documentation,
-        type_info: internal_node.visibility.map(|v| format!("{:?}", v)),
+        type_info: internal_node.visibility.map(|v| format!("{v:?}")),
         children: None, // TODO: Implement hierarchical structure
     })
 }
@@ -262,7 +272,7 @@ fn convert_outline_node(
 /// Convert internal OutlineNodeType to MCP tool OutlineKind
 fn convert_outline_node_type(node_type: &crate::outline::types::OutlineNodeType) -> OutlineKind {
     use crate::outline::types::OutlineNodeType;
-    
+
     match node_type {
         OutlineNodeType::Class => OutlineKind::Class,
         OutlineNodeType::Interface => OutlineKind::Interface,

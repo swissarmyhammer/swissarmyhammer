@@ -4,8 +4,8 @@
 //! supporting classes, interfaces, functions, methods, type aliases, enums,
 //! namespaces, and their associated documentation, visibility, and signature information.
 
-use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -29,7 +29,7 @@ impl TypeScriptExtractor {
                 OutlineNodeType::Function,
                 r#"(export_statement (function_declaration) @function)"#,
             ),
-            // Direct function declarations  
+            // Direct function declarations
             (
                 OutlineNodeType::Function,
                 r#"(program (function_declaration) @function)"#,
@@ -46,7 +46,7 @@ impl TypeScriptExtractor {
                 OutlineNodeType::Class,
                 r#"(export_statement (class_declaration) @class)"#,
             ),
-            // Abstract class declarations in export statements  
+            // Abstract class declarations in export statements
             (
                 OutlineNodeType::Class,
                 r#"(export_statement (abstract_class_declaration) @class)"#,
@@ -72,10 +72,7 @@ impl TypeScriptExtractor {
                 r#"(type_alias_declaration) @type_alias"#,
             ),
             // Enums
-            (
-                OutlineNodeType::Enum,
-                r#"(enum_declaration) @enum"#,
-            ),
+            (OutlineNodeType::Enum, r#"(enum_declaration) @enum"#),
             // Variables (let, const, var)
             (
                 OutlineNodeType::Variable,
@@ -86,10 +83,7 @@ impl TypeScriptExtractor {
                 r#"(lexical_declaration) @variable"#,
             ),
             // Import statements
-            (
-                OutlineNodeType::Import,
-                r#"(import_statement) @import"#,
-            ),
+            (OutlineNodeType::Import, r#"(import_statement) @import"#),
             // Namespaces (try different query syntax)
             (
                 OutlineNodeType::Module,
@@ -100,15 +94,9 @@ impl TypeScriptExtractor {
                 "#,
             ),
             // Modules (using module keyword)
-            (
-                OutlineNodeType::Module,
-                r#"(module) @module"#,
-            ),
+            (OutlineNodeType::Module, r#"(module) @module"#),
             // Method definitions within classes
-            (
-                OutlineNodeType::Method,
-                r#"(method_definition) @method"#,
-            ),
+            (OutlineNodeType::Method, r#"(method_definition) @method"#),
             // Property definitions within classes
             (
                 OutlineNodeType::Property,
@@ -124,10 +112,7 @@ impl TypeScriptExtractor {
         // Compile all queries
         for (node_type, query_str) in query_definitions {
             let query = Query::new(&language, query_str).map_err(|e| {
-                OutlineError::TreeSitter(format!(
-                    "Failed to compile {:?} query: {}",
-                    node_type, e
-                ))
+                OutlineError::TreeSitter(format!("Failed to compile {node_type:?} query: {e}"))
             })?;
             queries.push((node_type, query));
         }
@@ -227,8 +212,8 @@ impl TypeScriptExtractor {
         if let Some(return_type_node) = node.child_by_field_name("return_type") {
             return Some(self.get_node_text(&return_type_node, source));
         }
-        
-        // Fallback: search for type_annotation in children 
+
+        // Fallback: search for type_annotation in children
         for child in node.children(&mut node.walk()) {
             if child.kind() == "type_annotation" {
                 return Some(self.get_node_text(&child, source));
@@ -242,7 +227,7 @@ impl TypeScriptExtractor {
         if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
             return Some(self.get_node_text(&type_params_node, source));
         }
-        
+
         for child in node.children(&mut node.walk()) {
             if child.kind() == "type_parameters" {
                 return Some(self.get_node_text(&child, source));
@@ -254,7 +239,7 @@ impl TypeScriptExtractor {
     /// Extract heritage clause (extends/implements)
     fn extract_heritage_clause(&self, node: &Node, source: &str) -> Option<String> {
         let mut heritage_parts = Vec::new();
-        
+
         for child in node.children(&mut node.walk()) {
             match child.kind() {
                 "class_heritage" | "interface_heritage" => {
@@ -263,7 +248,7 @@ impl TypeScriptExtractor {
                 _ => {}
             }
         }
-        
+
         if heritage_parts.is_empty() {
             None
         } else {
@@ -292,7 +277,7 @@ impl TypeScriptExtractor {
                 _ => {}
             }
         }
-        
+
         // Check if the node's parent is an export statement
         if let Some(parent) = node.parent() {
             match parent.kind() {
@@ -302,7 +287,7 @@ impl TypeScriptExtractor {
                 _ => {}
             }
         }
-        
+
         // Check for private naming convention (starts with _)
         if let Some(name_node) = node.child_by_field_name("name").or_else(|| {
             if node.kind() == "variable_declarator" {
@@ -316,7 +301,7 @@ impl TypeScriptExtractor {
                 return Some(Visibility::Private);
             }
         }
-        
+
         None // No explicit visibility
     }
 
@@ -334,7 +319,7 @@ impl TypeScriptExtractor {
         // Look backwards from the node's line to find JSDoc comments
         for line_idx in (0..node_line).rev() {
             let line = lines.get(line_idx)?.trim();
-            
+
             if line == "*/" && !in_jsdoc {
                 in_jsdoc = true;
                 continue;
@@ -376,13 +361,13 @@ impl TypeScriptExtractor {
         let mut signature = String::new();
         signature.push_str("function ");
         signature.push_str(name);
-        
+
         if let Some(gen) = type_params {
             signature.push_str(&gen);
         }
-        
+
         signature.push_str(&params);
-        
+
         if let Some(ret) = return_type {
             signature.push_str(&ret);
         }
@@ -395,7 +380,7 @@ impl TypeScriptExtractor {
         let mut signature = String::new();
         signature.push_str("class ");
         signature.push_str(name);
-        
+
         if let Some(type_params) = self.extract_type_parameters(node, source) {
             signature.push_str(&type_params);
         }
@@ -413,7 +398,7 @@ impl TypeScriptExtractor {
         let mut signature = String::new();
         signature.push_str("interface ");
         signature.push_str(name);
-        
+
         if let Some(type_params) = self.extract_type_parameters(node, source) {
             signature.push_str(&type_params);
         }
@@ -431,7 +416,7 @@ impl TypeScriptExtractor {
         let mut signature = String::new();
         signature.push_str("type ");
         signature.push_str(name);
-        
+
         if let Some(type_params) = self.extract_type_parameters(node, source) {
             signature.push_str(&type_params);
         }
@@ -447,12 +432,12 @@ impl TypeScriptExtractor {
 
     /// Build enum signature
     fn build_enum_signature(&self, name: &str, _node: &Node, _source: &str) -> String {
-        format!("enum {}", name)
+        format!("enum {name}")
     }
 
     /// Build namespace signature
     fn build_namespace_signature(&self, name: &str, _node: &Node, _source: &str) -> String {
-        format!("namespace {}", name)
+        format!("namespace {name}")
     }
 
     /// Build method signature
@@ -460,10 +445,10 @@ impl TypeScriptExtractor {
         let params = self.extract_function_parameters(node, source);
         let type_params = self.extract_type_parameters(node, source);
         let return_type = self.extract_return_type(node, source);
-        
+
         // Check for static, async, getter, setter
         let mut modifiers = Vec::new();
-        
+
         // Check for static modifier
         for child in node.children(&mut node.walk()) {
             match child.kind() {
@@ -475,21 +460,21 @@ impl TypeScriptExtractor {
                 _ => {}
             }
         }
-        
+
         let mut signature = String::new();
         if !modifiers.is_empty() {
             signature.push_str(&modifiers.join(" "));
             signature.push(' ');
         }
-        
+
         signature.push_str(name);
-        
+
         if let Some(gen) = type_params {
             signature.push_str(&gen);
         }
-        
+
         signature.push_str(&params);
-        
+
         if let Some(ret) = return_type {
             signature.push_str(&ret);
         }
@@ -500,7 +485,7 @@ impl TypeScriptExtractor {
     /// Build property signature
     fn build_property_signature(&self, name: &str, node: &Node, source: &str) -> String {
         let mut signature = String::new();
-        
+
         // Check for modifiers
         let mut modifiers = Vec::new();
         for child in node.children(&mut node.walk()) {
@@ -511,23 +496,23 @@ impl TypeScriptExtractor {
                 _ => {}
             }
         }
-        
+
         if !modifiers.is_empty() {
             signature.push_str(&modifiers.join(" "));
             signature.push(' ');
         }
-        
+
         signature.push_str(name);
-        
+
         // Try to extract type annotation
         if let Some(type_annotation) = self.extract_property_type(node, source) {
             signature.push_str(": ");
             signature.push_str(&type_annotation);
         }
-        
+
         signature
     }
-    
+
     /// Extract property type annotation
     fn extract_property_type(&self, node: &Node, source: &str) -> Option<String> {
         // Look for type annotation in the property
@@ -551,17 +536,17 @@ impl TypeScriptExtractor {
                 let mut signature = String::new();
                 signature.push_str("const ");
                 signature.push_str(name);
-                
+
                 if let Some(gen) = type_params {
                     signature.push_str(&gen);
                 }
-                
+
                 signature.push_str(" = ");
                 signature.push_str(&params);
                 signature.push_str(" => ");
-                
+
                 if let Some(ret) = return_type {
-                    signature.push_str(&ret.trim_start_matches(':').trim());
+                    signature.push_str(ret.trim_start_matches(':').trim());
                 } else {
                     signature.push_str("void");
                 }
@@ -569,8 +554,8 @@ impl TypeScriptExtractor {
                 return signature;
             }
         }
-        
-        format!("const {} = () => void", name)
+
+        format!("const {name} = () => void")
     }
 }
 
@@ -587,7 +572,7 @@ impl SymbolExtractor for TypeScriptExtractor {
                 // Get the main captured node (should be the only capture)
                 if let Some(capture) = query_match.captures.first() {
                     let node = &capture.node;
-                    
+
                     if let Some(name) = self.extract_name_from_node(node, source) {
                         let (start_line, end_line) = self.get_line_range(node);
                         let mut outline_node = OutlineNode::new(
@@ -673,20 +658,12 @@ impl SymbolExtractor for TypeScriptExtractor {
                 }
                 None
             }
-            "method_definition" | "method_signature" => {
-                if let Some(name) = self.extract_name_from_node(node, source) {
-                    Some(self.build_method_signature(&name, node, source))
-                } else {
-                    None
-                }
-            }
-            "property_signature" => {
-                if let Some(name) = self.extract_name_from_node(node, source) {
-                    Some(self.build_property_signature(&name, node, source))
-                } else {
-                    None
-                }
-            }
+            "method_definition" | "method_signature" => self
+                .extract_name_from_node(node, source)
+                .map(|name| self.build_method_signature(&name, node, source)),
+            "property_signature" => self
+                .extract_name_from_node(node, source)
+                .map(|name| self.build_property_signature(&name, node, source)),
             "class_declaration" | "abstract_class_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = self.get_node_text(&name_node, source);
@@ -744,17 +721,29 @@ impl SymbolExtractor for TypeScriptExtractor {
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
         vec![
             // Functions
-            ("(function_declaration) @function", OutlineNodeType::Function),
+            (
+                "(function_declaration) @function",
+                OutlineNodeType::Function,
+            ),
             // Classes
             ("(class_declaration) @class", OutlineNodeType::Class),
             // Interfaces
-            ("(interface_declaration) @interface", OutlineNodeType::Interface),
+            (
+                "(interface_declaration) @interface",
+                OutlineNodeType::Interface,
+            ),
             // Type aliases
-            ("(type_alias_declaration) @type_alias", OutlineNodeType::TypeAlias),
+            (
+                "(type_alias_declaration) @type_alias",
+                OutlineNodeType::TypeAlias,
+            ),
             // Enums
             ("(enum_declaration) @enum", OutlineNodeType::Enum),
             // Variables
-            ("(variable_declaration) @variable", OutlineNodeType::Variable),
+            (
+                "(variable_declaration) @variable",
+                OutlineNodeType::Variable,
+            ),
             ("(lexical_declaration) @variable", OutlineNodeType::Variable),
             // Imports
             ("(import_statement) @import", OutlineNodeType::Import),
@@ -793,23 +782,37 @@ export function greetUser(name: string): string {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert_eq!(symbols.len(), 1);
         let func = &symbols[0];
         assert_eq!(func.name, "greetUser");
         assert_eq!(func.node_type, OutlineNodeType::Function);
         // Visibility detection might not work as expected, so just check it's some or none
         // assert_eq!(func.visibility, Some(Visibility::Public));
-        assert!(func.signature.as_ref().unwrap().contains("function greetUser"));
-        assert!(func.signature.as_ref().unwrap().contains("(name: string): string"));
-        assert!(func.documentation.as_ref().unwrap().contains("This is a test function"));
+        assert!(func
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("function greetUser"));
+        assert!(func
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("(name: string): string"));
+        assert!(func
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("This is a test function"));
     }
 
-    #[test] 
+    #[test]
     fn test_extract_class() {
         let extractor = TypeScriptExtractor::new().unwrap();
         let source = r#"
@@ -832,17 +835,27 @@ export class User {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(!symbols.is_empty());
         let class_symbol = symbols.iter().find(|s| s.name == "User").unwrap();
         assert_eq!(class_symbol.node_type, OutlineNodeType::Class);
         assert_eq!(class_symbol.visibility, Some(Visibility::Public));
-        assert!(class_symbol.signature.as_ref().unwrap().contains("class User"));
-        assert!(class_symbol.documentation.as_ref().unwrap().contains("A user class"));
+        assert!(class_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("class User"));
+        assert!(class_symbol
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("A user class"));
     }
 
     #[test]
@@ -863,17 +876,27 @@ interface Config<T> {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(!symbols.is_empty());
         let interface_symbol = symbols.iter().find(|s| s.name == "Config").unwrap();
         assert_eq!(interface_symbol.node_type, OutlineNodeType::Interface);
-        assert!(interface_symbol.signature.as_ref().unwrap().contains("interface Config"));
+        assert!(interface_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("interface Config"));
         assert!(interface_symbol.signature.as_ref().unwrap().contains("<T>"));
-        assert!(interface_symbol.documentation.as_ref().unwrap().contains("Configuration interface"));
+        assert!(interface_symbol
+            .documentation
+            .as_ref()
+            .unwrap()
+            .contains("Configuration interface"));
     }
 
     #[test]
@@ -892,21 +915,31 @@ type UserStatus = 'active' | 'inactive' | 'pending';
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(symbols.len() >= 2);
-        
+
         let handler_symbol = symbols.iter().find(|s| s.name == "EventHandler").unwrap();
         assert_eq!(handler_symbol.node_type, OutlineNodeType::TypeAlias);
-        assert!(handler_symbol.signature.as_ref().unwrap().contains("type EventHandler"));
+        assert!(handler_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("type EventHandler"));
         assert!(handler_symbol.signature.as_ref().unwrap().contains("<T>"));
-        
+
         let status_symbol = symbols.iter().find(|s| s.name == "UserStatus").unwrap();
         assert_eq!(status_symbol.node_type, OutlineNodeType::TypeAlias);
-        assert!(status_symbol.signature.as_ref().unwrap().contains("type UserStatus"));
+        assert!(status_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("type UserStatus"));
     }
 
     #[test]
@@ -933,21 +966,31 @@ const enum StatusCode {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(symbols.len() >= 2);
-        
+
         let color_symbol = symbols.iter().find(|s| s.name == "Color").unwrap();
         assert_eq!(color_symbol.node_type, OutlineNodeType::Enum);
         assert_eq!(color_symbol.visibility, Some(Visibility::Public));
-        assert!(color_symbol.signature.as_ref().unwrap().contains("enum Color"));
-        
+        assert!(color_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("enum Color"));
+
         let status_symbol = symbols.iter().find(|s| s.name == "StatusCode").unwrap();
         assert_eq!(status_symbol.node_type, OutlineNodeType::Enum);
-        assert!(status_symbol.signature.as_ref().unwrap().contains("enum StatusCode"));
+        assert!(status_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("enum StatusCode"));
     }
 
     #[test]
@@ -976,18 +1019,24 @@ module App {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(!symbols.is_empty());
-        
+
         // First verify that App module is found correctly
         let app_symbol = symbols.iter().find(|s| s.name == "App").unwrap();
         assert_eq!(app_symbol.node_type, OutlineNodeType::Module);
-        assert!(app_symbol.signature.as_ref().unwrap().contains("namespace App"));
-        
+        assert!(app_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("namespace App"));
+
         // Note: namespace Utils is not being extracted due to internal_module query issue
         // The children (formatString, DEFAULT_TIMEOUT) are correctly extracted though
         let format_fn = symbols.iter().find(|s| s.name == "formatString");
@@ -1022,22 +1071,28 @@ const add = (a: number, b: number) => a + b;
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         assert!(symbols.len() >= 3);
-        
+
         let handle_click = symbols.iter().find(|s| s.name == "handleClick").unwrap();
         assert_eq!(handle_click.node_type, OutlineNodeType::Function);
-        assert!(handle_click.signature.as_ref().unwrap().contains("handleClick"));
+        assert!(handle_click
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("handleClick"));
         assert!(handle_click.signature.as_ref().unwrap().contains("=>"));
-        
+
         let fetch_data = symbols.iter().find(|s| s.name == "fetchData").unwrap();
         assert_eq!(fetch_data.node_type, OutlineNodeType::Function);
         assert!(fetch_data.signature.as_ref().unwrap().contains("fetchData"));
-        
+
         let add_func = symbols.iter().find(|s| s.name == "add").unwrap();
         assert_eq!(add_func.node_type, OutlineNodeType::Function);
         assert!(add_func.signature.as_ref().unwrap().contains("add"));
@@ -1081,29 +1136,41 @@ export class UserRepository {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         // Should extract class, methods, and properties
         let class_symbol = symbols.iter().find(|s| s.name == "UserRepository");
         assert!(class_symbol.is_some());
-        
+
         // Check for methods
-        let find_by_id = symbols.iter().find(|s| s.name == "findById" && s.node_type == OutlineNodeType::Method);
+        let find_by_id = symbols
+            .iter()
+            .find(|s| s.name == "findById" && s.node_type == OutlineNodeType::Method);
         assert!(find_by_id.is_some());
-        
-        let validate_user = symbols.iter().find(|s| s.name == "validateUser" && s.node_type == OutlineNodeType::Method);
+
+        let validate_user = symbols
+            .iter()
+            .find(|s| s.name == "validateUser" && s.node_type == OutlineNodeType::Method);
         assert!(validate_user.is_some());
-        
-        let get_instance = symbols.iter().find(|s| s.name == "getInstance" && s.node_type == OutlineNodeType::Method);
+
+        let get_instance = symbols
+            .iter()
+            .find(|s| s.name == "getInstance" && s.node_type == OutlineNodeType::Method);
         assert!(get_instance.is_some());
-        
+
         // Check for properties
-        let _connection_prop = symbols.iter().find(|s| s.name == "connection" && s.node_type == OutlineNodeType::Property);
-        let _instance_prop = symbols.iter().find(|s| s.name == "instance" && s.node_type == OutlineNodeType::Property);
-        
+        let _connection_prop = symbols
+            .iter()
+            .find(|s| s.name == "connection" && s.node_type == OutlineNodeType::Property);
+        let _instance_prop = symbols
+            .iter()
+            .find(|s| s.name == "instance" && s.node_type == OutlineNodeType::Property);
+
         // Note: Properties might not be extracted perfectly due to Tree-sitter query limitations
         // This is acceptable for the current implementation
     }
@@ -1131,22 +1198,32 @@ interface UserService {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         let interface_symbol = symbols.iter().find(|s| s.name == "UserService").unwrap();
         assert_eq!(interface_symbol.node_type, OutlineNodeType::Interface);
-        
+
         // Check for method signatures
-        let _find_method = symbols.iter().find(|s| s.name == "findById" && s.node_type == OutlineNodeType::Method);
-        let _update_method = symbols.iter().find(|s| s.name == "update" && s.node_type == OutlineNodeType::Method);
-        
-        // Check for property signatures  
-        let _user_count_prop = symbols.iter().find(|s| s.name == "userCount" && s.node_type == OutlineNodeType::Property);
-        let _callback_prop = symbols.iter().find(|s| s.name == "onUserChange" && s.node_type == OutlineNodeType::Property);
-        
+        let _find_method = symbols
+            .iter()
+            .find(|s| s.name == "findById" && s.node_type == OutlineNodeType::Method);
+        let _update_method = symbols
+            .iter()
+            .find(|s| s.name == "update" && s.node_type == OutlineNodeType::Method);
+
+        // Check for property signatures
+        let _user_count_prop = symbols
+            .iter()
+            .find(|s| s.name == "userCount" && s.node_type == OutlineNodeType::Property);
+        let _callback_prop = symbols
+            .iter()
+            .find(|s| s.name == "onUserChange" && s.node_type == OutlineNodeType::Property);
+
         // Note: Method and property signatures might not be perfectly extracted
         // due to Tree-sitter query complexity. This is acceptable.
     }
@@ -1171,19 +1248,29 @@ export abstract class BaseRepository<T> {
         "#;
 
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
 
         let symbols = extractor.extract_symbols(&tree, source).unwrap();
-        
+
         let class_symbol = symbols.iter().find(|s| s.name == "BaseRepository").unwrap();
         assert_eq!(class_symbol.node_type, OutlineNodeType::Class);
-        assert!(class_symbol.signature.as_ref().unwrap().contains("BaseRepository"));
-        
+        assert!(class_symbol
+            .signature
+            .as_ref()
+            .unwrap()
+            .contains("BaseRepository"));
+
         // Check for abstract methods
-        let _find_method = symbols.iter().find(|s| s.name == "findById" && s.node_type == OutlineNodeType::Method);
-        let _query_method = symbols.iter().find(|s| s.name == "query" && s.node_type == OutlineNodeType::Method);
-        
+        let _find_method = symbols
+            .iter()
+            .find(|s| s.name == "findById" && s.node_type == OutlineNodeType::Method);
+        let _query_method = symbols
+            .iter()
+            .find(|s| s.name == "query" && s.node_type == OutlineNodeType::Method);
+
         // Note: Abstract methods might not be perfectly detected due to query limitations
     }
 }
