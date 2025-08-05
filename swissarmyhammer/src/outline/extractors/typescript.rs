@@ -5,14 +5,236 @@
 //! namespaces, and their associated documentation, visibility, and signature information.
 
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::signature::{SignatureExtractor, Signature, Parameter, TypeInfo, GenericParameter, Modifier};
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
+use crate::search::types::Language;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// TypeScript symbol extractor using Tree-sitter
 pub struct TypeScriptExtractor {
     /// Tree-sitter queries for different symbol types
     queries: Vec<(OutlineNodeType, Query)>,
+}
+
+impl SignatureExtractor for TypeScriptExtractor {
+    fn extract_function_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::TypeScript);
+
+        // Special handling for arrow functions - set raw signature
+        if node.kind() == "variable_declarator" {
+            if let Some(value_node) = node.child_by_field_name("value") {
+                if value_node.kind() == "arrow_function" {
+                    let arrow_sig = self.build_arrow_function_signature(&name, node, source);
+                    signature = signature.with_raw_signature(arrow_sig);
+                }
+            }
+        }
+
+        // Extract modifiers
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract generic parameters
+        let generics = self.parse_generic_parameters(node, source);
+        for generic in generics {
+            signature = signature.with_generic(generic);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        } else if node.kind() == "variable_declarator" {
+            if let Some(value_node) = node.child_by_field_name("value") {
+                if value_node.kind() == "arrow_function" {
+                    if let Some(params_node) = value_node.child_by_field_name("parameters") {
+                        let parameters = self.extract_parameters_from_node(&params_node, source);
+                        for param in parameters {
+                            signature = signature.with_parameter(param);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract return type
+        if let Some(return_type_node) = node.child_by_field_name("return_type") {
+            let return_type = self.extract_type_from_node(&return_type_node, source);
+            signature = signature.with_return_type(return_type);
+        } else if node.kind() == "variable_declarator" {
+            if let Some(value_node) = node.child_by_field_name("value") {
+                if value_node.kind() == "arrow_function" {
+                    if let Some(return_type_node) = value_node.child_by_field_name("return_type") {
+                        let return_type = self.extract_type_from_node(&return_type_node, source);
+                        signature = signature.with_return_type(return_type);
+                    }
+                }
+            }
+        }
+
+        Some(signature)
+    }
+
+    fn extract_method_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::TypeScript);
+
+        // Extract modifiers
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract generic parameters
+        let generics = self.parse_generic_parameters(node, source);
+        for generic in generics {
+            signature = signature.with_generic(generic);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Extract return type
+        if let Some(return_type_node) = node.child_by_field_name("return_type") {
+            let return_type = self.extract_type_from_node(&return_type_node, source);
+            signature = signature.with_return_type(return_type);
+        }
+
+        Some(signature)
+    }
+
+    fn extract_constructor_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = "constructor".to_string();
+        let mut signature = Signature::new(name, Language::TypeScript);
+
+        // Extract modifiers
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        Some(signature)
+    }
+
+    fn extract_type_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::TypeScript);
+
+        // Handle different type signature variants
+        match node.kind() {
+            "class_declaration" | "abstract_class_declaration" => {
+                // Build the class signature string
+                let class_signature = self.build_class_signature(&name, node, source);
+                signature = signature.with_raw_signature(class_signature);
+
+                // Extract modifiers
+                let modifiers = self.parse_modifiers(node, source);
+                if !modifiers.is_empty() {
+                    signature = signature.with_modifiers(modifiers);
+                }
+
+                // Extract generic parameters
+                let generics = self.parse_generic_parameters(node, source);
+                for generic in generics {
+                    signature = signature.with_generic(generic);
+                }
+
+                // Extract extends/implements clauses
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "class_heritage" => {
+                            self.parse_heritage_clause(&child, source, &mut signature);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "interface_declaration" => {
+                // Build the interface signature string
+                let interface_signature = self.build_interface_signature(&name, node, source);
+                signature = signature.with_raw_signature(interface_signature);
+
+                // Extract generic parameters
+                let generics = self.parse_generic_parameters(node, source);
+                for generic in generics {
+                    signature = signature.with_generic(generic);
+                }
+
+                // Extract extends clauses
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "interface_heritage" {
+                        self.parse_heritage_clause(&child, source, &mut signature);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        Some(signature)
+    }
+
+    fn parse_type_info(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        Some(self.extract_type_from_node(node, source))
+    }
+
+    fn parse_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        self.extract_single_parameter(node, source)
+    }
+
+    fn parse_generic_parameters(&self, node: &Node, source: &str) -> Vec<GenericParameter> {
+        if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
+            self.extract_generics_from_node(&type_params_node, source)
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn parse_modifiers(&self, node: &Node, source: &str) -> Vec<Modifier> {
+        let mut modifiers = Vec::new();
+
+        // Extract visibility modifiers
+        if let Some(visibility) = self.parse_visibility(node, source) {
+            match visibility {
+                Visibility::Public => modifiers.push(Modifier::Public),
+                Visibility::Private => modifiers.push(Modifier::Private),
+                Visibility::Protected => modifiers.push(Modifier::Protected),
+                _ => {}
+            }
+        }
+
+        // Check for other modifiers
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "static" => modifiers.push(Modifier::Static),
+                "async" => modifiers.push(Modifier::Async),
+                "abstract" => modifiers.push(Modifier::Abstract),
+                "readonly" => modifiers.push(Modifier::Readonly),
+                // Note: TypeScript getter/setter handling would need specific Modifier variants
+                _ => {}
+            }
+        }
+
+        modifiers
+    }
 }
 
 impl TypeScriptExtractor {
@@ -557,6 +779,316 @@ impl TypeScriptExtractor {
 
         format!("const {name} = () => void")
     }
+
+    /// Extract generics from a type_parameters node
+    fn extract_generics_from_node(&self, node: &Node, source: &str) -> Vec<GenericParameter> {
+        let mut generics = Vec::new();
+        
+        // Iterate through type_parameter children
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "type_parameter" {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    let name = self.get_node_text(&name_node, source);
+                    let mut generic = GenericParameter::new(name);
+                    
+                    // Check for constraints (extends clause)
+                    if let Some(constraint_node) = child.child_by_field_name("constraint") {
+                        let constraint = self.extract_type_from_node(&constraint_node, source);
+                        generic = generic.with_bounds(vec![constraint.name]);
+                    }
+                    
+                    // Check for default type
+                    if let Some(default_node) = child.child_by_field_name("default_type") {
+                        let default_type = self.extract_type_from_node(&default_node, source);
+                        generic = generic.with_default(default_type.name);
+                    }
+                    
+                    generics.push(generic);
+                }
+            }
+        }
+        
+        generics
+    }
+    
+    /// Extract parameters from a formal_parameters node
+    fn extract_parameters_from_node(&self, node: &Node, source: &str) -> Vec<Parameter> {
+        let mut parameters = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "required_parameter" | "optional_parameter" => {
+                    if let Some(param) = self.extract_single_parameter(&child, source) {
+                        parameters.push(param);
+                    }
+                }
+                "rest_parameter" => {
+                    if let Some(param) = self.extract_rest_parameter(&child, source) {
+                        parameters.push(param);
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        parameters
+    }
+    
+    /// Extract a single parameter
+    fn extract_single_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        let name_node = node.child_by_field_name("pattern").or_else(|| node.child_by_field_name("name"))?;
+        let name = self.get_node_text(&name_node, source);
+        
+        let param_type = if let Some(type_node) = node.child_by_field_name("type") {
+            self.extract_type_from_node(&type_node, source)
+        } else {
+            TypeInfo::new("any".to_string())
+        };
+        
+        let is_optional = node.kind() == "optional_parameter" || 
+                         self.get_node_text(node, source).contains('?');
+        
+        let mut param = Parameter::new(name).with_type(param_type);
+        if is_optional {
+            param = param.optional();
+        }
+        Some(param)
+    }
+    
+    /// Extract a rest parameter (...args)
+    fn extract_rest_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        let name_node = node.child_by_field_name("name")?;
+        let name = format!("...{}", self.get_node_text(&name_node, source));
+        
+        let param_type = if let Some(type_node) = node.child_by_field_name("type") {
+            TypeInfo::array(self.extract_type_from_node(&type_node, source), 1)
+        } else {
+            TypeInfo::array(TypeInfo::new("any".to_string()), 1)
+        };
+        
+        Some(Parameter::new(name).with_type(param_type).variadic())
+    }
+    
+    /// Extract complex TypeScript type from a node
+    fn extract_type_from_node(&self, node: &Node, source: &str) -> TypeInfo {
+        match node.kind() {
+            "type_annotation" => {
+                // Skip the ':' and get the actual type
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() != ":" {
+                        return self.extract_type_from_node(&child, source);
+                    }
+                }
+                TypeInfo::new("any".to_string())
+            }
+            "predefined_type" => {
+                let type_name = self.get_node_text(node, source);
+                TypeInfo::new(type_name)
+            }
+            "type_identifier" | "identifier" => {
+                let type_name = self.get_node_text(node, source);
+                TypeInfo::new(type_name)
+            }
+            "generic_type" => {
+                let mut base_type = String::new();
+                let mut generic_args = Vec::new();
+                
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "type_identifier" | "identifier" => {
+                            base_type = self.get_node_text(&child, source);
+                        }
+                        "type_arguments" => {
+                            generic_args = self.extract_type_arguments(&child, source);
+                        }
+                        _ => {}
+                    }
+                }
+                
+                TypeInfo::generic(base_type, generic_args)
+            }
+            "array_type" => {
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() != "[" && child.kind() != "]" {
+                        return TypeInfo::array(self.extract_type_from_node(&child, source), 1);
+                    }
+                }
+                TypeInfo::array(TypeInfo::new("any".to_string()), 1)
+            }
+            "union_type" => {
+                let union_types = self.extract_union_types(node, source);
+                if union_types.len() == 1 {
+                    union_types.into_iter().next().unwrap()
+                } else {
+                    // Represent union as string for now
+                    let union_str = union_types.iter()
+                        .map(|t| t.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    TypeInfo::new(union_str)
+                }
+            }
+            "intersection_type" => {
+                let intersection_types = self.extract_intersection_types(node, source);
+                if intersection_types.len() == 1 {
+                    intersection_types.into_iter().next().unwrap()
+                } else {
+                    // Represent intersection as string for now
+                    let intersection_str = intersection_types.iter()
+                        .map(|t| t.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(" & ");
+                    TypeInfo::new(intersection_str)
+                }
+            }
+            "function_type" => {
+                self.extract_function_type(node, source)
+            }
+            "object_type" => {
+                TypeInfo::new("object".to_string())
+            }
+            "tuple_type" => {
+                let tuple_types = self.extract_tuple_types(node, source);
+                let tuple_str = format!("[{}]", 
+                    tuple_types.iter()
+                        .map(|t| t.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", "));
+                TypeInfo::new(tuple_str)
+            }
+            "parenthesized_type" => {
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() != "(" && child.kind() != ")" {
+                        return self.extract_type_from_node(&child, source);
+                    }
+                }
+                TypeInfo::new("any".to_string())
+            }
+            "optional_type" => {
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() != "?" {
+                        let mut type_info = self.extract_type_from_node(&child, source);
+                        type_info.is_nullable = true;
+                        return type_info;
+                    }
+                }
+                let mut type_info = TypeInfo::new("any".to_string());
+                type_info.is_nullable = true;
+                type_info
+            }
+            _ => {
+                // Fallback: use the raw text
+                let type_text = self.get_node_text(node, source);
+                TypeInfo::new(type_text)
+            }
+        }
+    }
+    
+    /// Extract type arguments from a type_arguments node
+    fn extract_type_arguments(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
+        let mut args = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if child.kind() != "<" && child.kind() != ">" && child.kind() != "," {
+                args.push(self.extract_type_from_node(&child, source));
+            }
+        }
+        
+        args
+    }
+    
+    /// Extract union type members
+    fn extract_union_types(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
+        let mut types = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if child.kind() != "|" {
+                types.push(self.extract_type_from_node(&child, source));
+            }
+        }
+        
+        types
+    }
+    
+    /// Extract intersection type members
+    fn extract_intersection_types(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
+        let mut types = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if child.kind() != "&" {
+                types.push(self.extract_type_from_node(&child, source));
+            }
+        }
+        
+        types
+    }
+    
+    /// Extract tuple type elements
+    fn extract_tuple_types(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
+        let mut types = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if child.kind() != "[" && child.kind() != "]" && child.kind() != "," {
+                types.push(self.extract_type_from_node(&child, source));
+            }
+        }
+        
+        types
+    }
+    
+    /// Extract function type signature
+    fn extract_function_type(&self, node: &Node, source: &str) -> TypeInfo {
+        let mut params = Vec::new();
+        let mut return_type = None;
+        
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "formal_parameters" => {
+                    // Extract parameter types
+                    for param_child in child.children(&mut child.walk()) {
+                        if let Some(param) = self.extract_single_parameter(&param_child, source) {
+                            if let Some(type_info) = param.type_info {
+                                params.push(type_info);
+                            }
+                        }
+                    }
+                }
+                "type_annotation" => {
+                    return_type = Some(self.extract_type_from_node(&child, source));
+                }
+                _ => {}
+            }
+        }
+        
+        TypeInfo::function(params, return_type)
+    }
+    
+    /// Parse heritage clause (extends/implements) and add constraints to signature
+    fn parse_heritage_clause(&self, node: &Node, source: &str, _signature: &mut Signature) {
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "extends_clause" => {
+                    // Extract types from extends clause
+                    for extends_child in child.children(&mut child.walk()) {
+                        if extends_child.kind() != "extends" {
+                            let _constraint = self.extract_type_from_node(&extends_child, source);
+                            // For now, just skip this - TypeScript inheritance is complex to track
+                        }
+                    }
+                }
+                "implements_clause" => {
+                    // Extract types from implements clause
+                    for impl_child in child.children(&mut child.walk()) {
+                        if impl_child.kind() != "implements" {
+                            let _constraint = self.extract_type_from_node(&impl_child, source);
+                            // For now, just skip this - TypeScript inheritance is complex to track
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl SymbolExtractor for TypeScriptExtractor {
@@ -583,19 +1115,32 @@ impl SymbolExtractor for TypeScriptExtractor {
                             (node.start_byte(), node.end_byte()),
                         );
 
-                        // Add signature based on node type and kind
+                        // Add comprehensive signature based on node type and kind
                         let signature = match (node_type, node.kind()) {
                             (OutlineNodeType::Function, "function_declaration") => {
-                                Some(self.build_function_signature(&name, node, source))
+                                self.extract_function_signature(node, source)
+                                    .map(|s| s.format_typescript_style())
+                                    .or_else(|| Some(self.build_function_signature(&name, node, source)))
                             }
                             (OutlineNodeType::Function, "variable_declarator") => {
-                                Some(self.build_arrow_function_signature(&name, node, source))
+                                self.extract_function_signature(node, source)
+                                    .map(|s| s.format_typescript_style())
+                                    .or_else(|| Some(self.build_arrow_function_signature(&name, node, source)))
                             }
                             (OutlineNodeType::Class, _) => {
-                                Some(self.build_class_signature(&name, node, source))
+                                self.extract_type_signature(node, source)
+                                    .map(|s| s.format_typescript_style())
+                                    .or_else(|| Some(self.build_class_signature(&name, node, source)))
                             }
                             (OutlineNodeType::Interface, _) => {
-                                Some(self.build_interface_signature(&name, node, source))
+                                self.extract_type_signature(node, source)
+                                    .map(|s| s.format_typescript_style())
+                                    .or_else(|| Some(self.build_interface_signature(&name, node, source)))
+                            }
+                            (OutlineNodeType::Method, _) => {
+                                self.extract_method_signature(node, source)
+                                    .map(|s| s.format_typescript_style())
+                                    .or_else(|| Some(self.build_method_signature(&name, node, source)))
                             }
                             (OutlineNodeType::TypeAlias, _) => {
                                 Some(self.build_type_alias_signature(&name, node, source))
@@ -639,46 +1184,67 @@ impl SymbolExtractor for TypeScriptExtractor {
     fn extract_signature(&self, node: &Node, source: &str) -> Option<String> {
         match node.kind() {
             "function_declaration" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    Some(self.build_function_signature(&name, node, source))
-                } else {
-                    None
-                }
+                self.extract_function_signature(node, source)
+                    .map(|s| s.format_typescript_style())
+                    .or_else(|| {
+                        if let Some(name_node) = node.child_by_field_name("name") {
+                            let name = self.get_node_text(&name_node, source);
+                            Some(self.build_function_signature(&name, node, source))
+                        } else {
+                            None
+                        }
+                    })
             }
             "variable_declarator" => {
                 // Handle arrow functions
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    if let Some(value_node) = node.child_by_field_name("value") {
-                        if value_node.kind() == "arrow_function" {
-                            return Some(self.build_arrow_function_signature(&name, node, source));
+                self.extract_function_signature(node, source)
+                    .map(|s| s.format_typescript_style())
+                    .or_else(|| {
+                        if let Some(name_node) = node.child_by_field_name("name") {
+                            let name = self.get_node_text(&name_node, source);
+                            if let Some(value_node) = node.child_by_field_name("value") {
+                                if value_node.kind() == "arrow_function" {
+                                    return Some(self.build_arrow_function_signature(&name, node, source));
+                                }
+                            }
                         }
-                    }
-                }
-                None
+                        None
+                    })
             }
-            "method_definition" | "method_signature" => self
-                .extract_name_from_node(node, source)
-                .map(|name| self.build_method_signature(&name, node, source)),
+            "method_definition" | "method_signature" => {
+                self.extract_method_signature(node, source)
+                    .map(|s| s.format_typescript_style())
+                    .or_else(|| {
+                        self.extract_name_from_node(node, source)
+                            .map(|name| self.build_method_signature(&name, node, source))
+                    })
+            }
             "property_signature" => self
                 .extract_name_from_node(node, source)
                 .map(|name| self.build_property_signature(&name, node, source)),
             "class_declaration" | "abstract_class_declaration" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    Some(self.build_class_signature(&name, node, source))
-                } else {
-                    None
-                }
+                self.extract_type_signature(node, source)
+                    .map(|s| s.format_typescript_style())
+                    .or_else(|| {
+                        if let Some(name_node) = node.child_by_field_name("name") {
+                            let name = self.get_node_text(&name_node, source);
+                            Some(self.build_class_signature(&name, node, source))
+                        } else {
+                            None
+                        }
+                    })
             }
             "interface_declaration" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    Some(self.build_interface_signature(&name, node, source))
-                } else {
-                    None
-                }
+                self.extract_type_signature(node, source)
+                    .map(|s| s.format_typescript_style())
+                    .or_else(|| {
+                        if let Some(name_node) = node.child_by_field_name("name") {
+                            let name = self.get_node_text(&name_node, source);
+                            Some(self.build_interface_signature(&name, node, source))
+                        } else {
+                            None
+                        }
+                    })
             }
             "type_alias_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
@@ -793,13 +1359,12 @@ export function greetUser(name: string): string {
         let func = &symbols[0];
         assert_eq!(func.name, "greetUser");
         assert_eq!(func.node_type, OutlineNodeType::Function);
-        // Visibility detection might not work as expected, so just check it's some or none
-        // assert_eq!(func.visibility, Some(Visibility::Public));
+        assert_eq!(func.visibility, Some(Visibility::Public));
         assert!(func
             .signature
             .as_ref()
             .unwrap()
-            .contains("function greetUser"));
+            .contains("greetUser"));
         assert!(func
             .signature
             .as_ref()

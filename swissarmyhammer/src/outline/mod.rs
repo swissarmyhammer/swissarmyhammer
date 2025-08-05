@@ -22,6 +22,8 @@ pub mod file_discovery;
 pub mod formatter;
 pub mod hierarchy;
 pub mod parser;
+pub mod signature;
+pub mod signature_integration_test;
 pub mod types;
 pub mod utils;
 
@@ -75,6 +77,7 @@ pub use file_discovery::*;
 pub use formatter::{FormatterConfig, SortOrder as FormatterSortOrder, YamlFormatter};
 pub use hierarchy::*;
 pub use parser::*;
+pub use signature::*;
 pub use types::*;
 pub use utils::*;
 
