@@ -186,7 +186,8 @@ impl McpTool for OutlineGenerateTool {
                     McpError::internal_error(format!("Failed to create outline parser: {e}"), None)
                 })?;
 
-        let mut outline_nodes = Vec::new();
+        // Build hierarchical structure using HierarchyBuilder
+        let mut hierarchy_builder = crate::outline::HierarchyBuilder::new();
         let mut total_symbols = 0;
 
         for discovered_file in &supported_files {
@@ -207,10 +208,15 @@ impl McpTool for OutlineGenerateTool {
 
             match outline_parser.parse_file(&discovered_file.path, &content) {
                 Ok(outline_tree) => {
-                    for node in outline_tree.symbols {
-                        outline_nodes.push(convert_outline_node(node, &discovered_file.path)?);
-                        total_symbols += 1;
-                    }
+                    total_symbols += outline_tree.symbols.len();
+                    hierarchy_builder
+                        .add_file_outline(outline_tree)
+                        .map_err(|e| {
+                            McpError::internal_error(
+                                format!("Failed to add file to hierarchy: {e}"),
+                                None,
+                            )
+                        })?;
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -223,22 +229,42 @@ impl McpTool for OutlineGenerateTool {
             }
         }
 
-        let response = OutlineResponse {
-            outline: outline_nodes,
-            files_processed: supported_files.len(),
-            symbols_found: total_symbols,
-            execution_time_ms: start_time.elapsed().as_millis() as u64,
-        };
+        // Build the complete hierarchy
+        let hierarchy = hierarchy_builder.build_hierarchy().map_err(|e| {
+            McpError::internal_error(format!("Failed to build hierarchy: {e}"), None)
+        })?;
 
         // Format output based on requested format
         let output_format = request.output_format.as_deref().unwrap_or("yaml");
         let formatted_output = match output_format {
-            "json" => serde_json::to_string_pretty(&response).map_err(|e| {
-                McpError::internal_error(format!("JSON serialization error: {e}"), None)
-            })?,
-            "yaml" => serde_yaml::to_string(&response).map_err(|e| {
-                McpError::internal_error(format!("YAML serialization error: {e}"), None)
-            })?,
+            "json" => {
+                // For JSON, convert to legacy format for compatibility
+                let mut outline_nodes = Vec::new();
+                for file in hierarchy.all_files() {
+                    for symbol in &file.symbols {
+                        let converted = convert_outline_node_with_children(symbol.clone())?;
+                        outline_nodes.push(converted);
+                    }
+                }
+
+                let response = OutlineResponse {
+                    outline: outline_nodes,
+                    files_processed: supported_files.len(),
+                    symbols_found: total_symbols,
+                    execution_time_ms: start_time.elapsed().as_millis() as u64,
+                };
+
+                serde_json::to_string_pretty(&response).map_err(|e| {
+                    McpError::internal_error(format!("JSON serialization error: {e}"), None)
+                })?
+            }
+            "yaml" => {
+                // Use the new YamlFormatter for proper hierarchical YAML output
+                let formatter = crate::outline::YamlFormatter::with_defaults();
+                formatter.format_hierarchy(&hierarchy).map_err(|e| {
+                    McpError::internal_error(format!("YAML formatting error: {e}"), None)
+                })?
+            }
             _ => {
                 return Err(McpError::invalid_params(
                     format!("Unsupported output format: {output_format}"),
@@ -251,7 +277,8 @@ impl McpTool for OutlineGenerateTool {
     }
 }
 
-/// Convert internal OutlineNode to MCP tool OutlineNode
+/// Convert internal OutlineNode to MCP tool OutlineNode (legacy - no children support)
+#[allow(dead_code)]
 fn convert_outline_node(
     internal_node: crate::outline::types::OutlineNode,
     _file_path: &std::path::Path,
@@ -265,7 +292,35 @@ fn convert_outline_node(
         signature: internal_node.signature,
         doc: internal_node.documentation,
         type_info: internal_node.visibility.map(|v| format!("{v:?}")),
-        children: None, // TODO: Implement hierarchical structure
+        children: None, // Legacy function - no children support
+    })
+}
+
+/// Convert internal OutlineNode to MCP tool OutlineNode with children support
+fn convert_outline_node_with_children(
+    internal_node: crate::outline::types::OutlineNode,
+) -> Result<OutlineNode, McpError> {
+    let kind = convert_outline_node_type(&internal_node.node_type);
+
+    // Convert children recursively
+    let children = if internal_node.children.is_empty() {
+        None
+    } else {
+        let mut converted_children = Vec::new();
+        for child in internal_node.children {
+            converted_children.push(convert_outline_node_with_children(*child)?);
+        }
+        Some(converted_children)
+    };
+
+    Ok(OutlineNode {
+        name: internal_node.name,
+        kind,
+        line: internal_node.start_line as u32,
+        signature: internal_node.signature,
+        doc: internal_node.documentation,
+        type_info: internal_node.visibility.map(|v| format!("{v:?}")),
+        children,
     })
 }
 
