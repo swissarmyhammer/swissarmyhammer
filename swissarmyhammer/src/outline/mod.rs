@@ -23,6 +23,7 @@ pub mod formatter;
 pub mod hierarchy;
 pub mod parser;
 pub mod signature;
+pub mod signature_integration_test;
 pub mod types;
 pub mod utils;
 

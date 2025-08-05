@@ -44,6 +44,10 @@ pub enum Modifier {
     Mut,
     /// Ref modifier
     Ref,
+    /// Class method modifier (Python)
+    ClassMethod,
+    /// Property modifier (Python)
+    Property,
 }
 
 impl Modifier {
@@ -94,6 +98,8 @@ impl Modifier {
             Modifier::Static => "@staticmethod",
             Modifier::Abstract => "@abstractmethod",
             Modifier::Async => "async",
+            Modifier::ClassMethod => "@classmethod",
+            Modifier::Property => "@property",
             _ => "",
         }
     }
@@ -499,6 +505,14 @@ impl Parameter {
         self
     }
 
+    /// Mark parameter as named (for Dart named parameters)
+    pub fn named(mut self) -> Self {
+        // In Dart, named parameters are handled specially
+        // We can add an attribute to track this
+        self.attributes.push("named".to_string());
+        self
+    }
+
     /// Format parameter for Rust syntax
     pub fn format_rust(&self) -> String {
         let mut result = String::new();
@@ -703,6 +717,13 @@ impl Signature {
         self
     }
 
+    /// Add a constraint (for Python base classes)
+    pub fn with_constraint(mut self, constraint: String) -> Self {
+        // For Python, we can add constraints as attributes
+        self.attributes.push(format!("constraint:{}", constraint));
+        self
+    }
+
     /// Format signature for the appropriate language
     pub fn format_for_language(&self, language: Language) -> String {
         match language {
@@ -728,8 +749,8 @@ impl Signature {
             }
         }
 
-        // Add async keyword
-        if self.is_async {
+        // Add async keyword (only if not already added via modifiers)
+        if self.is_async && !self.modifiers.contains(&Modifier::Async) {
             result.push_str("async ");
         }
 
@@ -870,6 +891,13 @@ impl Signature {
 
     /// Format signature in JavaScript style
     pub fn format_javascript_style(&self) -> String {
+        // If we have a raw signature that looks like a class definition, use it
+        if !self.raw_signature.is_empty() && 
+           (self.raw_signature.starts_with("class ") ||
+            self.raw_signature.contains(" class ")) {
+            return self.raw_signature.clone();
+        }
+
         let mut result = String::new();
 
         // Add async keyword

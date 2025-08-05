@@ -6,8 +6,12 @@
 //! Includes support for Flutter-specific patterns and modern Dart language features.
 
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::signature::{
+    GenericParameter, Modifier, Parameter, Signature, SignatureExtractor, TypeInfo,
+};
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
+use crate::search::types::Language;
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -504,6 +508,348 @@ impl DartExtractor {
     }
 }
 
+impl SignatureExtractor for DartExtractor {
+    fn extract_function_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Dart);
+
+        // Extract modifiers from Dart function
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters with named parameter support
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Extract return type
+        if let Some(return_type) = self.parse_dart_return_type(node, source) {
+            signature = signature.with_return_type(return_type);
+        }
+
+        // Check for async
+        if self.is_async_function(node, source) {
+            signature = signature.async_function();
+        }
+
+        Some(signature)
+    }
+
+    fn extract_method_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Dart);
+
+        // Extract modifiers (static, abstract, etc.)
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Extract return type
+        if let Some(return_type) = self.parse_dart_return_type(node, source) {
+            signature = signature.with_return_type(return_type);
+        }
+
+        // Check for async
+        if self.is_async_function(node, source) {
+            signature = signature.async_function();
+        }
+
+        Some(signature)
+    }
+
+    fn extract_constructor_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Dart);
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        signature = signature.constructor();
+        Some(signature)
+    }
+
+    fn extract_type_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Dart);
+
+        match node.kind() {
+            "class_definition" => {
+                // Extract generic parameters
+                let generics = self.parse_generic_parameters(node, source);
+                for generic in generics {
+                    signature = signature.with_generic(generic);
+                }
+
+                // Build the class signature string
+                let class_signature = self.build_class_signature(&name, node, source);
+                signature = signature.with_raw_signature(class_signature);
+            }
+            "enum_declaration" => {
+                let enum_signature = format!("enum {}", name);
+                signature = signature.with_raw_signature(enum_signature);
+            }
+            "mixin_declaration" => {
+                let mixin_signature = format!("mixin {}", name);
+                signature = signature.with_raw_signature(mixin_signature);
+            }
+            "extension_declaration" => {
+                let extension_signature = format!("extension {}", name);
+                signature = signature.with_raw_signature(extension_signature);
+            }
+            _ => {}
+        }
+
+        Some(signature)
+    }
+
+    fn parse_type_info(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        match node.kind() {
+            "type_identifier" => {
+                let type_name = self.get_node_text(node, source);
+                Some(TypeInfo::new(type_name))
+            }
+            "type_name" => {
+                let type_name = self.get_node_text(node, source);
+                Some(TypeInfo::new(type_name))
+            }
+            "generic_type" => {
+                // Extract the base type and generic arguments
+                let mut base_name = String::new();
+                let mut generic_args = Vec::new();
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "type_identifier" => {
+                            if base_name.is_empty() {
+                                base_name = self.get_node_text(&child, source);
+                            }
+                        }
+                        "type_arguments" => {
+                            for arg_child in child.children(&mut child.walk()) {
+                                if let Some(arg_type) = self.parse_type_info(&arg_child, source) {
+                                    generic_args.push(arg_type);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !base_name.is_empty() {
+                    Some(TypeInfo::generic(base_name, generic_args))
+                } else {
+                    None
+                }
+            }
+            "list_type" => {
+                // Handle List<T>
+                for child in node.children(&mut node.walk()) {
+                    if let Some(element_type) = self.parse_type_info(&child, source) {
+                        return Some(TypeInfo::array(element_type, 1));
+                    }
+                }
+                Some(TypeInfo::array(TypeInfo::new("dynamic".to_string()), 1))
+            }
+            _ => {
+                // Fallback: just use the raw text
+                let text = self.get_node_text(node, source);
+                if !text.is_empty() {
+                    Some(TypeInfo::new(text))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn parse_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        match node.kind() {
+            "formal_parameter" | "normal_formal_parameter" => {
+                let mut param_name = String::new();
+                let mut param_type = None;
+                let mut is_named = false;
+                let mut is_optional = false;
+                let mut default_value = None;
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "identifier" => {
+                            param_name = self.get_node_text(&child, source);
+                        }
+                        "type_identifier" | "type_name" => {
+                            if let Some(type_info) = self.parse_type_info(&child, source) {
+                                param_type = Some(type_info);
+                            }
+                        }
+                        "?" => {
+                            is_optional = true;
+                        }
+                        "default_formal_parameter" => {
+                            // Handle default values
+                            if let Some(value_node) = child.child_by_field_name("default_value") {
+                                default_value = Some(self.get_node_text(&value_node, source));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Check if this is inside named parameters
+                if let Some(parent) = node.parent() {
+                    if parent.kind() == "named_parameter_types" {
+                        is_named = true;
+                    }
+                }
+
+                if !param_name.is_empty() {
+                    let mut parameter = Parameter::new(param_name);
+                    if let Some(type_info) = param_type {
+                        parameter = parameter.with_type(type_info);
+                    } else {
+                        parameter = parameter.with_type(TypeInfo::new("dynamic".to_string()));
+                    }
+                    if is_optional {
+                        parameter = parameter.optional();
+                    }
+                    if is_named {
+                        parameter = parameter.named();
+                    }
+                    if let Some(default) = default_value {
+                        parameter = parameter.with_default(default);
+                    }
+                    Some(parameter)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_generic_parameters(&self, node: &Node, source: &str) -> Vec<GenericParameter> {
+        let mut generics = Vec::new();
+
+        // Look for type_parameter_list
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "type_parameter_list" {
+                for param_child in child.children(&mut child.walk()) {
+                    if param_child.kind() == "type_parameter" {
+                        if let Some(name_node) = param_child.child_by_field_name("name") {
+                            let name = self.get_node_text(&name_node, source);
+                            let mut generic = GenericParameter::new(name);
+                            
+                            // Check for constraints (extends clause)
+                            if let Some(bound_node) = param_child.child_by_field_name("bound") {
+                                if let Some(bound_type) = self.parse_type_info(&bound_node, source) {
+                                    generic = generic.with_bounds(vec![bound_type.name]);
+                                }
+                            }
+                            
+                            generics.push(generic);
+                        }
+                    }
+                }
+            }
+        }
+
+        generics
+    }
+
+    fn parse_modifiers(&self, node: &Node, source: &str) -> Vec<Modifier> {
+        let mut modifiers = Vec::new();
+
+        // Check for various Dart modifiers
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "static" => modifiers.push(Modifier::Static),
+                "abstract" => modifiers.push(Modifier::Abstract),
+                "async" => modifiers.push(Modifier::Async),
+                "const" => modifiers.push(Modifier::Const),
+                "final" => modifiers.push(Modifier::Final),
+                _ => {}
+            }
+        }
+
+        // Check the source text for modifiers that might not be separate nodes
+        let node_text = self.get_node_text(node, source);
+        if node_text.contains("async") && !modifiers.contains(&Modifier::Async) {
+            modifiers.push(Modifier::Async);
+        }
+
+        modifiers
+    }
+}
+
+impl DartExtractor {
+    /// Check if a function is async
+    fn is_async_function(&self, node: &Node, source: &str) -> bool {
+        // Check for async keyword in children
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "async" {
+                return true;
+            }
+        }
+
+        // Check the source text
+        let node_text = self.get_node_text(node, source);
+        node_text.contains("async")
+    }
+
+    /// Extract parameters from a formal_parameter_list node
+    fn extract_parameters_from_node(&self, node: &Node, source: &str) -> Vec<Parameter> {
+        let mut parameters = Vec::new();
+
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "formal_parameter" | "normal_formal_parameter" | "optional_formal_parameters" | "named_parameter_types" => {
+                    if let Some(param) = self.parse_parameter(&child, source) {
+                        parameters.push(param);
+                    }
+                    // Also check children for nested parameters
+                    for grandchild in child.children(&mut child.walk()) {
+                        if let Some(param) = self.parse_parameter(&grandchild, source) {
+                            parameters.push(param);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        parameters
+    }
+
+    /// Parse return type from Dart function
+    fn parse_dart_return_type(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        // Look for return type before function name
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "type_identifier" || child.kind() == "type_name" {
+                return self.parse_type_info(&child, source);
+            }
+        }
+        None
+    }
+}
+
 impl SymbolExtractor for DartExtractor {
     fn extract_symbols(&self, tree: &Tree, source: &str) -> Result<Vec<OutlineNode>> {
         let mut symbols = Vec::new();
@@ -529,34 +875,69 @@ impl SymbolExtractor for DartExtractor {
                             (node.start_byte(), node.end_byte()),
                         );
 
-                        // Add signature based on node type and kind
+                        // Add comprehensive signature based on node type and kind
                         let signature = match node_type {
                             OutlineNodeType::Function => {
-                                Some(self.build_function_signature(&name, node, source))
+                                // Use new comprehensive signature extraction
+                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::Dart))
+                                } else {
+                                    Some(self.build_function_signature(&name, node, source))
+                                }
                             }
                             OutlineNodeType::Method => match node.kind() {
                                 "constructor_signature" => {
-                                    Some(self.build_constructor_signature(&name, node, source))
+                                    if let Some(detailed_sig) = self.extract_constructor_signature(node, source) {
+                                        Some(detailed_sig.format_for_language(Language::Dart))
+                                    } else {
+                                        Some(self.build_constructor_signature(&name, node, source))
+                                    }
                                 }
                                 "factory_constructor_signature" => {
-                                    Some(self.build_factory_signature(&name, node, source))
+                                    if let Some(detailed_sig) = self.extract_constructor_signature(node, source) {
+                                        Some(detailed_sig.format_for_language(Language::Dart))
+                                    } else {
+                                        Some(self.build_factory_signature(&name, node, source))
+                                    }
                                 }
-                                _ => Some(self.build_function_signature(&name, node, source)),
+                                _ => {
+                                    if let Some(detailed_sig) = self.extract_method_signature(node, source) {
+                                        Some(detailed_sig.format_for_language(Language::Dart))
+                                    } else {
+                                        Some(self.build_function_signature(&name, node, source))
+                                    }
+                                }
                             },
                             OutlineNodeType::Class => {
-                                Some(self.build_class_signature(&name, node, source))
+                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::Dart))
+                                } else {
+                                    Some(self.build_class_signature(&name, node, source))
+                                }
                             }
                             OutlineNodeType::Interface => match node.kind() {
                                 "mixin_declaration" => {
-                                    Some(self.build_mixin_signature(&name, node, source))
+                                    if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                        Some(detailed_sig.format_for_language(Language::Dart))
+                                    } else {
+                                        Some(self.build_mixin_signature(&name, node, source))
+                                    }
                                 }
                                 "extension_declaration" => {
-                                    Some(self.build_extension_signature(&name, node, source))
+                                    if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                        Some(detailed_sig.format_for_language(Language::Dart))
+                                    } else {
+                                        Some(self.build_extension_signature(&name, node, source))
+                                    }
                                 }
                                 _ => None,
                             },
                             OutlineNodeType::Enum => {
-                                Some(self.build_enum_signature(&name, node, source))
+                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::Dart))
+                                } else {
+                                    Some(self.build_enum_signature(&name, node, source))
+                                }
                             }
                             OutlineNodeType::Property => match node.kind() {
                                 "getter_signature" => Some(format!(
@@ -607,19 +988,72 @@ impl SymbolExtractor for DartExtractor {
     }
 
     fn extract_signature(&self, node: &Node, source: &str) -> Option<String> {
-        let name = self.extract_name_from_node(node, source)?;
-
         match node.kind() {
-            "function_signature" => Some(self.build_function_signature(&name, node, source)),
-            "class_definition" => Some(self.build_class_signature(&name, node, source)),
-            "mixin_declaration" => Some(self.build_mixin_signature(&name, node, source)),
-            "extension_declaration" => Some(self.build_extension_signature(&name, node, source)),
-            "enum_declaration" => Some(self.build_enum_signature(&name, node, source)),
-            "constructor_signature" => Some(self.build_constructor_signature(&name, node, source)),
-            "factory_constructor_signature" => {
-                Some(self.build_factory_signature(&name, node, source))
+            "function_signature" => {
+                // Use new comprehensive signature extraction
+                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_function_signature(&name, node, source))
+                }
             }
-            "method_signature" => Some(self.build_function_signature(&name, node, source)),
+            "class_definition" => {
+                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_class_signature(&name, node, source))
+                }
+            }
+            "mixin_declaration" => {
+                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_mixin_signature(&name, node, source))
+                }
+            }
+            "extension_declaration" => {
+                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_extension_signature(&name, node, source))
+                }
+            }
+            "enum_declaration" => {
+                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_enum_signature(&name, node, source))
+                }
+            }
+            "constructor_signature" => {
+                if let Some(detailed_sig) = self.extract_constructor_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_constructor_signature(&name, node, source))
+                }
+            }
+            "factory_constructor_signature" => {
+                if let Some(detailed_sig) = self.extract_constructor_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_factory_signature(&name, node, source))
+                }
+            }
+            "method_signature" => {
+                if let Some(detailed_sig) = self.extract_method_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Dart))
+                } else {
+                    let name = self.extract_name_from_node(node, source)?;
+                    Some(self.build_function_signature(&name, node, source))
+                }
+            }
             _ => None,
         }
     }

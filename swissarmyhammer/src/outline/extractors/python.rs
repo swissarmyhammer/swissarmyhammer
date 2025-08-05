@@ -5,8 +5,12 @@
 //! and their associated documentation, type hints, and signature information.
 
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::signature::{
+    GenericParameter, Modifier, Parameter, Signature, SignatureExtractor, TypeInfo,
+};
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
+use crate::search::types::Language;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// Python symbol extractor using Tree-sitter
@@ -333,6 +337,405 @@ impl PythonExtractor {
         } else {
             Some(Visibility::Public)
         }
+    }
+}
+
+impl SignatureExtractor for PythonExtractor {
+    fn extract_function_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Python);
+
+        // Extract modifiers from Python function
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters with Python-specific features (*args, **kwargs, type hints)
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Extract return type annotation
+        if let Some(return_type) = self.parse_python_return_type(node, source) {
+            signature = signature.with_return_type(return_type);
+        }
+
+        // Check for async
+        if self.is_async_function(node, source) {
+            signature = signature.async_function();
+        }
+
+        Some(signature)
+    }
+
+    fn extract_method_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Python);
+
+        // Extract modifiers (static, class method, etc.)
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Extract return type annotation
+        if let Some(return_type) = self.parse_python_return_type(node, source) {
+            signature = signature.with_return_type(return_type);
+        }
+
+        // Check for async
+        if self.is_async_function(node, source) {
+            signature = signature.async_function();
+        }
+
+        Some(signature)
+    }
+
+    fn extract_constructor_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let mut signature = Signature::new("__init__".to_string(), Language::Python);
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        signature = signature.constructor();
+        Some(signature)
+    }
+
+    fn extract_type_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Python);
+
+        match node.kind() {
+            "class_definition" => {
+                // Extract base classes from inheritance
+                if let Some(bases_node) = node.child_by_field_name("superclasses") {
+                    // Python doesn't have formal generics but we can extract base classes
+                    let bases = self.extract_base_classes(&bases_node, source);
+                    for base in bases {
+                        // Store as constraints for now
+                        signature = signature.with_constraint(base);
+                    }
+                }
+
+                // Build the class signature string
+                let class_signature = self.build_class_signature(&name, node, source);
+                signature = signature.with_raw_signature(class_signature);
+            }
+            _ => {}
+        }
+
+        Some(signature)
+    }
+
+    fn parse_type_info(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        match node.kind() {
+            "identifier" => {
+                let type_name = self.get_node_text(node, source);
+                Some(TypeInfo::new(type_name))
+            }
+            "attribute" => {
+                // Handle qualified types like typing.List
+                let type_name = self.get_node_text(node, source);
+                Some(TypeInfo::new(type_name))
+            }
+            "subscript" => {
+                // Handle generic types like List[str], Dict[str, int]
+                let mut base_name = String::new();
+                let mut generic_args = Vec::new();
+
+                if let Some(value_node) = node.child_by_field_name("value") {
+                    base_name = self.get_node_text(&value_node, source);
+                }
+
+                if let Some(slice_node) = node.child_by_field_name("slice") {
+                    // Handle both single and multiple subscripts
+                    generic_args = self.extract_subscript_args(&slice_node, source);
+                }
+
+                if !base_name.is_empty() {
+                    Some(TypeInfo::generic(base_name, generic_args))
+                } else {
+                    None
+                }
+            }
+            "list" => {
+                // Handle List type annotations
+                let mut list_types = Vec::new();
+                for child in node.children(&mut node.walk()) {
+                    if let Some(element_type) = self.parse_type_info(&child, source) {
+                        list_types.push(element_type);
+                    }
+                }
+                if list_types.len() == 1 {
+                    Some(TypeInfo::array(list_types.into_iter().next().unwrap(), 1))
+                } else {
+                    Some(TypeInfo::new("list".to_string()))
+                }
+            }
+            "binary_operator" => {
+                // Handle Union types like str | int
+                if self.get_node_text(node, source).contains('|') {
+                    let union_types = self.extract_union_types(node, source);
+                    if union_types.len() == 1 {
+                        union_types.into_iter().next()
+                    } else {
+                        let union_str = union_types.iter()
+                            .map(|t| t.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+                        Some(TypeInfo::new(union_str))
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => {
+                // Fallback: just use the raw text
+                let text = self.get_node_text(node, source);
+                if !text.is_empty() {
+                    Some(TypeInfo::new(text))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn parse_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        match node.kind() {
+            "identifier" => {
+                let name = self.get_node_text(node, source);
+                // Check if this is a special parameter like self, cls
+                let param_type = if name == "self" {
+                    TypeInfo::new("Self".to_string())
+                } else if name == "cls" {
+                    TypeInfo::new("Type[Self]".to_string())
+                } else {
+                    TypeInfo::new("Any".to_string())
+                };
+                Some(Parameter::new(name).with_type(param_type))
+            }
+            "typed_parameter" => {
+                let mut param_name = String::new();
+                let mut param_type = None;
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "identifier" => {
+                            param_name = self.get_node_text(&child, source);
+                        }
+                        _ => {
+                            // Try to parse as type annotation
+                            if let Some(type_info) = self.parse_type_info(&child, source) {
+                                param_type = Some(type_info);
+                            }
+                        }
+                    }
+                }
+
+                if !param_name.is_empty() {
+                    let mut parameter = Parameter::new(param_name);
+                    if let Some(type_info) = param_type {
+                        parameter = parameter.with_type(type_info);
+                    } else {
+                        parameter = parameter.with_type(TypeInfo::new("Any".to_string()));
+                    }
+                    Some(parameter)
+                } else {
+                    None
+                }
+            }
+            "default_parameter" => {
+                let mut param_name = String::new();
+                let mut param_type = None;
+                let mut default_value = None;
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "identifier" => {
+                            param_name = self.get_node_text(&child, source);
+                        }
+                        "typed_parameter" => {
+                            // Handle typed default parameters
+                            if let Some(typed_param) = self.parse_parameter(&child, source) {
+                                param_name = typed_param.name;
+                                param_type = typed_param.type_info;
+                            }
+                        }
+                        _ => {
+                            // This might be the default value
+                            if !param_name.is_empty() && default_value.is_none() {
+                                default_value = Some(self.get_node_text(&child, source));
+                            }
+                        }
+                    }
+                }
+
+                if !param_name.is_empty() {
+                    let mut parameter = Parameter::new(param_name);
+                    if let Some(type_info) = param_type {
+                        parameter = parameter.with_type(type_info);
+                    } else {
+                        parameter = parameter.with_type(TypeInfo::new("Any".to_string()));
+                    }
+                    if let Some(default) = default_value {
+                        parameter = parameter.with_default(default);
+                    }
+                    Some(parameter)
+                } else {
+                    None
+                }
+            }
+            "list_splat_pattern" => {
+                // Handle *args parameters
+                for child in node.children(&mut node.walk()) {
+                    if let Some(param) = self.parse_parameter(&child, source) {
+                        let name = format!("*{}", param.name);
+                        let param_type = TypeInfo::new("tuple".to_string());
+                        return Some(Parameter::new(name).with_type(param_type).variadic());
+                    }
+                }
+                None
+            }
+            "dictionary_splat_pattern" => {
+                // Handle **kwargs parameters
+                for child in node.children(&mut node.walk()) {
+                    if let Some(param) = self.parse_parameter(&child, source) {
+                        let name = format!("**{}", param.name);
+                        let param_type = TypeInfo::new("dict".to_string());
+                        return Some(Parameter::new(name).with_type(param_type).variadic());
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_generic_parameters(&self, _node: &Node, _source: &str) -> Vec<GenericParameter> {
+        // Python doesn't have generics in the same way as other languages
+        // But we could potentially extract TypeVar definitions
+        Vec::new()
+    }
+
+    fn parse_modifiers(&self, node: &Node, source: &str) -> Vec<Modifier> {
+        let mut modifiers = Vec::new();
+
+        // Check for decorators that indicate modifiers
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "decorated_definition" {
+                for child in parent.children(&mut parent.walk()) {
+                    if child.kind() == "decorator" {
+                        let decorator_text = self.get_node_text(&child, source);
+                        match decorator_text.as_str() {
+                            "@staticmethod" => modifiers.push(Modifier::Static),
+                            "@classmethod" => modifiers.push(Modifier::ClassMethod),
+                            "@property" => modifiers.push(Modifier::Property),
+                            "@abstractmethod" => modifiers.push(Modifier::Abstract),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for async functions
+        if self.is_async_function(node, source) {
+            modifiers.push(Modifier::Async);
+        }
+
+        modifiers
+    }
+}
+
+impl PythonExtractor {
+    /// Check if a function is async
+    fn is_async_function(&self, node: &Node, source: &str) -> bool {
+        // Check if this is inside an async function
+        let node_text = self.get_node_text(node, source);
+        node_text.starts_with("async ")
+    }
+
+    /// Extract parameters from a parameters node
+    fn extract_parameters_from_node(&self, node: &Node, source: &str) -> Vec<Parameter> {
+        let mut parameters = Vec::new();
+
+        for child in node.children(&mut node.walk()) {
+            if let Some(param) = self.parse_parameter(&child, source) {
+                parameters.push(param);
+            }
+        }
+
+        parameters
+    }
+
+    /// Parse return type from Python function
+    fn parse_python_return_type(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        // Look for return type annotation (->)
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "type" {
+                return self.parse_type_info(&child, source);
+            }
+        }
+        None
+    }
+
+    /// Extract base classes from a superclasses node
+    fn extract_base_classes(&self, node: &Node, source: &str) -> Vec<String> {
+        let mut bases = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "identifier" || child.kind() == "attribute" {
+                bases.push(self.get_node_text(&child, source));
+            }
+        }
+        
+        bases
+    }
+
+    /// Extract subscript arguments for generic types
+    fn extract_subscript_args(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
+        let mut args = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if let Some(type_info) = self.parse_type_info(&child, source) {
+                args.push(type_info);
+            }
+        }
+        
+        args
+    }
+
+    /// Extract union types from binary operators
+    fn extract_union_types(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
+        let mut types = Vec::new();
+        
+        for child in node.children(&mut node.walk()) {
+            if child.kind() != "|" {
+                if let Some(type_info) = self.parse_type_info(&child, source) {
+                    types.push(type_info);
+                }
+            }
+        }
+        
+        types
     }
 }
 

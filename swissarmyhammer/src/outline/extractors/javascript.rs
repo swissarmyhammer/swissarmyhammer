@@ -5,8 +5,12 @@
 //! associated JSDoc documentation and basic visibility inference.
 
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::signature::{
+    GenericParameter, Modifier, Parameter, Signature, SignatureExtractor, TypeInfo,
+};
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
+use crate::search::types::Language;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
 /// JavaScript symbol extractor using Tree-sitter
@@ -297,6 +301,213 @@ impl JavaScriptExtractor {
     }
 }
 
+impl SignatureExtractor for JavaScriptExtractor {
+    fn extract_function_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::JavaScript);
+
+        // Extract modifiers
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters from JSDoc if available
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Check for async
+        if self.is_async_function(node, source) {
+            signature = signature.async_function();
+        }
+
+        Some(signature)
+    }
+
+    fn extract_method_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::JavaScript);
+
+        // Extract modifiers (static, async, get, set)
+        let modifiers = self.parse_modifiers(node, source);
+        if !modifiers.is_empty() {
+            signature = signature.with_modifiers(modifiers);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        // Check for async
+        if self.is_async_function(node, source) {
+            signature = signature.async_function();
+        }
+
+        Some(signature)
+    }
+
+    fn extract_constructor_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let mut signature = Signature::new("constructor".to_string(), Language::JavaScript);
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            let parameters = self.extract_parameters_from_node(&params_node, source);
+            for param in parameters {
+                signature = signature.with_parameter(param);
+            }
+        }
+
+        signature = signature.constructor();
+        Some(signature)
+    }
+
+    fn extract_type_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::JavaScript);
+
+        match node.kind() {
+            "class_declaration" => {
+                // Build the class signature string
+                let class_signature = self.build_class_signature(&name, node, source);
+                signature = signature.with_raw_signature(class_signature);
+            }
+            _ => {}
+        }
+
+        Some(signature)
+    }
+
+    fn parse_type_info(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        // JavaScript doesn't have explicit types, but we can infer from JSDoc
+        // For now, return a generic "any" type
+        if let Some(jsdoc_type) = self.extract_jsdoc_type(node, source) {
+            Some(TypeInfo::new(jsdoc_type))
+        } else {
+            Some(TypeInfo::new("any".to_string()))
+        }
+    }
+
+    fn parse_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        match node.kind() {
+            "identifier" => {
+                let name = self.get_node_text(node, source);
+                let param_type = TypeInfo::new("any".to_string());
+                Some(Parameter::new(name).with_type(param_type))
+            }
+            "rest_pattern" => {
+                // Handle ...args parameters
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "identifier" {
+                        let name = format!("...{}", self.get_node_text(&child, source));
+                        let param_type = TypeInfo::array(TypeInfo::new("any".to_string()), 1);
+                        return Some(Parameter::new(name).with_type(param_type).variadic());
+                    }
+                }
+                None
+            }
+            "assignment_pattern" => {
+                // Handle default parameters
+                if let Some(name_node) = node.child_by_field_name("left") {
+                    let name = self.get_node_text(&name_node, source);
+                    let default_value = if let Some(value_node) = node.child_by_field_name("right") {
+                        Some(self.get_node_text(&value_node, source))
+                    } else {
+                        None
+                    };
+                    
+                    let param_type = TypeInfo::new("any".to_string());
+                    let mut param = Parameter::new(name).with_type(param_type);
+                    if let Some(default) = default_value {
+                        param = param.with_default(default);
+                    }
+                    Some(param)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_generic_parameters(&self, _node: &Node, _source: &str) -> Vec<GenericParameter> {
+        // JavaScript doesn't have generics
+        Vec::new()
+    }
+
+    fn parse_modifiers(&self, node: &Node, source: &str) -> Vec<Modifier> {
+        let mut modifiers = Vec::new();
+
+        // Check for various modifiers in the node
+        for child in node.children(&mut node.walk()) {
+            match child.kind() {
+                "static" => modifiers.push(Modifier::Static),
+                "async" => modifiers.push(Modifier::Async),
+                _ => {}
+            }
+        }
+
+        // Check for export modifier (indicates public)
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "export_statement" {
+                modifiers.push(Modifier::Public);
+            }
+        }
+
+        // Check source text for modifiers that might not be separate nodes
+        let node_text = self.get_node_text(node, source);
+        if node_text.contains("async") && !modifiers.contains(&Modifier::Async) {
+            modifiers.push(Modifier::Async);
+        }
+
+        modifiers
+    }
+}
+
+impl JavaScriptExtractor {
+    /// Check if a function is async
+    fn is_async_function(&self, node: &Node, source: &str) -> bool {
+        // Check for async keyword in children
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "async" {
+                return true;
+            }
+        }
+
+        // Check the source text
+        let node_text = self.get_node_text(node, source);
+        node_text.contains("async")
+    }
+
+    /// Extract parameters from a formal_parameters node
+    fn extract_parameters_from_node(&self, node: &Node, source: &str) -> Vec<Parameter> {
+        let mut parameters = Vec::new();
+
+        for child in node.children(&mut node.walk()) {
+            if let Some(param) = self.parse_parameter(&child, source) {
+                parameters.push(param);
+            }
+        }
+
+        parameters
+    }
+
+    /// Extract JSDoc type information if available
+    fn extract_jsdoc_type(&self, node: &Node, source: &str) -> Option<String> {
+        // This would require more sophisticated JSDoc parsing
+        // For now, just return None and default to "any"
+        let _ = (node, source);
+        None
+    }
+}
+
 impl SymbolExtractor for JavaScriptExtractor {
     fn extract_symbols(&self, tree: &Tree, source: &str) -> Result<Vec<OutlineNode>> {
         let mut symbols = Vec::new();
@@ -322,19 +533,39 @@ impl SymbolExtractor for JavaScriptExtractor {
                             (node.start_byte(), node.end_byte()),
                         );
 
-                        // Add signature based on node type
+                        // Add comprehensive signature based on node type
                         let signature = match (node_type, node.kind()) {
                             (OutlineNodeType::Function, "function_declaration") => {
-                                Some(self.build_function_signature(&name, node, source))
+                                // Use new comprehensive signature extraction
+                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                                } else {
+                                    Some(self.build_function_signature(&name, node, source))
+                                }
                             }
                             (OutlineNodeType::Function, "variable_declarator") => {
-                                Some(self.build_arrow_function_signature(&name, node, source))
+                                // Use new comprehensive signature extraction for arrow functions
+                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                                } else {
+                                    Some(self.build_arrow_function_signature(&name, node, source))
+                                }
                             }
                             (OutlineNodeType::Method, _) => {
-                                Some(self.build_method_signature(&name, node, source))
+                                // Use new comprehensive method signature extraction
+                                if let Some(detailed_sig) = self.extract_method_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                                } else {
+                                    Some(self.build_method_signature(&name, node, source))
+                                }
                             }
                             (OutlineNodeType::Class, _) => {
-                                Some(self.build_class_signature(&name, node, source))
+                                // Use new comprehensive type signature extraction
+                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                                } else {
+                                    Some(self.build_class_signature(&name, node, source))
+                                }
                             }
                             _ => None,
                         };
@@ -369,15 +600,45 @@ impl SymbolExtractor for JavaScriptExtractor {
     fn extract_signature(&self, node: &Node, source: &str) -> Option<String> {
         match node.kind() {
             "function_declaration" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
+                // Use new comprehensive signature extraction
+                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                } else if let Some(name_node) = node.child_by_field_name("name") {
                     let name = self.get_node_text(&name_node, source);
                     Some(self.build_function_signature(&name, node, source))
                 } else {
                     None
                 }
             }
+            "variable_declarator" => {
+                // Handle arrow functions
+                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                } else if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = self.get_node_text(&name_node, source);
+                    if let Some(value_node) = node.child_by_field_name("value") {
+                        if value_node.kind() == "arrow_function" {
+                            return Some(self.build_arrow_function_signature(&name, node, source));
+                        }
+                    }
+                    None
+                } else {
+                    None
+                }
+            }
+            "method_definition" => {
+                if let Some(detailed_sig) = self.extract_method_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                } else {
+                    self.extract_name_from_node(node, source)
+                        .map(|name| self.build_method_signature(&name, node, source))
+                }
+            }
             "class_declaration" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
+                // Use new comprehensive type signature extraction
+                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::JavaScript))
+                } else if let Some(name_node) = node.child_by_field_name("name") {
                     let name = self.get_node_text(&name_node, source);
                     Some(self.build_class_signature(&name, node, source))
                 } else {
