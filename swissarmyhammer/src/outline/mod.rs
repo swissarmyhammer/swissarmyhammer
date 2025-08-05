@@ -1,13 +1,25 @@
 //! Outline generation functionality for Tree-sitter based code analysis
 //!
-//! This module provides file discovery and parsing capabilities for generating
-//! structured code outlines. It builds upon the existing search infrastructure
-//! to provide language-aware file processing and symbol extraction.
+//! This module provides comprehensive code outline generation capabilities including:
+//! - File discovery with glob pattern support and gitignore integration
+//! - Language-aware parsing using Tree-sitter for multiple programming languages
+//! - Hierarchical structure building that mirrors file system organization
+//! - Symbol extraction with nested relationships and metadata
+//! - Multiple output formatting options with extensible architecture
+//!
+//! The module is organized into several key components:
+//! - [`file_discovery`]: File system traversal and pattern matching
+//! - [`parser`]: Tree-sitter integration and language-specific parsing
+//! - [`extractors`]: Language-specific symbol extraction logic
+//! - [`hierarchy`]: Organization of parsed symbols into hierarchical structures
+//! - [`types`]: Core data structures and type definitions
+//! - [`utils`]: Utility functions and helpers
 
 use thiserror::Error;
 
 pub mod extractors;
 pub mod file_discovery;
+pub mod hierarchy;
 pub mod parser;
 pub mod types;
 pub mod utils;
@@ -59,6 +71,7 @@ impl From<crate::error::SwissArmyHammerError> for OutlineError {
 
 pub use extractors::*;
 pub use file_discovery::*;
+pub use hierarchy::*;
 pub use parser::*;
 pub use types::*;
 pub use utils::*;
