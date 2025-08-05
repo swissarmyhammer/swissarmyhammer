@@ -5,8 +5,12 @@
 //! and their associated documentation, visibility, and signature information.
 
 use crate::outline::parser::SymbolExtractor;
+use crate::outline::signature::{
+    GenericParameter, Modifier, Parameter, Signature, SignatureExtractor, TypeInfo,
+};
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
+use crate::search::types::Language;
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 
@@ -308,6 +312,428 @@ impl RustExtractor {
     }
 }
 
+impl SignatureExtractor for RustExtractor {
+    fn extract_function_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        if node.kind() != "function_item" {
+            return None;
+        }
+
+        let name = self.extract_name_from_node(node, source)?;
+        let mut signature = Signature::new(name.clone(), Language::Rust);
+
+        // Extract visibility modifiers
+        let mut modifiers = Vec::new();
+        if let Some(visibility) = self.parse_visibility(node, source) {
+            match visibility {
+                Visibility::Public => modifiers.push(Modifier::Public),
+                Visibility::Private => {}, // Private is implicit in Rust
+                Visibility::Protected => {}, // Not applicable to Rust
+                Visibility::Package => modifiers.push(Modifier::Public), // pub(crate) etc.
+                Visibility::Module => modifiers.push(Modifier::Public),
+                Visibility::Custom(_) => modifiers.push(Modifier::Public),
+            }
+        }
+
+        // Check for async, unsafe, const, extern modifiers
+        let node_text = self.get_node_text(node, source);
+        if node_text.contains("async") {
+            modifiers.push(Modifier::Async);
+            signature = signature.async_function();
+        }
+        if node_text.contains("unsafe") {
+            modifiers.push(Modifier::Unsafe);
+        }
+        if node_text.contains("const") {
+            modifiers.push(Modifier::Const);
+        }
+        if node_text.contains("extern") {
+            modifiers.push(Modifier::Extern);
+        }
+
+        signature = signature.with_modifiers(modifiers);
+
+        // Extract generic parameters
+        let generics = self.parse_generic_parameters(node, source);
+        for generic in generics {
+            signature = signature.with_generic(generic);
+        }
+
+        // Extract parameters
+        if let Some(params_node) = node.child_by_field_name("parameters") {
+            for param_node in params_node.children(&mut params_node.walk()) {
+                if let Some(parameter) = self.parse_parameter(&param_node, source) {
+                    signature = signature.with_parameter(parameter);
+                }
+            }
+        }
+
+        // Extract return type
+        if let Some(return_type) = self.parse_type_info_from_return_type(node, source) {
+            signature = signature.with_return_type(return_type);
+        }
+
+        // Set raw signature
+        signature = signature.with_raw_signature(self.build_function_signature(&name, node, source));
+
+        Some(signature)
+    }
+
+    fn extract_method_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        // Methods are just functions inside impl blocks
+        self.extract_function_signature(node, source)
+    }
+
+    fn extract_constructor_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        // Rust doesn't have explicit constructors, but we can treat `new` functions as constructors
+        if let Some(mut signature) = self.extract_function_signature(node, source) {
+            if signature.name == "new" {
+                signature = signature.constructor();
+            }
+            Some(signature)
+        } else {
+            None
+        }
+    }
+
+    fn extract_type_signature(&self, node: &Node, source: &str) -> Option<Signature> {
+        match node.kind() {
+            "struct_item" => {
+                let name = self.extract_name_from_node(node, source)?;
+                let mut signature = Signature::new(name.clone(), Language::Rust);
+                
+                // Add visibility modifiers
+                let mut modifiers = Vec::new();
+                if let Some(visibility) = self.parse_visibility(node, source) {
+                    match visibility {
+                        Visibility::Public => modifiers.push(Modifier::Public),
+                        _ => {},
+                    }
+                }
+                signature = signature.with_modifiers(modifiers);
+
+                // Extract generic parameters
+                let generics = self.parse_generic_parameters(node, source);
+                for generic in generics {
+                    signature = signature.with_generic(generic);
+                }
+
+                signature = signature.with_raw_signature(self.build_struct_signature(&name, node, source));
+                Some(signature)
+            }
+            "enum_item" | "trait_item" | "type_item" => {
+                let name = self.extract_name_from_node(node, source)?;
+                let mut signature = Signature::new(name.clone(), Language::Rust);
+                
+                // Add visibility modifiers
+                let mut modifiers = Vec::new();
+                if let Some(visibility) = self.parse_visibility(node, source) {
+                    match visibility {
+                        Visibility::Public => modifiers.push(Modifier::Public),
+                        _ => {},
+                    }
+                }
+                signature = signature.with_modifiers(modifiers);
+
+                // Extract generic parameters
+                let generics = self.parse_generic_parameters(node, source);
+                for generic in generics {
+                    signature = signature.with_generic(generic);
+                }
+
+                let raw_sig = match node.kind() {
+                    "enum_item" => self.build_enum_signature(&name, node, source),
+                    "trait_item" => self.build_trait_signature(&name, node, source),
+                    "type_item" => format!("type {}", name),
+                    _ => name.clone(),
+                };
+                signature = signature.with_raw_signature(raw_sig);
+                Some(signature)
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_type_info(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        match node.kind() {
+            "type_identifier" => {
+                let name = self.get_node_text(node, source);
+                Some(TypeInfo::new(name))
+            }
+            "generic_type" => {
+                // Extract the base type and generic arguments
+                let mut base_name = String::new();
+                let mut generic_args = Vec::new();
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "type_identifier" => {
+                            if base_name.is_empty() {
+                                base_name = self.get_node_text(&child, source);
+                            }
+                        }
+                        "type_arguments" => {
+                            for arg_child in child.children(&mut child.walk()) {
+                                if let Some(arg_type) = self.parse_type_info(&arg_child, source) {
+                                    generic_args.push(arg_type);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !base_name.is_empty() {
+                    Some(TypeInfo::generic(base_name, generic_args))
+                } else {
+                    None
+                }
+            }
+            "reference_type" => {
+                // Handle &T, &mut T
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() != "&" && child.kind() != "mut" {
+                        if let Some(inner_type) = self.parse_type_info(&child, source) {
+                            let type_name = if node.children(&mut node.walk()).any(|c| c.kind() == "mut") {
+                                format!("&mut {}", inner_type.name)
+                            } else {
+                                format!("&{}", inner_type.name)
+                            };
+                            return Some(TypeInfo::new(type_name));
+                        }
+                    }
+                }
+                None
+            }
+            "array_type" => {
+                // Handle [T; N] or [T]
+                for child in node.children(&mut node.walk()) {
+                    if let Some(element_type) = self.parse_type_info(&child, source) {
+                        return Some(TypeInfo::array(element_type, 1));
+                    }
+                }
+                None
+            }
+            "tuple_type" => {
+                // Handle (T, U, V)
+                let mut tuple_types = Vec::new();
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
+                        if let Some(element_type) = self.parse_type_info(&child, source) {
+                            tuple_types.push(element_type);
+                        }
+                    }
+                }
+                if !tuple_types.is_empty() {
+                    let tuple_name = format!("({})", 
+                        tuple_types.iter()
+                            .map(|t| t.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    Some(TypeInfo::new(tuple_name))
+                } else {
+                    None
+                }
+            }
+            "function_type" => {
+                // Handle function pointer types: fn(args) -> ret
+                let mut param_types = Vec::new();
+                let mut return_type = None;
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "parameters" => {
+                            for param_child in child.children(&mut child.walk()) {
+                                if let Some(param_type) = self.parse_type_info(&param_child, source) {
+                                    param_types.push(param_type);
+                                }
+                            }
+                        }
+                        "type_identifier" | "generic_type" => {
+                            // This might be the return type
+                            if let Some(ret_type) = self.parse_type_info(&child, source) {
+                                return_type = Some(ret_type);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                Some(TypeInfo::function(param_types, return_type))
+            }
+            _ => {
+                // Fallback: just use the raw text
+                let text = self.get_node_text(node, source);
+                if !text.is_empty() {
+                    Some(TypeInfo::new(text))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn parse_parameter(&self, node: &Node, source: &str) -> Option<Parameter> {
+        match node.kind() {
+            "parameter" => {
+                // Extract parameter name and type
+                let mut param_name = String::new();
+                let mut param_type = None;
+                let mut modifiers = Vec::new();
+
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "identifier" => {
+                            param_name = self.get_node_text(&child, source);
+                        }
+                        "mut" => {
+                            modifiers.push(Modifier::Mut);
+                        }
+                        "ref" => {
+                            modifiers.push(Modifier::Ref);
+                        }
+                        _ => {
+                            // Try to parse as type information
+                            if let Some(type_info) = self.parse_type_info(&child, source) {
+                                param_type = Some(type_info);
+                            }
+                        }
+                    }
+                }
+
+                if !param_name.is_empty() {
+                    let is_mutable = modifiers.contains(&Modifier::Mut);
+                    let mut parameter = Parameter::new(param_name).with_modifiers(modifiers);
+                    if let Some(type_info) = param_type {
+                        parameter = parameter.with_type(type_info);
+                    }
+                    if is_mutable {
+                        parameter = parameter.mutable();
+                    }
+                    Some(parameter)
+                } else {
+                    None
+                }
+            }
+            "self_parameter" => {
+                // Handle self, &self, &mut self
+                let self_text = self.get_node_text(node, source);
+                let mut parameter = Parameter::new("self".to_string());
+                
+                if self_text.contains("mut") {
+                    parameter = parameter.mutable().with_modifiers(vec![Modifier::Mut]);
+                }
+                
+                let type_name = if self_text.starts_with("&mut") {
+                    "&mut Self"
+                } else if self_text.starts_with('&') {
+                    "&Self"
+                } else {
+                    "Self"
+                };
+                
+                parameter = parameter.with_type(TypeInfo::new(type_name.to_string()));
+                Some(parameter)
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_generic_parameters(&self, node: &Node, source: &str) -> Vec<GenericParameter> {
+        let mut generics = Vec::new();
+
+        // Look for type_parameters node
+        if let Some(type_params_node) = node.child_by_field_name("type_parameters") {
+            for child in type_params_node.children(&mut type_params_node.walk()) {
+                if child.kind() == "type_identifier" {
+                    let name = self.get_node_text(&child, source);
+                    generics.push(GenericParameter::new(name));
+                } else if child.kind() == "constrained_type_parameter" {
+                    // Handle T: Bound syntax
+                    let mut param_name = String::new();
+                    let mut bounds = Vec::new();
+
+                    for bound_child in child.children(&mut child.walk()) {
+                        match bound_child.kind() {
+                            "type_identifier" => {
+                                if param_name.is_empty() {
+                                    param_name = self.get_node_text(&bound_child, source);
+                                } else {
+                                    bounds.push(self.get_node_text(&bound_child, source));
+                                }
+                            }
+                            "trait_bounds" => {
+                                for trait_child in bound_child.children(&mut bound_child.walk()) {
+                                    if trait_child.kind() == "type_identifier" {
+                                        bounds.push(self.get_node_text(&trait_child, source));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if !param_name.is_empty() {
+                        generics.push(GenericParameter::new(param_name).with_bounds(bounds));
+                    }
+                }
+            }
+        }
+
+        generics
+    }
+
+    fn parse_modifiers(&self, node: &Node, source: &str) -> Vec<Modifier> {
+        let mut modifiers = Vec::new();
+        let node_text = self.get_node_text(node, source);
+
+        // Check for various Rust modifiers
+        if node_text.contains("pub") {
+            modifiers.push(Modifier::Public);
+        }
+        if node_text.contains("async") {
+            modifiers.push(Modifier::Async);
+        }
+        if node_text.contains("unsafe") {
+            modifiers.push(Modifier::Unsafe);
+        }
+        if node_text.contains("const") {
+            modifiers.push(Modifier::Const);
+        }
+        if node_text.contains("extern") {
+            modifiers.push(Modifier::Extern);
+        }
+        if node_text.contains("static") {
+            modifiers.push(Modifier::Static);
+        }
+
+        modifiers
+    }
+}
+
+impl RustExtractor {
+    /// Parse type info specifically from return type field
+    fn parse_type_info_from_return_type(&self, node: &Node, source: &str) -> Option<TypeInfo> {
+        if let Some(return_type_node) = node.child_by_field_name("return_type") {
+            // The return_type field might directly contain the type or have children
+            // First try to parse the return_type_node itself
+            if let Some(type_info) = self.parse_type_info(&return_type_node, source) {
+                return Some(type_info);
+            }
+            
+            // If that doesn't work, look through its children
+            for child in return_type_node.children(&mut return_type_node.walk()) {
+                if child.kind() != "->" && child.kind() != " " {
+                    if let Some(type_info) = self.parse_type_info(&child, source) {
+                        return Some(type_info);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 impl SymbolExtractor for RustExtractor {
     fn extract_symbols(&self, tree: &Tree, source: &str) -> Result<Vec<OutlineNode>> {
         let mut symbols = Vec::new();
@@ -333,19 +759,28 @@ impl SymbolExtractor for RustExtractor {
                             (node.start_byte(), node.end_byte()),
                         );
 
-                        // Add signature based on node type
+                        // Add signature using enhanced signature extraction
                         let signature = match node_type {
                             OutlineNodeType::Function => {
-                                Some(self.build_function_signature(&name, node, source))
+                                // Use new comprehensive signature extraction
+                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::Rust))
+                                } else {
+                                    Some(self.build_function_signature(&name, node, source))
+                                }
                             }
-                            OutlineNodeType::Struct => {
-                                Some(self.build_struct_signature(&name, node, source))
-                            }
-                            OutlineNodeType::Enum => {
-                                Some(self.build_enum_signature(&name, node, source))
-                            }
-                            OutlineNodeType::Trait => {
-                                Some(self.build_trait_signature(&name, node, source))
+                            OutlineNodeType::Struct | OutlineNodeType::Enum | OutlineNodeType::Trait => {
+                                // Use new type signature extraction
+                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                    Some(detailed_sig.format_for_language(Language::Rust))
+                                } else {
+                                    match node_type {
+                                        OutlineNodeType::Struct => Some(self.build_struct_signature(&name, node, source)),
+                                        OutlineNodeType::Enum => Some(self.build_enum_signature(&name, node, source)),
+                                        OutlineNodeType::Trait => Some(self.build_trait_signature(&name, node, source)),
+                                        _ => None,
+                                    }
+                                }
                             }
                             OutlineNodeType::Impl => Some(self.build_impl_signature(node, source)),
                             _ => None,
@@ -381,35 +816,34 @@ impl SymbolExtractor for RustExtractor {
     fn extract_signature(&self, node: &Node, source: &str) -> Option<String> {
         match node.kind() {
             "function_item" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
+                // Use new comprehensive signature extraction for functions
+                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Rust))
+                } else if let Some(name_node) = node.child_by_field_name("name") {
                     let name = self.get_node_text(&name_node, source);
                     Some(self.build_function_signature(&name, node, source))
                 } else {
                     None
                 }
             }
-            "struct_item" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    Some(self.build_struct_signature(&name, node, source))
+            "struct_item" | "enum_item" | "trait_item" | "type_item" => {
+                // Use new comprehensive type signature extraction
+                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                    Some(detailed_sig.format_for_language(Language::Rust))
                 } else {
-                    None
-                }
-            }
-            "enum_item" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    Some(self.build_enum_signature(&name, node, source))
-                } else {
-                    None
-                }
-            }
-            "trait_item" => {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = self.get_node_text(&name_node, source);
-                    Some(self.build_trait_signature(&name, node, source))
-                } else {
-                    None
+                    // Fallback to old method
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let name = self.get_node_text(&name_node, source);
+                        match node.kind() {
+                            "struct_item" => Some(self.build_struct_signature(&name, node, source)),
+                            "enum_item" => Some(self.build_enum_signature(&name, node, source)),
+                            "trait_item" => Some(self.build_trait_signature(&name, node, source)),
+                            "type_item" => Some(format!("type {}", name)),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
                 }
             }
             "impl_item" => Some(self.build_impl_signature(node, source)),

@@ -412,3 +412,43 @@ mod tests {
 ## Notes
 
 Signature extraction is a critical feature for code navigation and understanding. The implementation should prioritize accuracy and completeness while maintaining good performance. Consider providing different levels of signature detail (brief vs. full) to accommodate different use cases.
+
+## Proposed Solution
+
+After analyzing the current codebase, I'll implement a comprehensive signature extraction system with the following approach:
+
+### 1. Core Architecture
+- Create a new `src/outline/signature.rs` module with unified signature types
+- Implement a `SignatureExtractor` trait for consistent signature extraction across languages
+- Define comprehensive data structures for signatures, parameters, types, and generics
+
+### 2. Current State Analysis
+The existing signature extraction is basic - each language extractor has simple signature building methods that concatenate strings. The current implementation lacks:
+- Detailed parameter information (optional, variadic, default values)
+- Complex type handling (union types, generics with bounds)
+- Consistent cross-language representation
+- Structured parameter and return type information
+
+### 3. Implementation Steps
+1. **Signature Data Structures**: Create `Signature`, `Parameter`, `TypeInfo`, `GenericParameter`, and `Modifier` structs
+2. **SignatureExtractor Trait**: Define interface for extracting function, method, constructor, and type signatures
+3. **Language-Specific Enhancement**: Enhance each language extractor with advanced signature extraction
+4. **Signature Formatting**: Implement language-specific signature formatting while maintaining consistency
+5. **Integration**: Integrate with existing outline generation pipeline
+6. **Testing**: Create comprehensive tests covering complex scenarios
+
+### 4. Key Features
+- **Generic Parameters**: Full support for type parameters with bounds and constraints
+- **Complex Types**: Union types, intersection types, function types, nullable types
+- **Parameter Details**: Default values, optional parameters, variadic parameters
+- **Visibility and Modifiers**: Complete modifier support (async, static, abstract, etc.)
+- **Cross-Language Consistency**: Uniform representation while preserving language-specific syntax
+
+### 5. Benefits
+- Accurate signature representation for all supported languages
+- Enhanced code navigation and understanding
+- Foundation for future IDE integrations
+- Consistent API for tooling consumption
+- Improved YAML output formatting
+
+The implementation will prioritize accuracy and completeness while maintaining good performance and backward compatibility with existing outline functionality.
