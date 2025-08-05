@@ -136,7 +136,6 @@ impl PythonExtractor {
         decorators
     }
 
-
     /// Extract Python function signature with type hints
     fn extract_function_signature(&self, node: &Node, source: &str) -> Option<String> {
         let node_text = self.get_node_text(node, source);
@@ -190,7 +189,9 @@ impl PythonExtractor {
     /// Build Python function signature from components
     fn build_function_signature(&self, name: &str, node: &Node, source: &str) -> String {
         // Check if this is a decorated definition
-        let parent_node = node.parent().filter(|&parent| parent.kind() == "decorated_definition");
+        let parent_node = node
+            .parent()
+            .filter(|&parent| parent.kind() == "decorated_definition");
 
         let mut signature = if let Some(sig) = self.extract_function_signature(node, source) {
             sig
@@ -222,7 +223,9 @@ impl PythonExtractor {
     /// Build Python class signature with inheritance
     fn build_class_signature(&self, name: &str, node: &Node, source: &str) -> String {
         // Check if this is a decorated definition
-        let parent_node = node.parent().filter(|&parent| parent.kind() == "decorated_definition");
+        let parent_node = node
+            .parent()
+            .filter(|&parent| parent.kind() == "decorated_definition");
 
         let mut signature = if let Some(sig) = self.extract_class_signature(node, source) {
             sig
@@ -290,13 +293,13 @@ impl PythonExtractor {
         let mut cleaned = docstring.trim();
 
         // Remove triple quotes
-        if cleaned.starts_with("\"\"\"") && cleaned.ends_with("\"\"\"") {
+        if (cleaned.starts_with("\"\"\"") && cleaned.ends_with("\"\"\""))
+            || (cleaned.starts_with("'''") && cleaned.ends_with("'''"))
+        {
             cleaned = &cleaned[3..cleaned.len() - 3];
-        } else if cleaned.starts_with("'''") && cleaned.ends_with("'''") {
-            cleaned = &cleaned[3..cleaned.len() - 3];
-        } else if cleaned.starts_with('"') && cleaned.ends_with('"') {
-            cleaned = &cleaned[1..cleaned.len() - 1];
-        } else if cleaned.starts_with('\'') && cleaned.ends_with('\'') {
+        } else if (cleaned.starts_with('"') && cleaned.ends_with('"'))
+            || (cleaned.starts_with('\'') && cleaned.ends_with('\''))
+        {
             cleaned = &cleaned[1..cleaned.len() - 1];
         }
 

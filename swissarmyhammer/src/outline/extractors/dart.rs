@@ -883,14 +883,14 @@ enum Priority {
                 println!("    Doc: {doc}");
             }
         }
-        
+
         // Verify we extract key Flutter patterns
         let class_names: Vec<_> = symbols
             .iter()
             .filter(|s| matches!(s.node_type, crate::outline::types::OutlineNodeType::Class))
             .map(|s| s.name.as_str())
             .collect();
-        
+
         assert!(class_names.contains(&"MyApp"));
         assert!(class_names.contains(&"HomePage"));
         assert!(class_names.contains(&"_HomePageState"));
