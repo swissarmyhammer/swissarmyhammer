@@ -762,6 +762,141 @@ class Person {
     }
 
     #[test]
+    fn test_dart_flutter_patterns() {
+        let extractor = DartExtractor::new().unwrap();
+        let source = r#"
+import 'package:flutter/material.dart';
+
+/// Main application widget
+class MyApp extends StatelessWidget {
+  /// App title
+  final String title;
+  
+  /// Create MyApp widget
+  const MyApp({super.key, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: title,
+      home: HomePage(),
+    );
+  }
+}
+
+/// Home page widget
+class HomePage extends StatefulWidget {
+  /// Create HomePage
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+/// Private state class for HomePage
+class _HomePageState extends State<HomePage> {
+  int _counter = 0;
+
+  /// Increment counter
+  void _incrementCounter() {
+    setState(() {
+      _counter++;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Text('$_counter'),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _incrementCounter,
+        child: Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+/// Typedef for callback function
+typedef CounterCallback = void Function(int count);
+
+/// Global function with async
+Future<String> fetchData() async {
+  await Future.delayed(Duration(seconds: 1));
+  return 'Data loaded';
+}
+
+/// Extension with generic constraints
+extension ListUtils<T extends Comparable<T>> on List<T> {
+  /// Sort list in place
+  void sortInPlace() => sort();
+  
+  /// Find maximum element
+  T? get max => isEmpty ? null : reduce((a, b) => a.compareTo(b) > 0 ? a : b);
+}
+
+/// Mixin with type constraints
+mixin LoggerMixin<T extends Object> on Object {
+  /// Log message with type info
+  void log(String message) {
+    print('[$T] $message');
+  }
+}
+
+/// Enhanced enum with methods
+enum Priority {
+  low(0, 'Low Priority'),
+  medium(1, 'Medium Priority'), 
+  high(2, 'High Priority');
+  
+  /// Create priority
+  const Priority(this.value, this.label);
+  
+  /// Priority value
+  final int value;
+  
+  /// Display label
+  final String label;
+  
+  /// Check if high priority
+  bool get isHigh => this == Priority.high;
+}
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_dart::language()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+
+        println!("Extracted {} symbols from Flutter patterns", symbols.len());
+        for symbol in &symbols {
+            println!(
+                "  {:?} '{}' at line {}",
+                symbol.node_type, symbol.name, symbol.start_line
+            );
+            if let Some(sig) = &symbol.signature {
+                println!("    Signature: {sig}");
+            }
+            if let Some(doc) = &symbol.documentation {
+                println!("    Doc: {doc}");
+            }
+        }
+        
+        // Verify we extract key Flutter patterns
+        let class_names: Vec<_> = symbols
+            .iter()
+            .filter(|s| matches!(s.node_type, crate::outline::types::OutlineNodeType::Class))
+            .map(|s| s.name.as_str())
+            .collect();
+        
+        assert!(class_names.contains(&"MyApp"));
+        assert!(class_names.contains(&"HomePage"));
+        assert!(class_names.contains(&"_HomePageState"));
+    }
+
+    #[test]
     fn test_extract_complex_dart_code() {
         let extractor = DartExtractor::new().unwrap();
         let source = r#"

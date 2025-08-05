@@ -36,7 +36,7 @@
 //!     }
 //!     
 //!     fn description(&self) -> &'static str {
-//!         include_str!("description.md")
+//!         include_str!("generate/description.md")
 //!     }
 //!     
 //!     fn schema(&self) -> serde_json::Value {
@@ -58,7 +58,7 @@
 //!         arguments: serde_json::Map<String, serde_json::Value>,
 //!         context: &ToolContext,
 //!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
-//!         let request: OutlineRequest = BaseToolImpl::parse_arguments(arguments)?;
+//!         let request: generate::OutlineRequest = BaseToolImpl::parse_arguments(arguments)?;
 //!         // Tool implementation here
 //!         Ok(BaseToolImpl::create_success_response("Success!"))
 //!     }
