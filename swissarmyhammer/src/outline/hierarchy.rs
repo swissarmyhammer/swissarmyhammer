@@ -47,13 +47,17 @@ impl HierarchyBuilder {
     pub fn build_hierarchy(mut self) -> Result<OutlineHierarchy> {
         // Group files by directory
         let mut directory_map: HashMap<PathBuf, Vec<OutlineTree>> = HashMap::new();
-        
+
         for outline in &self.files {
-            let parent_dir = outline.file_path
+            let parent_dir = outline
+                .file_path
                 .parent()
                 .unwrap_or(Path::new("."))
                 .to_path_buf();
-            directory_map.entry(parent_dir).or_default().push(outline.clone());
+            directory_map
+                .entry(parent_dir)
+                .or_default()
+                .push(outline.clone());
         }
 
         // Find the actual root directory to start from
@@ -81,8 +85,9 @@ impl HierarchyBuilder {
         let mut total_files = 0;
         let mut total_symbols = 0;
         let mut languages = HashSet::new();
-        
-        self.root.collect_stats(&mut total_files, &mut total_symbols, &mut languages);
+
+        self.root
+            .collect_stats(&mut total_files, &mut total_symbols, &mut languages);
 
         Ok(OutlineHierarchy {
             root: self.root,
@@ -263,12 +268,7 @@ pub struct OutlineFile {
 
 impl OutlineFile {
     /// Create a new outline file
-    pub fn new(
-        name: String,
-        path: PathBuf,
-        language: Language,
-        symbols: Vec<OutlineNode>,
-    ) -> Self {
+    pub fn new(name: String, path: PathBuf, language: Language, symbols: Vec<OutlineNode>) -> Self {
         Self {
             name,
             path,
@@ -280,7 +280,8 @@ impl OutlineFile {
 
     /// Create from an OutlineTree
     pub fn from_outline_tree(tree: OutlineTree) -> Result<Self> {
-        let name = tree.file_path
+        let name = tree
+            .file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
@@ -310,7 +311,8 @@ impl OutlineFile {
 
     /// Sort symbols by kind (functions, classes, etc.)
     pub fn sort_symbols_by_kind(&mut self) {
-        self.symbols.sort_by_key(|s| symbol_kind_order(&s.node_type));
+        self.symbols
+            .sort_by_key(|s| symbol_kind_order(&s.node_type));
         for symbol in &mut self.symbols {
             sort_node_children_by_kind(symbol);
         }
@@ -318,7 +320,8 @@ impl OutlineFile {
 
     /// Sort symbols by visibility (public first, then private)
     pub fn sort_symbols_by_visibility(&mut self) {
-        self.symbols.sort_by_key(|s| visibility_order(&s.visibility));
+        self.symbols
+            .sort_by_key(|s| visibility_order(&s.visibility));
         for symbol in &mut self.symbols {
             sort_node_children_by_visibility(symbol);
         }
@@ -348,14 +351,16 @@ fn sort_node_children_alphabetically(node: &mut OutlineNode) {
 }
 
 fn sort_node_children_by_kind(node: &mut OutlineNode) {
-    node.children.sort_by_key(|s| symbol_kind_order(&s.node_type));
+    node.children
+        .sort_by_key(|s| symbol_kind_order(&s.node_type));
     for child in &mut node.children {
         sort_node_children_by_kind(child);
     }
 }
 
 fn sort_node_children_by_visibility(node: &mut OutlineNode) {
-    node.children.sort_by_key(|s| visibility_order(&s.visibility));
+    node.children
+        .sort_by_key(|s| visibility_order(&s.visibility));
     for child in &mut node.children {
         sort_node_children_by_visibility(child);
     }
@@ -402,21 +407,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_outline_tree(file_path: &str, symbols: Vec<OutlineNode>) -> OutlineTree {
-        OutlineTree::new(
-            PathBuf::from(file_path),
-            Language::Rust,
-            symbols,
-        )
+        OutlineTree::new(PathBuf::from(file_path), Language::Rust, symbols)
     }
 
     fn create_test_node(name: &str, node_type: OutlineNodeType) -> OutlineNode {
-        OutlineNode::new(
-            name.to_string(),
-            node_type,
-            1,
-            10,
-            (0, 100),
-        )
+        OutlineNode::new(name.to_string(), node_type, 1, 10, (0, 100))
     }
 
     #[test]
@@ -431,7 +426,7 @@ mod tests {
     fn test_add_file_outline() {
         let mut builder = HierarchyBuilder::new();
         let outline = create_test_outline_tree("src/lib.rs", vec![]);
-        
+
         let result = builder.add_file_outline(outline);
         assert!(result.is_ok());
         assert_eq!(builder.files.len(), 1);
@@ -446,21 +441,18 @@ mod tests {
     #[test]
     fn test_simple_hierarchy_build() {
         let mut builder = HierarchyBuilder::new();
-        
+
         // Add a simple file
-        let symbols = vec![
-            create_test_node("main", OutlineNodeType::Function),
-        ];
+        let symbols = vec![create_test_node("main", OutlineNodeType::Function)];
         let outline = create_test_outline_tree("src/main.rs", symbols);
         builder.add_file_outline(outline).unwrap();
 
         let hierarchy = builder.build_hierarchy().unwrap();
-        
+
         assert_eq!(hierarchy.total_files, 1);
         assert_eq!(hierarchy.total_symbols, 1);
         assert!(hierarchy.languages.contains(&Language::Rust));
     }
-
 
     #[test]
     fn test_sorting_strategies() {
@@ -479,13 +471,11 @@ mod tests {
 
     #[test]
     fn test_outline_file_from_tree() {
-        let symbols = vec![
-            create_test_node("test_func", OutlineNodeType::Function),
-        ];
+        let symbols = vec![create_test_node("test_func", OutlineNodeType::Function)];
         let tree = create_test_outline_tree("src/test.rs", symbols);
-        
+
         let file = OutlineFile::from_outline_tree(tree).unwrap();
-        
+
         assert_eq!(file.name, "test.rs");
         assert_eq!(file.language, Language::Rust);
         assert_eq!(file.symbols.len(), 1);
@@ -497,14 +487,14 @@ mod tests {
         let mut parent = create_test_node("Parent", OutlineNodeType::Class);
         parent.add_child(create_test_node("child1", OutlineNodeType::Method));
         parent.add_child(create_test_node("child2", OutlineNodeType::Property));
-        
+
         let file = OutlineFile::new(
             "test.rs".to_string(),
             PathBuf::from("test.rs"),
             Language::Rust,
             vec![parent],
         );
-        
+
         // Should count parent + 2 children = 3 total symbols
         assert_eq!(file.symbol_count(), 3);
     }
@@ -512,7 +502,7 @@ mod tests {
     #[test]
     fn test_directory_all_files() {
         let mut dir = OutlineDirectory::new("src".to_string(), PathBuf::from("src"));
-        
+
         let file1 = OutlineFile::new(
             "main.rs".to_string(),
             PathBuf::from("src/main.rs"),
@@ -520,7 +510,7 @@ mod tests {
             vec![],
         );
         dir.files.push(file1);
-        
+
         let mut subdir = OutlineDirectory::new("utils".to_string(), PathBuf::from("src/utils"));
         let file2 = OutlineFile::new(
             "helpers.rs".to_string(),
@@ -530,10 +520,10 @@ mod tests {
         );
         subdir.files.push(file2);
         dir.subdirectories.push(subdir);
-        
+
         let all_files = dir.all_files();
         assert_eq!(all_files.len(), 2);
-        
+
         let file_names: Vec<_> = all_files.iter().map(|f| f.name.as_str()).collect();
         assert!(file_names.contains(&"main.rs"));
         assert!(file_names.contains(&"helpers.rs"));
@@ -542,39 +532,32 @@ mod tests {
     #[test]
     fn test_multi_language_project() {
         let mut builder = HierarchyBuilder::new();
-        
+
         // Add Rust file
-        let rust_symbols = vec![
-            create_test_node("main", OutlineNodeType::Function),
-        ];
-        let rust_outline = OutlineTree::new(
-            PathBuf::from("src/main.rs"),
-            Language::Rust,
-            rust_symbols,
-        );
+        let rust_symbols = vec![create_test_node("main", OutlineNodeType::Function)];
+        let rust_outline =
+            OutlineTree::new(PathBuf::from("src/main.rs"), Language::Rust, rust_symbols);
         builder.add_file_outline(rust_outline).unwrap();
 
         // Add JavaScript file
-        let js_symbols = vec![
-            create_test_node("initApp", OutlineNodeType::Function),
-        ];
+        let js_symbols = vec![create_test_node("initApp", OutlineNodeType::Function)];
         let js_outline = OutlineTree::new(
-            PathBuf::from("frontend/app.js"), 
+            PathBuf::from("frontend/app.js"),
             Language::JavaScript,
             js_symbols,
         );
         builder.add_file_outline(js_outline).unwrap();
-        
+
         let hierarchy = builder.build_hierarchy().unwrap();
-        
+
         assert_eq!(hierarchy.total_files, 2);
         assert_eq!(hierarchy.languages.len(), 2);
         assert!(hierarchy.languages.contains(&Language::Rust));
         assert!(hierarchy.languages.contains(&Language::JavaScript));
-        
+
         let rust_files = hierarchy.files_by_language(&Language::Rust);
         let js_files = hierarchy.files_by_language(&Language::JavaScript);
-        
+
         assert_eq!(rust_files.len(), 1);
         assert_eq!(js_files.len(), 1);
         assert!(rust_files[0].name.ends_with(".rs"));
@@ -583,59 +566,68 @@ mod tests {
 
     #[test]
     fn test_alphabetical_sorting_integration() {
-        let mut builder = HierarchyBuilder::new()
-            .with_sorting(SortOrder::Alphabetical);
-        
+        let mut builder = HierarchyBuilder::new().with_sorting(SortOrder::Alphabetical);
+
         // Create file with multiple symbols in non-alphabetical order
         let symbols = vec![
             create_test_node("zebra_function", OutlineNodeType::Function),
             create_test_node("alpha_function", OutlineNodeType::Function),
             create_test_node("beta_class", OutlineNodeType::Class),
         ];
-        
+
         let outline = create_test_outline_tree("src/test.rs", symbols);
         builder.add_file_outline(outline).unwrap();
-        
+
         let hierarchy = builder.build_hierarchy().unwrap();
         let file = hierarchy.all_files().into_iter().next().unwrap();
-        
+
         // Should be sorted alphabetically
         let names: Vec<&String> = file.symbols.iter().map(|s| &s.name).collect();
-        assert_eq!(names, vec!["alpha_function", "beta_class", "zebra_function"]);
+        assert_eq!(
+            names,
+            vec!["alpha_function", "beta_class", "zebra_function"]
+        );
     }
 
     #[test]
     fn test_nested_directory_structure() {
         let mut builder = HierarchyBuilder::new();
-        
+
         // Add files in nested directories
-        let outline1 = create_test_outline_tree("src/main.rs", vec![
-            create_test_node("main", OutlineNodeType::Function),
-        ]);
-        let outline2 = create_test_outline_tree("src/utils/helpers.rs", vec![
-            create_test_node("Helper", OutlineNodeType::Struct),
-        ]);
-        let outline3 = create_test_outline_tree("tests/integration.rs", vec![
-            create_test_node("test_main", OutlineNodeType::Function),
-        ]);
-        
+        let outline1 = create_test_outline_tree(
+            "src/main.rs",
+            vec![create_test_node("main", OutlineNodeType::Function)],
+        );
+        let outline2 = create_test_outline_tree(
+            "src/utils/helpers.rs",
+            vec![create_test_node("Helper", OutlineNodeType::Struct)],
+        );
+        let outline3 = create_test_outline_tree(
+            "tests/integration.rs",
+            vec![create_test_node("test_main", OutlineNodeType::Function)],
+        );
+
         builder.add_file_outline(outline1).unwrap();
         builder.add_file_outline(outline2).unwrap();
         builder.add_file_outline(outline3).unwrap();
-        
+
         let hierarchy = builder.build_hierarchy().unwrap();
-        
+
         assert_eq!(hierarchy.total_files, 3);
         assert_eq!(hierarchy.total_symbols, 3);
-        
+
         let all_files = hierarchy.all_files();
         let file_paths: Vec<String> = all_files
             .iter()
             .map(|f| f.path.to_string_lossy().to_string())
             .collect();
-        
+
         assert!(file_paths.iter().any(|p| p.contains("src/main.rs")));
-        assert!(file_paths.iter().any(|p| p.contains("src/utils/helpers.rs")));
-        assert!(file_paths.iter().any(|p| p.contains("tests/integration.rs")));
+        assert!(file_paths
+            .iter()
+            .any(|p| p.contains("src/utils/helpers.rs")));
+        assert!(file_paths
+            .iter()
+            .any(|p| p.contains("tests/integration.rs")));
     }
 }
