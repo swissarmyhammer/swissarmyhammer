@@ -5,7 +5,7 @@
 //! symbol information rather than creating search indexes.
 
 use crate::outline::extractors::{
-    JavaScriptExtractor, PythonExtractor, RustExtractor, TypeScriptExtractor,
+    DartExtractor, JavaScriptExtractor, PythonExtractor, RustExtractor, TypeScriptExtractor,
 };
 use crate::outline::{OutlineNode, OutlineNodeType, OutlineTree, Result, Visibility};
 use crate::search::parser::{CodeParser, ParserConfig};
@@ -93,7 +93,7 @@ impl OutlineParser {
         extractors.insert(Language::TypeScript, Box::new(TypeScriptExtractor::new()?));
         extractors.insert(Language::JavaScript, Box::new(JavaScriptExtractor::new()?));
         extractors.insert(Language::Python, Box::new(PythonExtractor::new()?));
-        // TODO: Add Dart extractor when implemented
+        extractors.insert(Language::Dart, Box::new(DartExtractor::new()?));
 
         Ok(Self {
             code_parser,
@@ -377,7 +377,6 @@ pub mod inner {
         assert!(supported.contains(&Language::TypeScript));
         assert!(supported.contains(&Language::JavaScript));
         assert!(supported.contains(&Language::Python));
-        // TODO: Add when Dart extractor is implemented
-        // assert!(supported.contains(&Language::Dart));
+        assert!(supported.contains(&Language::Dart));
     }
 }

@@ -658,12 +658,12 @@ impl SymbolExtractor for TypeScriptExtractor {
                 }
                 None
             }
-            "method_definition" | "method_signature" => {
-                self.extract_name_from_node(node, source).map(|name| self.build_method_signature(&name, node, source))
-            }
-            "property_signature" => {
-                self.extract_name_from_node(node, source).map(|name| self.build_property_signature(&name, node, source))
-            }
+            "method_definition" | "method_signature" => self
+                .extract_name_from_node(node, source)
+                .map(|name| self.build_method_signature(&name, node, source)),
+            "property_signature" => self
+                .extract_name_from_node(node, source)
+                .map(|name| self.build_property_signature(&name, node, source)),
             "class_declaration" | "abstract_class_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let name = self.get_node_text(&name_node, source);
