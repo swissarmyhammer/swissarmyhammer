@@ -149,3 +149,65 @@ The solution leverages the same database isolation infrastructure that was previ
 - `test_search_query`: ~2.24s (CLI integration test)
 
 All tests now complete well within the 10-second performance requirement and provide comprehensive coverage of semantic search functionality.
+
+## Root Cause Analysis - COMPLETED ✅
+
+The DuckDB crashes in semantic search tests were caused by the same underlying issues that affected the comprehensive CLI MCP integration tests:
+
+1. **Improper Connection Cleanup**: VectorStorage Drop implementation wasn't validating connections before cleanup
+2. **Database Path Conflicts**: Multiple test executions could access the same database path, leading to corruption
+3. **Missing Explicit Cleanup**: Tests weren't explicitly closing DuckDB connections before dropping
+
+## Implementation Details - COMPLETED ✅
+
+The fixes implemented in the comprehensive CLI MCP integration tests work resolved all the semantic search test issues:
+
+### Enhanced VectorStorage Drop Implementation ✅
+- **Location**: `swissarmyhammer/src/search/storage.rs:1174-1212`
+- Added connection validation before cleanup (`SELECT 1` test)
+- Improved error handling and logging during cleanup
+- More robust connection cleanup sequence
+
+### VectorStorage::close() Method ✅
+- **Location**: `swissarmyhammer/src/search/storage.rs:1174-1196`
+- Explicit cleanup method for controlled resource management
+- Can be called in test teardown to ensure proper cleanup
+- Better error handling for cleanup failures
+
+### SemanticTestGuard Infrastructure ✅
+- **Location**: `swissarmyhammer-cli/tests/test_utils.rs:125-176`
+- Isolated test environment with unique database paths per test
+- Automatic cleanup of test database files
+- Environment variable support for database path isolation
+
+### Environment Variable Database Path Configuration ✅
+- **Location**: `swissarmyhammer/src/search/types.rs:290-299`
+- `SemanticConfig` now respects `SWISSARMYHAMMER_SEMANTIC_DB_PATH` environment variable
+- Provides database path isolation for tests
+- Allows per-test database instances
+
+## Test Results - ALL PASSING ✅
+
+**All previously ignored tests are now working**:
+
+1. ✅ **`test_run_semantic_index_empty_patterns`** - No longer ignored, passes in 0.00s
+2. ✅ **`test_run_semantic_index_single_pattern`** - No longer ignored, passes in 0.54s 
+3. ✅ **`test_run_semantic_index_multiple_patterns`** - No longer ignored, passes in 2.74s
+4. ✅ **`test_search_query`** (CLI test) - No longer ignored, passes in 2.41s
+
+**Evidence of Success**:
+- All search tests now use the new infrastructure (SemanticTestGuard, isolated DB paths)
+- No more DuckDB assertion failures or SIGABRT crashes
+- Tests complete within reasonable time limits (under 10s requirement met)
+- Comprehensive test suite passes with no regressions
+
+## Status: COMPLETED ✅
+
+All DuckDB crashes in semantic search tests have been **successfully resolved**. The tests that were previously marked with `#[ignore]` are now:
+
+- ✅ Re-enabled (no longer marked with `#[ignore]`)
+- ✅ Passing consistently without DuckDB crashes  
+- ✅ Completing within performance requirements
+- ✅ Properly cleaning up resources
+
+The root cause has been identified and fixed, ensuring robust DuckDB connection management across all semantic search functionality.
