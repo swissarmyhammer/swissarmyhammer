@@ -2,47 +2,37 @@
 name: docs-comments
 title: Generate Code Comments
 description: Add comprehensive comments and documentation to code
-arguments:
-  - name: comment_style
-    description: Comment style (inline, block, jsdoc, docstring, rustdoc)
-    required: false
-    default: "auto-detect"
-  - name: detail_level
-    description: Level of detail (minimal, standard, comprehensive)
-    required: false
-    default: "standard"
-  - name: audience
-    description: Target audience for the comments
-    required: false
-    default: "developers"
 ---
 
-# Code Documentation: {{comment_style}}
+## Goal
+
+Create high quality documentation comments in source.
+
+{% render "principals" %}
+{% render "documentation" %}
 
 {% render code %}
-
-## Documentation Parameters
-- **Style**: {{comment_style}}
-- **Detail Level**: {{detail_level}}
-- **Audience**: {{audience}}
 
 ## Documentation Strategy
 
 ### 1. Comment Types
 
 #### File/Module Level
+
 - Purpose and responsibility
 - Author and maintenance info
 - Dependencies and requirements
 - Usage examples
 
 #### Class/Interface Level
+
 - Design decisions
 - Invariants and contracts
 - Relationships to other components
 - Thread safety considerations
 
 #### Method/Function Level
+
 - Purpose and behavior
 - Parameters and return values
 - Side effects and exceptions
@@ -50,6 +40,7 @@ arguments:
 - Complexity notes
 
 #### Implementation Comments
+
 - Non-obvious logic explanation
 - Algorithm choices
 - Performance considerations
@@ -57,8 +48,8 @@ arguments:
 
 ### 2. Documentation Standards
 
-{% if comment_style == "jsdoc" %}
 #### JSDoc Format
+
 ```javascript
 /**
  * Brief description of the function.
@@ -71,8 +62,9 @@ arguments:
  * functionName(args);
  */
 ```
-{% elsif comment_style == "docstring" %}
+
 #### Python Docstring Format
+
 ```python
 """Brief description of the function.
 
@@ -92,8 +84,9 @@ Examples:
     expected_output
 """
 ```
-{% elsif comment_style == "rustdoc" %}
+
 #### Rust Documentation Format
+
 ```rust
 /// Brief description of the function.
 /// 
@@ -113,7 +106,6 @@ Examples:
 /// let result = function_name(args);
 /// ```
 ```
-{% endif %}
 
 ### 3. Best Practices
 
@@ -138,15 +130,8 @@ Examples:
 - Present tense
 - Consistent terminology
 
-### 4. {{detail_level}} Level Documentation
+### 4. Detail Level Documentation
 
-{% if detail_level == "minimal" %}
-Focus on:
-
-- Public API documentation
-- Critical warnings
-- Non-obvious behavior
-{% elsif detail_level == "comprehensive" %}
 Include:
 
 - Detailed parameter descriptions
@@ -154,14 +139,6 @@ Include:
 - Edge cases
 - Performance notes
 - Related references
-{% else %}
-Balance between clarity and completeness:
-
-- Clear purpose statements
-- Parameter/return documentation
-- Key examples
-- Important notes
-{% endif %}
 
 ### 5. Generated Documentation
 
