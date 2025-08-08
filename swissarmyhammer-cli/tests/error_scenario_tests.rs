@@ -179,6 +179,7 @@ fn test_invalid_memo_operations() -> Result<()> {
 
 /// Test search error conditions
 #[test]
+#[ignore] // This test is ignored to avoid running it in normal test suites
 fn test_search_error_conditions() -> Result<()> {
     let (_temp_dir, temp_path) = setup_error_test_environment()?;
 

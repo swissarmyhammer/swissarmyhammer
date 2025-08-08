@@ -417,12 +417,13 @@ impl SignatureExtractor for JavaScriptExtractor {
                 // Handle default parameters
                 if let Some(name_node) = node.child_by_field_name("left") {
                     let name = self.get_node_text(&name_node, source);
-                    let default_value = if let Some(value_node) = node.child_by_field_name("right") {
+                    let default_value = if let Some(value_node) = node.child_by_field_name("right")
+                    {
                         Some(self.get_node_text(&value_node, source))
                     } else {
                         None
                     };
-                    
+
                     let param_type = TypeInfo::new("any".to_string());
                     let mut param = Parameter::new(name).with_type(param_type);
                     if let Some(default) = default_value {
@@ -537,7 +538,9 @@ impl SymbolExtractor for JavaScriptExtractor {
                         let signature = match (node_type, node.kind()) {
                             (OutlineNodeType::Function, "function_declaration") => {
                                 // Use new comprehensive signature extraction
-                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_function_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::JavaScript))
                                 } else {
                                     Some(self.build_function_signature(&name, node, source))
@@ -545,7 +548,9 @@ impl SymbolExtractor for JavaScriptExtractor {
                             }
                             (OutlineNodeType::Function, "variable_declarator") => {
                                 // Use new comprehensive signature extraction for arrow functions
-                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_function_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::JavaScript))
                                 } else {
                                     Some(self.build_arrow_function_signature(&name, node, source))
@@ -553,7 +558,9 @@ impl SymbolExtractor for JavaScriptExtractor {
                             }
                             (OutlineNodeType::Method, _) => {
                                 // Use new comprehensive method signature extraction
-                                if let Some(detailed_sig) = self.extract_method_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_method_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::JavaScript))
                                 } else {
                                     Some(self.build_method_signature(&name, node, source))
@@ -561,7 +568,9 @@ impl SymbolExtractor for JavaScriptExtractor {
                             }
                             (OutlineNodeType::Class, _) => {
                                 // Use new comprehensive type signature extraction
-                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_type_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::JavaScript))
                                 } else {
                                     Some(self.build_class_signature(&name, node, source))

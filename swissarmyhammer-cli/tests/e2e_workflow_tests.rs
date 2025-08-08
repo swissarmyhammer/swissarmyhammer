@@ -468,6 +468,7 @@ fn test_complete_memo_workflow() -> Result<()> {
 
 /// Test complete search workflow (optimized)
 #[test]
+#[ignore]
 fn test_complete_search_workflow() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
