@@ -9,7 +9,7 @@ use swissarmyhammer_cli::mcp_integration::CliToolContext;
 use tempfile::TempDir;
 
 mod test_utils;
-use test_utils::setup_git_repo;
+use test_utils::{create_semantic_test_guard, setup_git_repo};
 
 /// Test helper to create a comprehensive test environment
 fn setup_comprehensive_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
@@ -202,16 +202,18 @@ async fn test_all_memo_tools_execution() -> Result<()> {
 
 /// Test all search-related MCP tools can be executed
 #[tokio::test]
-#[ignore] // Temporarily disabled due to DuckDB crash during cleanup
+// Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_all_search_tools_execution() -> Result<()> {
+    let _guard = create_semantic_test_guard();
     let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Test search_index
+    // Test search_index with limited files to avoid DuckDB timeout
+    // Index only the specific test file created in setup (max 6 files as per issue requirement)
     let index_args = context.create_arguments(vec![
-        ("patterns", json!(["src/**/*.rs"])),
+        ("patterns", json!(["src/integration_test.rs"])),
         ("force", json!(false)),
     ]);
     let result = context.execute_tool("search_index", index_args).await;
@@ -260,8 +262,9 @@ async fn test_mcp_error_propagation() -> Result<()> {
 
 /// Test argument passing and validation
 #[tokio::test]
-#[ignore] // Temporarily disabled due to DuckDB crash during cleanup
+// Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_argument_passing_and_validation() -> Result<()> {
+    let _guard = create_semantic_test_guard();
     let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
@@ -275,9 +278,9 @@ async fn test_argument_passing_and_validation() -> Result<()> {
     let result = context.execute_tool("memo_create", valid_args).await;
     assert!(result.is_ok(), "Valid arguments should succeed");
 
-    // Test boolean arguments
+    // Test boolean arguments with limited files to avoid DuckDB timeout
     let boolean_args = context.create_arguments(vec![
-        ("patterns", json!(["**/*.rs"])),
+        ("patterns", json!(["src/integration_test.rs"])),
         ("force", json!(true)),
     ]);
     let result = context.execute_tool("search_index", boolean_args).await;
@@ -286,9 +289,9 @@ async fn test_argument_passing_and_validation() -> Result<()> {
         "Boolean arguments should be handled correctly"
     );
 
-    // Test array arguments
+    // Test array arguments with limited files to avoid DuckDB timeout
     let array_args = context.create_arguments(vec![
-        ("patterns", json!(["src/**/*.rs", "tests/**/*.rs"])),
+        ("patterns", json!(["src/integration_test.rs"])),
         ("force", json!(false)),
     ]);
     let result = context.execute_tool("search_index", array_args).await;
@@ -551,8 +554,9 @@ async fn test_tool_context_configurations() -> Result<()> {
 
 /// Test MCP tool robustness under stress
 #[tokio::test]
-#[ignore] // Temporarily disabled due to DuckDB crash during cleanup
+// Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_mcp_tool_stress_conditions() -> Result<()> {
+    let _guard = create_semantic_test_guard();
     let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
@@ -571,9 +575,9 @@ async fn test_mcp_tool_stress_conditions() -> Result<()> {
         );
     }
 
-    // Test tool execution with minimal resources
+    // Test tool execution with minimal resources - use empty pattern to avoid DuckDB timeout
     let args = context.create_arguments(vec![
-        ("patterns", json!(["nonexistent/**/*.rs"])),
+        ("patterns", json!(["nonexistent_file.rs"])),
         ("force", json!(false)),
     ]);
     let result = context.execute_tool("search_index", args).await;

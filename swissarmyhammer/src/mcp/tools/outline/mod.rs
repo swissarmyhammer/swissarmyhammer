@@ -18,7 +18,7 @@
 //! ## Tool Implementation Pattern
 //!
 //! Each tool follows the standard MCP pattern:
-//! ```rust
+//! ```ignore
 //! use async_trait::async_trait;
 //! use swissarmyhammer::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 //!

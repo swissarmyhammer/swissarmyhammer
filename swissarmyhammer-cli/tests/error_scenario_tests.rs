@@ -182,26 +182,42 @@ fn test_invalid_memo_operations() -> Result<()> {
 fn test_search_error_conditions() -> Result<()> {
     let (_temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Test querying before indexing - this may succeed with empty results
+    // Create unique test identifier to avoid any cross-test conflicts
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let thread_id = std::thread::current().id();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let test_id = format!("{thread_id:?}_{timestamp}");
+
+    // Test querying before indexing - should succeed but return no results
     let output = Command::cargo_bin("swissarmyhammer")?
         .args(["search", "query", "test query"])
         .current_dir(&temp_path)
+        .env("SWISSARMYHAMMER_TEST_MODE", "1")
+        .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
+        .env("RUST_LOG", "warn")
         .assert()
-        .success(); // Changed to expect success since "No matches found" is a valid response
+        .success(); // Should succeed and show no results when no index exists
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
     // Should indicate no results found
     assert!(
         stdout.contains("No matches")
             || stdout.contains("no matches")
-            || stdout.contains("0 results"),
-        "Should indicate no matches found: {stdout}"
+            || stdout.contains("0 results")
+            || stdout.contains("No matches found"),
+        "Should indicate no matches found when no index exists: {stdout}"
     );
 
-    // Test indexing non-existent patterns
+    // Test indexing non-existent patterns - should succeed but index 0 files
     let output = Command::cargo_bin("swissarmyhammer")?
         .args(["search", "index", "nonexistent/**/*.rs"])
         .current_dir(&temp_path)
+        .env("SWISSARMYHAMMER_TEST_MODE", "1")
+        .env("SWISSARMYHAMMER_TEST_ID", &test_id)
+        .env("RUST_LOG", "warn")
         .assert()
         .success(); // This might succeed but index no files
 

@@ -16,7 +16,7 @@
 //! # Quick Start
 //!
 //! ```no_run
-//! use swissarmyhammer::config::{load_config, ConfigError};
+//! use swissarmyhammer::toml_config::{load_config, ConfigError};
 //! use std::path::Path;
 //!
 //! // Load configuration from file
@@ -94,7 +94,7 @@ pub use value::ConfigValue;
 ///
 /// # Example
 /// ```no_run
-/// use swissarmyhammer::config::load_config;
+/// use swissarmyhammer::toml_config::load_config;
 /// use std::path::Path;
 ///
 /// let config = load_config(Path::new("sah.toml"))?;
@@ -115,9 +115,9 @@ pub fn load_config(file_path: &std::path::Path) -> Result<Configuration, ConfigE
 ///
 /// # Example
 /// ```no_run
-/// use swissarmyhammer::config::load_repo_config;
+/// use swissarmyhammer::toml_config::load_repo_config_wrapper;
 ///
-/// match load_repo_config()? {
+/// match load_repo_config_wrapper()? {
 ///     Some(config) => println!("Found configuration with {} values", config.len()),
 ///     None => println!("No sah.toml found in repository"),
 /// }
@@ -137,7 +137,7 @@ pub fn load_repo_config_wrapper() -> Result<Option<Configuration>, ConfigError> 
 ///
 /// # Example
 /// ```no_run
-/// use swissarmyhammer::config::validate_config_file;
+/// use swissarmyhammer::toml_config::validate_config_file;
 /// use std::path::Path;
 ///
 /// validate_config_file(Path::new("sah.toml"))?;
@@ -162,7 +162,7 @@ pub fn validate_config_file(file_path: &std::path::Path) -> Result<(), ConfigErr
 ///
 /// # Example
 /// ```
-/// use swissarmyhammer::config::parse_toml_string;
+/// use swissarmyhammer::toml_config::parse_toml_string;
 ///
 /// let toml_content = r#"
 ///     name = "Test Project"

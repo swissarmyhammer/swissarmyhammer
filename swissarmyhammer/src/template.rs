@@ -123,6 +123,46 @@ impl ParseTag for PartialTag {
 #[derive(Debug, Clone)]
 struct PartialRenderable;
 
+
+/// Convert string to URL-friendly slug
+fn slugify_string(input: &str) -> String {
+    input
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() {
+                Some(c.to_ascii_lowercase())
+            } else if c.is_whitespace() || c == '-' || c == '_' {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Count lines in a string
+fn count_lines_in_string(input: &str) -> i32 {
+    if input.is_empty() {
+        0
+    } else {
+        input.lines().count() as i32
+    }
+}
+
+/// Indent each line of a string with the specified number of spaces
+fn indent_string(input: &str, indent_count: usize) -> String {
+    let indent = " ".repeat(indent_count);
+    input
+        .lines()
+        .map(|line| format!("{}{}", indent, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl Renderable for PartialRenderable {
     fn render_to(
         &self,
@@ -396,15 +436,70 @@ impl Template {
         self.render_with_timeout(args, timeout)
     }
 
+    /// Preprocess template string to handle custom filters
+    fn preprocess_custom_filters(&self, template_str: &str, args: &HashMap<String, String>) -> String {
+        let mut processed = template_str.to_string();
+        
+        // Handle slugify filter: {{ variable | slugify }}
+        let slugify_regex = regex::Regex::new(r"\{\{\s*(\w+)\s*\|\s*slugify\s*\}\}")
+            .expect("Failed to compile slugify regex");
+        
+        for cap in slugify_regex.captures_iter(template_str) {
+            let var_name = &cap[1];
+            let full_match = &cap[0];
+            
+            if let Some(value) = args.get(var_name) {
+                let slugified = slugify_string(value);
+                processed = processed.replace(full_match, &slugified);
+            }
+        }
+        
+        // Handle count_lines filter: {{ variable | count_lines }}
+        let count_lines_regex = regex::Regex::new(r"\{\{\s*(\w+)\s*\|\s*count_lines\s*\}\}")
+            .expect("Failed to compile count_lines regex");
+        
+        for cap in count_lines_regex.captures_iter(template_str) {
+            let var_name = &cap[1];
+            let full_match = &cap[0];
+            
+            if let Some(value) = args.get(var_name) {
+                let line_count = count_lines_in_string(value);
+                processed = processed.replace(full_match, &line_count.to_string());
+            }
+        }
+        
+        // Handle indent filter: {{ variable | indent: N }}
+        let indent_regex = regex::Regex::new(r"\{\{\s*(\w+)\s*\|\s*indent:\s*(\d+)\s*\}\}")
+            .expect("Failed to compile indent regex");
+        
+        for cap in indent_regex.captures_iter(template_str) {
+            let var_name = &cap[1];
+            let indent_str = &cap[2];
+            let full_match = &cap[0];
+            
+            if let Some(value) = args.get(var_name) {
+                if let Ok(indent_count) = indent_str.parse::<usize>() {
+                    let indented = indent_string(value, indent_count);
+                    processed = processed.replace(full_match, &indented);
+                }
+            }
+        }
+        
+        processed
+    }
+
     /// Render the template with given arguments and custom timeout
     pub fn render_with_timeout(
         &self,
         args: &HashMap<String, String>,
         _timeout: Duration,
     ) -> Result<String> {
+        // Preprocess template to handle custom filters
+        let processed_template_str = self.preprocess_custom_filters(&self.template_str, args);
+        
         let template = self
             .parser
-            .parse(&self.template_str)
+            .parse(&processed_template_str)
             .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
 
         let mut object = Object::new();
@@ -446,9 +541,12 @@ impl Template {
     /// This method merges the provided arguments with environment variables,
     /// with provided arguments taking precedence over environment variables.
     pub fn render_with_env(&self, args: &HashMap<String, String>) -> Result<String> {
+        // Preprocess template to handle custom filters
+        let processed_template_str = self.preprocess_custom_filters(&self.template_str, args);
+        
         let template = self
             .parser
-            .parse(&self.template_str)
+            .parse(&processed_template_str)
             .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
 
         let mut object = Object::new();
@@ -485,9 +583,12 @@ impl Template {
     /// 2. Environment variables
     /// 3. sah.toml configuration variables
     pub fn render_with_config(&self, args: &HashMap<String, String>) -> Result<String> {
+        // Preprocess template to handle custom filters
+        let processed_template_str = self.preprocess_custom_filters(&self.template_str, args);
+        
         let template = self
             .parser
-            .parse(&self.template_str)
+            .parse(&processed_template_str)
             .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
 
         let mut object = Object::new();
@@ -600,8 +701,62 @@ impl TemplateEngine {
 
     /// Render a template string with arguments
     pub fn render(&self, template_str: &str, args: &HashMap<String, String>) -> Result<String> {
-        let template = self.parse(template_str)?;
+        // Preprocess template to handle custom filters
+        let processed_template_str = self.preprocess_custom_filters(template_str, args);
+        let template = self.parse(&processed_template_str)?;
         template.render(args)
+    }
+
+    /// Preprocess template string to handle custom filters (for TemplateEngine)
+    fn preprocess_custom_filters(&self, template_str: &str, args: &HashMap<String, String>) -> String {
+        let mut processed = template_str.to_string();
+        
+        // Handle slugify filter: {{ variable | slugify }}
+        let slugify_regex = regex::Regex::new(r"\{\{\s*(\w+)\s*\|\s*slugify\s*\}\}")
+            .expect("Failed to compile slugify regex");
+        
+        for cap in slugify_regex.captures_iter(template_str) {
+            let var_name = &cap[1];
+            let full_match = &cap[0];
+            
+            if let Some(value) = args.get(var_name) {
+                let slugified = slugify_string(value);
+                processed = processed.replace(full_match, &slugified);
+            }
+        }
+        
+        // Handle count_lines filter: {{ variable | count_lines }}
+        let count_lines_regex = regex::Regex::new(r"\{\{\s*(\w+)\s*\|\s*count_lines\s*\}\}")
+            .expect("Failed to compile count_lines regex");
+        
+        for cap in count_lines_regex.captures_iter(template_str) {
+            let var_name = &cap[1];
+            let full_match = &cap[0];
+            
+            if let Some(value) = args.get(var_name) {
+                let line_count = count_lines_in_string(value);
+                processed = processed.replace(full_match, &line_count.to_string());
+            }
+        }
+        
+        // Handle indent filter: {{ variable | indent: N }}
+        let indent_regex = regex::Regex::new(r"\{\{\s*(\w+)\s*\|\s*indent:\s*(\d+)\s*\}\}")
+            .expect("Failed to compile indent regex");
+        
+        for cap in indent_regex.captures_iter(template_str) {
+            let var_name = &cap[1];
+            let indent_str = &cap[2];
+            let full_match = &cap[0];
+            
+            if let Some(value) = args.get(var_name) {
+                if let Ok(indent_count) = indent_str.parse::<usize>() {
+                    let indented = indent_string(value, indent_count);
+                    processed = processed.replace(full_match, &indented);
+                }
+            }
+        }
+        
+        processed
     }
 
     /// Render a template string with arguments and environment variables
@@ -613,7 +768,9 @@ impl TemplateEngine {
         template_str: &str,
         args: &HashMap<String, String>,
     ) -> Result<String> {
-        let template = self.parse(template_str)?;
+        // Preprocess template to handle custom filters
+        let processed_template_str = self.preprocess_custom_filters(template_str, args);
+        let template = self.parse(&processed_template_str)?;
         template.render_with_env(args)
     }
 
@@ -627,7 +784,9 @@ impl TemplateEngine {
         template_str: &str,
         args: &HashMap<String, String>,
     ) -> Result<String> {
-        let template = self.parse(template_str)?;
+        // Preprocess template to handle custom filters
+        let processed_template_str = self.preprocess_custom_filters(template_str, args);
+        let template = self.parse(&processed_template_str)?;
         template.render_with_config(args)
     }
 
@@ -971,5 +1130,61 @@ mod tests {
             .render_with_config("{{greeting}} World!", &args)
             .unwrap();
         assert_eq!(result, "Hello World!");
+    }
+
+    #[test]
+    fn test_slugify_filter() {
+        let engine = TemplateEngine::new();
+        let mut args = HashMap::new();
+        args.insert("title".to_string(), "Hello World!".to_string());
+
+        let result = engine.render("{{ title | slugify }}", &args).unwrap();
+        assert_eq!(result, "hello-world");
+    }
+
+    #[test]
+    fn test_count_lines_filter() {
+        let engine = TemplateEngine::new();
+        let mut args = HashMap::new();
+        args.insert("text".to_string(), "line1\nline2\nline3".to_string());
+
+        let result = engine.render("{{ text | count_lines }}", &args).unwrap();
+        assert_eq!(result, "3");
+    }
+
+    #[test]
+    fn test_slugify_function() {
+        assert_eq!(slugify_string("Hello World!"), "hello-world");
+        assert_eq!(slugify_string("Test_String-123"), "test-string-123");
+        assert_eq!(slugify_string("   Multiple   Spaces   "), "multiple-spaces");
+        assert_eq!(slugify_string("Special@#$Characters"), "specialcharacters");
+        assert_eq!(slugify_string(""), "");
+    }
+
+    #[test]
+    fn test_count_lines_function() {
+        assert_eq!(count_lines_in_string("line1\nline2\nline3"), 3);
+        assert_eq!(count_lines_in_string("single line"), 1);
+        assert_eq!(count_lines_in_string(""), 0);
+        assert_eq!(count_lines_in_string("line1\n\nline3"), 3);
+        assert_eq!(count_lines_in_string("line1\n"), 1);
+    }
+
+    #[test]
+    fn test_indent_function() {
+        assert_eq!(indent_string("line1\nline2", 2), "  line1\n  line2");
+        assert_eq!(indent_string("single", 4), "    single");
+        assert_eq!(indent_string("", 2), "");
+        assert_eq!(indent_string("line1\n\nline3", 1), " line1\n \n line3");
+    }
+
+    #[test]
+    fn test_indent_filter() {
+        let engine = TemplateEngine::new();
+        let mut args = HashMap::new();
+        args.insert("text".to_string(), "line1\nline2".to_string());
+
+        let result = engine.render("{{ text | indent: 2 }}", &args).unwrap();
+        assert_eq!(result, "  line1\n  line2");
     }
 }

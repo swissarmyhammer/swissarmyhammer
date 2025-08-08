@@ -406,7 +406,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Temporarily disabled due to DuckDB crash during cleanup
     async fn test_run_semantic_index_empty_patterns() {
         let patterns: Vec<String> = vec![];
         let result = run_semantic_index(&patterns, false).await;
@@ -418,9 +417,17 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Temporarily disabled due to DuckDB crash during cleanup
     async fn test_run_semantic_index_single_pattern() {
-        let patterns = vec!["test_pattern.rs".to_string()];
+        // Set up database isolation for test
+        let test_db = tempfile::NamedTempFile::new()
+            .expect("Failed to create temp database file")
+            .path()
+            .with_extension("db")
+            .to_path_buf();
+        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &test_db);
+
+        // Use a limited pattern to avoid indexing too many files (max 6 per requirement)
+        let patterns = vec!["src/lib.rs".to_string()];
 
         // Semantic indexing should work with fastembed's automatic model caching
         // Models will be downloaded on first run and cached for subsequent runs
@@ -443,15 +450,29 @@ mod tests {
                 }
             }
         }
+
+        // Clean up test database
+        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+        if test_db.exists() {
+            let _ = std::fs::remove_file(&test_db);
+        }
     }
 
     #[tokio::test]
-    #[ignore] // Temporarily disabled due to DuckDB crash during cleanup
     async fn test_run_semantic_index_multiple_patterns() {
+        // Set up database isolation for test
+        let test_db = tempfile::NamedTempFile::new()
+            .expect("Failed to create temp database file")
+            .path()
+            .with_extension("db")
+            .to_path_buf();
+        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &test_db);
+
+        // Use limited patterns to avoid indexing too many files (max 6 per requirement)
         let patterns = vec![
-            "src/**/*.rs".to_string(),
-            "tests/**/*.rs".to_string(),
-            "benches/**/*.rs".to_string(),
+            "src/lib.rs".to_string(),
+            "src/main.rs".to_string(),
+            "src/error.rs".to_string(),
         ];
 
         // Semantic indexing should work with fastembed's automatic model caching
@@ -474,6 +495,12 @@ mod tests {
                     panic!("Unexpected error in semantic indexing: {error_msg}");
                 }
             }
+        }
+
+        // Clean up test database
+        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+        if test_db.exists() {
+            let _ = std::fs::remove_file(&test_db);
         }
     }
 

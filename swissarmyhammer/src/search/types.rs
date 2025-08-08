@@ -283,10 +283,21 @@ impl Default for SemanticConfig {
 
 impl SemanticConfig {
     /// Find the most appropriate path for the semantic database
-    /// Following the same precedence as prompts/workflows:
-    /// 1. Local .swissarmyhammer directories (repository-specific)
-    /// 2. User ~/.swissarmyhammer directory (fallback)
+    /// Following the precedence:
+    /// 1. Environment variable SWISSARMYHAMMER_SEMANTIC_DB_PATH (test isolation)
+    /// 2. Local .swissarmyhammer directories (repository-specific)
+    /// 3. User ~/.swissarmyhammer directory (fallback)
     fn find_semantic_database_path() -> PathBuf {
+        // Check for environment variable override (for test isolation)
+        if let Ok(env_path) = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH") {
+            let path = PathBuf::from(env_path);
+            tracing::debug!(
+                "Using environment variable semantic database path: {}",
+                path.display()
+            );
+            return path;
+        }
+
         // Try to find local .swissarmyhammer directories first
         if let Ok(current_dir) = std::env::current_dir() {
             let local_dirs =

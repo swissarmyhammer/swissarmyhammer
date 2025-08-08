@@ -101,9 +101,9 @@ Based on your requirements, here's a template:
 {% raw %}
 ```markdown
 ---
-name: {{category}}-{{purpose | slugify}}
-title: {{purpose | titlecase}}
-description: A prompt that {{purpose | lowercase}}
+name: {{category}}-descriptive-name
+title: Clear Title for {{purpose}}
+description: A prompt that {{purpose}}
 arguments:
   - name: input
     description: The main input for {{purpose}}
@@ -111,8 +111,8 @@ arguments:
 {% if inputs_needed %}
 {% assign input_list = inputs_needed | split: "," %}
 {% for input_item in input_list %}
-  - name: {{ input_item | strip | downcase | replace: " ", "_" | replace: "-", "_" }}
-    description: {{ input_item | strip }}
+  - name: input_name
+    description: Input description
     required: false
     default: ""
 {% endfor %}
@@ -122,7 +122,7 @@ arguments:
 # {{purpose}}
 
 ## Overview
-This prompt helps you {{purpose | lowercase}}.
+This prompt helps you {{purpose}}.
 
 ## Input
 - **Main Input**: {{input}}
@@ -130,7 +130,7 @@ This prompt helps you {{purpose | lowercase}}.
 ## Additional Configuration
 {% assign input_list = inputs_needed | split: "," %}
 {% for input_item in input_list %}
-- **{{ input_item | strip }}**: {{ input_item | strip | downcase | replace: " ", "_" | replace: "-", "_" }}
+- **Input Name**: input_value
 {% endfor %}
 {% endif %}
 
