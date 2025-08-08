@@ -1170,6 +1170,40 @@ impl VectorStorage {
             _ => crate::search::types::ChunkType::PlainText,
         }
     }
+
+    /// Explicitly close the database connection
+    ///
+    /// This method should be called to ensure proper cleanup of the DuckDB connection.
+    /// It's automatically called during Drop, but can be called explicitly if needed.
+    pub fn close(&self) -> Result<()> {
+        if let Ok(conn) = self.connection.lock() {
+            // Test if connection is still valid by running a simple query
+            match conn.execute("SELECT 1", []) {
+                Ok(_) => {
+                    tracing::debug!(
+                        "Closing DuckDB connection for path: {}",
+                        self.db_path.display()
+                    );
+                    // DuckDB connections are automatically closed when dropped
+                    // No explicit close call needed, but we can log the closure
+                }
+                Err(e) => {
+                    tracing::warn!("DuckDB connection already invalid during close: {}", e);
+                }
+            }
+        } else {
+            tracing::warn!("Failed to acquire connection lock during close");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for VectorStorage {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            tracing::warn!("Error during VectorStorage drop cleanup: {}", e);
+        }
+    }
 }
 
 /// Statistics about the vector storage

@@ -248,7 +248,7 @@ impl TypeInfo {
         }
 
         if self.is_nullable {
-            result = format!("Option<{}>", result);
+            result = format!("Option<{result}>");
         }
 
         result
@@ -277,7 +277,7 @@ impl TypeInfo {
                 }
                 func_result
             };
-            
+
             // If this is an array of functions, wrap in parentheses
             if self.is_array {
                 result.push('(');
@@ -289,11 +289,11 @@ impl TypeInfo {
             } else {
                 result.push_str(&function_sig);
             }
-            
+
             if self.is_nullable {
                 result.push_str(" | null");
             }
-            
+
             return result;
         }
 
@@ -360,7 +360,7 @@ impl TypeInfo {
         }
 
         if self.is_nullable {
-            result = format!("Optional[{}]", result);
+            result = format!("Optional[{result}]");
         }
 
         result
@@ -536,7 +536,7 @@ impl Parameter {
         if let Some(ref type_info) = self.type_info {
             result.push_str(&type_info.format_rust());
         } else {
-            result.push_str("_");
+            result.push('_');
         }
 
         result
@@ -598,7 +598,7 @@ impl Parameter {
 
         result
     }
-    
+
     /// Format parameter for Dart syntax
     pub fn format_dart(&self) -> String {
         let mut result = String::new();
@@ -720,7 +720,7 @@ impl Signature {
     /// Add a constraint (for Python base classes)
     pub fn with_constraint(mut self, constraint: String) -> Self {
         // For Python, we can add constraints as attributes
-        self.attributes.push(format!("constraint:{}", constraint));
+        self.attributes.push(format!("constraint:{constraint}"));
         self
     }
 
@@ -809,14 +809,15 @@ impl Signature {
     /// Format signature in TypeScript style
     pub fn format_typescript_style(&self) -> String {
         // If we have a raw signature that looks like a class/interface/type definition, use it
-        if !self.raw_signature.is_empty() && 
-           (self.raw_signature.starts_with("class ") ||
-            self.raw_signature.starts_with("interface ") ||
-            self.raw_signature.starts_with("type ") ||
-            self.raw_signature.starts_with("enum ") ||
-            self.raw_signature.starts_with("namespace ") ||
-            self.raw_signature.starts_with("module ") ||
-            self.raw_signature.contains("=>")) {
+        if !self.raw_signature.is_empty()
+            && (self.raw_signature.starts_with("class ")
+                || self.raw_signature.starts_with("interface ")
+                || self.raw_signature.starts_with("type ")
+                || self.raw_signature.starts_with("enum ")
+                || self.raw_signature.starts_with("namespace ")
+                || self.raw_signature.starts_with("module ")
+                || self.raw_signature.contains("=>"))
+        {
             return self.raw_signature.clone();
         }
 
@@ -836,7 +837,11 @@ impl Signature {
         // Add other modifiers (including async from modifiers)
         for modifier in &self.modifiers {
             match modifier {
-                Modifier::Static | Modifier::Abstract | Modifier::Readonly | Modifier::Override | Modifier::Async => {
+                Modifier::Static
+                | Modifier::Abstract
+                | Modifier::Readonly
+                | Modifier::Override
+                | Modifier::Async => {
                     result.push_str(modifier.as_typescript_str());
                     result.push(' ');
                 }
@@ -892,9 +897,9 @@ impl Signature {
     /// Format signature in JavaScript style
     pub fn format_javascript_style(&self) -> String {
         // If we have a raw signature that looks like a class definition, use it
-        if !self.raw_signature.is_empty() && 
-           (self.raw_signature.starts_with("class ") ||
-            self.raw_signature.contains(" class ")) {
+        if !self.raw_signature.is_empty()
+            && (self.raw_signature.starts_with("class ") || self.raw_signature.contains(" class "))
+        {
             return self.raw_signature.clone();
         }
 
@@ -943,7 +948,7 @@ impl Signature {
             result.push_str(attr);
             result.push('\n');
         }
-        
+
         // Add modifiers as decorators
         for modifier in &self.modifiers {
             let mod_str = modifier.as_python_str();
@@ -1053,40 +1058,46 @@ impl fmt::Display for Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_comprehensive_rust_signature_scenarios() {
         // Test complex generic function with bounds
         let signature = Signature::new("process_data".to_string(), Language::Rust)
             .with_modifiers(vec![Modifier::Public, Modifier::Async])
-            .with_generic(
-                GenericParameter::new("T".to_string())
-                    .with_bounds(vec!["Clone".to_string(), "Send".to_string(), "Sync".to_string()])
-            )
+            .with_generic(GenericParameter::new("T".to_string()).with_bounds(vec![
+                "Clone".to_string(),
+                "Send".to_string(),
+                "Sync".to_string(),
+            ]))
             .with_generic(
                 GenericParameter::new("E".to_string())
-                    .with_bounds(vec!["std::error::Error".to_string()])
+                    .with_bounds(vec!["std::error::Error".to_string()]),
             )
             .with_parameter(
-                Parameter::new("items".to_string())
-                    .with_type(TypeInfo::generic("Vec".to_string(), vec![TypeInfo::new("T".to_string())]))
+                Parameter::new("items".to_string()).with_type(TypeInfo::generic(
+                    "Vec".to_string(),
+                    vec![TypeInfo::new("T".to_string())],
+                )),
             )
             .with_parameter(
-                Parameter::new("processor".to_string())
-                    .with_type(TypeInfo::function(
-                        vec![TypeInfo::new("T".to_string())],
-                        Some(TypeInfo::generic("Result".to_string(), vec![
+                Parameter::new("processor".to_string()).with_type(TypeInfo::function(
+                    vec![TypeInfo::new("T".to_string())],
+                    Some(TypeInfo::generic(
+                        "Result".to_string(),
+                        vec![
                             TypeInfo::new("T".to_string()),
-                            TypeInfo::new("E".to_string())
-                        ]))
-                    ))
+                            TypeInfo::new("E".to_string()),
+                        ],
+                    )),
+                )),
             )
-            .with_return_type(
-                TypeInfo::generic("Result".to_string(), vec![
+            .with_return_type(TypeInfo::generic(
+                "Result".to_string(),
+                vec![
                     TypeInfo::generic("Vec".to_string(), vec![TypeInfo::new("T".to_string())]),
-                    TypeInfo::new("E".to_string())
-                ])
-            )
+                    TypeInfo::new("E".to_string()),
+                ],
+            ))
             .with_raw_signature("fn process_data".to_string());
 
         let formatted = signature.format_rust_style();
@@ -1104,38 +1115,43 @@ mod tests {
             .with_modifiers(vec![Modifier::Public, Modifier::Static, Modifier::Async])
             .with_generic(
                 GenericParameter::new("T".to_string())
-                    .with_bounds(vec!["Serializable".to_string()])
+                    .with_bounds(vec!["Serializable".to_string()]),
             )
             .with_generic(
                 GenericParameter::new("U".to_string())
                     .with_bounds(vec!["Deserializable".to_string()])
-                    .with_default("T".to_string())
+                    .with_default("T".to_string()),
             )
             .with_parameter(
                 Parameter::new("data".to_string())
-                    .with_type(TypeInfo::array(TypeInfo::new("T".to_string()), 1))
+                    .with_type(TypeInfo::array(TypeInfo::new("T".to_string()), 1)),
             )
             .with_parameter(
                 Parameter::new("options".to_string())
                     .with_type(TypeInfo::new("ProcessOptions".to_string()))
-                    .optional()
+                    .optional(),
             )
             .with_parameter(
                 Parameter::new("handlers".to_string())
                     .with_type(TypeInfo::array(
                         TypeInfo::function(
                             vec![TypeInfo::new("T".to_string())],
-                            Some(TypeInfo::generic("Promise".to_string(), vec![TypeInfo::new("U".to_string())]))
+                            Some(TypeInfo::generic(
+                                "Promise".to_string(),
+                                vec![TypeInfo::new("U".to_string())],
+                            )),
                         ),
-                        1
+                        1,
                     ))
-                    .variadic()
+                    .variadic(),
             )
-            .with_return_type(
-                TypeInfo::generic("Promise".to_string(), vec![
-                    TypeInfo::generic("ProcessResult".to_string(), vec![TypeInfo::new("U".to_string())])
-                ])
-            );
+            .with_return_type(TypeInfo::generic(
+                "Promise".to_string(),
+                vec![TypeInfo::generic(
+                    "ProcessResult".to_string(),
+                    vec![TypeInfo::new("U".to_string())],
+                )],
+            ));
 
         let formatted = signature.format_typescript_style();
         assert!(formatted.contains("public static async processAsync"));
@@ -1152,38 +1168,49 @@ mod tests {
         let signature = Signature::new("process_data".to_string(), Language::Python)
             .with_modifiers(vec![Modifier::Static])
             .with_parameter(
-                Parameter::new("items".to_string())
-                    .with_type(TypeInfo::generic("List".to_string(), vec![TypeInfo::new("T".to_string())]))
+                Parameter::new("items".to_string()).with_type(TypeInfo::generic(
+                    "List".to_string(),
+                    vec![TypeInfo::new("T".to_string())],
+                )),
             )
             .with_parameter(
-                Parameter::new("processor".to_string())
-                    .with_type(TypeInfo::function(
+                Parameter::new("processor".to_string()).with_type(TypeInfo::function(
+                    vec![TypeInfo::new("T".to_string())],
+                    Some(TypeInfo::generic(
+                        "Awaitable".to_string(),
                         vec![TypeInfo::new("T".to_string())],
-                        Some(TypeInfo::generic("Awaitable".to_string(), vec![TypeInfo::new("T".to_string())]))
-                    ))
+                    )),
+                )),
             )
             .with_parameter(
                 Parameter::new("args".to_string())
                     .with_type(TypeInfo::new("Any".to_string()))
-                    .variadic()
+                    .variadic(),
             )
             .with_parameter(
                 Parameter::new("timeout".to_string())
-                    .with_type(TypeInfo::generic("Optional".to_string(), vec![TypeInfo::new("float".to_string())]))
-                    .with_default("None".to_string())
+                    .with_type(TypeInfo::generic(
+                        "Optional".to_string(),
+                        vec![TypeInfo::new("float".to_string())],
+                    ))
+                    .with_default("None".to_string()),
             )
             .with_parameter(
                 Parameter::new("kwargs".to_string())
-                    .with_type(TypeInfo::generic("Dict".to_string(), vec![
-                        TypeInfo::new("str".to_string()),
-                        TypeInfo::new("Any".to_string())
-                    ]))
+                    .with_type(TypeInfo::generic(
+                        "Dict".to_string(),
+                        vec![
+                            TypeInfo::new("str".to_string()),
+                            TypeInfo::new("Any".to_string()),
+                        ],
+                    ))
                     .variadic()
-                    .with_modifiers(vec![Modifier::Ref])
+                    .with_modifiers(vec![Modifier::Ref]),
             )
-            .with_return_type(
-                TypeInfo::generic("AsyncIterator".to_string(), vec![TypeInfo::new("T".to_string())])
-            )
+            .with_return_type(TypeInfo::generic(
+                "AsyncIterator".to_string(),
+                vec![TypeInfo::new("T".to_string())],
+            ))
             .async_function();
 
         let formatted = signature.format_python_style();
@@ -1203,26 +1230,30 @@ mod tests {
         let signature = Signature::new("processData".to_string(), Language::Dart)
             .with_modifiers(vec![Modifier::Static, Modifier::Final])
             .with_parameter(
-                Parameter::new("data".to_string())
-                    .with_type(TypeInfo::generic("List".to_string(), vec![TypeInfo::new("T".to_string())]))
+                Parameter::new("data".to_string()).with_type(TypeInfo::generic(
+                    "List".to_string(),
+                    vec![TypeInfo::new("T".to_string())],
+                )),
             )
             .with_parameter(
                 Parameter::new("required".to_string())
-                    .with_type(TypeInfo::new("String".to_string()))
+                    .with_type(TypeInfo::new("String".to_string())),
             )
             .with_parameter(
                 Parameter::new("optional".to_string())
                     .with_type(TypeInfo::new("int".to_string()))
-                    .optional()
+                    .optional(),
             )
-            .with_return_type(
-                TypeInfo::generic("Future".to_string(), vec![
-                    TypeInfo::generic("Result".to_string(), vec![
+            .with_return_type(TypeInfo::generic(
+                "Future".to_string(),
+                vec![TypeInfo::generic(
+                    "Result".to_string(),
+                    vec![
                         TypeInfo::new("T".to_string()),
-                        TypeInfo::new("Exception".to_string())
-                    ])
-                ])
-            );
+                        TypeInfo::new("Exception".to_string()),
+                    ],
+                )],
+            ));
 
         let formatted = signature.format_dart_style();
         assert!(formatted.contains("static final"));
@@ -1239,11 +1270,14 @@ mod tests {
         assert_eq!(ref_type.format_rust(), "&mut Vec<T>");
 
         let array_type = TypeInfo::array(
-            TypeInfo::generic("HashMap".to_string(), vec![
-                TypeInfo::new("String".to_string()),
-                TypeInfo::new("i32".to_string())
-            ]),
-            2
+            TypeInfo::generic(
+                "HashMap".to_string(),
+                vec![
+                    TypeInfo::new("String".to_string()),
+                    TypeInfo::new("i32".to_string()),
+                ],
+            ),
+            2,
         );
         assert!(array_type.is_array);
         assert_eq!(array_type.array_dimensions, 2);
@@ -1262,12 +1296,15 @@ mod tests {
         let closure_type = TypeInfo::function(
             vec![
                 TypeInfo::new("i32".to_string()),
-                TypeInfo::generic("Vec".to_string(), vec![TypeInfo::new("String".to_string())])
+                TypeInfo::generic("Vec".to_string(), vec![TypeInfo::new("String".to_string())]),
             ],
-            Some(TypeInfo::generic("Result".to_string(), vec![
-                TypeInfo::new("bool".to_string()),
-                TypeInfo::new("Error".to_string())
-            ]))
+            Some(TypeInfo::generic(
+                "Result".to_string(),
+                vec![
+                    TypeInfo::new("bool".to_string()),
+                    TypeInfo::new("Error".to_string()),
+                ],
+            )),
         );
 
         let rust_format = closure_type.format_rust();
@@ -1285,13 +1322,12 @@ mod tests {
     #[test]
     fn test_generic_parameter_bounds_and_defaults() {
         // Test complex generic parameter scenarios
-        let bounded_generic = GenericParameter::new("T".to_string())
-            .with_bounds(vec![
-                "Clone".to_string(),
-                "Send".to_string(),
-                "Sync".to_string(),
-                "'static".to_string()
-            ]);
+        let bounded_generic = GenericParameter::new("T".to_string()).with_bounds(vec![
+            "Clone".to_string(),
+            "Send".to_string(),
+            "Sync".to_string(),
+            "'static".to_string(),
+        ]);
 
         let rust_format = bounded_generic.format_rust();
         assert_eq!(rust_format, "T: Clone + Send + Sync + 'static");
@@ -1330,17 +1366,20 @@ mod tests {
     fn test_signature_display_formatting() {
         // Test that Display trait works correctly for different languages
         let rust_sig = Signature::new("test".to_string(), Language::Rust)
-            .with_parameter(Parameter::new("x".to_string()).with_type(TypeInfo::new("i32".to_string())))
+            .with_parameter(
+                Parameter::new("x".to_string()).with_type(TypeInfo::new("i32".to_string())),
+            )
             .with_raw_signature("fn test".to_string());
 
-        let display_output = format!("{}", rust_sig);
+        let display_output = format!("{rust_sig}");
         assert!(display_output.contains("fn test"));
         assert!(display_output.contains("x: i32"));
 
-        let ts_sig = Signature::new("test".to_string(), Language::TypeScript)
-            .with_parameter(Parameter::new("x".to_string()).with_type(TypeInfo::new("number".to_string())));
+        let ts_sig = Signature::new("test".to_string(), Language::TypeScript).with_parameter(
+            Parameter::new("x".to_string()).with_type(TypeInfo::new("number".to_string())),
+        );
 
-        let ts_display = format!("{}", ts_sig);
+        let ts_display = format!("{ts_sig}");
         assert!(ts_display.contains("test"));
         assert!(ts_display.contains("x: number"));
     }
@@ -1352,10 +1391,8 @@ mod tests {
         assert!(!simple_type.is_nullable);
         assert!(!simple_type.is_array);
 
-        let generic_type = TypeInfo::generic(
-            "Vec".to_string(),
-            vec![TypeInfo::new("i32".to_string())],
-        );
+        let generic_type =
+            TypeInfo::generic("Vec".to_string(), vec![TypeInfo::new("i32".to_string())]);
         assert_eq!(generic_type.name, "Vec");
         assert_eq!(generic_type.generic_args.len(), 1);
         assert_eq!(generic_type.generic_args[0].name, "i32");
@@ -1378,8 +1415,7 @@ mod tests {
     fn test_signature_creation() {
         let signature = Signature::new("test_function".to_string(), Language::Rust)
             .with_parameter(
-                Parameter::new("x".to_string())
-                    .with_type(TypeInfo::new("i32".to_string()))
+                Parameter::new("x".to_string()).with_type(TypeInfo::new("i32".to_string())),
             )
             .with_return_type(TypeInfo::new("String".to_string()))
             .async_function();
@@ -1395,8 +1431,7 @@ mod tests {
         let signature = Signature::new("test_fn".to_string(), Language::Rust)
             .with_modifiers(vec![Modifier::Public])
             .with_parameter(
-                Parameter::new("x".to_string())
-                    .with_type(TypeInfo::new("i32".to_string()))
+                Parameter::new("x".to_string()).with_type(TypeInfo::new("i32".to_string())),
             )
             .with_return_type(TypeInfo::new("String".to_string()))
             .async_function();
@@ -1416,7 +1451,7 @@ mod tests {
             .with_parameter(
                 Parameter::new("x".to_string())
                     .with_type(TypeInfo::new("number".to_string()))
-                    .optional()
+                    .optional(),
             )
             .with_return_type(TypeInfo::new("Promise<string>".to_string()));
 
@@ -1436,13 +1471,18 @@ mod tests {
         let signature = Signature::new("process".to_string(), Language::Rust)
             .with_generic(generic_param)
             .with_parameter(
-                Parameter::new("items".to_string())
-                    .with_type(TypeInfo::generic("Vec".to_string(), vec![TypeInfo::new("T".to_string())]))
+                Parameter::new("items".to_string()).with_type(TypeInfo::generic(
+                    "Vec".to_string(),
+                    vec![TypeInfo::new("T".to_string())],
+                )),
             )
-            .with_return_type(TypeInfo::generic("Result".to_string(), vec![
-                TypeInfo::new("T".to_string()),
-                TypeInfo::new("Error".to_string())
-            ]));
+            .with_return_type(TypeInfo::generic(
+                "Result".to_string(),
+                vec![
+                    TypeInfo::new("T".to_string()),
+                    TypeInfo::new("Error".to_string()),
+                ],
+            ));
 
         let formatted = signature.format_rust_style();
         assert!(formatted.contains("fn process<T: Clone + Send>"));
@@ -1453,8 +1493,11 @@ mod tests {
     #[test]
     fn test_function_type() {
         let function_type = TypeInfo::function(
-            vec![TypeInfo::new("i32".to_string()), TypeInfo::new("i32".to_string())],
-            Some(TypeInfo::new("i32".to_string()))
+            vec![
+                TypeInfo::new("i32".to_string()),
+                TypeInfo::new("i32".to_string()),
+            ],
+            Some(TypeInfo::new("i32".to_string())),
         );
 
         let rust_format = function_type.format_rust();

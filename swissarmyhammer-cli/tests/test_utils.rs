@@ -117,21 +117,33 @@ pub fn setup_mcp_test_env() -> Result<(TempDir, PathBuf)> {
 /// functionality without requiring real API credentials.
 pub struct SemanticTestGuard {
     _home_guard: TestHomeGuard,
+    _temp_dir: TempDir,
     original_api_key: Option<String>,
+    original_db_path: Option<String>,
 }
 
 impl SemanticTestGuard {
     /// Create a new semantic test guard with isolated environment
     pub fn new() -> Self {
         let home_guard = create_test_home_guard();
+        let temp_dir =
+            TempDir::new().expect("Failed to create temporary directory for semantic test");
+
         let original_api_key = std::env::var("NOMIC_API_KEY").ok();
+        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
 
         // Set a test API key that allows the command to start but will fail gracefully
         std::env::set_var("NOMIC_API_KEY", "test-key-for-cli-integration-testing");
 
+        // Set unique database path for this test to avoid conflicts
+        let db_path = temp_dir.path().join("semantic_test.db");
+        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &db_path);
+
         Self {
             _home_guard: home_guard,
+            _temp_dir: temp_dir,
             original_api_key,
+            original_db_path,
         }
     }
 }
@@ -148,6 +160,24 @@ impl Drop for SemanticTestGuard {
         match &self.original_api_key {
             Some(key) => std::env::set_var("NOMIC_API_KEY", key),
             None => std::env::remove_var("NOMIC_API_KEY"),
+        }
+
+        // Restore original database path environment variable
+        match &self.original_db_path {
+            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+        }
+
+        // Clean up test database files
+        let db_path = self._temp_dir.path().join("semantic_test.db");
+        if db_path.exists() {
+            if let Err(e) = std::fs::remove_file(&db_path) {
+                eprintln!(
+                    "Warning: Failed to clean up test database file {}: {}",
+                    db_path.display(),
+                    e
+                );
+            }
         }
     }
 }

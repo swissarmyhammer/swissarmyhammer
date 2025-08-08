@@ -326,8 +326,8 @@ impl SignatureExtractor for RustExtractor {
         if let Some(visibility) = self.parse_visibility(node, source) {
             match visibility {
                 Visibility::Public => modifiers.push(Modifier::Public),
-                Visibility::Private => {}, // Private is implicit in Rust
-                Visibility::Protected => {}, // Not applicable to Rust
+                Visibility::Private => {}   // Private is implicit in Rust
+                Visibility::Protected => {} // Not applicable to Rust
                 Visibility::Package => modifiers.push(Modifier::Public), // pub(crate) etc.
                 Visibility::Module => modifiers.push(Modifier::Public),
                 Visibility::Custom(_) => modifiers.push(Modifier::Public),
@@ -373,7 +373,8 @@ impl SignatureExtractor for RustExtractor {
         }
 
         // Set raw signature
-        signature = signature.with_raw_signature(self.build_function_signature(&name, node, source));
+        signature =
+            signature.with_raw_signature(self.build_function_signature(&name, node, source));
 
         Some(signature)
     }
@@ -400,14 +401,11 @@ impl SignatureExtractor for RustExtractor {
             "struct_item" => {
                 let name = self.extract_name_from_node(node, source)?;
                 let mut signature = Signature::new(name.clone(), Language::Rust);
-                
+
                 // Add visibility modifiers
                 let mut modifiers = Vec::new();
-                if let Some(visibility) = self.parse_visibility(node, source) {
-                    match visibility {
-                        Visibility::Public => modifiers.push(Modifier::Public),
-                        _ => {},
-                    }
+                if let Some(Visibility::Public) = self.parse_visibility(node, source) {
+                    modifiers.push(Modifier::Public);
                 }
                 signature = signature.with_modifiers(modifiers);
 
@@ -417,20 +415,18 @@ impl SignatureExtractor for RustExtractor {
                     signature = signature.with_generic(generic);
                 }
 
-                signature = signature.with_raw_signature(self.build_struct_signature(&name, node, source));
+                signature =
+                    signature.with_raw_signature(self.build_struct_signature(&name, node, source));
                 Some(signature)
             }
             "enum_item" | "trait_item" | "type_item" => {
                 let name = self.extract_name_from_node(node, source)?;
                 let mut signature = Signature::new(name.clone(), Language::Rust);
-                
+
                 // Add visibility modifiers
                 let mut modifiers = Vec::new();
-                if let Some(visibility) = self.parse_visibility(node, source) {
-                    match visibility {
-                        Visibility::Public => modifiers.push(Modifier::Public),
-                        _ => {},
-                    }
+                if let Some(Visibility::Public) = self.parse_visibility(node, source) {
+                    modifiers.push(Modifier::Public);
                 }
                 signature = signature.with_modifiers(modifiers);
 
@@ -443,7 +439,7 @@ impl SignatureExtractor for RustExtractor {
                 let raw_sig = match node.kind() {
                     "enum_item" => self.build_enum_signature(&name, node, source),
                     "trait_item" => self.build_trait_signature(&name, node, source),
-                    "type_item" => format!("type {}", name),
+                    "type_item" => format!("type {name}"),
                     _ => name.clone(),
                 };
                 signature = signature.with_raw_signature(raw_sig);
@@ -493,11 +489,12 @@ impl SignatureExtractor for RustExtractor {
                 for child in node.children(&mut node.walk()) {
                     if child.kind() != "&" && child.kind() != "mut" {
                         if let Some(inner_type) = self.parse_type_info(&child, source) {
-                            let type_name = if node.children(&mut node.walk()).any(|c| c.kind() == "mut") {
-                                format!("&mut {}", inner_type.name)
-                            } else {
-                                format!("&{}", inner_type.name)
-                            };
+                            let type_name =
+                                if node.children(&mut node.walk()).any(|c| c.kind() == "mut") {
+                                    format!("&mut {}", inner_type.name)
+                                } else {
+                                    format!("&{}", inner_type.name)
+                                };
                             return Some(TypeInfo::new(type_name));
                         }
                     }
@@ -524,8 +521,10 @@ impl SignatureExtractor for RustExtractor {
                     }
                 }
                 if !tuple_types.is_empty() {
-                    let tuple_name = format!("({})", 
-                        tuple_types.iter()
+                    let tuple_name = format!(
+                        "({})",
+                        tuple_types
+                            .iter()
                             .map(|t| t.name.clone())
                             .collect::<Vec<_>>()
                             .join(", ")
@@ -544,7 +543,8 @@ impl SignatureExtractor for RustExtractor {
                     match child.kind() {
                         "parameters" => {
                             for param_child in child.children(&mut child.walk()) {
-                                if let Some(param_type) = self.parse_type_info(&param_child, source) {
+                                if let Some(param_type) = self.parse_type_info(&param_child, source)
+                                {
                                     param_types.push(param_type);
                                 }
                             }
@@ -619,11 +619,11 @@ impl SignatureExtractor for RustExtractor {
                 // Handle self, &self, &mut self
                 let self_text = self.get_node_text(node, source);
                 let mut parameter = Parameter::new("self".to_string());
-                
+
                 if self_text.contains("mut") {
                     parameter = parameter.mutable().with_modifiers(vec![Modifier::Mut]);
                 }
-                
+
                 let type_name = if self_text.starts_with("&mut") {
                     "&mut Self"
                 } else if self_text.starts_with('&') {
@@ -631,7 +631,7 @@ impl SignatureExtractor for RustExtractor {
                 } else {
                     "Self"
                 };
-                
+
                 parameter = parameter.with_type(TypeInfo::new(type_name.to_string()));
                 Some(parameter)
             }
@@ -720,7 +720,7 @@ impl RustExtractor {
             if let Some(type_info) = self.parse_type_info(&return_type_node, source) {
                 return Some(type_info);
             }
-            
+
             // If that doesn't work, look through its children
             for child in return_type_node.children(&mut return_type_node.walk()) {
                 if child.kind() != "->" && child.kind() != " " {
@@ -763,21 +763,33 @@ impl SymbolExtractor for RustExtractor {
                         let signature = match node_type {
                             OutlineNodeType::Function => {
                                 // Use new comprehensive signature extraction
-                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_function_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::Rust))
                                 } else {
                                     Some(self.build_function_signature(&name, node, source))
                                 }
                             }
-                            OutlineNodeType::Struct | OutlineNodeType::Enum | OutlineNodeType::Trait => {
+                            OutlineNodeType::Struct
+                            | OutlineNodeType::Enum
+                            | OutlineNodeType::Trait => {
                                 // Use new type signature extraction
-                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_type_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::Rust))
                                 } else {
                                     match node_type {
-                                        OutlineNodeType::Struct => Some(self.build_struct_signature(&name, node, source)),
-                                        OutlineNodeType::Enum => Some(self.build_enum_signature(&name, node, source)),
-                                        OutlineNodeType::Trait => Some(self.build_trait_signature(&name, node, source)),
+                                        OutlineNodeType::Struct => {
+                                            Some(self.build_struct_signature(&name, node, source))
+                                        }
+                                        OutlineNodeType::Enum => {
+                                            Some(self.build_enum_signature(&name, node, source))
+                                        }
+                                        OutlineNodeType::Trait => {
+                                            Some(self.build_trait_signature(&name, node, source))
+                                        }
                                         _ => None,
                                     }
                                 }
@@ -838,7 +850,7 @@ impl SymbolExtractor for RustExtractor {
                             "struct_item" => Some(self.build_struct_signature(&name, node, source)),
                             "enum_item" => Some(self.build_enum_signature(&name, node, source)),
                             "trait_item" => Some(self.build_trait_signature(&name, node, source)),
-                            "type_item" => Some(format!("type {}", name)),
+                            "type_item" => Some(format!("type {name}")),
                             _ => None,
                         }
                     } else {
@@ -1137,7 +1149,7 @@ where
 pub mod utils {
     /// Helper function
     pub fn format_data(input: &str) -> String {
-        format!("formatted: {}", input)
+        format!("formatted: {input}")
     }
 }
 
