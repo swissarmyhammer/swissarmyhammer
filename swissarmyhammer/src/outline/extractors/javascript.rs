@@ -373,13 +373,10 @@ impl SignatureExtractor for JavaScriptExtractor {
         let name = self.extract_name_from_node(node, source)?;
         let mut signature = Signature::new(name.clone(), Language::JavaScript);
 
-        match node.kind() {
-            "class_declaration" => {
-                // Build the class signature string
-                let class_signature = self.build_class_signature(&name, node, source);
-                signature = signature.with_raw_signature(class_signature);
-            }
-            _ => {}
+        if node.kind() == "class_declaration" {
+            // Build the class signature string
+            let class_signature = self.build_class_signature(&name, node, source);
+            signature = signature.with_raw_signature(class_signature);
         }
 
         Some(signature)
@@ -417,12 +414,9 @@ impl SignatureExtractor for JavaScriptExtractor {
                 // Handle default parameters
                 if let Some(name_node) = node.child_by_field_name("left") {
                     let name = self.get_node_text(&name_node, source);
-                    let default_value = if let Some(value_node) = node.child_by_field_name("right")
-                    {
-                        Some(self.get_node_text(&value_node, source))
-                    } else {
-                        None
-                    };
+                    let default_value = node
+                        .child_by_field_name("right")
+                        .map(|value_node| self.get_node_text(&value_node, source));
 
                     let param_type = TypeInfo::new("any".to_string());
                     let mut param = Parameter::new(name).with_type(param_type);

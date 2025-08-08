@@ -404,11 +404,8 @@ impl SignatureExtractor for RustExtractor {
 
                 // Add visibility modifiers
                 let mut modifiers = Vec::new();
-                if let Some(visibility) = self.parse_visibility(node, source) {
-                    match visibility {
-                        Visibility::Public => modifiers.push(Modifier::Public),
-                        _ => {}
-                    }
+                if let Some(Visibility::Public) = self.parse_visibility(node, source) {
+                    modifiers.push(Modifier::Public);
                 }
                 signature = signature.with_modifiers(modifiers);
 
@@ -428,11 +425,8 @@ impl SignatureExtractor for RustExtractor {
 
                 // Add visibility modifiers
                 let mut modifiers = Vec::new();
-                if let Some(visibility) = self.parse_visibility(node, source) {
-                    match visibility {
-                        Visibility::Public => modifiers.push(Modifier::Public),
-                        _ => {}
-                    }
+                if let Some(Visibility::Public) = self.parse_visibility(node, source) {
+                    modifiers.push(Modifier::Public);
                 }
                 signature = signature.with_modifiers(modifiers);
 
@@ -445,7 +439,7 @@ impl SignatureExtractor for RustExtractor {
                 let raw_sig = match node.kind() {
                     "enum_item" => self.build_enum_signature(&name, node, source),
                     "trait_item" => self.build_trait_signature(&name, node, source),
-                    "type_item" => format!("type {}", name),
+                    "type_item" => format!("type {name}"),
                     _ => name.clone(),
                 };
                 signature = signature.with_raw_signature(raw_sig);
@@ -856,7 +850,7 @@ impl SymbolExtractor for RustExtractor {
                             "struct_item" => Some(self.build_struct_signature(&name, node, source)),
                             "enum_item" => Some(self.build_enum_signature(&name, node, source)),
                             "trait_item" => Some(self.build_trait_signature(&name, node, source)),
-                            "type_item" => Some(format!("type {}", name)),
+                            "type_item" => Some(format!("type {name}")),
                             _ => None,
                         }
                     } else {
@@ -1155,7 +1149,7 @@ where
 pub mod utils {
     /// Helper function
     pub fn format_data(input: &str) -> String {
-        format!("formatted: {}", input)
+        format!("formatted: {input}")
     }
 }
 

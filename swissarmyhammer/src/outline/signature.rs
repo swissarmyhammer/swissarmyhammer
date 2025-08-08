@@ -248,7 +248,7 @@ impl TypeInfo {
         }
 
         if self.is_nullable {
-            result = format!("Option<{}>", result);
+            result = format!("Option<{result}>");
         }
 
         result
@@ -360,7 +360,7 @@ impl TypeInfo {
         }
 
         if self.is_nullable {
-            result = format!("Optional[{}]", result);
+            result = format!("Optional[{result}]");
         }
 
         result
@@ -536,7 +536,7 @@ impl Parameter {
         if let Some(ref type_info) = self.type_info {
             result.push_str(&type_info.format_rust());
         } else {
-            result.push_str("_");
+            result.push('_');
         }
 
         result
@@ -720,7 +720,7 @@ impl Signature {
     /// Add a constraint (for Python base classes)
     pub fn with_constraint(mut self, constraint: String) -> Self {
         // For Python, we can add constraints as attributes
-        self.attributes.push(format!("constraint:{}", constraint));
+        self.attributes.push(format!("constraint:{constraint}"));
         self
     }
 
@@ -1371,7 +1371,7 @@ mod tests {
             )
             .with_raw_signature("fn test".to_string());
 
-        let display_output = format!("{}", rust_sig);
+        let display_output = format!("{rust_sig}");
         assert!(display_output.contains("fn test"));
         assert!(display_output.contains("x: i32"));
 
@@ -1379,7 +1379,7 @@ mod tests {
             Parameter::new("x".to_string()).with_type(TypeInfo::new("number".to_string())),
         );
 
-        let ts_display = format!("{}", ts_sig);
+        let ts_display = format!("{ts_sig}");
         assert!(ts_display.contains("test"));
         assert!(ts_display.contains("x: number"));
     }

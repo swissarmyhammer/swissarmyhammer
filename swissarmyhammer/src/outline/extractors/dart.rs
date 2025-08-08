@@ -604,15 +604,15 @@ impl SignatureExtractor for DartExtractor {
                 signature = signature.with_raw_signature(class_signature);
             }
             "enum_declaration" => {
-                let enum_signature = format!("enum {}", name);
+                let enum_signature = format!("enum {name}");
                 signature = signature.with_raw_signature(enum_signature);
             }
             "mixin_declaration" => {
-                let mixin_signature = format!("mixin {}", name);
+                let mixin_signature = format!("mixin {name}");
                 signature = signature.with_raw_signature(mixin_signature);
             }
             "extension_declaration" => {
-                let extension_signature = format!("extension {}", name);
+                let extension_signature = format!("extension {name}");
                 signature = signature.with_raw_signature(extension_signature);
             }
             _ => {}

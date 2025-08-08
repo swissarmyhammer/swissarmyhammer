@@ -83,7 +83,6 @@ fn test_search_index_with_force() -> Result<()> {
 
 /// Test search query functionality
 #[test]
-#[ignore] // Temporarily disabled due to DuckDB crash during cleanup
 fn test_search_query() -> Result<()> {
     let _guard = create_semantic_test_guard();
 

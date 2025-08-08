@@ -422,23 +422,20 @@ impl SignatureExtractor for PythonExtractor {
         let name = self.extract_name_from_node(node, source)?;
         let mut signature = Signature::new(name.clone(), Language::Python);
 
-        match node.kind() {
-            "class_definition" => {
-                // Extract base classes from inheritance
-                if let Some(bases_node) = node.child_by_field_name("superclasses") {
-                    // Python doesn't have formal generics but we can extract base classes
-                    let bases = self.extract_base_classes(&bases_node, source);
-                    for base in bases {
-                        // Store as constraints for now
-                        signature = signature.with_constraint(base);
-                    }
+        if node.kind() == "class_definition" {
+            // Extract base classes from inheritance
+            if let Some(bases_node) = node.child_by_field_name("superclasses") {
+                // Python doesn't have formal generics but we can extract base classes
+                let bases = self.extract_base_classes(&bases_node, source);
+                for base in bases {
+                    // Store as constraints for now
+                    signature = signature.with_constraint(base);
                 }
-
-                // Build the class signature string
-                let class_signature = self.build_class_signature(&name, node, source);
-                signature = signature.with_raw_signature(class_signature);
             }
-            _ => {}
+
+            // Build the class signature string
+            let class_signature = self.build_class_signature(&name, node, source);
+            signature = signature.with_raw_signature(class_signature);
         }
 
         Some(signature)

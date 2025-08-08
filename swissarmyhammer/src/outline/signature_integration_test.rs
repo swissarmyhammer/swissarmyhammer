@@ -319,9 +319,6 @@ mod tests {
 
         // This demonstrates that the comprehensive signature extraction framework
         // successfully provides unified, language-specific signature handling
-        assert!(
-            true,
-            "Cross-language signature extraction framework is complete and consistent"
-        );
+        // All language-specific tests above verify the framework completeness
     }
 }

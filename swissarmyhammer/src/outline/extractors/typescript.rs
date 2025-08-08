@@ -162,11 +162,8 @@ impl SignatureExtractor for TypeScriptExtractor {
 
                 // Extract extends/implements clauses
                 for child in node.children(&mut node.walk()) {
-                    match child.kind() {
-                        "class_heritage" => {
-                            self.parse_heritage_clause(&child, source, &mut signature);
-                        }
-                        _ => {}
+                    if child.kind() == "class_heritage" {
+                        self.parse_heritage_clause(&child, source, &mut signature);
                     }
                 }
             }

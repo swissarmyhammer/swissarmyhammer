@@ -287,6 +287,16 @@ impl SemanticConfig {
     /// 1. Local .swissarmyhammer directories (repository-specific)
     /// 2. User ~/.swissarmyhammer directory (fallback)
     fn find_semantic_database_path() -> PathBuf {
+        // First check for environment variable override (useful for testing)
+        if let Ok(db_path) = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH") {
+            let path = PathBuf::from(db_path);
+            tracing::debug!(
+                "Using environment variable semantic database path: {}",
+                path.display()
+            );
+            return path;
+        }
+
         // Try to find local .swissarmyhammer directories first
         if let Ok(current_dir) = std::env::current_dir() {
             let local_dirs =
