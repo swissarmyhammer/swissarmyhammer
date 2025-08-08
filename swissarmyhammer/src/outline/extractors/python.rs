@@ -496,7 +496,8 @@ impl SignatureExtractor for PythonExtractor {
                     if union_types.len() == 1 {
                         union_types.into_iter().next()
                     } else {
-                        let union_str = union_types.iter()
+                        let union_str = union_types
+                            .iter()
                             .map(|t| t.name.clone())
                             .collect::<Vec<_>>()
                             .join(" | ");
@@ -700,33 +701,33 @@ impl PythonExtractor {
     /// Extract base classes from a superclasses node
     fn extract_base_classes(&self, node: &Node, source: &str) -> Vec<String> {
         let mut bases = Vec::new();
-        
+
         for child in node.children(&mut node.walk()) {
             if child.kind() == "identifier" || child.kind() == "attribute" {
                 bases.push(self.get_node_text(&child, source));
             }
         }
-        
+
         bases
     }
 
     /// Extract subscript arguments for generic types
     fn extract_subscript_args(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
         let mut args = Vec::new();
-        
+
         for child in node.children(&mut node.walk()) {
             if let Some(type_info) = self.parse_type_info(&child, source) {
                 args.push(type_info);
             }
         }
-        
+
         args
     }
 
     /// Extract union types from binary operators
     fn extract_union_types(&self, node: &Node, source: &str) -> Vec<TypeInfo> {
         let mut types = Vec::new();
-        
+
         for child in node.children(&mut node.walk()) {
             if child.kind() != "|" {
                 if let Some(type_info) = self.parse_type_info(&child, source) {
@@ -734,7 +735,7 @@ impl PythonExtractor {
                 }
             }
         }
-        
+
         types
     }
 }

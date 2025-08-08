@@ -756,14 +756,15 @@ impl SignatureExtractor for DartExtractor {
                         if let Some(name_node) = param_child.child_by_field_name("name") {
                             let name = self.get_node_text(&name_node, source);
                             let mut generic = GenericParameter::new(name);
-                            
+
                             // Check for constraints (extends clause)
                             if let Some(bound_node) = param_child.child_by_field_name("bound") {
-                                if let Some(bound_type) = self.parse_type_info(&bound_node, source) {
+                                if let Some(bound_type) = self.parse_type_info(&bound_node, source)
+                                {
                                     generic = generic.with_bounds(vec![bound_type.name]);
                                 }
                             }
-                            
+
                             generics.push(generic);
                         }
                     }
@@ -820,7 +821,10 @@ impl DartExtractor {
 
         for child in node.children(&mut node.walk()) {
             match child.kind() {
-                "formal_parameter" | "normal_formal_parameter" | "optional_formal_parameters" | "named_parameter_types" => {
+                "formal_parameter"
+                | "normal_formal_parameter"
+                | "optional_formal_parameters"
+                | "named_parameter_types" => {
                     if let Some(param) = self.parse_parameter(&child, source) {
                         parameters.push(param);
                     }
@@ -879,7 +883,9 @@ impl SymbolExtractor for DartExtractor {
                         let signature = match node_type {
                             OutlineNodeType::Function => {
                                 // Use new comprehensive signature extraction
-                                if let Some(detailed_sig) = self.extract_function_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_function_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::Dart))
                                 } else {
                                     Some(self.build_function_signature(&name, node, source))
@@ -887,21 +893,27 @@ impl SymbolExtractor for DartExtractor {
                             }
                             OutlineNodeType::Method => match node.kind() {
                                 "constructor_signature" => {
-                                    if let Some(detailed_sig) = self.extract_constructor_signature(node, source) {
+                                    if let Some(detailed_sig) =
+                                        self.extract_constructor_signature(node, source)
+                                    {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
                                         Some(self.build_constructor_signature(&name, node, source))
                                     }
                                 }
                                 "factory_constructor_signature" => {
-                                    if let Some(detailed_sig) = self.extract_constructor_signature(node, source) {
+                                    if let Some(detailed_sig) =
+                                        self.extract_constructor_signature(node, source)
+                                    {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
                                         Some(self.build_factory_signature(&name, node, source))
                                     }
                                 }
                                 _ => {
-                                    if let Some(detailed_sig) = self.extract_method_signature(node, source) {
+                                    if let Some(detailed_sig) =
+                                        self.extract_method_signature(node, source)
+                                    {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
                                         Some(self.build_function_signature(&name, node, source))
@@ -909,7 +921,9 @@ impl SymbolExtractor for DartExtractor {
                                 }
                             },
                             OutlineNodeType::Class => {
-                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_type_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::Dart))
                                 } else {
                                     Some(self.build_class_signature(&name, node, source))
@@ -917,14 +931,18 @@ impl SymbolExtractor for DartExtractor {
                             }
                             OutlineNodeType::Interface => match node.kind() {
                                 "mixin_declaration" => {
-                                    if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                    if let Some(detailed_sig) =
+                                        self.extract_type_signature(node, source)
+                                    {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
                                         Some(self.build_mixin_signature(&name, node, source))
                                     }
                                 }
                                 "extension_declaration" => {
-                                    if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                    if let Some(detailed_sig) =
+                                        self.extract_type_signature(node, source)
+                                    {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
                                         Some(self.build_extension_signature(&name, node, source))
@@ -933,7 +951,9 @@ impl SymbolExtractor for DartExtractor {
                                 _ => None,
                             },
                             OutlineNodeType::Enum => {
-                                if let Some(detailed_sig) = self.extract_type_signature(node, source) {
+                                if let Some(detailed_sig) =
+                                    self.extract_type_signature(node, source)
+                                {
                                     Some(detailed_sig.format_for_language(Language::Dart))
                                 } else {
                                     Some(self.build_enum_signature(&name, node, source))

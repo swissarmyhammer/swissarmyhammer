@@ -45,13 +45,13 @@ pub fn merge_config_into_context(context: &mut HashMap<String, Value>, config: &
     let mut merged_vars = serde_json::Map::new();
 
     // First, add sah.toml configuration values (lowest priority)
-    for (key, config_value) in config.values() {
+    // Process environment variable substitution in config values (medium priority)
+    let mut config_with_env_vars = config.clone();
+    substitute_env_vars(&mut config_with_env_vars);
+
+    for (key, config_value) in config_with_env_vars.values() {
         merged_vars.insert(key.clone(), config_value_to_json_value(config_value));
     }
-
-    // TODO: Add environment variable substitution here (medium priority)
-    // This would involve processing values like ${VAR_NAME:-default}
-    // and replacing them with actual environment variable values
 
     // Finally, add existing workflow template variables (highest priority)
     // These will override any config values with the same key
@@ -388,5 +388,63 @@ mod tests {
 
         env::remove_var("PROJECT_NAME");
         env::remove_var("VERSION");
+    }
+
+    #[test]
+    fn test_merge_config_with_env_var_substitution() {
+        env::set_var("ENV_PROJECT_NAME", "EnvProject");
+        env::set_var("ENV_TIMEOUT", "30");
+
+        let mut context = HashMap::new();
+        context.insert(
+            "_template_vars".to_string(),
+            json!({
+                "workflow_var": "workflow_value",
+                "env_project_name": "ShouldBeOverriddenByWorkflow" // This should override env var
+            }),
+        );
+
+        let mut config = Configuration::new();
+        config.insert(
+            "env_project_name".to_string(),
+            ConfigValue::String("${ENV_PROJECT_NAME}".to_string()),
+        );
+        config.insert(
+            "timeout".to_string(),
+            ConfigValue::String("${ENV_TIMEOUT:-60}".to_string()),
+        );
+        config.insert(
+            "default_value".to_string(),
+            ConfigValue::String("${MISSING_VAR:-default}".to_string()),
+        );
+        config.insert(
+            "config_var".to_string(),
+            ConfigValue::String("config_value".to_string()),
+        );
+
+        merge_config_into_context(&mut context, &config);
+
+        let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
+
+        // Workflow vars should override config/env vars
+        assert_eq!(
+            template_vars.get("env_project_name").unwrap(),
+            "ShouldBeOverriddenByWorkflow"
+        );
+
+        // Env var substitution should work for new keys
+        assert_eq!(template_vars.get("timeout").unwrap(), "30");
+
+        // Default value should work when env var is missing
+        assert_eq!(template_vars.get("default_value").unwrap(), "default");
+
+        // Regular config values should work
+        assert_eq!(template_vars.get("config_var").unwrap(), "config_value");
+
+        // Existing workflow vars should be preserved
+        assert_eq!(template_vars.get("workflow_var").unwrap(), "workflow_value");
+
+        env::remove_var("ENV_PROJECT_NAME");
+        env::remove_var("ENV_TIMEOUT");
     }
 }
