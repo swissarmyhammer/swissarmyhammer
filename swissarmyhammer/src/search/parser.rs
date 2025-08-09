@@ -1692,7 +1692,7 @@ pub async fn handle_memo_command(command: MemoCommands) -> Result<(), Box<dyn st
         let memo_file_path = Path::new("./swissarmyhammer-cli/src/memo.rs");
         let memo_chunks = parser.parse_file(memo_file_path, memo_content).unwrap();
 
-        if memo_chunks.is_empty() {}
+        memo_chunks.is_empty();
 
         // The test should pass if we extract chunks from either file
         assert!(

@@ -32,8 +32,6 @@ SwissArmyHammer transforms prompt chaos into organized, collaborative workflow w
 
 **⚡ Developer-First Tooling**: Rich CLI with instant search, validation, testing, and diagnostics ensures your prompts are always discoverable, reliable, and maintainable.
 
-**The Result**: Teams report 5x faster prompt iteration, zero lost prompts, and dramatically improved prompt quality through systematic organization and collaboration.
-
 ## How SwissArmyHammer Works
 
 SwissArmyHammer transforms your prompt workflow through:

@@ -42,8 +42,8 @@ ignore = { workspace = true }
 dashmap = { workspace = true }
 regex = { workspace = true }
 chrono = { workspace = true }
-ulid = { version = "1.1", features = ["serde"] }
-toml = "0.8"
+ulid = { version = "1.2.1", features = ["serde"] }
+toml = "0.9.5"
 
 # Search functionality
 tantivy = { workspace = true }
@@ -60,7 +60,7 @@ duckdb = { workspace = true, optional = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }
-tree-sitter-typescript = { workspace = true }  
+tree-sitter-typescript = { workspace = true }
 tree-sitter-javascript = { workspace = true }
 tree-sitter-dart = { workspace = true }
 md5 = { workspace = true }
@@ -99,7 +99,14 @@ indicatif = { workspace = true }
 
 [features]
 default = ["semantic-search"]
-semantic-search = ["ort", "tokenizers", "hf-hub", "ndarray", "fastembed", "duckdb"]
+semantic-search = [
+    "ort",
+    "tokenizers",
+    "hf-hub",
+    "ndarray",
+    "fastembed",
+    "duckdb",
+]
 fast-tests = []
 
 [dev-dependencies]

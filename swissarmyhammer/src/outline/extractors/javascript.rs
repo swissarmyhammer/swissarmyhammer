@@ -1048,7 +1048,7 @@ function processUser(user) {
         // Currently, all symbols should be at the top level (no nesting)
         // Note: there might be duplicate classes due to overlapping queries
         assert!(
-            class_symbols.len() >= 1,
+            !class_symbols.is_empty(),
             "Should find at least one User class"
         );
         assert_eq!(class_symbols[0].name, "User");
@@ -1127,7 +1127,7 @@ function processUser(user) {
 
         // Should have at least one User class
         assert!(
-            class_symbols.len() >= 1,
+            !class_symbols.is_empty(),
             "Should find at least one User class"
         );
         let user_class = class_symbols[0];
@@ -1251,8 +1251,7 @@ class Vehicle {
             .count();
         assert_eq!(
             top_level_methods, 0,
-            "All methods should be nested in the class, found {} at top level",
-            top_level_methods
+            "All methods should be nested in the class, found {top_level_methods} at top level"
         );
     }
 }

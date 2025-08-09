@@ -1803,8 +1803,7 @@ def function_with_nested():
         for method_name in &expected_base_methods {
             assert!(
                 base_child_names.contains(&&method_name.to_string()),
-                "BaseClass should contain {} method",
-                method_name
+                "BaseClass should contain {method_name} method"
             );
         }
 
@@ -1846,7 +1845,7 @@ def function_with_nested():
             .expect("Should find DataModel");
 
         assert!(
-            data_model.children.len() >= 1,
+            !data_model.children.is_empty(),
             "DataModel should have at least 1 child method, found: {}",
             data_model.children.len()
         );
