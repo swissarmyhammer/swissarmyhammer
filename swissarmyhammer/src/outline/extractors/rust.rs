@@ -946,7 +946,10 @@ impl SymbolExtractor for RustExtractor {
 
                 // Find all symbols that belong to this module
                 for &(j, potential_child) in &sorted_symbols {
-                    if i != j && !used_indices.contains(&j) && Self::is_symbol_within_range(potential_child, symbol) {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
                         // Check if this child isn't already a child of a more specific parent
                         let mut should_add = true;
 
@@ -1440,19 +1443,25 @@ pub fn main() {
             .iter()
             .find(|s| s.name == "my_module" && s.node_type == OutlineNodeType::Module);
         assert!(module_opt.is_some(), "Should find my_module");
-        
+
         let module = module_opt.unwrap();
         assert!(!module.children.is_empty(), "Module should have children");
 
         // Check that the module contains expected children (struct should be there)
         let child_names: Vec<&String> = module.children.iter().map(|c| &c.name).collect();
-        assert!(child_names.contains(&&"Person".to_string()), "Module should contain Person struct");
+        assert!(
+            child_names.contains(&&"Person".to_string()),
+            "Module should contain Person struct"
+        );
 
         // Find trait at top level (traits are processed first now)
         let trait_opt = hierarchical_symbols
             .iter()
             .find(|s| s.name == "Displayable" && s.node_type == OutlineNodeType::Trait);
-        assert!(trait_opt.is_some(), "Should find Displayable trait at top level");
+        assert!(
+            trait_opt.is_some(),
+            "Should find Displayable trait at top level"
+        );
 
         // Find impl blocks at top level (processed before modules)
         let impl_blocks: Vec<&OutlineNode> = hierarchical_symbols
@@ -1462,24 +1471,38 @@ pub fn main() {
         assert_eq!(impl_blocks.len(), 2, "Should have two impl blocks");
 
         // Check that impl blocks have their methods as children
-        let person_impl = impl_blocks.iter()
-            .find(|impl_block| impl_block.name.contains("Person") && !impl_block.name.contains("Displayable"));
+        let person_impl = impl_blocks.iter().find(|impl_block| {
+            impl_block.name.contains("Person") && !impl_block.name.contains("Displayable")
+        });
         assert!(person_impl.is_some(), "Should find impl block for Person");
 
         if let Some(impl_block) = person_impl {
             let method_names: Vec<&String> = impl_block.children.iter().map(|c| &c.name).collect();
-            assert!(method_names.contains(&&"new".to_string()), "Impl should contain new method");
-            assert!(method_names.contains(&&"name".to_string()), "Impl should contain name method");
+            assert!(
+                method_names.contains(&&"new".to_string()),
+                "Impl should contain new method"
+            );
+            assert!(
+                method_names.contains(&&"name".to_string()),
+                "Impl should contain name method"
+            );
         }
 
         // Check that the trait impl has the display method
-        let trait_impl = impl_blocks.iter()
+        let trait_impl = impl_blocks
+            .iter()
             .find(|impl_block| impl_block.name.contains("Displayable"));
-        assert!(trait_impl.is_some(), "Should find impl block for Displayable trait");
+        assert!(
+            trait_impl.is_some(),
+            "Should find impl block for Displayable trait"
+        );
 
         if let Some(impl_block) = trait_impl {
             let method_names: Vec<&String> = impl_block.children.iter().map(|c| &c.name).collect();
-            assert!(method_names.contains(&&"display".to_string()), "Trait impl should contain display method");
+            assert!(
+                method_names.contains(&&"display".to_string()),
+                "Trait impl should contain display method"
+            );
         }
 
         // Check that global function is not in the module
@@ -1487,12 +1510,24 @@ pub fn main() {
             .iter()
             .find(|s| s.name == "main" && s.node_type == OutlineNodeType::Function);
         assert!(global_func.is_some(), "Should find global main function");
-        assert!(global_func.unwrap().children.is_empty(), "Global function should not have children");
+        assert!(
+            global_func.unwrap().children.is_empty(),
+            "Global function should not have children"
+        );
 
         println!("Hierarchical relationships test passed!");
-        println!("Module '{}' has {} children:", module.name, module.children.len());
+        println!(
+            "Module '{}' has {} children:",
+            module.name,
+            module.children.len()
+        );
         for child in &module.children {
-            println!("  {:?} '{}' with {} children", child.node_type, child.name, child.children.len());
+            println!(
+                "  {:?} '{}' with {} children",
+                child.node_type,
+                child.name,
+                child.children.len()
+            );
             for grandchild in &child.children {
                 println!("    {:?} '{}'", grandchild.node_type, grandchild.name);
             }

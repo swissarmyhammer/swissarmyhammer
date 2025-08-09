@@ -1734,9 +1734,10 @@ void globalFunction() {
 
         // Verify that global function exists
         assert!(
-            hierarchical_symbols.iter().any(|s| s.name == "globalFunction"),
+            hierarchical_symbols
+                .iter()
+                .any(|s| s.name == "globalFunction"),
             "globalFunction should exist"
         );
     }
-
 }
