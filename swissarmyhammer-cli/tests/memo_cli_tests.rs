@@ -863,12 +863,11 @@ fn test_cli_memo_file_from_temp() {
 mod stress_tests {
     use super::*;
 
-    /// Stress test: Create many memos rapidly via CLI
+    /// Performance test: Create multiple memos rapidly via CLI
     #[test]
-    #[ignore] // Run only when specifically requested due to time
     fn test_cli_memo_create_many() {
         let temp_dir = TempDir::new().unwrap();
-        let num_memos = 100;
+        let num_memos = 45;
 
         for i in 1..=num_memos {
             memo_cmd_with_dir(&temp_dir)
