@@ -310,6 +310,15 @@ impl RustExtractor {
 
         signature
     }
+
+    /// Check if an inner symbol is within the range of an outer symbol
+    fn is_symbol_within_range(inner: &OutlineNode, outer: &OutlineNode) -> bool {
+        // A symbol belongs to a container if its byte range is completely within the container's byte range
+        inner.source_range.0 >= outer.source_range.0
+            && inner.source_range.1 <= outer.source_range.1
+            && inner.start_line >= outer.start_line
+            && inner.end_line <= outer.end_line
+    }
 }
 
 impl SignatureExtractor for RustExtractor {
@@ -870,9 +879,139 @@ impl SymbolExtractor for RustExtractor {
     }
 
     fn build_hierarchy(&self, symbols: Vec<OutlineNode>) -> Vec<OutlineNode> {
-        // For now, return symbols as-is
-        // TODO: Build proper hierarchical relationships for impl blocks, modules, etc.
-        symbols
+        let mut hierarchical_symbols = Vec::new();
+        let mut used_indices = std::collections::HashSet::new();
+
+        // Sort symbols by start line for processing in order
+        let mut sorted_symbols: Vec<(usize, &OutlineNode)> = symbols.iter().enumerate().collect();
+        sorted_symbols.sort_by_key(|&(_, symbol)| symbol.start_line);
+
+        // First pass: Process traits and their associated methods
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Trait {
+                let mut trait_symbol = symbol.clone();
+
+                // Find methods that belong to this trait
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Only add functions/methods that belong to this trait
+                        if potential_child.node_type == OutlineNodeType::Function {
+                            trait_symbol.add_child(potential_child.clone());
+                            used_indices.insert(j);
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(trait_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Second pass: Process impl blocks and associate their methods
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Impl && !used_indices.contains(&i) {
+                let mut impl_symbol = symbol.clone();
+
+                // Find methods and associated items that belong to this impl block
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Add functions, constants, and type aliases that belong to this impl
+                        match potential_child.node_type {
+                            OutlineNodeType::Function
+                            | OutlineNodeType::Constant
+                            | OutlineNodeType::TypeAlias => {
+                                impl_symbol.add_child(potential_child.clone());
+                                used_indices.insert(j);
+                            }
+                            _ => {} // Don't add other types as children to impls
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(impl_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Third pass: Process modules and their remaining contents
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Module && !used_indices.contains(&i) {
+                let mut module_symbol = symbol.clone();
+
+                // Find all symbols that belong to this module
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j && !used_indices.contains(&j) && Self::is_symbol_within_range(potential_child, symbol) {
+                        // Check if this child isn't already a child of a more specific parent
+                        let mut should_add = true;
+
+                        // For nested modules, ensure we don't double-assign to both parent and grandparent
+                        if potential_child.node_type == OutlineNodeType::Module {
+                            for &(k, other_module) in &sorted_symbols {
+                                if k != i && other_module.node_type == OutlineNodeType::Module {
+                                    // If there's another module that contains this child and is within our module
+                                    if Self::is_symbol_within_range(potential_child, other_module)
+                                        && Self::is_symbol_within_range(other_module, symbol)
+                                    {
+                                        should_add = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if should_add {
+                            module_symbol.add_child(potential_child.clone());
+                            used_indices.insert(j);
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(module_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Fourth pass: Process enums and their variants/methods (if any)
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Enum && !used_indices.contains(&i) {
+                let enum_symbol = symbol.clone();
+
+                // Find associated items that belong to this enum (mainly from impl blocks)
+                // Note: Enum variants are typically not captured as separate symbols by our queries
+                // but enum methods from impl blocks would be handled in the impl pass above
+
+                hierarchical_symbols.push(enum_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Fifth pass: Process structs
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Struct && !used_indices.contains(&i) {
+                let struct_symbol = symbol.clone();
+
+                // Note: Struct methods are typically in impl blocks, which are handled separately
+                // Struct fields are not typically captured as separate symbols by our queries
+
+                hierarchical_symbols.push(struct_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Sixth pass: Add any remaining symbols that weren't processed
+        for &(i, symbol) in &sorted_symbols {
+            if !used_indices.contains(&i) {
+                hierarchical_symbols.push(symbol.clone());
+            }
+        }
+
+        hierarchical_symbols
     }
 
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
@@ -1239,6 +1378,124 @@ pub struct ProcessError {
                 "  {:?} '{}' at line {}",
                 symbol.node_type, symbol.name, symbol.start_line
             );
+        }
+    }
+
+    #[test]
+    fn test_hierarchical_relationships() {
+        let extractor = RustExtractor::new().unwrap();
+        let source = r#"
+/// A simple module
+pub mod my_module {
+    /// A struct in the module
+    pub struct Person {
+        name: String,
+        age: u32,
+    }
+
+    /// Implementation for Person
+    impl Person {
+        /// Create a new person
+        pub fn new(name: String, age: u32) -> Self {
+            Self { name, age }
+        }
+
+        /// Get the person's name
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    /// A trait in the module
+    pub trait Displayable {
+        /// Display the object
+        fn display(&self) -> String;
+    }
+
+    /// Trait implementation
+    impl Displayable for Person {
+        fn display(&self) -> String {
+            format!("{} ({})", self.name, self.age)
+        }
+    }
+}
+
+/// A global function
+pub fn main() {
+    println!("Hello, World!");
+}
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+        let hierarchical_symbols = extractor.build_hierarchy(symbols);
+
+        // Find the module
+        let module_opt = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "my_module" && s.node_type == OutlineNodeType::Module);
+        assert!(module_opt.is_some(), "Should find my_module");
+        
+        let module = module_opt.unwrap();
+        assert!(!module.children.is_empty(), "Module should have children");
+
+        // Check that the module contains expected children (struct should be there)
+        let child_names: Vec<&String> = module.children.iter().map(|c| &c.name).collect();
+        assert!(child_names.contains(&&"Person".to_string()), "Module should contain Person struct");
+
+        // Find trait at top level (traits are processed first now)
+        let trait_opt = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "Displayable" && s.node_type == OutlineNodeType::Trait);
+        assert!(trait_opt.is_some(), "Should find Displayable trait at top level");
+
+        // Find impl blocks at top level (processed before modules)
+        let impl_blocks: Vec<&OutlineNode> = hierarchical_symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Impl)
+            .collect();
+        assert_eq!(impl_blocks.len(), 2, "Should have two impl blocks");
+
+        // Check that impl blocks have their methods as children
+        let person_impl = impl_blocks.iter()
+            .find(|impl_block| impl_block.name.contains("Person") && !impl_block.name.contains("Displayable"));
+        assert!(person_impl.is_some(), "Should find impl block for Person");
+
+        if let Some(impl_block) = person_impl {
+            let method_names: Vec<&String> = impl_block.children.iter().map(|c| &c.name).collect();
+            assert!(method_names.contains(&&"new".to_string()), "Impl should contain new method");
+            assert!(method_names.contains(&&"name".to_string()), "Impl should contain name method");
+        }
+
+        // Check that the trait impl has the display method
+        let trait_impl = impl_blocks.iter()
+            .find(|impl_block| impl_block.name.contains("Displayable"));
+        assert!(trait_impl.is_some(), "Should find impl block for Displayable trait");
+
+        if let Some(impl_block) = trait_impl {
+            let method_names: Vec<&String> = impl_block.children.iter().map(|c| &c.name).collect();
+            assert!(method_names.contains(&&"display".to_string()), "Trait impl should contain display method");
+        }
+
+        // Check that global function is not in the module
+        let global_func = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "main" && s.node_type == OutlineNodeType::Function);
+        assert!(global_func.is_some(), "Should find global main function");
+        assert!(global_func.unwrap().children.is_empty(), "Global function should not have children");
+
+        println!("Hierarchical relationships test passed!");
+        println!("Module '{}' has {} children:", module.name, module.children.len());
+        for child in &module.children {
+            println!("  {:?} '{}' with {} children", child.node_type, child.name, child.children.len());
+            for grandchild in &child.children {
+                println!("    {:?} '{}'", grandchild.node_type, grandchild.name);
+            }
         }
     }
 }
