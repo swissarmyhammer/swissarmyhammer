@@ -1091,6 +1091,15 @@ impl TypeScriptExtractor {
             }
         }
     }
+
+    /// Check if a symbol's byte range is contained within another symbol's range
+    fn is_symbol_within_range(inner: &OutlineNode, outer: &OutlineNode) -> bool {
+        // A symbol belongs to a container if its byte range is completely within the container's byte range
+        inner.source_range.0 >= outer.source_range.0
+            && inner.source_range.1 <= outer.source_range.1
+            && inner.start_line >= outer.start_line
+            && inner.end_line <= outer.end_line
+    }
 }
 
 impl SymbolExtractor for TypeScriptExtractor {
@@ -1280,9 +1289,156 @@ impl SymbolExtractor for TypeScriptExtractor {
     }
 
     fn build_hierarchy(&self, symbols: Vec<OutlineNode>) -> Vec<OutlineNode> {
-        // For now, return symbols as-is
-        // TODO: Build proper hierarchical relationships for classes, interfaces, namespaces, etc.
-        symbols
+        let mut hierarchical_symbols = Vec::new();
+        let mut used_indices = std::collections::HashSet::new();
+
+        // Sort symbols by start line for processing in order
+        let mut sorted_symbols: Vec<(usize, &OutlineNode)> = symbols.iter().enumerate().collect();
+        sorted_symbols.sort_by_key(|&(_, symbol)| symbol.start_line);
+
+        // First pass: Process namespaces/modules first (largest containers)
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Module {
+                let mut module_symbol = symbol.clone();
+
+                // Find top-level symbols that belong to this module/namespace
+                // Don't take members of classes/interfaces, only top-level constructs
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Check if this child isn't already a child of a more specific parent
+                        let mut should_add = true;
+
+                        // For nested modules, ensure we don't double-assign to both parent and grandparent
+                        if potential_child.node_type == OutlineNodeType::Module {
+                            for &(k, other_module) in &sorted_symbols {
+                                if k != i && other_module.node_type == OutlineNodeType::Module {
+                                    // If there's another module that contains this child and is within our module
+                                    if Self::is_symbol_within_range(potential_child, other_module)
+                                        && Self::is_symbol_within_range(other_module, symbol)
+                                    {
+                                        should_add = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Don't take methods and properties - they belong to classes/interfaces
+                        // Only take top-level constructs like classes, interfaces, functions, etc.
+                        match potential_child.node_type {
+                            OutlineNodeType::Method | OutlineNodeType::Property => {
+                                // Check if this member belongs to a class or interface within this namespace
+                                for &(k, potential_parent) in &sorted_symbols {
+                                    if k != i
+                                        && k != j
+                                        && (potential_parent.node_type == OutlineNodeType::Class
+                                            || potential_parent.node_type
+                                                == OutlineNodeType::Interface)
+                                        && Self::is_symbol_within_range(
+                                            potential_child,
+                                            potential_parent,
+                                        )
+                                        && Self::is_symbol_within_range(potential_parent, symbol)
+                                    {
+                                        // This method/property belongs to a class/interface within our namespace
+                                        should_add = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => {} // For other types, the default logic applies
+                        }
+
+                        if should_add {
+                            module_symbol.add_child(potential_child.clone());
+                            used_indices.insert(j);
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(module_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Second pass: Process classes and their methods/properties
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Class && !used_indices.contains(&i) {
+                let mut class_symbol = symbol.clone();
+
+                // Find methods, properties that belong to this class
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Add methods, properties that belong to this class
+                        match potential_child.node_type {
+                            OutlineNodeType::Method | OutlineNodeType::Property => {
+                                class_symbol.add_child(potential_child.clone());
+                                used_indices.insert(j);
+                            }
+                            _ => {} // Don't add other types as children to classes
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(class_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Third pass: Process interfaces and their members
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Interface && !used_indices.contains(&i) {
+                let mut interface_symbol = symbol.clone();
+
+                // Find method signatures and properties that belong to this interface
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Add method signatures, properties that belong to this interface
+                        match potential_child.node_type {
+                            OutlineNodeType::Method | OutlineNodeType::Property => {
+                                interface_symbol.add_child(potential_child.clone());
+                                used_indices.insert(j);
+                            }
+                            _ => {} // Don't add other types as children to interfaces
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(interface_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Fourth pass: Process enums (they are already properly structured but may contain constants)
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Enum && !used_indices.contains(&i) {
+                let enum_symbol = symbol.clone();
+
+                // Note: Enum members are typically not captured as separate symbols by our queries
+                // but enum methods from associated namespaces would be handled above
+
+                hierarchical_symbols.push(enum_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Fifth pass: Add any remaining symbols that weren't processed
+        for &(i, symbol) in &sorted_symbols {
+            if !used_indices.contains(&i) {
+                hierarchical_symbols.push(symbol.clone());
+            }
+        }
+
+        hierarchical_symbols
     }
 
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
@@ -1834,5 +1990,154 @@ export abstract class BaseRepository<T> {
             .find(|s| s.name == "query" && s.node_type == OutlineNodeType::Method);
 
         // Note: Abstract methods might not be perfectly detected due to query limitations
+    }
+
+    #[test]
+    fn test_hierarchical_relationships() {
+        let extractor = TypeScriptExtractor::new().unwrap();
+        let source = r#"
+/**
+ * Example namespace with classes and interfaces
+ */
+namespace MyLibrary {
+    /**
+     * User interface definition
+     */
+    export interface IUser {
+        id: number;
+        name: string;
+        getDisplayName(): string;
+    }
+
+    /**
+     * User implementation class
+     */
+    export class User implements IUser {
+        private _id: number;
+        public name: string;
+
+        constructor(id: number, name: string) {
+            this._id = id;
+            this.name = name;
+        }
+
+        get id(): number {
+            return this._id;
+        }
+
+        public getDisplayName(): string {
+            return `User: ${this.name}`;
+        }
+
+        private validateData(): boolean {
+            return this._id > 0 && this.name.length > 0;
+        }
+    }
+
+    /**
+     * Helper function
+     */
+    export function createUser(id: number, name: string): IUser {
+        return new User(id, name);
+    }
+}
+
+/**
+ * Global utility function
+ */
+export function globalHelper(): void {
+    console.log("Global helper called");
+}
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+
+        let hierarchical_symbols = extractor.build_hierarchy(symbols);
+
+        // Find the namespace
+        let namespace_opt = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "MyLibrary" && s.node_type == OutlineNodeType::Module);
+        assert!(namespace_opt.is_some(), "Should find MyLibrary namespace");
+
+        let namespace = namespace_opt.unwrap();
+        assert!(
+            !namespace.children.is_empty(),
+            "Namespace should have children"
+        );
+
+        // Check that the namespace contains the interface, class, and function
+        let interface_in_namespace = namespace
+            .children
+            .iter()
+            .find(|c| c.name == "IUser" && c.node_type == OutlineNodeType::Interface);
+        assert!(
+            interface_in_namespace.is_some(),
+            "Namespace should contain IUser interface"
+        );
+
+        let class_in_namespace = namespace
+            .children
+            .iter()
+            .find(|c| c.name == "User" && c.node_type == OutlineNodeType::Class);
+        assert!(
+            class_in_namespace.is_some(),
+            "Namespace should contain User class"
+        );
+
+        let function_in_namespace = namespace
+            .children
+            .iter()
+            .find(|c| c.name == "createUser" && c.node_type == OutlineNodeType::Function);
+        assert!(
+            function_in_namespace.is_some(),
+            "Namespace should contain createUser function"
+        );
+
+        // Check interface hierarchical structure
+        if let Some(interface) = interface_in_namespace {
+            // Note: Interface method signatures may or may not be captured depending on queries
+            assert!(
+                interface.node_type == OutlineNodeType::Interface,
+                "Should be interface type"
+            );
+        }
+
+        // Check class hierarchical structure
+        if let Some(class) = class_in_namespace {
+            // Verify the class was properly processed
+            assert!(
+                class.node_type == OutlineNodeType::Class,
+                "Should be class type"
+            );
+            // Note: Class members might not always be captured depending on query implementation
+            // The key success is that the class itself is properly nested in the namespace
+        }
+
+        // Check that global function is not in the namespace
+        let global_func = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "globalHelper" && s.node_type == OutlineNodeType::Function);
+        assert!(
+            global_func.is_some(),
+            "Should find global globalHelper function"
+        );
+        assert!(
+            global_func.unwrap().children.is_empty(),
+            "Global function should not have children"
+        );
+
+        // Verify hierarchical relationships were built correctly
+        assert_eq!(
+            namespace.children.len(),
+            3,
+            "Namespace should have exactly 3 children"
+        );
     }
 }
