@@ -470,10 +470,10 @@ impl JavaScriptExtractor {
     /// Check if a symbol (method) is within the source range of another symbol (class)
     fn is_symbol_within_range(inner: &OutlineNode, outer: &OutlineNode) -> bool {
         // A method belongs to a class if its byte range is completely within the class's byte range
-        inner.source_range.0 >= outer.source_range.0 && 
-        inner.source_range.1 <= outer.source_range.1 &&
-        inner.start_line >= outer.start_line &&
-        inner.end_line <= outer.end_line
+        inner.source_range.0 >= outer.source_range.0
+            && inner.source_range.1 <= outer.source_range.1
+            && inner.start_line >= outer.start_line
+            && inner.end_line <= outer.end_line
     }
 
     /// Check if a function is async
@@ -674,7 +674,7 @@ impl SymbolExtractor for JavaScriptExtractor {
             if symbol.node_type == OutlineNodeType::Class {
                 // Create a new class with its methods as children
                 let mut class_symbol = symbol.clone();
-                
+
                 // Find methods that belong to this class based on source position
                 for (j, potential_method) in symbols.iter().enumerate() {
                     if i != j && potential_method.node_type == OutlineNodeType::Method {
@@ -686,7 +686,7 @@ impl SymbolExtractor for JavaScriptExtractor {
                         }
                     }
                 }
-                
+
                 hierarchical_symbols.push(class_symbol);
                 used_indices.insert(i);
             }
@@ -701,7 +701,7 @@ impl SymbolExtractor for JavaScriptExtractor {
 
         // Sort to maintain original order for top-level symbols
         hierarchical_symbols.sort_by_key(|s| s.start_line);
-        
+
         hierarchical_symbols
     }
 
@@ -1032,19 +1032,38 @@ function processUser(user) {
 
         // Currently, symbols should be flat - no hierarchy
         // We should find: User class (possibly duplicated), constructor, getName, createGuest, _getPrivateInfo, processUser
-        let class_symbols = symbols.iter().filter(|s| s.node_type == OutlineNodeType::Class && s.name == "User").collect::<Vec<_>>();
-        let method_symbols = symbols.iter().filter(|s| s.node_type == OutlineNodeType::Method).collect::<Vec<_>>();
-        let function_symbols = symbols.iter().filter(|s| s.node_type == OutlineNodeType::Function).collect::<Vec<_>>();
+        let class_symbols = symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Class && s.name == "User")
+            .collect::<Vec<_>>();
+        let method_symbols = symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Method)
+            .collect::<Vec<_>>();
+        let function_symbols = symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Function)
+            .collect::<Vec<_>>();
 
         // Currently, all symbols should be at the top level (no nesting)
         // Note: there might be duplicate classes due to overlapping queries
-        assert!(class_symbols.len() >= 1, "Should find at least one User class");
+        assert!(
+            class_symbols.len() >= 1,
+            "Should find at least one User class"
+        );
         assert_eq!(class_symbols[0].name, "User");
-        assert_eq!(class_symbols[0].children.len(), 0, "Class should have no children currently");
+        assert_eq!(
+            class_symbols[0].children.len(),
+            0,
+            "Class should have no children currently"
+        );
 
         // Methods should be at top level currently
-        assert!(method_symbols.len() >= 3, "Should find constructor, getName, createGuest, _getPrivateInfo methods");
-        
+        assert!(
+            method_symbols.len() >= 3,
+            "Should find constructor, getName, createGuest, _getPrivateInfo methods"
+        );
+
         // Function should be at top level
         assert_eq!(function_symbols.len(), 1);
         assert_eq!(function_symbols[0].name, "processUser");
@@ -1054,7 +1073,7 @@ function processUser(user) {
     fn test_hierarchical_class_method_nesting() {
         use crate::outline::parser::{OutlineParser, OutlineParserConfig};
         use std::path::Path;
-        
+
         let parser = OutlineParser::new(OutlineParserConfig::default()).unwrap();
         let source = r#"
 /**
@@ -1093,31 +1112,61 @@ function processUser(user) {
         // Verify hierarchy is properly built
 
         // Now test that classes contain their methods as children
-        let class_symbols = symbols.iter().filter(|s| s.node_type == OutlineNodeType::Class && s.name == "User").collect::<Vec<_>>();
-        let top_level_method_symbols = symbols.iter().filter(|s| s.node_type == OutlineNodeType::Method).collect::<Vec<_>>();
-        let function_symbols = symbols.iter().filter(|s| s.node_type == OutlineNodeType::Function).collect::<Vec<_>>();
+        let class_symbols = symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Class && s.name == "User")
+            .collect::<Vec<_>>();
+        let top_level_method_symbols = symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Method)
+            .collect::<Vec<_>>();
+        let function_symbols = symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Function)
+            .collect::<Vec<_>>();
 
         // Should have at least one User class
-        assert!(class_symbols.len() >= 1, "Should find at least one User class");
+        assert!(
+            class_symbols.len() >= 1,
+            "Should find at least one User class"
+        );
         let user_class = class_symbols[0];
         assert_eq!(user_class.name, "User");
-        
+
         // The class should now have children (methods)
-        assert!(user_class.children.len() >= 3, 
+        assert!(user_class.children.len() >= 3,
             "User class should have at least 3 method children (constructor, getName, createGuest, _getPrivateInfo), found: {}", 
             user_class.children.len());
 
         // Verify the method names in the class
-        let child_names: Vec<&String> = user_class.children.iter().map(|child| &child.name).collect();
-        assert!(child_names.contains(&&"constructor".to_string()), "Should contain constructor");
-        assert!(child_names.contains(&&"getName".to_string()), "Should contain getName");
-        assert!(child_names.contains(&&"createGuest".to_string()), "Should contain createGuest");
-        assert!(child_names.contains(&&"_getPrivateInfo".to_string()), "Should contain _getPrivateInfo");
+        let child_names: Vec<&String> = user_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+        assert!(
+            child_names.contains(&&"constructor".to_string()),
+            "Should contain constructor"
+        );
+        assert!(
+            child_names.contains(&&"getName".to_string()),
+            "Should contain getName"
+        );
+        assert!(
+            child_names.contains(&&"createGuest".to_string()),
+            "Should contain createGuest"
+        );
+        assert!(
+            child_names.contains(&&"_getPrivateInfo".to_string()),
+            "Should contain _getPrivateInfo"
+        );
 
         // Methods should not be at the top level anymore (should be fewer or none)
-        assert!(top_level_method_symbols.len() < 4, 
-            "Should have fewer top-level methods now that they're nested, found: {}", 
-            top_level_method_symbols.len());
+        assert!(
+            top_level_method_symbols.len() < 4,
+            "Should have fewer top-level methods now that they're nested, found: {}",
+            top_level_method_symbols.len()
+        );
 
         // Standalone function should remain at top level
         assert_eq!(function_symbols.len(), 1);
@@ -1128,7 +1177,7 @@ function processUser(user) {
     fn test_constructor_and_static_method_handling() {
         use crate::outline::parser::{OutlineParser, OutlineParserConfig};
         use std::path::Path;
-        
+
         let parser = OutlineParser::new(OutlineParserConfig::default()).unwrap();
         let source = r#"
 class Vehicle {
@@ -1157,36 +1206,53 @@ class Vehicle {
         let symbols = outline_tree.symbols;
 
         // Find the Vehicle class
-        let vehicle_class = symbols.iter()
+        let vehicle_class = symbols
+            .iter()
             .find(|s| s.node_type == OutlineNodeType::Class && s.name == "Vehicle")
             .expect("Should find Vehicle class");
 
         // Verify it has the expected methods as children
-        assert!(vehicle_class.children.len() >= 4, 
+        assert!(vehicle_class.children.len() >= 4,
             "Vehicle class should have at least 4 method children (constructor, createCar, createTruck, getInfo), found: {}", 
             vehicle_class.children.len());
 
-        let child_names: Vec<&String> = vehicle_class.children.iter().map(|child| &child.name).collect();
-        
+        let child_names: Vec<&String> = vehicle_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+
         // Check for constructor
-        assert!(child_names.contains(&&"constructor".to_string()), 
-            "Should contain constructor method");
-            
+        assert!(
+            child_names.contains(&&"constructor".to_string()),
+            "Should contain constructor method"
+        );
+
         // Check for static methods
-        assert!(child_names.contains(&&"createCar".to_string()), 
-            "Should contain createCar static method");
-        assert!(child_names.contains(&&"createTruck".to_string()), 
-            "Should contain createTruck static method");
-            
+        assert!(
+            child_names.contains(&&"createCar".to_string()),
+            "Should contain createCar static method"
+        );
+        assert!(
+            child_names.contains(&&"createTruck".to_string()),
+            "Should contain createTruck static method"
+        );
+
         // Check for instance method
-        assert!(child_names.contains(&&"getInfo".to_string()), 
-            "Should contain getInfo instance method");
+        assert!(
+            child_names.contains(&&"getInfo".to_string()),
+            "Should contain getInfo instance method"
+        );
 
         // Verify no methods are at top level (should all be nested in class)
-        let top_level_methods = symbols.iter()
+        let top_level_methods = symbols
+            .iter()
             .filter(|s| s.node_type == OutlineNodeType::Method)
             .count();
-        assert_eq!(top_level_methods, 0, 
-            "All methods should be nested in the class, found {} at top level", top_level_methods);
+        assert_eq!(
+            top_level_methods, 0,
+            "All methods should be nested in the class, found {} at top level",
+            top_level_methods
+        );
     }
 }

@@ -157,7 +157,7 @@ fn indent_string(input: &str, indent_count: usize) -> String {
     let indent = " ".repeat(indent_count);
     input
         .lines()
-        .map(|line| format!("{}{}", indent, line))
+        .map(|line| format!("{indent}{line}"))
         .collect::<Vec<_>>()
         .join("\n")
 }
