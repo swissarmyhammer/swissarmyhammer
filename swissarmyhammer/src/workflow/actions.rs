@@ -695,7 +695,7 @@ impl Action for WaitAction {
                 if let Some(message) = &self.message {
                     tracing::info!("Waiting: {}", message);
                 }
-                
+
                 // In test mode, use much shorter wait times for faster test execution
                 let actual_duration = if cfg!(test) || std::env::var("RUST_TEST").is_ok() {
                     // Cap wait time at 50ms in test mode for performance
@@ -703,7 +703,7 @@ impl Action for WaitAction {
                 } else {
                     duration
                 };
-                
+
                 tokio::time::sleep(actual_duration).await;
             }
             None => {

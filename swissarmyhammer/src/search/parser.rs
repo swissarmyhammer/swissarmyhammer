@@ -1821,7 +1821,9 @@ pub fn helper_function(data: &[u8]) -> String {
             }
         }
 
-        tracing::debug!("✅ TreeSitter chunk extraction works correctly across all configurations!");
+        tracing::debug!(
+            "✅ TreeSitter chunk extraction works correctly across all configurations!"
+        );
     }
 
     #[test]
