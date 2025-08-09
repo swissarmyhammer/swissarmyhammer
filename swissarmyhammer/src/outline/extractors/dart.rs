@@ -18,7 +18,7 @@ use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 /// Dart symbol extractor using Tree-sitter
 pub struct DartExtractor {
     /// Tree-sitter queries for different symbol types
-    queries: HashMap<OutlineNodeType, Query>,
+    queries: HashMap<OutlineNodeType, Vec<Query>>,
 }
 
 impl DartExtractor {
@@ -80,7 +80,10 @@ impl DartExtractor {
             let query = Query::new(&language, query_str).map_err(|e| {
                 OutlineError::TreeSitter(format!("Failed to compile {node_type:?} query: {e}"))
             })?;
-            queries.insert(node_type, query);
+            queries
+                .entry(node_type)
+                .or_insert_with(Vec::new)
+                .push(query);
         }
 
         Ok(Self { queries })
@@ -869,141 +872,149 @@ impl SymbolExtractor for DartExtractor {
         let root_node = tree.root_node();
 
         // Process each query type
-        for (node_type, query) in &self.queries {
-            let mut cursor = QueryCursor::new();
-            let mut matches = cursor.matches(query, root_node, source.as_bytes());
+        for (node_type, query_vec) in &self.queries {
+            for query in query_vec {
+                let mut cursor = QueryCursor::new();
+                let mut matches = cursor.matches(query, root_node, source.as_bytes());
 
-            while let Some(query_match) = matches.next() {
-                // Get the main captured node (should be the only capture)
-                if let Some(capture) = query_match.captures.first() {
-                    let node = &capture.node;
+                while let Some(query_match) = matches.next() {
+                    // Get the main captured node (should be the only capture)
+                    if let Some(capture) = query_match.captures.first() {
+                        let node = &capture.node;
 
-                    if let Some(name) = self.extract_name_from_node(node, source) {
-                        let (start_line, end_line) = self.get_line_range(node);
-                        let mut outline_node = OutlineNode::new(
-                            name.clone(),
-                            node_type.clone(),
-                            start_line,
-                            end_line,
-                            (node.start_byte(), node.end_byte()),
-                        );
+                        if let Some(name) = self.extract_name_from_node(node, source) {
+                            let (start_line, end_line) = self.get_line_range(node);
+                            let mut outline_node = OutlineNode::new(
+                                name.clone(),
+                                node_type.clone(),
+                                start_line,
+                                end_line,
+                                (node.start_byte(), node.end_byte()),
+                            );
 
-                        // Add comprehensive signature based on node type and kind
-                        let signature = match node_type {
-                            OutlineNodeType::Function => {
-                                // Use new comprehensive signature extraction
-                                if let Some(detailed_sig) =
-                                    self.extract_function_signature(node, source)
-                                {
-                                    Some(detailed_sig.format_for_language(Language::Dart))
-                                } else {
-                                    Some(self.build_function_signature(&name, node, source))
-                                }
-                            }
-                            OutlineNodeType::Method => match node.kind() {
-                                "constructor_signature" => {
+                            // Add comprehensive signature based on node type and kind
+                            let signature = match node_type {
+                                OutlineNodeType::Function => {
+                                    // Use new comprehensive signature extraction
                                     if let Some(detailed_sig) =
-                                        self.extract_constructor_signature(node, source)
-                                    {
-                                        Some(detailed_sig.format_for_language(Language::Dart))
-                                    } else {
-                                        Some(self.build_constructor_signature(&name, node, source))
-                                    }
-                                }
-                                "factory_constructor_signature" => {
-                                    if let Some(detailed_sig) =
-                                        self.extract_constructor_signature(node, source)
-                                    {
-                                        Some(detailed_sig.format_for_language(Language::Dart))
-                                    } else {
-                                        Some(self.build_factory_signature(&name, node, source))
-                                    }
-                                }
-                                _ => {
-                                    if let Some(detailed_sig) =
-                                        self.extract_method_signature(node, source)
+                                        self.extract_function_signature(node, source)
                                     {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
                                         Some(self.build_function_signature(&name, node, source))
                                     }
                                 }
-                            },
-                            OutlineNodeType::Class => {
-                                if let Some(detailed_sig) =
-                                    self.extract_type_signature(node, source)
-                                {
-                                    Some(detailed_sig.format_for_language(Language::Dart))
-                                } else {
-                                    Some(self.build_class_signature(&name, node, source))
-                                }
-                            }
-                            OutlineNodeType::Interface => match node.kind() {
-                                "mixin_declaration" => {
+                                OutlineNodeType::Method => match node.kind() {
+                                    "constructor_signature" => {
+                                        if let Some(detailed_sig) =
+                                            self.extract_constructor_signature(node, source)
+                                        {
+                                            Some(detailed_sig.format_for_language(Language::Dart))
+                                        } else {
+                                            Some(
+                                                self.build_constructor_signature(
+                                                    &name, node, source,
+                                                ),
+                                            )
+                                        }
+                                    }
+                                    "factory_constructor_signature" => {
+                                        if let Some(detailed_sig) =
+                                            self.extract_constructor_signature(node, source)
+                                        {
+                                            Some(detailed_sig.format_for_language(Language::Dart))
+                                        } else {
+                                            Some(self.build_factory_signature(&name, node, source))
+                                        }
+                                    }
+                                    _ => {
+                                        if let Some(detailed_sig) =
+                                            self.extract_method_signature(node, source)
+                                        {
+                                            Some(detailed_sig.format_for_language(Language::Dart))
+                                        } else {
+                                            Some(self.build_function_signature(&name, node, source))
+                                        }
+                                    }
+                                },
+                                OutlineNodeType::Class => {
                                     if let Some(detailed_sig) =
                                         self.extract_type_signature(node, source)
                                     {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
-                                        Some(self.build_mixin_signature(&name, node, source))
+                                        Some(self.build_class_signature(&name, node, source))
                                     }
                                 }
-                                "extension_declaration" => {
+                                OutlineNodeType::Interface => match node.kind() {
+                                    "mixin_declaration" => {
+                                        if let Some(detailed_sig) =
+                                            self.extract_type_signature(node, source)
+                                        {
+                                            Some(detailed_sig.format_for_language(Language::Dart))
+                                        } else {
+                                            Some(self.build_mixin_signature(&name, node, source))
+                                        }
+                                    }
+                                    "extension_declaration" => {
+                                        if let Some(detailed_sig) =
+                                            self.extract_type_signature(node, source)
+                                        {
+                                            Some(detailed_sig.format_for_language(Language::Dart))
+                                        } else {
+                                            Some(
+                                                self.build_extension_signature(&name, node, source),
+                                            )
+                                        }
+                                    }
+                                    _ => None,
+                                },
+                                OutlineNodeType::Enum => {
                                     if let Some(detailed_sig) =
                                         self.extract_type_signature(node, source)
                                     {
                                         Some(detailed_sig.format_for_language(Language::Dart))
                                     } else {
-                                        Some(self.build_extension_signature(&name, node, source))
+                                        Some(self.build_enum_signature(&name, node, source))
                                     }
                                 }
+                                OutlineNodeType::Property => match node.kind() {
+                                    "getter_signature" => Some(format!(
+                                        "{} get {}",
+                                        self.extract_return_type(node, source)
+                                            .unwrap_or_else(|| "dynamic".to_string()),
+                                        name
+                                    )),
+                                    "setter_signature" => Some(format!(
+                                        "set {} {}",
+                                        name,
+                                        self.extract_function_parameters(node, source)
+                                    )),
+                                    _ => None,
+                                },
+                                OutlineNodeType::Variable => Some(format!("var {name}")),
+                                OutlineNodeType::TypeAlias => Some(format!("typedef {name}")),
+                                OutlineNodeType::Module => Some(format!("library {name}")),
+                                OutlineNodeType::Import => Some(format!("import {name}")),
                                 _ => None,
-                            },
-                            OutlineNodeType::Enum => {
-                                if let Some(detailed_sig) =
-                                    self.extract_type_signature(node, source)
-                                {
-                                    Some(detailed_sig.format_for_language(Language::Dart))
-                                } else {
-                                    Some(self.build_enum_signature(&name, node, source))
-                                }
+                            };
+
+                            if let Some(sig) = signature {
+                                outline_node = outline_node.with_signature(sig);
                             }
-                            OutlineNodeType::Property => match node.kind() {
-                                "getter_signature" => Some(format!(
-                                    "{} get {}",
-                                    self.extract_return_type(node, source)
-                                        .unwrap_or_else(|| "dynamic".to_string()),
-                                    name
-                                )),
-                                "setter_signature" => Some(format!(
-                                    "set {} {}",
-                                    name,
-                                    self.extract_function_parameters(node, source)
-                                )),
-                                _ => None,
-                            },
-                            OutlineNodeType::Variable => Some(format!("var {name}")),
-                            OutlineNodeType::TypeAlias => Some(format!("typedef {name}")),
-                            OutlineNodeType::Module => Some(format!("library {name}")),
-                            OutlineNodeType::Import => Some(format!("import {name}")),
-                            _ => None,
-                        };
 
-                        if let Some(sig) = signature {
-                            outline_node = outline_node.with_signature(sig);
+                            // Add visibility
+                            if let Some(visibility) = self.parse_visibility(node, source) {
+                                outline_node = outline_node.with_visibility(visibility);
+                            }
+
+                            // Add documentation
+                            if let Some(docs) = self.extract_dartdoc_comments(node, source) {
+                                outline_node = outline_node.with_documentation(docs);
+                            }
+
+                            symbols.push(outline_node);
                         }
-
-                        // Add visibility
-                        if let Some(visibility) = self.parse_visibility(node, source) {
-                            outline_node = outline_node.with_visibility(visibility);
-                        }
-
-                        // Add documentation
-                        if let Some(docs) = self.extract_dartdoc_comments(node, source) {
-                            outline_node = outline_node.with_documentation(docs);
-                        }
-
-                        symbols.push(outline_node);
                     }
                 }
             }
@@ -1577,4 +1588,155 @@ Stream<ProcessResult> processUsers(
             }
         }
     }
+
+    #[test]
+    fn test_hierarchical_relationships() {
+        let extractor = DartExtractor::new().unwrap();
+        let source = r#"
+/// Main application class
+class MyApp {
+  /// App title
+  final String title;
+
+  /// Default constructor
+  MyApp(this.title);
+
+  /// Named constructor
+  MyApp.withConfig(Config config) : title = config.appName;
+
+  /// Factory constructor
+  factory MyApp.create() {
+    return MyApp('Default App');
+  }
+
+  /// Instance method
+  String getTitle() {
+    return title;
+  }
+
+  /// Static method
+  static MyApp getDefault() {
+    return MyApp('Default');
+  }
+
+  /// Getter
+  String get displayTitle => title.toUpperCase();
+
+  /// Setter
+  set displayTitle(String value) {
+    // Implementation would go here
+  }
+
+  /// Nested class
+  class NestedHelper {
+    void help() {
+      print('Helping');
+    }
+  }
+}
+
+/// Mixin with methods
+mixin LoggerMixin {
+  void log(String message) {
+    print(message);
+  }
+
+  String get logPrefix => '[LOG]';
+}
+
+/// Extension with methods
+extension StringExtensions on String {
+  bool get isNotEmpty => this.isNotEmpty;
+
+  String capitalize() {
+    return isEmpty ? this : this[0].toUpperCase() + substring(1);
+  }
+}
+
+/// Enum with methods
+enum Color {
+  red, green, blue;
+
+  String get name => toString().split('.').last;
+
+  bool get isPrimary => this == red || this == green || this == blue;
+}
+
+/// Top-level function
+void globalFunction() {
+  // Nested function
+  void nestedFunction() {
+    print('Nested');
+  }
+  
+  nestedFunction();
+}
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_dart::language()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let flat_symbols = extractor.extract_symbols(&tree, source).unwrap();
+
+        let hierarchical_symbols = extractor.build_hierarchy(flat_symbols);
+
+        // Verify class hierarchies
+        let app_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "MyApp" && matches!(s.node_type, OutlineNodeType::Class))
+            .expect("MyApp class should exist");
+
+        // MyApp should have children (constructors, methods, properties)
+        assert!(
+            !app_class.children.is_empty(),
+            "MyApp class should have children"
+        );
+
+        // Check for expected children types
+        let child_names: Vec<&String> = app_class.children.iter().map(|c| &c.name).collect();
+        assert!(
+            child_names.contains(&&"getTitle".to_string()),
+            "Should have getTitle method"
+        );
+        assert!(
+            child_names.contains(&&"displayTitle".to_string()),
+            "Should have displayTitle property"
+        );
+
+        // Verify mixin has methods
+        let logger_mixin = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "LoggerMixin")
+            .expect("LoggerMixin should exist");
+
+        assert!(
+            !logger_mixin.children.is_empty(),
+            "LoggerMixin should have children"
+        );
+
+        // Verify extension has methods
+        let string_ext = hierarchical_symbols
+            .iter()
+            .find(|s| s.name == "StringExtensions")
+            .expect("StringExtensions should exist");
+
+        assert!(
+            !string_ext.children.is_empty(),
+            "StringExtensions should have children"
+        );
+
+        // Verify that enum exists
+        assert!(
+            hierarchical_symbols.iter().any(|s| s.name == "Color"),
+            "Color enum should exist"
+        );
+
+        // Verify that global function exists
+        assert!(
+            hierarchical_symbols.iter().any(|s| s.name == "globalFunction"),
+            "globalFunction should exist"
+        );
+    }
+
 }
