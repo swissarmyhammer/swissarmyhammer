@@ -6,14 +6,14 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Command-line interface for SwissArmyHammer prompt management"
-default-run = "swissarmyhammer"
+default-run = "sah"
 
 [lib]
 name = "swissarmyhammer_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "swissarmyhammer"
+name = "sah"
 path = "src/main.rs"
 
 

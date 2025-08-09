@@ -494,25 +494,8 @@ fn test_complete_memo_workflow() -> Result<()> {
 fn test_search_cli_help() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
-<<<<<<< HEAD
-    // Force skip expensive search operations for speed and reliability
-    std::env::set_var("SKIP_SEARCH_TESTS", "1");
-
-    // Fast path: Try indexing with very short timeout, fallback to mock
-    let indexed = try_search_index(&temp_path, &["src/**/*.rs"], false)?;
-    if !indexed {
-        // Use mock search workflow for speed
-        mock_search_workflow(&temp_path)?;
-        return Ok(());
-    }
-
-    // Only do full workflow if indexing succeeded quickly
-    // Step 2: Single optimized query
-    run_optimized_command(&["search", "query", "function", "--limit", "3"], &temp_path)?
-=======
     // Test help works for search commands
     run_optimized_command(&["search", "--help"], &temp_path)?
->>>>>>> origin/main
         .assert()
         .success();
 

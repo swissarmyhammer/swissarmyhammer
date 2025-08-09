@@ -1,7 +1,7 @@
 # Remove Dart Extractor TODO - Build Hierarchical Relationships
 
 ## Location
-`swissarmyhammer/src/outline/extractors/dart.rs:1067`
+`swissarmyhammer/src/outline/extractors/dart.rs`
 
 ## Current State
 There's a TODO comment in the Dart extractor about building proper hierarchical relationships for classes, mixins, etc.

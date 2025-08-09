@@ -996,7 +996,7 @@ mod stress_tests {
 
         // Initialize MCP connection
         initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
-        
+
         // Clean up any existing memos to ensure clean test state
         cleanup_all_memos(&mut stdin, &mut reader).unwrap();
 
@@ -1014,7 +1014,7 @@ mod stress_tests {
                     "content": format!("Content for performance test memo {} with additional text", i)
                 }),
             );
-            
+
             if let Err(e) = send_request(&mut stdin, create_request) {
                 panic!("Failed to send create request for memo {i}: {e}");
             }
@@ -1023,14 +1023,18 @@ mod stress_tests {
                 Ok(resp) => resp,
                 Err(e) => panic!("Failed to read create response for memo {i}: {e}"),
             };
-            
-            assert!(response.get("error").is_none(), "Failed to create memo {i}: {:?}", response.get("error"));
+
+            assert!(
+                response.get("error").is_none(),
+                "Failed to create memo {i}: {:?}",
+                response.get("error")
+            );
 
             let memo_id = extract_memo_id_from_response(
                 response["result"]["content"][0]["text"].as_str().unwrap(),
             );
             memo_ids.push(memo_id);
-            
+
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
@@ -1045,7 +1049,7 @@ mod stress_tests {
                     "content": format!("Updated content for memo {}", i + 1)
                 }),
             );
-            
+
             if let Err(e) = send_request(&mut stdin, update_request) {
                 panic!("Failed to send update request for memo {memo_id}: {e}");
             }
@@ -1054,13 +1058,13 @@ mod stress_tests {
                 Ok(resp) => resp,
                 Err(e) => panic!("Failed to read update response for memo {memo_id}: {e}"),
             };
-            
+
             assert!(
                 response.get("error").is_none(),
                 "Failed to update memo {memo_id}: {:?}",
                 response.get("error")
             );
-            
+
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
@@ -1074,7 +1078,7 @@ mod stress_tests {
                     "id": memo_id
                 }),
             );
-            
+
             if let Err(e) = send_request(&mut stdin, delete_request) {
                 panic!("Failed to send delete request for memo {memo_id}: {e}");
             }
@@ -1083,13 +1087,13 @@ mod stress_tests {
                 Ok(resp) => resp,
                 Err(e) => panic!("Failed to read delete response for memo {memo_id}: {e}"),
             };
-            
+
             assert!(
                 response.get("error").is_none(),
                 "Failed to delete memo {memo_id}: {:?}",
                 response.get("error")
             );
-            
+
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
@@ -1117,12 +1121,9 @@ mod stress_tests {
 
         // Initialize MCP connection
         initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
-<<<<<<< HEAD
-        
+
         // Clean up any existing memos to ensure clean test state
         cleanup_all_memos(&mut stdin, &mut reader).unwrap();
-=======
->>>>>>> origin/main
 
         // Create memos with different patterns for searching
         // Reduced from 5 patterns × 20 memos = 100 total to 3 patterns × 4 memos = 12 total
@@ -1139,15 +1140,15 @@ mod stress_tests {
                         "content": format!("This memo is about {} work item number {} with context", pattern, i)
                     }),
                 );
-                
+
                 if let Err(e) = send_request(&mut stdin, create_request) {
                     panic!("Failed to send search test create request: {e}");
                 }
-                
+
                 if let Err(e) = read_response(&mut reader) {
                     panic!("Failed to read search test create response: {e}");
                 }
-                
+
                 // Small delay to prevent server overload
                 tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
             }
@@ -1162,20 +1163,27 @@ mod stress_tests {
                     "query": pattern
                 }),
             );
-            
+
             if let Err(e) = send_request(&mut stdin, search_request) {
                 panic!("Failed to send search request for pattern {pattern}: {e}");
             }
-            
+
             let response = match read_response(&mut reader) {
                 Ok(resp) => resp,
                 Err(e) => panic!("Failed to read search response for pattern {pattern}: {e}"),
             };
 
-            assert!(response.get("error").is_none(), "Search failed for pattern {pattern}: {:?}", response.get("error"));
+            assert!(
+                response.get("error").is_none(),
+                "Search failed for pattern {pattern}: {:?}",
+                response.get("error")
+            );
             let text = response["result"]["content"][0]["text"].as_str().unwrap();
-            assert!(text.contains(&format!("Found {num_per_pattern} memo")) || text.contains(&format!("{num_per_pattern} memos matching")),
-                    "Expected to find {num_per_pattern} memos for pattern '{pattern}', but got: {text}");
+            assert!(
+                text.contains(&format!("Found {num_per_pattern} memo"))
+                    || text.contains(&format!("{num_per_pattern} memos matching")),
+                "Expected to find {num_per_pattern} memos for pattern '{pattern}', but got: {text}"
+            );
         }
     }
 }
