@@ -6,6 +6,7 @@ use crate::search::{Result, SemanticError};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::Path;
+use tracing;
 use tree_sitter::{
     Language as TreeSitterLanguage, Node, Parser, Query, QueryCursor, StreamingIterator,
 };
@@ -1551,12 +1552,12 @@ pub fn format_content_preview(content: &str, max_length: usize) -> String {
             let permissive_parser = CodeParser::new(permissive_config).unwrap();
             let permissive_chunks = permissive_parser.parse_file(file_path, content).unwrap();
 
-            println!(
+            tracing::debug!(
                 "With permissive config (min_chunk_size: 1): {} chunks",
                 permissive_chunks.len()
             );
             for (i, chunk) in permissive_chunks.iter().enumerate().take(5) {
-                println!(
+                tracing::debug!(
                     "  Chunk {}: {:?} - {} chars",
                     i,
                     chunk.chunk_type,
@@ -1771,7 +1772,7 @@ pub fn helper_function(data: &[u8]) -> String {
             let file_path = Path::new("test_code.rs");
             let chunks = parser.parse_file(file_path, test_content).unwrap();
 
-            println!(
+            tracing::debug!(
                 "Config {}: min_chunk_size={}, extracted {} chunks:",
                 i,
                 config.min_chunk_size,
@@ -1779,7 +1780,7 @@ pub fn helper_function(data: &[u8]) -> String {
             );
 
             for (j, chunk) in chunks.iter().enumerate() {
-                println!(
+                tracing::debug!(
                     "  Chunk {}: {:?} - {} chars",
                     j,
                     chunk.chunk_type,
@@ -1809,7 +1810,7 @@ pub fn helper_function(data: &[u8]) -> String {
                     .filter(|c| c.chunk_type == ChunkType::Function)
                     .count();
 
-                println!("  Use: {use_chunks}, Struct/Enum/Impl: {struct_chunks}, Function: {function_chunks}");
+                tracing::debug!("  Use: {use_chunks}, Struct/Enum/Impl: {struct_chunks}, Function: {function_chunks}");
 
                 // We should get at least one semantic chunk (not just fallback to plain text)
                 let semantic_chunks = use_chunks + struct_chunks + function_chunks;
@@ -1820,7 +1821,7 @@ pub fn helper_function(data: &[u8]) -> String {
             }
         }
 
-        println!("✅ TreeSitter chunk extraction works correctly across all configurations!");
+        tracing::debug!("✅ TreeSitter chunk extraction works correctly across all configurations!");
     }
 
     #[test]
@@ -1835,8 +1836,8 @@ pub fn helper_function(data: &[u8]) -> String {
         parser.set_language(&language).unwrap();
         let tree = parser.parse(content, None).unwrap();
 
-        println!("=== DEBUGGING TREESITTER QUERY MATCHING ===");
-        println!("Content: {content}");
+        tracing::debug!("=== DEBUGGING TREESITTER QUERY MATCHING ===");
+        tracing::debug!("Content: {content}");
 
         // Test the query patterns one by one
         let test_queries = vec![
@@ -1849,12 +1850,12 @@ pub fn helper_function(data: &[u8]) -> String {
         ];
 
         for (query_str, description) in test_queries {
-            println!("\nTesting query: {description} - '{query_str}'");
+            tracing::debug!("\nTesting query: {description} - '{query_str}'");
 
             match tree_sitter::Query::new(&language, query_str) {
                 Ok(query) => {
-                    println!("  Query compiled successfully");
-                    println!("  Query capture names: {:?}", query.capture_names());
+                    tracing::debug!("  Query compiled successfully");
+                    tracing::debug!("  Query capture names: {:?}", query.capture_names());
 
                     let mut cursor = tree_sitter::QueryCursor::new();
                     let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
@@ -1863,7 +1864,7 @@ pub fn helper_function(data: &[u8]) -> String {
                     let mut match_idx = 0;
                     while let Some(query_match) = matches.next() {
                         match_count += 1;
-                        println!(
+                        tracing::debug!(
                             "  Match {}: {} captures",
                             match_idx + 1,
                             query_match.captures.len()
@@ -1874,7 +1875,7 @@ pub fn helper_function(data: &[u8]) -> String {
                             let node = capture.node;
                             let text = &content[node.start_byte()..node.end_byte()];
                             let capture_name = query.capture_names()[capture.index as usize];
-                            println!(
+                            tracing::debug!(
                                 "    Capture {}: '{}' = '{}' (node: {})",
                                 cap_idx,
                                 capture_name,
@@ -1888,19 +1889,19 @@ pub fn helper_function(data: &[u8]) -> String {
                     }
 
                     if match_count == 0 {
-                        println!("  ❌ No matches found for this query!");
+                        tracing::debug!("  ❌ No matches found for this query!");
                     } else {
-                        println!("  ✅ Found {match_count} matches");
+                        tracing::debug!("  ✅ Found {match_count} matches");
                     }
                 }
                 Err(e) => {
-                    println!("  ❌ Query compilation failed: {e}");
+                    tracing::error!("  ❌ Query compilation failed: {e}");
                 }
             }
         }
 
         // Test with the exact same iterator pattern used in the main code
-        println!("\n=== Testing iterator pattern from main code ===");
+        tracing::debug!("\n=== Testing iterator pattern from main code ===");
         let query = tree_sitter::Query::new(&language, "(function_item) @function").unwrap();
         let mut cursor = tree_sitter::QueryCursor::new();
         let mut matches = cursor.matches(&query, tree.root_node(), content.as_bytes());
@@ -1908,10 +1909,10 @@ pub fn helper_function(data: &[u8]) -> String {
         let mut found_with_next = 0;
         while let Some(query_match) = matches.next() {
             found_with_next += 1;
-            println!("Found match {found_with_next} with next() pattern");
+            tracing::debug!("Found match {found_with_next} with next() pattern");
             for capture in query_match.captures {
                 let text = &content[capture.node.start_byte()..capture.node.end_byte()];
-                println!(
+                tracing::debug!(
                     "  Capture: '{}'",
                     text.chars()
                         .take(30)
@@ -1922,9 +1923,9 @@ pub fn helper_function(data: &[u8]) -> String {
         }
 
         if found_with_next == 0 {
-            println!("❌ No matches found with next() pattern - this is the bug!");
+            tracing::error!("❌ No matches found with next() pattern - this is the bug!");
         } else {
-            println!("✅ Found {found_with_next} matches with next() pattern");
+            tracing::debug!("✅ Found {found_with_next} matches with next() pattern");
         }
     }
 
@@ -1946,13 +1947,13 @@ pub fn helper_function(data: &[u8]) -> String {
 
         // Get TreeSitter language and parser directly
         let language = parser.detect_language(file_path);
-        println!("Detected language: {language:?}");
+        tracing::debug!("Detected language: {language:?}");
 
         let queries = parser.get_queries_for_language(&language);
-        println!("Found {} queries for {:?}", queries.len(), language);
+        tracing::debug!("Found {} queries for {:?}", queries.len(), language);
 
         for (i, (query_str, chunk_type)) in queries.iter().enumerate() {
-            println!("Query {i}: {chunk_type:?} - '{query_str}'");
+            tracing::debug!("Query {i}: {chunk_type:?} - '{query_str}'");
         }
 
         // Try parsing with TreeSitter directly
@@ -1963,19 +1964,19 @@ pub fn helper_function(data: &[u8]) -> String {
         let tree = tree_parser.parse(content, None).unwrap();
         let root_node = tree.root_node();
 
-        println!(
+        tracing::debug!(
             "TreeSitter parse success. Root node: {:?}",
             root_node.kind()
         );
-        println!("Has error: {}", root_node.has_error());
-        println!("Node count: {}", root_node.named_child_count());
+        tracing::debug!("Has error: {}", root_node.has_error());
+        tracing::debug!("Node count: {}", root_node.named_child_count());
 
         // Print the tree structure
         print_tree(&root_node, content, 0);
 
         // Test each query manually
         for (query_str, chunk_type) in queries {
-            println!("\nTesting query: {chunk_type:?} - '{query_str}'");
+            tracing::debug!("\nTesting query: {chunk_type:?} - '{query_str}'");
 
             match tree_sitter::Query::new(&tree_sitter_language, query_str) {
                 Ok(query) => {
@@ -1986,7 +1987,7 @@ pub fn helper_function(data: &[u8]) -> String {
                     let mut matches = matches;
                     while let Some(query_match) = matches.get() {
                         match_count += 1;
-                        println!(
+                        tracing::debug!(
                             "  Match {}: {} captures",
                             match_count,
                             query_match.captures.len()
@@ -1994,7 +1995,7 @@ pub fn helper_function(data: &[u8]) -> String {
                         for capture in query_match.captures {
                             let node = capture.node;
                             let text = &content[node.start_byte()..node.end_byte()];
-                            println!(
+                            tracing::debug!(
                                 "    Capture: '{}' ({})",
                                 text.chars().take(30).collect::<String>(),
                                 node.kind()
@@ -2004,11 +2005,11 @@ pub fn helper_function(data: &[u8]) -> String {
                     }
 
                     if match_count == 0 {
-                        println!("  No matches found for this query!");
+                        tracing::debug!("  No matches found for this query!");
                     }
                 }
                 Err(e) => {
-                    println!("  Query compilation failed: {e}");
+                    tracing::error!("  Query compilation failed: {e}");
                 }
             }
         }
@@ -2023,7 +2024,7 @@ pub fn helper_function(data: &[u8]) -> String {
             String::new()
         };
 
-        println!("{}{}:{}", indent, node.kind(), node_text);
+        tracing::debug!("{}{}:{}", indent, node.kind(), node_text);
 
         if depth < 3 {
             // Limit depth to avoid too much output
