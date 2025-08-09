@@ -417,8 +417,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_semantic_index_patterns_validation() {
+        // Test pattern validation logic without calling MCP functions
+        let patterns: Vec<String> = vec![];
+        
+        // Test empty patterns - should return error quickly
+        let result = run_semantic_index(&patterns, false).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No patterns"));
+    }
+
+    #[test]
+    fn test_search_argument_validation() {
+        // Test argument validation without MCP calls
+        let arg = SearchArgument {
+            name: "test".to_string(),
+            description: Some("test arg".to_string()),
+            required: true,
+            default: None,
+        };
+        
+        assert_eq!(arg.name, "test");
+        assert!(arg.required);
+        assert!(arg.description.is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "Expensive test - requires ML model download that may block indefinitely"]
     async fn test_run_semantic_index_single_pattern() {
-        // Skip if in CI or fast test mode to avoid model downloads
+        // Skip by default - only run when explicitly requested with --ignored
+        // This test downloads ML models and can be very slow
         if std::env::var("CI").is_ok() 
             || std::env::var("FAST_TESTS").is_ok() 
             || std::env::var("SKIP_SLOW_TESTS").is_ok() {
@@ -469,8 +497,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Expensive test - requires ML model download that may block indefinitely"]
     async fn test_run_semantic_index_multiple_patterns() {
-        // Skip if in CI or fast test mode to avoid model downloads
+        // Skip by default - only run when explicitly requested with --ignored
+        // This test downloads ML models and can be very slow
         if std::env::var("CI").is_ok() 
             || std::env::var("FAST_TESTS").is_ok() 
             || std::env::var("SKIP_SLOW_TESTS").is_ok() {
