@@ -3,6 +3,7 @@ use crate::toml_config::error::{ConfigError, ValidationLimits};
 use crate::toml_config::value::ConfigValue;
 use std::fs;
 use std::path::Path;
+use toml;
 
 /// TOML configuration parser with comprehensive validation and error handling
 pub struct ConfigParser {
@@ -80,8 +81,13 @@ impl ConfigParser {
         contents: &str,
         file_path: Option<std::path::PathBuf>,
     ) -> Result<Configuration, ConfigError> {
+        // Handle empty or whitespace-only content
+        if contents.trim().is_empty() {
+            return Ok(Configuration::new());
+        }
+
         // Parse TOML
-        let toml_value: toml::Value = contents.parse().map_err(|e| self.convert_toml_error(e))?;
+        let toml_value: toml::Value = toml::from_str(contents).map_err(ConfigError::TomlParseGeneric)?;
 
         // Convert to our ConfigValue structure
         let config_value = ConfigValue::from(toml_value);
@@ -111,17 +117,6 @@ impl ConfigParser {
         Ok(config)
     }
 
-    /// Convert TOML parsing error to our ConfigError with better context
-    fn convert_toml_error(&self, error: toml::de::Error) -> ConfigError {
-        // Try to extract line and column information
-        if let Some(range) = error.span() {
-            // TOML errors include span information
-            ConfigError::toml_parse(range.start, range.end, error.message().to_string())
-        } else {
-            // Fall back to generic error
-            ConfigError::TomlParseGeneric(error)
-        }
-    }
 
     /// Validate file exists and is readable
     pub fn validate_file<P: AsRef<Path>>(&self, file_path: P) -> Result<(), ConfigError> {

@@ -1117,9 +1117,12 @@ mod stress_tests {
 
         // Initialize MCP connection
         initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
+<<<<<<< HEAD
         
         // Clean up any existing memos to ensure clean test state
         cleanup_all_memos(&mut stdin, &mut reader).unwrap();
+=======
+>>>>>>> origin/main
 
         // Create memos with different patterns for searching
         // Reduced from 5 patterns × 20 memos = 100 total to 3 patterns × 4 memos = 12 total
