@@ -208,3 +208,64 @@ The Python extractor now provides proper hierarchical relationships that accurat
 - [✅] Properties and attributes are correctly associated with their classes
 - [✅] The outline accurately reflects the code structure
 - [✅] Unit tests verify the hierarchical structure
+
+## Analysis Results
+
+After thorough analysis of the current Python extractor implementation, I discovered that **hierarchical relationships are already fully implemented and working correctly**.
+
+### Current Implementation Status ✅
+
+The Python extractor at `/Users/wballard/github/swissarmyhammer/swissarmyhammer/src/outline/extractors/python.rs` contains:
+
+1. **Complete `build_hierarchy` method** (lines 859-953): A sophisticated three-pass algorithm:
+   - **Pass 1**: Processes classes and finds their methods, properties, and nested classes as children
+   - **Pass 2**: Processes functions and finds nested functions as children  
+   - **Pass 3**: Adds remaining symbols that weren't used as children
+
+2. **Helper method `is_symbol_within_range`** (lines 662-667): Properly determines containment using both byte ranges and line numbers
+
+3. **Comprehensive test coverage**: Multiple tests verify all aspects of hierarchical relationships:
+   - `test_hierarchical_relationships()` - Basic class/method nesting
+   - `test_comprehensive_hierarchical_structure()` - Complex nested structures
+   - `test_nested_classes()` - Nested class handling
+
+### Verification Results
+
+**All 15/15 Python extractor tests pass**, including comprehensive hierarchical structure tests that verify:
+
+- ✅ Classes contain their methods as children in the outline
+- ✅ Nested classes are properly represented in the hierarchy  
+- ✅ Properties and attributes are correctly associated with their classes
+- ✅ The outline accurately reflects the code structure
+- ✅ Unit tests verify the hierarchical structure
+- ✅ Static methods, class methods, and properties are properly nested
+- ✅ Nested functions are children of their parent functions
+- ✅ Class variables are children of their classes, not module-level
+
+### Test Results Summary
+
+```
+    Starting 15 tests across 35 binaries (2093 tests skipped)
+        PASS [   0.228s] swissarmyhammer outline::extractors::python::tests::test_hierarchical_relationships
+        PASS [   0.254s] swissarmyhammer outline::extractors::python::tests::test_comprehensive_hierarchical_structure
+        PASS [   0.227s] swissarmyhammer outline::extractors::python::tests::test_nested_classes
+        ... all other Python tests also passing
+     Summary [   0.353s] 15 tests run: 15 passed, 2093 skipped
+```
+
+### Implementation Features
+
+The current implementation handles complex scenarios including:
+
+- **Method nesting**: All class methods are properly nested under their containing classes
+- **Nested class handling**: Inner classes are children of outer classes, with their methods correctly assigned to the inner class
+- **Property recognition**: `@property`, `@staticmethod`, `@classmethod` decorated methods are properly handled
+- **Duplicate prevention**: Symbols are not assigned to multiple parents
+- **Range-based containment**: Uses precise byte ranges and line numbers to determine symbol containment
+- **Order preservation**: Maintains original line order for top-level symbols
+
+## Conclusion
+
+**This issue is already resolved.** The Python extractor has comprehensive hierarchical relationship functionality that meets all acceptance criteria. The implementation is robust, well-tested, and working correctly.
+
+The issue may have originally referred to a TODO comment that has since been implemented, or was created based on outdated information about the codebase state.
