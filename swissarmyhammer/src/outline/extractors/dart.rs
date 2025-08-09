@@ -801,6 +801,15 @@ impl SignatureExtractor for DartExtractor {
 }
 
 impl DartExtractor {
+    /// Check if a symbol is completely within another symbol's range
+    fn is_symbol_within_range(inner: &OutlineNode, outer: &OutlineNode) -> bool {
+        // A symbol belongs to a container if its byte range is completely within the container's byte range
+        inner.source_range.0 >= outer.source_range.0
+            && inner.source_range.1 <= outer.source_range.1
+            && inner.start_line >= outer.start_line
+            && inner.end_line <= outer.end_line
+    }
+
     /// Check if a function is async
     fn is_async_function(&self, node: &Node, source: &str) -> bool {
         // Check for async keyword in children
@@ -1083,9 +1092,140 @@ impl SymbolExtractor for DartExtractor {
     }
 
     fn build_hierarchy(&self, symbols: Vec<OutlineNode>) -> Vec<OutlineNode> {
-        // For now, return symbols as-is
-        // TODO: Build proper hierarchical relationships for classes, mixins, etc.
-        symbols
+        let mut hierarchical_symbols = Vec::new();
+        let mut used_indices = std::collections::HashSet::new();
+
+        // Sort symbols by start line for processing in order
+        let mut sorted_symbols: Vec<(usize, &OutlineNode)> = symbols.iter().enumerate().collect();
+        sorted_symbols.sort_by_key(|&(_, symbol)| symbol.start_line);
+
+        // First pass: Process classes and their members (methods, constructors, properties)
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Class {
+                let mut class_symbol = symbol.clone();
+
+                // Find all symbols that belong to this class (methods, properties, constructors)
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j && Self::is_symbol_within_range(potential_child, symbol) {
+                        // Check if this child isn't already a child of a more specific parent
+                        let mut should_add = true;
+
+                        // For nested classes, ensure we don't double-assign to both parent and grandparent
+                        if potential_child.node_type == OutlineNodeType::Class {
+                            for &(k, other_class) in &sorted_symbols {
+                                if k != i && other_class.node_type == OutlineNodeType::Class {
+                                    // If there's another class that contains this child and is within our class
+                                    if Self::is_symbol_within_range(potential_child, other_class)
+                                        && Self::is_symbol_within_range(other_class, symbol)
+                                    {
+                                        should_add = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if should_add {
+                            class_symbol.add_child(potential_child.clone());
+                            used_indices.insert(j);
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(class_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Second pass: Process mixins and their members
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Interface && !used_indices.contains(&i) {
+                // Check if this is actually a mixin or extension (both use OutlineNodeType::Interface)
+                let mut container_symbol = symbol.clone();
+
+                // Find all symbols that belong to this mixin/extension
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Only add methods, properties, and other members that belong to this container
+                        match potential_child.node_type {
+                            OutlineNodeType::Method
+                            | OutlineNodeType::Property
+                            | OutlineNodeType::Function => {
+                                container_symbol.add_child(potential_child.clone());
+                                used_indices.insert(j);
+                            }
+                            _ => {} // Don't add other types as children to mixins/extensions
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(container_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Third pass: Process enums and their methods (Dart enums can have methods)
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Enum && !used_indices.contains(&i) {
+                let mut enum_symbol = symbol.clone();
+
+                // Find methods that belong to this enum
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_child, symbol)
+                    {
+                        // Only add methods and properties to enums
+                        match potential_child.node_type {
+                            OutlineNodeType::Method | OutlineNodeType::Property => {
+                                enum_symbol.add_child(potential_child.clone());
+                                used_indices.insert(j);
+                            }
+                            _ => {} // Don't add other types as children to enums
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(enum_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Fourth pass: Process standalone functions and their nested functions
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Function && !used_indices.contains(&i) {
+                let mut function_symbol = symbol.clone();
+
+                // Find nested functions within this function
+                for &(j, potential_nested) in &sorted_symbols {
+                    if i != j
+                        && potential_nested.node_type == OutlineNodeType::Function
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_nested, symbol)
+                    {
+                        function_symbol.add_child(potential_nested.clone());
+                        used_indices.insert(j);
+                    }
+                }
+
+                hierarchical_symbols.push(function_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Fifth pass: Add remaining symbols that weren't used as children
+        for (i, symbol) in symbols.iter().enumerate() {
+            if !used_indices.contains(&i) {
+                hierarchical_symbols.push(symbol.clone());
+            }
+        }
+
+        // Sort to maintain original order for top-level symbols
+        hierarchical_symbols.sort_by_key(|s| s.start_line);
+        hierarchical_symbols
     }
 
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {

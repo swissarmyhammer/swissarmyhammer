@@ -87,7 +87,8 @@ impl ConfigParser {
         }
 
         // Parse TOML
-        let toml_value: toml::Value = toml::from_str(contents).map_err(ConfigError::TomlParseGeneric)?;
+        let toml_value: toml::Value =
+            toml::from_str(contents).map_err(ConfigError::TomlParseGeneric)?;
 
         // Convert to our ConfigValue structure
         let config_value = ConfigValue::from(toml_value);
@@ -116,7 +117,6 @@ impl ConfigParser {
 
         Ok(config)
     }
-
 
     /// Validate file exists and is readable
     pub fn validate_file<P: AsRef<Path>>(&self, file_path: P) -> Result<(), ConfigError> {
