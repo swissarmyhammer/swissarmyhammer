@@ -829,12 +829,20 @@ mod tests {
     use std::path::PathBuf;
 
     async fn create_test_searcher() -> Result<SemanticSearcher> {
+        use std::process;
+        use std::thread;
         use std::time::{SystemTime, UNIX_EPOCH};
+
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let db_path = format!("/tmp/test_semantic_{timestamp}.db");
+        let thread_id = thread::current().id();
+        let process_id = process::id();
+        let ulid_suffix = ulid::Ulid::new().to_string();
+
+        let db_path =
+            format!("/tmp/test_semantic_{timestamp}_{process_id}_{thread_id:?}_{ulid_suffix}.db");
 
         let config = SemanticConfig {
             database_path: std::path::PathBuf::from(db_path),
@@ -1021,12 +1029,20 @@ mod tests {
 
     /// Helper to create a searcher with actual test data
     async fn create_test_searcher_with_data() -> Result<SemanticSearcher> {
+        use std::process;
+        use std::thread;
         use std::time::{SystemTime, UNIX_EPOCH};
+
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let db_path = format!("/tmp/test_semantic_{timestamp}.db");
+        let thread_id = thread::current().id();
+        let process_id = process::id();
+        let ulid_suffix = ulid::Ulid::new().to_string();
+
+        let db_path =
+            format!("/tmp/test_semantic_{timestamp}_{process_id}_{thread_id:?}_{ulid_suffix}.db");
 
         // Much lower thresholds for local embedding engine with deterministic results
         let config = SemanticConfig {
