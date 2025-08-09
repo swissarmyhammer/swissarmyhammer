@@ -51,7 +51,8 @@ impl WorkflowResolver {
             let ext = file.path.extension().and_then(|s| s.to_str());
             if matches!(ext, Some("md") | Some("mermaid")) {
                 // Extract the workflow name without extension
-                let workflow_name = file.name
+                let workflow_name = file
+                    .name
                     .strip_suffix(".md")
                     .or_else(|| file.name.strip_suffix(".mermaid"))
                     .unwrap_or(&file.name);
