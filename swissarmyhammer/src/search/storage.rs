@@ -16,6 +16,7 @@ use duckdb::{Connection, ToSql};
 use serde_json;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tracing;
 
 /// Vector storage for code chunks and embeddings using DuckDB
 ///
@@ -1480,11 +1481,11 @@ mod tests {
 
         match result {
             Ok(results) => {
-                println!("Search succeeded with {} results", results.len());
+                tracing::debug!("Search succeeded with {} results", results.len());
                 assert_eq!(results.len(), 0); // Should be empty but not fail
             }
             Err(e) => {
-                println!("Search failed with error: {e}");
+                tracing::error!("Search failed with error: {e}");
                 panic!("similarity_search should not fail on empty database: {e}");
             }
         }
@@ -1517,7 +1518,7 @@ mod tests {
 
                 match searcher.search(&search_query).await {
                     Ok(results) => {
-                        println!(
+                        tracing::debug!(
                             "Full integration search succeeded! Found {} results",
                             results.len()
                         );
@@ -1526,15 +1527,15 @@ mod tests {
                         // Test that we get results back (could be 0 or more)
                     }
                     Err(e) => {
-                        println!("Full integration search failed with error: {e}");
-                        println!("Error debug: {e:?}");
+                        tracing::error!("Full integration search failed with error: {e}");
+                        tracing::error!("Error debug: {e:?}");
 
-                        // Print the full error chain
+                        // Log the full error chain
                         let mut source = e.source();
                         let mut level = 1;
                         while let Some(err) = source {
-                            println!("  Error level {level}: {err}");
-                            println!("  Error level {level} debug: {err:?}");
+                            tracing::error!("  Error level {level}: {err}");
+                            tracing::error!("  Error level {level} debug: {err:?}");
                             source = err.source();
                             level += 1;
                         }
@@ -1544,7 +1545,7 @@ mod tests {
                 }
             }
             Err(e) => {
-                println!("Failed to create searcher: {e}");
+                tracing::error!("Failed to create searcher: {e}");
                 panic!("Failed to create searcher: {e}");
             }
         }

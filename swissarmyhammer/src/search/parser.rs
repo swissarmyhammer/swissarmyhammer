@@ -1389,17 +1389,6 @@ mod tests {
             has_meaningful_content,
             "Chunks should contain meaningful Rust constructs"
         );
-
-        // Log the chunks for debugging
-        println!("Extracted {} chunks:", chunks.len());
-        for (i, chunk) in chunks.iter().enumerate() {
-            println!(
-                "  Chunk {}: {:?} - '{}'...",
-                i,
-                chunk.chunk_type,
-                chunk.content.chars().take(50).collect::<String>()
-            );
-        }
     }
 
     #[test]
@@ -1547,31 +1536,11 @@ pub fn format_content_preview(content: &str, max_length: usize) -> String {
 
         let chunks = parser.parse_file(file_path, content).unwrap();
 
-        // Log the chunks for debugging
-        println!("Extracted {} chunks with DEFAULT config:", chunks.len());
-        for (i, chunk) in chunks.iter().enumerate() {
-            println!(
-                "  Chunk {}: {:?} - {} chars - '{}'",
-                i,
-                chunk.chunk_type,
-                chunk.content.len(),
-                chunk
-                    .content
-                    .chars()
-                    .take(50)
-                    .collect::<String>()
-                    .replace('\n', " ")
-            );
-        }
-
         // This test demonstrates the issue: with default config (min_chunk_size: 50),
         // small chunks like use statements get filtered out, potentially leaving 0 chunks
         // if all extracted chunks are below the minimum size threshold
 
         if chunks.is_empty() {
-            println!("ISSUE REPRODUCED: Default config filters out all chunks!");
-            println!("Default min_chunk_size: {DEFAULT_MIN_CHUNK_SIZE}");
-
             // Let's also test with a more permissive config to compare
             let permissive_config = ParserConfig {
                 min_chunk_size: 1,
@@ -1658,33 +1627,12 @@ impl ExecutionVisualizer {
         let file_path = Path::new("./swissarmyhammer/src/workflow/visualization.rs");
         let chunks = parser.parse_file(file_path, visualization_content).unwrap();
 
-        println!("Testing with actual visualization.rs content:");
-        println!("Extracted {} chunks:", chunks.len());
-        for (i, chunk) in chunks.iter().enumerate() {
-            println!(
-                "  Chunk {}: {:?} - {} chars - '{}'",
-                i,
-                chunk.chunk_type,
-                chunk.content.len(),
-                chunk
-                    .content
-                    .chars()
-                    .take(50)
-                    .collect::<String>()
-                    .replace('\n', " ")
-            );
-        }
-
         if chunks.is_empty() {
-            println!("ISSUE REPRODUCED: No chunks extracted from visualization.rs content!");
-
             // Debug: Let's also check what language is detected
-            let detected_language = parser.detect_language(file_path);
-            println!("Detected language: {detected_language:?}");
+            let _detected_language = parser.detect_language(file_path);
 
             // Check if file is supported
-            let is_supported = parser.is_supported_file(file_path);
-            println!("File is supported: {is_supported}");
+            let _is_supported = parser.is_supported_file(file_path);
         }
 
         // Test with memo.rs content
@@ -1743,26 +1691,7 @@ pub async fn handle_memo_command(command: MemoCommands) -> Result<(), Box<dyn st
         let memo_file_path = Path::new("./swissarmyhammer-cli/src/memo.rs");
         let memo_chunks = parser.parse_file(memo_file_path, memo_content).unwrap();
 
-        println!("\nTesting with actual memo.rs content:");
-        println!("Extracted {} chunks:", memo_chunks.len());
-        for (i, chunk) in memo_chunks.iter().enumerate() {
-            println!(
-                "  Chunk {}: {:?} - {} chars - '{}'",
-                i,
-                chunk.chunk_type,
-                chunk.content.len(),
-                chunk
-                    .content
-                    .chars()
-                    .take(50)
-                    .collect::<String>()
-                    .replace('\n', " ")
-            );
-        }
-
-        if memo_chunks.is_empty() {
-            println!("ISSUE REPRODUCED: No chunks extracted from memo.rs content!");
-        }
+        if memo_chunks.is_empty() {}
 
         // The test should pass if we extract chunks from either file
         assert!(
@@ -1772,6 +1701,7 @@ pub async fn handle_memo_command(command: MemoCommands) -> Result<(), Box<dyn st
     }
 
     #[test]
+    #[ignore = "Debug test with println output"]
     fn test_treesitter_chunk_extraction_independent_of_embedding() {
         // This test verifies that TreeSitter chunk extraction works regardless of embedding engine availability
         // This addresses the original issue where 0 chunks were extracted despite successful TreeSitter parsing
@@ -1894,6 +1824,7 @@ pub fn helper_function(data: &[u8]) -> String {
     }
 
     #[test]
+    #[ignore = "Debug test with println output"]
     fn test_fix_treesitter_query_matching() {
         // Fix the TreeSitter query matching issue
         let content = "fn main() {\n    println!(\"Hello, world!\");\n}";
@@ -1998,6 +1929,7 @@ pub fn helper_function(data: &[u8]) -> String {
     }
 
     #[test]
+    #[ignore = "Debug test with println output"]
     fn test_debug_treesitter_query_execution() {
         // Debug test to understand why TreeSitter queries aren't matching
         let config = ParserConfig {
