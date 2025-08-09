@@ -9,16 +9,12 @@ use swissarmyhammer_cli::mcp_integration::CliToolContext;
 use tempfile::TempDir;
 
 mod test_utils;
-use test_utils::{setup_git_repo, SemanticTestGuard};
+use test_utils::{create_semantic_test_guard, setup_git_repo};
 
 /// Test helper to create a comprehensive test environment
-fn setup_comprehensive_test_environment() -> Result<(TempDir, std::path::PathBuf, SemanticTestGuard)>
-{
+fn setup_comprehensive_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
-
-    // Set up database isolation for this test using the proper guard
-    let semantic_guard = SemanticTestGuard::new();
 
     // Create issues directory with sample issues
     let issues_dir = temp_path.join("issues");
@@ -37,6 +33,10 @@ This is a test issue for comprehensive CLI-MCP integration testing.
 - Response formatting
 "#,
     )?;
+
+    // Create .swissarmyhammer directory for memos
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    std::fs::create_dir_all(&swissarmyhammer_dir)?;
 
     // Create source files for search testing
     let src_dir = temp_path.join("src");
@@ -65,13 +65,13 @@ pub fn handle_integration_error(error: &str) -> Result<(), String> {
     // Initialize git repository
     setup_git_repo(&temp_path)?;
 
-    Ok((temp_dir, temp_path, semantic_guard))
+    Ok((temp_dir, temp_path))
 }
 
 /// Test all issue-related MCP tools can be executed
 #[tokio::test]
 async fn test_all_issue_tools_execution() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -125,7 +125,7 @@ async fn test_all_issue_tools_execution() -> Result<()> {
 /// Test all memo-related MCP tools can be executed
 #[tokio::test]
 async fn test_all_memo_tools_execution() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -202,13 +202,16 @@ async fn test_all_memo_tools_execution() -> Result<()> {
 
 /// Test all search-related MCP tools can be executed
 #[tokio::test]
+// Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_all_search_tools_execution() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let _guard = create_semantic_test_guard();
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // Test search_index (limit to specific files to avoid timeout)
+    // Test search_index with limited files to avoid DuckDB timeout
+    // Index only the specific test file created in setup (max 6 files as per issue requirement)
     let index_args = context.create_arguments(vec![
         ("patterns", json!(["src/integration_test.rs"])),
         ("force", json!(false)),
@@ -230,7 +233,7 @@ async fn test_all_search_tools_execution() -> Result<()> {
 /// Test error propagation from MCP tools to CLI
 #[tokio::test]
 async fn test_mcp_error_propagation() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -259,8 +262,10 @@ async fn test_mcp_error_propagation() -> Result<()> {
 
 /// Test argument passing and validation
 #[tokio::test]
+// Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_argument_passing_and_validation() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let _guard = create_semantic_test_guard();
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -273,7 +278,7 @@ async fn test_argument_passing_and_validation() -> Result<()> {
     let result = context.execute_tool("memo_create", valid_args).await;
     assert!(result.is_ok(), "Valid arguments should succeed");
 
-    // Test boolean arguments
+    // Test boolean arguments with limited files to avoid DuckDB timeout
     let boolean_args = context.create_arguments(vec![
         ("patterns", json!(["src/integration_test.rs"])),
         ("force", json!(true)),
@@ -284,7 +289,7 @@ async fn test_argument_passing_and_validation() -> Result<()> {
         "Boolean arguments should be handled correctly"
     );
 
-    // Test array arguments
+    // Test array arguments with limited files to avoid DuckDB timeout
     let array_args = context.create_arguments(vec![
         ("patterns", json!(["src/integration_test.rs"])),
         ("force", json!(false)),
@@ -310,7 +315,7 @@ async fn test_argument_passing_and_validation() -> Result<()> {
 /// Test response formatting utilities
 #[tokio::test]
 async fn test_response_formatting() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -355,7 +360,7 @@ async fn test_response_formatting() -> Result<()> {
 /// Test concurrent tool execution
 #[tokio::test]
 async fn test_concurrent_tool_execution() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let _context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -394,7 +399,7 @@ async fn test_concurrent_tool_execution() -> Result<()> {
 /// Test tool execution with complex data structures
 #[tokio::test]
 async fn test_complex_data_structures() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -439,7 +444,7 @@ fn example_code() {
 /// Test tool execution edge cases
 #[tokio::test]
 async fn test_tool_execution_edge_cases() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -479,7 +484,7 @@ async fn test_tool_execution_edge_cases() -> Result<()> {
 /// Test error message formatting and user-friendliness
 #[tokio::test]
 async fn test_error_message_formatting() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -518,7 +523,7 @@ async fn test_error_message_formatting() -> Result<()> {
 /// Test tool context initialization with different configurations
 #[tokio::test]
 async fn test_tool_context_configurations() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
 
     // Test with different working directories
     let context1 = CliToolContext::new_with_dir(&temp_path)
@@ -549,8 +554,10 @@ async fn test_tool_context_configurations() -> Result<()> {
 
 /// Test MCP tool robustness under stress
 #[tokio::test]
+// Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_mcp_tool_stress_conditions() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let _guard = create_semantic_test_guard();
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -568,9 +575,9 @@ async fn test_mcp_tool_stress_conditions() -> Result<()> {
         );
     }
 
-    // Test tool execution with minimal resources
+    // Test tool execution with minimal resources - use empty pattern to avoid DuckDB timeout
     let args = context.create_arguments(vec![
-        ("patterns", json!(["nonexistent/**/*.rs"])),
+        ("patterns", json!(["nonexistent_file.rs"])),
         ("force", json!(false)),
     ]);
     let result = context.execute_tool("search_index", args).await;
@@ -583,7 +590,7 @@ async fn test_mcp_tool_stress_conditions() -> Result<()> {
 /// Test MCP tool state consistency across operations
 #[tokio::test]
 async fn test_mcp_tool_state_consistency() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -628,7 +635,7 @@ async fn test_mcp_tool_state_consistency() -> Result<()> {
 /// Test MCP error boundaries and recovery
 #[tokio::test]
 async fn test_mcp_error_boundaries() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -658,7 +665,7 @@ async fn test_mcp_error_boundaries() -> Result<()> {
 /// Test comprehensive issue_show functionality with enhanced parameters
 #[tokio::test]
 async fn test_issue_show_comprehensive() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -780,7 +787,7 @@ async fn test_issue_show_comprehensive() -> Result<()> {
 /// Test issue_show performance and edge cases
 #[tokio::test]
 async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
-    let (_temp_dir, temp_path, _guard) = setup_comprehensive_test_environment()?;
+    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;

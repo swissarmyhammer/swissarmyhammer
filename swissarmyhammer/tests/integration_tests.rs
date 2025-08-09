@@ -178,10 +178,8 @@ fn test_template_engine() {
     assert_eq!(result, "Count: 5");
 }
 
-// Custom filters test disabled - these filters are not implemented in the library
-// To enable this test, implement the custom filters: slugify, count_lines, indent
+// Custom filters test - implemented via preprocessing
 #[test]
-#[ignore = "Custom filters not yet implemented"]
 fn test_custom_filters() {
     let engine = TemplateEngine::new();
 

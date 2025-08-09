@@ -33,7 +33,7 @@ impl Configuration {
     ///
     /// # Examples
     /// ```
-    /// use swissarmyhammer::config::{Configuration, ConfigValue};
+    /// use swissarmyhammer::toml_config::{Configuration, ConfigValue};
     /// use std::collections::HashMap;
     ///
     /// let mut config = Configuration::new();
@@ -93,7 +93,7 @@ impl Configuration {
     ///
     /// # Examples
     /// ```
-    /// use swissarmyhammer::config::{Configuration, ConfigValue};
+    /// use swissarmyhammer::toml_config::{Configuration, ConfigValue};
     ///
     /// let mut config = Configuration::new();
     /// config.set("database.host".to_string(), ConfigValue::String("localhost".to_string()));

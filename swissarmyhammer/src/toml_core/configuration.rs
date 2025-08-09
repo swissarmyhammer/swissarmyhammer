@@ -29,7 +29,7 @@ impl Configuration {
     ///
     /// # Examples
     /// ```
-    /// use swissarmyhammer::config::{Configuration, ConfigValue};
+    /// use swissarmyhammer::toml_core::{Configuration, ConfigValue};
     /// use std::collections::HashMap;
     ///
     /// let mut config = Configuration::new();
@@ -41,7 +41,7 @@ impl Configuration {
     /// let db_table = config.get("database").unwrap();
     ///
     /// // Dot notation access
-    /// let port = config.get_nested("database.port").unwrap();
+    /// let port = config.get_nested("database.port").unwrap().unwrap();
     /// assert_eq!(port, &ConfigValue::Integer(5432));
     /// ```
     pub fn get(&self, key: &str) -> Option<&ConfigValue> {

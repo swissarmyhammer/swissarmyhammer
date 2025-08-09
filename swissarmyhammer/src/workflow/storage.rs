@@ -47,10 +47,15 @@ impl WorkflowResolver {
 
         // Process all loaded files into workflows
         for file in self.vfs.list() {
-            // Only process .md files for workflows
-            if file.path.extension().and_then(|s| s.to_str()) == Some("md") {
+            // Process .md and .mermaid files for workflows
+            let ext = file.path.extension().and_then(|s| s.to_str());
+            if matches!(ext, Some("md") | Some("mermaid")) {
                 // Extract the workflow name without extension
-                let workflow_name = file.name.strip_suffix(".md").unwrap_or(&file.name);
+                let workflow_name = file
+                    .name
+                    .strip_suffix(".md")
+                    .or_else(|| file.name.strip_suffix(".mermaid"))
+                    .unwrap_or(&file.name);
 
                 // Parse frontmatter to extract metadata
                 let (metadata, _) = self.parse_front_matter(&file.content)?;

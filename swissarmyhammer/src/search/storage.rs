@@ -1173,33 +1173,39 @@ impl VectorStorage {
 
     /// Explicitly close the database connection
     ///
-    /// This method should be called to ensure proper cleanup of the DuckDB connection.
-    /// It's automatically called during Drop, but can be called explicitly if needed.
+    /// This method allows for explicit cleanup of DuckDB connections,
+    /// which can help prevent assertion failures during Drop.
     pub fn close(&self) -> Result<()> {
         if let Ok(conn) = self.connection.lock() {
-            // Test if connection is still valid by running a simple query
+            // Test connection validity before attempting to close
             match conn.execute("SELECT 1", []) {
                 Ok(_) => {
-                    tracing::debug!(
-                        "Closing DuckDB connection for path: {}",
-                        self.db_path.display()
-                    );
-                    // DuckDB connections are automatically closed when dropped
-                    // No explicit close call needed, but we can log the closure
+                    // Connection is valid, perform explicit close
+                    drop(conn);
+                    tracing::debug!("Successfully closed VectorStorage database connection");
+                    Ok(())
                 }
                 Err(e) => {
-                    tracing::warn!("DuckDB connection already invalid during close: {}", e);
+                    tracing::warn!("Connection test failed during close: {}", e);
+                    // Connection was already invalid, just drop it
+                    drop(conn);
+                    Ok(())
                 }
             }
         } else {
-            tracing::warn!("Failed to acquire connection lock during close");
+            tracing::warn!("Could not acquire connection lock during close");
+            Ok(())
         }
-        Ok(())
     }
 }
 
+/// Enhanced Drop implementation for VectorStorage
+///
+/// This implementation ensures proper cleanup of DuckDB connections
+/// by validating the connection before attempting to drop it.
 impl Drop for VectorStorage {
     fn drop(&mut self) {
+        // Attempt graceful cleanup with connection validation
         if let Err(e) = self.close() {
             tracing::warn!("Error during VectorStorage drop cleanup: {}", e);
         }

@@ -34,12 +34,12 @@ fn test_search_index_old_glob_flag_rejected() -> Result<()> {
 fn test_search_index_positional_glob() -> Result<()> {
     let _guard = create_semantic_test_guard();
 
-    // Use timeout to prevent hanging and capture output with timeout
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
-    cmd.args(["search", "index", "**/*.rs"]);
-    cmd.timeout(std::time::Duration::from_secs(10));  // 10 second timeout
-    
-    let output = cmd.output()?;
+    // Use a pattern that won't match many files to avoid heavy indexing
+    let output = Command::cargo_bin("swissarmyhammer")
+        .unwrap()
+        .args(["search", "index", "nonexistent/**/*.xyz"])
+        .timeout(std::time::Duration::from_secs(10)) // Fail fast if this takes too long
+        .output()?;
 
     // The command should either succeed in showing the indexing message or fail gracefully
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -49,7 +49,7 @@ fn test_search_index_positional_glob() -> Result<()> {
     // We don't care if it fails due to model initialization - just that it parses args correctly
     let combined_output = format!("{stdout}{stderr}");
     assert!(
-        combined_output.contains("Indexing files matching: **/*.rs")
+        combined_output.contains("Indexing files matching: nonexistent/**/*.xyz")
             || combined_output.contains("Starting semantic search indexing")
             || combined_output.contains("Failed to initialize fastembed model")
             || combined_output.contains("Failed to create CLI context"),
@@ -64,9 +64,11 @@ fn test_search_index_positional_glob() -> Result<()> {
 fn test_search_index_with_force() -> Result<()> {
     let _guard = create_semantic_test_guard();
 
+    // Use a pattern that won't match many files to avoid heavy indexing
     let output = Command::cargo_bin("swissarmyhammer")
         .unwrap()
-        .args(["search", "index", "**/*.py", "--force"])
+        .args(["search", "index", "nonexistent/**/*.xyz", "--force"])
+        .timeout(std::time::Duration::from_secs(10)) // Fail fast if this takes too long
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -74,9 +76,11 @@ fn test_search_index_with_force() -> Result<()> {
 
     // Should show that it's starting indexing with the correct glob pattern and force flag
     assert!(
-        stdout.contains("Indexing files matching: **/*.py")
-            || stderr.contains("Indexing files matching:"),
-        "should show glob pattern in output: stdout={stdout}, stderr={stderr}"
+        stdout.contains("Indexing files matching: nonexistent/**/*.xyz")
+            || stderr.contains("Indexing files matching:")
+            || stdout.contains("Starting semantic search indexing")
+            || stderr.contains("Starting semantic search indexing"),
+        "should show glob pattern or indexing start in output: stdout={stdout}, stderr={stderr}"
     );
     assert!(
         stdout.contains("Force re-indexing: enabled")

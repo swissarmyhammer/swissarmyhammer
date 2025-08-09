@@ -26,7 +26,7 @@
 //! ## Basic Configuration Loading
 //!
 //! ```no_run
-//! use swissarmyhammer::config::{ConfigParser, ConfigValue};
+//! use swissarmyhammer::toml_core::{ConfigParser, ConfigValue};
 //! use std::path::Path;
 //!
 //! let parser = ConfigParser::new();
@@ -48,7 +48,7 @@
 //! ## Environment Variable Substitution
 //!
 //! ```no_run
-//! use swissarmyhammer::config::{ConfigParser, ConfigValue};
+//! use swissarmyhammer::toml_core::{ConfigParser, ConfigValue};
 //!
 //! let toml_content = r#"
 //! database_url = "${DATABASE_URL:-postgresql://localhost:5432/myapp}"
@@ -69,7 +69,7 @@
 //! ## Creating and Modifying Configuration
 //!
 //! ```
-//! use swissarmyhammer::config::{Configuration, ConfigValue};
+//! use swissarmyhammer::toml_core::{Configuration, ConfigValue};
 //! use std::collections::HashMap;
 //!
 //! let mut config = Configuration::new();
@@ -91,7 +91,7 @@
 //! ## Type Coercion
 //!
 //! ```
-//! use swissarmyhammer::config::ConfigValue;
+//! use swissarmyhammer::toml_core::ConfigValue;
 //!
 //! let value = ConfigValue::String("42".to_string());
 //!
@@ -120,12 +120,13 @@
 //! These limits can be customized when creating a [`ConfigParser`]:
 //!
 //! ```
-//! use swissarmyhammer::config::ConfigParser;
+//! use swissarmyhammer::toml_core::ConfigParser;
 //!
-//! let parser = ConfigParser::new()
-//!     .with_max_file_size(2 * 1024 * 1024)  // 2MB limit
-//!     .with_max_depth(5)                     // 5 levels max
-//!     .with_utf8_validation(true);           // Strict UTF-8 validation
+//! // Configure parser with file size limit
+//! let parser = ConfigParser::with_max_file_size(2 * 1024 * 1024);  // 2MB limit
+//!
+//! // Or with depth limit
+//! let parser = ConfigParser::with_max_depth(5);  // 5 levels max
 //! ```
 
 /// Configuration error types with detailed context and error chaining
@@ -161,7 +162,7 @@ pub use value::ConfigValue;
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer::config::load_config;
+/// use swissarmyhammer::toml_core::load_config;
 /// use std::path::Path;
 ///
 /// let config = load_config(Path::new("sah.toml"))?;
@@ -185,7 +186,7 @@ pub fn load_config(file_path: &std::path::Path) -> Result<Configuration, ConfigE
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer::config::load_repo_config;
+/// use swissarmyhammer::toml_core::load_repo_config;
 ///
 /// match load_repo_config()? {
 ///     Some(config) => println!("Found sah.toml with {} values", config.len()),
@@ -213,7 +214,7 @@ pub fn load_repo_config() -> Result<Option<Configuration>, ConfigError> {
 /// # Examples
 ///
 /// ```no_run
-/// use swissarmyhammer::config::validate_config_file;
+/// use swissarmyhammer::toml_core::validate_config_file;
 /// use std::path::Path;
 ///
 /// match validate_config_file(Path::new("sah.toml")) {

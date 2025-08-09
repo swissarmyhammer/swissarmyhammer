@@ -425,8 +425,10 @@ impl SignatureExtractor for RustExtractor {
 
                 // Add visibility modifiers
                 let mut modifiers = Vec::new();
-                if let Some(Visibility::Public) = self.parse_visibility(node, source) {
-                    modifiers.push(Modifier::Public);
+                if let Some(visibility) = self.parse_visibility(node, source) {
+                    if visibility == Visibility::Public {
+                        modifiers.push(Modifier::Public);
+                    }
                 }
                 signature = signature.with_modifiers(modifiers);
 
@@ -1149,7 +1151,7 @@ where
 pub mod utils {
     /// Helper function
     pub fn format_data(input: &str) -> String {
-        format!("formatted: {input}")
+        format!("formatted: {}", input)
     }
 }
 

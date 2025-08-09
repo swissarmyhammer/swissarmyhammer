@@ -120,6 +120,7 @@ pub struct SemanticTestGuard {
     _temp_dir: TempDir,
     original_api_key: Option<String>,
     original_db_path: Option<String>,
+    test_db_path: std::path::PathBuf,
 }
 
 impl SemanticTestGuard {
@@ -132,18 +133,25 @@ impl SemanticTestGuard {
         let original_api_key = std::env::var("NOMIC_API_KEY").ok();
         let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
 
+        // Create a unique database path for this test instance
+        let test_db_path = tempfile::NamedTempFile::new()
+            .expect("Failed to create temp database file")
+            .path()
+            .with_extension("db")
+            .to_path_buf();
+
         // Set a test API key that allows the command to start but will fail gracefully
         std::env::set_var("NOMIC_API_KEY", "test-key-for-cli-integration-testing");
 
-        // Set unique database path for this test to avoid conflicts
-        let db_path = temp_dir.path().join("semantic_test.db");
-        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &db_path);
+        // Set isolated database path for this test
+        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &test_db_path);
 
         Self {
             _home_guard: home_guard,
             _temp_dir: temp_dir,
             original_api_key,
             original_db_path,
+            test_db_path,
         }
     }
 }
@@ -168,15 +176,10 @@ impl Drop for SemanticTestGuard {
             None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
         }
 
-        // Clean up test database files
-        let db_path = self._temp_dir.path().join("semantic_test.db");
-        if db_path.exists() {
-            if let Err(e) = std::fs::remove_file(&db_path) {
-                eprintln!(
-                    "Warning: Failed to clean up test database file {}: {}",
-                    db_path.display(),
-                    e
-                );
+        // Clean up test database file
+        if self.test_db_path.exists() {
+            if let Err(e) = std::fs::remove_file(&self.test_db_path) {
+                eprintln!("Warning: Failed to clean up test database file: {e}");
             }
         }
     }
