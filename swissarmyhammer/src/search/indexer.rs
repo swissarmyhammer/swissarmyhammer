@@ -909,7 +909,7 @@ mod tests {
         let (mut indexer, temp_dir) = match indexer_result {
             Ok(result) => result,
             Err(e) => {
-                eprintln!("Skipping test_empty_gitignore: {e}");
+                tracing::warn!("Skipping test_empty_gitignore: {e}");
                 return;
             }
         };
@@ -937,7 +937,7 @@ mod tests {
         let (indexer, _temp_dir) = match indexer_result {
             Ok(result) => result,
             Err(e) => {
-                eprintln!("Skipping test_glob_pattern_parsing: {e}");
+                tracing::warn!("Skipping test_glob_pattern_parsing: {e}");
                 return;
             }
         };
