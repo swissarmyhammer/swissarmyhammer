@@ -105,7 +105,10 @@ fn mock_search_workflow(temp_path: &std::path::Path) -> Result<()> {
     // Create unique test identifier to avoid any cross-test conflicts
     use std::time::{SystemTime, UNIX_EPOCH};
     let thread_id = std::thread::current().id();
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let test_id = format!("{thread_id:?}_{timestamp}");
 
     // Just verify the command structure works without actual indexing

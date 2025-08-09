@@ -219,9 +219,9 @@ mod module_tests {
         );
     }
 
-    #[test]  
+    #[test]
     fn test_parse_toml_string() {
-        let toml_content = "name = \"test\"";  // Simplest possible TOML
+        let toml_content = "name = \"test\""; // Simplest possible TOML
 
         let config = parse_toml_string(toml_content).unwrap();
         assert_eq!(

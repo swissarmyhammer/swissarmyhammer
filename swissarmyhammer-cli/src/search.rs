@@ -429,7 +429,7 @@ mod tests {
     async fn test_semantic_index_patterns_validation() {
         // Test pattern validation logic without calling MCP functions
         let patterns: Vec<String> = vec![];
-        
+
         // Test empty patterns - should return error quickly
         let result = run_semantic_index(&patterns, false).await;
         assert!(result.is_err());
@@ -445,7 +445,7 @@ mod tests {
             required: true,
             default: None,
         };
-        
+
         assert_eq!(arg.name, "test");
         assert!(arg.required);
         assert!(arg.description.is_some());
