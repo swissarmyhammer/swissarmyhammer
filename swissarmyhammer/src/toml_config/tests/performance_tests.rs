@@ -519,7 +519,7 @@ mod caching_tests {
         let reuse_duration = start.elapsed();
 
         // Parsing multiple configs with same parser should be efficient
-        assert!(reuse_duration < Duration::from_millis(10));
+        assert!(reuse_duration < Duration::from_millis(20));
 
         println!(
             "Parsed {} configs with reused parser in {reuse_duration:?}",

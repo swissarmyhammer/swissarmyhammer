@@ -109,17 +109,18 @@ fn mock_search_workflow(temp_path: &std::path::Path) -> Result<()> {
     let test_id = format!("{thread_id:?}_{timestamp}");
 
     // Just verify the command structure works without actual indexing
-    // Should fail gracefully without downloading models
+    // Should complete quickly and skip model downloads with SKIP_SEARCH_TESTS=1
     let output = Command::cargo_bin("swissarmyhammer")?
         .args(["search", "query", "test", "--limit", "1"])
         .current_dir(temp_path)
         .env("SWISSARMYHAMMER_TEST_MODE", "1")
         .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
-        .env("RUST_LOG", "warn")
+        .env("RUST_LOG", "error") // Reduce log noise
         .env("SKIP_SEARCH_TESTS", "1") // Skip search tests to avoid model download
+        .timeout(std::time::Duration::from_secs(10)) // Reduced timeout since we're skipping heavy operations
         .output()?;
 
-    // Either succeeds with empty results or fails gracefully with search index error
+    // Should succeed with empty results when SKIP_SEARCH_TESTS=1
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Ensure it's a graceful search failure, not a model download error
