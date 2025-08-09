@@ -26,25 +26,19 @@ impl PythonExtractor {
         let mut queries = Vec::new();
 
         // Define Tree-sitter queries for each Python construct
+        // Note: Using more comprehensive queries to avoid duplicates between decorated and non-decorated symbols
         let query_definitions = vec![
-            // Function definitions (including async functions)
+            // Function definitions (both decorated and non-decorated)
             (
                 OutlineNodeType::Function,
-                r#"(function_definition) @function"#,
+                r#"[(function_definition) @function
+                   (decorated_definition definition: (function_definition)) @function]"#,
             ),
-            // Decorated functions (functions with decorators like @property, @classmethod)
-            (
-                OutlineNodeType::Function,
-                r#"(decorated_definition
-                  definition: (function_definition) @decorated_function)"#,
-            ),
-            // Class definitions
-            (OutlineNodeType::Class, r#"(class_definition) @class"#),
-            // Decorated classes (classes with decorators like @dataclass)
+            // Class definitions (both decorated and non-decorated)
             (
                 OutlineNodeType::Class,
-                r#"(decorated_definition
-                  definition: (class_definition) @decorated_class)"#,
+                r#"[(class_definition) @class
+                   (decorated_definition definition: (class_definition)) @class]"#,
             ),
             // Variable assignments at module level
             (
@@ -664,6 +658,15 @@ impl SignatureExtractor for PythonExtractor {
 }
 
 impl PythonExtractor {
+    /// Check if a symbol (method) is within the source range of another symbol (class)
+    fn is_symbol_within_range(inner: &OutlineNode, outer: &OutlineNode) -> bool {
+        // A method belongs to a class if its byte range is completely within the class's byte range
+        inner.source_range.0 >= outer.source_range.0
+            && inner.source_range.1 <= outer.source_range.1
+            && inner.start_line >= outer.start_line
+            && inner.end_line <= outer.end_line
+    }
+
     /// Check if a function is async
     fn is_async_function(&self, node: &Node, source: &str) -> bool {
         // Check if this is inside an async function
@@ -740,6 +743,7 @@ impl PythonExtractor {
 impl SymbolExtractor for PythonExtractor {
     fn extract_symbols(&self, tree: &Tree, source: &str) -> Result<Vec<OutlineNode>> {
         let mut symbols = Vec::new();
+        let mut seen_nodes = std::collections::HashSet::new();
         let root_node = tree.root_node();
 
         // Process each query
@@ -752,7 +756,26 @@ impl SymbolExtractor for PythonExtractor {
                 if let Some(capture) = query_match.captures.first() {
                     let node = &capture.node;
 
-                    if let Some(name) = self.extract_name_from_node(node, source) {
+                    // For decorated definitions, we need to extract from the inner definition
+                    let target_node = if node.kind() == "decorated_definition" {
+                        // Find the actual function or class definition inside the decorated definition
+                        node.child_by_field_name("definition").unwrap_or(*node)
+                    } else {
+                        *node
+                    };
+
+                    // Use the target_node (the actual function/class) for deduplication
+                    let node_key = (
+                        target_node.start_byte(),
+                        target_node.end_byte(),
+                        node_type.clone(),
+                    );
+                    if seen_nodes.contains(&node_key) {
+                        continue; // Skip duplicate
+                    }
+                    seen_nodes.insert(node_key);
+
+                    if let Some(name) = self.extract_name_from_node(&target_node, source) {
                         let (start_line, end_line) = self.get_line_range(node);
                         let mut outline_node = OutlineNode::new(
                             name.clone(),
@@ -765,10 +788,10 @@ impl SymbolExtractor for PythonExtractor {
                         // Add signature based on node type
                         let signature = match node_type {
                             OutlineNodeType::Function => {
-                                Some(self.build_function_signature(&name, node, source))
+                                Some(self.build_function_signature(&name, &target_node, source))
                             }
                             OutlineNodeType::Class => {
-                                Some(self.build_class_signature(&name, node, source))
+                                Some(self.build_class_signature(&name, &target_node, source))
                             }
                             OutlineNodeType::Import => {
                                 Some(self.build_import_signature(node, source))
@@ -789,7 +812,7 @@ impl SymbolExtractor for PythonExtractor {
                         }
 
                         // Add documentation
-                        if let Some(docs) = self.extract_docstring(node, source) {
+                        if let Some(docs) = self.extract_docstring(&target_node, source) {
                             outline_node = outline_node.with_documentation(docs);
                         }
 
@@ -834,9 +857,99 @@ impl SymbolExtractor for PythonExtractor {
     }
 
     fn build_hierarchy(&self, symbols: Vec<OutlineNode>) -> Vec<OutlineNode> {
-        // For now, return symbols as-is
-        // TODO: Build proper hierarchical relationships for classes and their methods
-        symbols
+        let mut hierarchical_symbols = Vec::new();
+        let mut used_indices = std::collections::HashSet::new();
+
+        // Sort symbols by start line for processing in order
+        let mut sorted_symbols: Vec<(usize, &OutlineNode)> = symbols.iter().enumerate().collect();
+        sorted_symbols.sort_by_key(|&(_, symbol)| symbol.start_line);
+
+        // First pass: Process classes and nested classes
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Class {
+                let mut class_symbol = symbol.clone();
+
+                // Find all symbols that belong to this class (methods, properties, variables, nested classes)
+                for &(j, potential_child) in &sorted_symbols {
+                    if i != j && Self::is_symbol_within_range(potential_child, symbol) {
+                        // Check if this child isn't already a child of a more specific parent
+                        let mut should_add = true;
+
+                        // For nested classes, ensure we don't double-assign to both parent and grandparent
+                        if potential_child.node_type == OutlineNodeType::Class {
+                            for &(k, other_class) in &sorted_symbols {
+                                if k != i && other_class.node_type == OutlineNodeType::Class {
+                                    // If there's another class that contains this child and is within our class
+                                    if Self::is_symbol_within_range(potential_child, other_class)
+                                        && Self::is_symbol_within_range(other_class, symbol)
+                                    {
+                                        should_add = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // For functions, check if they belong to a nested class instead
+                        if potential_child.node_type == OutlineNodeType::Function {
+                            for &(k, other_class) in &sorted_symbols {
+                                if k != i && other_class.node_type == OutlineNodeType::Class {
+                                    // If there's a nested class that contains this function
+                                    if Self::is_symbol_within_range(potential_child, other_class)
+                                        && Self::is_symbol_within_range(other_class, symbol)
+                                        && other_class.start_line > symbol.start_line
+                                    {
+                                        should_add = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if should_add {
+                            class_symbol.add_child(potential_child.clone());
+                            used_indices.insert(j);
+                        }
+                    }
+                }
+
+                hierarchical_symbols.push(class_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Second pass: Process functions and their nested functions
+        for &(i, symbol) in &sorted_symbols {
+            if symbol.node_type == OutlineNodeType::Function && !used_indices.contains(&i) {
+                let mut function_symbol = symbol.clone();
+
+                // Find nested functions within this function
+                for &(j, potential_nested) in &sorted_symbols {
+                    if i != j
+                        && potential_nested.node_type == OutlineNodeType::Function
+                        && !used_indices.contains(&j)
+                        && Self::is_symbol_within_range(potential_nested, symbol)
+                    {
+                        function_symbol.add_child(potential_nested.clone());
+                        used_indices.insert(j);
+                    }
+                }
+
+                hierarchical_symbols.push(function_symbol);
+                used_indices.insert(i);
+            }
+        }
+
+        // Third pass: Add remaining symbols that weren't used as children
+        for (i, symbol) in symbols.iter().enumerate() {
+            if !used_indices.contains(&i) {
+                hierarchical_symbols.push(symbol.clone());
+            }
+        }
+
+        // Sort to maintain original order for top-level symbols
+        hierarchical_symbols.sort_by_key(|s| s.start_line);
+        hierarchical_symbols
     }
 
     fn get_queries(&self) -> Vec<(&'static str, OutlineNodeType)> {
@@ -1306,5 +1419,521 @@ DEFAULT_PERMISSIONS = ["read", "write"]
                 symbol.node_type, symbol.name, symbol.start_line
             );
         }
+    }
+
+    #[test]
+    fn test_hierarchical_relationships() {
+        let extractor = PythonExtractor::new().unwrap();
+        let source = r#"
+class User:
+    """User class with methods."""
+    
+    def __init__(self, name: str):
+        """Initialize user."""
+        self.name = name
+    
+    def get_name(self) -> str:
+        """Get the user name."""
+        return self.name
+    
+    def set_name(self, name: str):
+        """Set the user name."""
+        self.name = name
+    
+    @property
+    def display_name(self) -> str:
+        """Get formatted display name."""
+        return f"User: {self.name}"
+
+def standalone_function():
+    """Standalone function outside of class."""
+    return "standalone"
+
+class Database:
+    """Database class."""
+    
+    def connect(self):
+        """Connect to database."""
+        pass
+    
+    def disconnect(self):
+        """Disconnect from database."""
+        pass
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+
+        // Build hierarchy
+        let hierarchical_symbols = extractor.build_hierarchy(symbols);
+
+        // Print results for debugging
+        println!("Hierarchical symbols:");
+        for symbol in &hierarchical_symbols {
+            println!(
+                "  {:?} '{}' at line {} (children: {})",
+                symbol.node_type,
+                symbol.name,
+                symbol.start_line,
+                symbol.children.len()
+            );
+            for child in &symbol.children {
+                println!(
+                    "    └── {:?} '{}' at line {}",
+                    child.node_type, child.name, child.start_line
+                );
+            }
+        }
+
+        // Verify classes are present with children
+        let user_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "User")
+            .expect("Should find User class");
+
+        let database_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "Database")
+            .expect("Should find Database class");
+
+        // User class should have methods as children
+        assert!(
+            user_class.children.len() >= 4,
+            "User class should have at least 4 methods (__init__, get_name, set_name, display_name), found: {}",
+            user_class.children.len()
+        );
+
+        // Database class should have methods as children
+        assert!(
+            database_class.children.len() >= 2,
+            "Database class should have at least 2 methods (connect, disconnect), found: {}",
+            database_class.children.len()
+        );
+
+        // Verify specific methods are children of User class
+        let user_child_names: Vec<&String> = user_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+        assert!(
+            user_child_names.contains(&&"__init__".to_string()),
+            "User class should contain __init__ method"
+        );
+        assert!(
+            user_child_names.contains(&&"get_name".to_string()),
+            "User class should contain get_name method"
+        );
+        assert!(
+            user_child_names.contains(&&"set_name".to_string()),
+            "User class should contain set_name method"
+        );
+        assert!(
+            user_child_names.contains(&&"display_name".to_string()),
+            "User class should contain display_name method"
+        );
+
+        // Verify Database class methods
+        let database_child_names: Vec<&String> = database_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+        assert!(
+            database_child_names.contains(&&"connect".to_string()),
+            "Database class should contain connect method"
+        );
+        assert!(
+            database_child_names.contains(&&"disconnect".to_string()),
+            "Database class should contain disconnect method"
+        );
+
+        // Verify standalone function is not a child of any class
+        let standalone_function = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Function && s.name == "standalone_function")
+            .expect("Should find standalone_function at top level");
+
+        assert_eq!(
+            standalone_function.children.len(),
+            0,
+            "Standalone function should not have children"
+        );
+
+        // Verify we don't have methods at top level anymore (they should be nested)
+        let top_level_methods: Vec<&OutlineNode> = hierarchical_symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Function && s.name != "standalone_function")
+            .collect();
+
+        assert!(
+            top_level_methods.is_empty(),
+            "Should not have class methods at top level, found: {:?}",
+            top_level_methods
+                .iter()
+                .map(|s| &s.name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_nested_classes() {
+        let extractor = PythonExtractor::new().unwrap();
+        let source = r#"
+class OuterClass:
+    """Outer class."""
+    
+    def outer_method(self):
+        """Method in outer class."""
+        pass
+    
+    class InnerClass:
+        """Inner class."""
+        
+        def inner_method(self):
+            """Method in inner class."""
+            pass
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+        let hierarchical_symbols = extractor.build_hierarchy(symbols);
+
+        // Should find outer class
+        let outer_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "OuterClass")
+            .expect("Should find OuterClass");
+
+        // Should find inner class
+        let inner_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "InnerClass")
+            .expect("Should find InnerClass");
+
+        // Outer class should have outer_method as child
+        let outer_child_names: Vec<&String> = outer_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+        assert!(
+            outer_child_names.contains(&&"outer_method".to_string()),
+            "OuterClass should contain outer_method"
+        );
+
+        // Inner class should have inner_method as child
+        let inner_child_names: Vec<&String> = inner_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+        assert!(
+            inner_child_names.contains(&&"inner_method".to_string()),
+            "InnerClass should contain inner_method"
+        );
+    }
+
+    #[test]
+    fn test_comprehensive_hierarchical_structure() {
+        let extractor = PythonExtractor::new().unwrap();
+        let source = r#"
+"""Module level docstring."""
+
+from typing import Optional, List
+import sys
+
+# Module level constants
+VERSION = "1.0.0"
+MAX_CONNECTIONS = 100
+
+class BaseClass:
+    """Base class with various member types."""
+    
+    # Class variable
+    class_var: int = 42
+    
+    def __init__(self, name: str) -> None:
+        """Initialize base class."""
+        self.name = name
+        self.instance_var = "instance"
+    
+    @property
+    def name_property(self) -> str:
+        """Get name as property."""
+        return self.name
+    
+    @staticmethod
+    def static_utility() -> str:
+        """Static utility method."""
+        return "static"
+    
+    @classmethod
+    def create_default(cls) -> 'BaseClass':
+        """Class method to create default instance."""
+        return cls("default")
+    
+    def regular_method(self, param: str) -> Optional[str]:
+        """Regular instance method."""
+        return param
+    
+    async def async_method(self) -> None:
+        """Async method."""
+        pass
+    
+    def _private_method(self) -> None:
+        """Private method."""
+        pass
+    
+    def __dunder_method__(self) -> str:
+        """Dunder method."""
+        return "dunder"
+    
+    class NestedClass:
+        """Nested class within BaseClass."""
+        
+        nested_var = "nested"
+        
+        def __init__(self) -> None:
+            """Initialize nested class."""
+            pass
+        
+        def nested_method(self) -> str:
+            """Method in nested class."""
+            return "nested"
+        
+        @property
+        def nested_property(self) -> str:
+            """Property in nested class."""
+            return self.nested_var
+
+@dataclass
+class DataModel:
+    """Data model class."""
+    name: str
+    value: int = 10
+    
+    def model_method(self) -> str:
+        """Method in data model."""
+        return f"{self.name}: {self.value}"
+
+def standalone_function(arg1: str, arg2: int = 5) -> str:
+    """Standalone function."""
+    return f"{arg1}_{arg2}"
+
+async def async_standalone(data: List[str]) -> None:
+    """Async standalone function."""
+    pass
+
+def function_with_nested():
+    """Function with nested function."""
+    def inner_function():
+        """Nested function."""
+        return "inner"
+    return inner_function()
+        "#;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(source, None).unwrap();
+
+        let symbols = extractor.extract_symbols(&tree, source).unwrap();
+        let hierarchical_symbols = extractor.build_hierarchy(symbols);
+
+        println!("Comprehensive hierarchical symbols:");
+        for symbol in &hierarchical_symbols {
+            println!(
+                "  {:?} '{}' at line {} (children: {})",
+                symbol.node_type,
+                symbol.name,
+                symbol.start_line,
+                symbol.children.len()
+            );
+            for child in &symbol.children {
+                println!(
+                    "    └── {:?} '{}' at line {}",
+                    child.node_type, child.name, child.start_line
+                );
+            }
+        }
+
+        // Verify BaseClass has all its methods and properties
+        let base_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "BaseClass")
+            .expect("Should find BaseClass");
+
+        // BaseClass should have multiple children (methods and properties)
+        assert!(
+            base_class.children.len() >= 8,
+            "BaseClass should have at least 8 children (methods and properties), found: {}",
+            base_class.children.len()
+        );
+
+        // Check specific methods are children of BaseClass
+        let base_child_names: Vec<&String> = base_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+
+        let expected_base_methods = [
+            "__init__",
+            "name_property",
+            "static_utility",
+            "create_default",
+            "regular_method",
+            "async_method",
+            "_private_method",
+            "__dunder_method__",
+        ];
+
+        for method_name in &expected_base_methods {
+            assert!(
+                base_child_names.contains(&&method_name.to_string()),
+                "BaseClass should contain {} method",
+                method_name
+            );
+        }
+
+        // Verify NestedClass exists and has its methods
+        let nested_class = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "NestedClass")
+            .expect("Should find NestedClass");
+
+        assert!(
+            nested_class.children.len() >= 2,
+            "NestedClass should have at least 2 children, found: {}",
+            nested_class.children.len()
+        );
+
+        let nested_child_names: Vec<&String> = nested_class
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+
+        assert!(
+            nested_child_names.contains(&&"__init__".to_string()),
+            "NestedClass should contain __init__ method"
+        );
+        assert!(
+            nested_child_names.contains(&&"nested_method".to_string()),
+            "NestedClass should contain nested_method"
+        );
+        assert!(
+            nested_child_names.contains(&&"nested_property".to_string()),
+            "NestedClass should contain nested_property"
+        );
+
+        // Verify DataModel class
+        let data_model = hierarchical_symbols
+            .iter()
+            .find(|s| s.node_type == OutlineNodeType::Class && s.name == "DataModel")
+            .expect("Should find DataModel");
+
+        assert!(
+            data_model.children.len() >= 1,
+            "DataModel should have at least 1 child method, found: {}",
+            data_model.children.len()
+        );
+
+        // Verify standalone functions are at top level
+        let standalone_functions: Vec<&OutlineNode> = hierarchical_symbols
+            .iter()
+            .filter(|s| {
+                s.node_type == OutlineNodeType::Function
+                    && matches!(
+                        s.name.as_str(),
+                        "standalone_function" | "async_standalone" | "function_with_nested"
+                    )
+            })
+            .collect();
+
+        assert_eq!(
+            standalone_functions.len(),
+            3,
+            "Should find 3 standalone functions, found: {}",
+            standalone_functions.len()
+        );
+
+        // Verify simple standalone functions have no children
+        let simple_standalone: Vec<&OutlineNode> = standalone_functions
+            .iter()
+            .filter(|s| matches!(s.name.as_str(), "standalone_function" | "async_standalone"))
+            .copied()
+            .collect();
+
+        for func in &simple_standalone {
+            assert_eq!(
+                func.children.len(),
+                0,
+                "Simple standalone function '{}' should not have children",
+                func.name
+            );
+        }
+
+        // Verify function_with_nested has nested function as child
+        let function_with_nested = standalone_functions
+            .iter()
+            .find(|s| s.name == "function_with_nested")
+            .expect("Should find function_with_nested");
+
+        assert_eq!(
+            function_with_nested.children.len(),
+            1,
+            "function_with_nested should have 1 child (inner_function)"
+        );
+
+        let nested_child_names: Vec<&String> = function_with_nested
+            .children
+            .iter()
+            .map(|child| &child.name)
+            .collect();
+        assert!(
+            nested_child_names.contains(&&"inner_function".to_string()),
+            "function_with_nested should contain inner_function as child"
+        );
+
+        // Verify no methods appear at top level (except standalone functions)
+        let top_level_functions: Vec<&OutlineNode> = hierarchical_symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Function)
+            .collect();
+
+        // All top-level functions should be standalone (not class methods or nested functions)
+        for func in &top_level_functions {
+            assert!(
+                matches!(func.name.as_str(), "standalone_function" | "async_standalone" | "function_with_nested"),
+                "Found unexpected top-level function: {} (nested functions and class methods should be children)",
+                func.name
+            );
+        }
+
+        // Verify imports and variables exist at module level
+        let imports: Vec<&OutlineNode> = hierarchical_symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Import)
+            .collect();
+        assert!(!imports.is_empty(), "Should find import statements");
+
+        let variables: Vec<&OutlineNode> = hierarchical_symbols
+            .iter()
+            .filter(|s| s.node_type == OutlineNodeType::Variable)
+            .collect();
+        assert!(!variables.is_empty(), "Should find module-level variables");
     }
 }

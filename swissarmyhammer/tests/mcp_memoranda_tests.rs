@@ -995,6 +995,9 @@ mod stress_tests {
         let stdout = server.0.stdout.take().unwrap();
         let mut reader = BufReader::new(stdout);
 
+        // Initialize MCP connection
+        initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
+
         let num_memos = 50;
         let mut memo_ids = Vec::new();
 
@@ -1077,6 +1080,9 @@ mod stress_tests {
         let mut stdin = server.0.stdin.take().unwrap();
         let stdout = server.0.stdout.take().unwrap();
         let mut reader = BufReader::new(stdout);
+
+        // Initialize MCP connection
+        initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
 
         // Create memos with different patterns for searching
         let patterns = [
