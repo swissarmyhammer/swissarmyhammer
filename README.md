@@ -6,7 +6,7 @@
 
 **Program all the things, just by writing markdown. Really.**
 
-📚 **[Complete Documentation & Guides](https://wballard.github.io/swissarmyhammer)** 📚
+📚 **[Complete Documentation & Guides](https://swissarmyhammer.github.io/swissarmyhammer)** 📚
 
 🦀 **[Rust API Documentation](https://docs.rs/swissarmyhammer)** 🦀
 
@@ -15,7 +15,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://github.com/anthropics/model-context-protocol)
 
-[📖 Documentation](https://wballard.github.io/swissarmyhammer) • [🦀 API Docs](https://docs.rs/swissarmyhammer)
+[📖 Documentation](https://swissarmyhammer.github.io/swissarmyhammer) • [🦀 API Docs](https://docs.rs/swissarmyhammer)
 
 </div>
 
@@ -136,7 +136,7 @@ sah validate
 
 ### Install
 
-See [https://wballard.github.io/swissarmyhammer/installation.html](https://wballard.github.io/swissarmyhammer/installation.html) for detailed installation instructions.
+See [https://wballard.github.io/swissarmyhammer/installation.html](https://swissarmyhammer.github.io/swissarmyhammer/installation.html) for detailed installation instructions.
 
 ### Configure Claude Code
 
@@ -199,15 +199,15 @@ All tools integrate seamlessly with Claude Code's MCP protocol and provide struc
 
 ## 📖 Documentation
 
-- **[Installation Guide](https://wballard.github.io/swissarmyhammer/installation.html)** - All installation methods
-- **[Quick Start](https://wballard.github.io/swissarmyhammer/quick-start.html)** - Get up and running
-- **[Creating Prompts](https://wballard.github.io/swissarmyhammer/creating-prompts.html)** - Prompt creation guide
-- **[Claude Code Integration](https://wballard.github.io/swissarmyhammer/claude-code-integration.html)** - Setup with Claude Code
-- **[Built-in Prompts](https://wballard.github.io/swissarmyhammer/builtin-prompts.html)** - Ready-to-use prompts
+- **[Installation Guide](https://swissarmyhammer.github.io/swissarmyhammer/installation.html)** - All installation methods
+- **[Quick Start](https://swissarmyhammer.github.io/swissarmyhammer/quick-start.html)** - Get up and running
+- **[Creating Prompts](https://swissarmyhammer.github.io/swissarmyhammer/creating-prompts.html)** - Prompt creation guide
+- **[Claude Code Integration](https://swissarmyhammer.github.io/swissarmyhammer/claude-code-integration.html)** - Setup with Claude Code
+- **[Built-in Prompts](https://swissarmyhammer.github.io/swissarmyhammer/builtin-prompts.html)** - Ready-to-use prompts
 
 ### Development Setup
 
-See [https://wballard.github.io/swissarmyhammer/installation.html](https://wballard.github.io/swissarmyhammer/installation.html) for development setup instructions.
+See [https://wballard.github.io/swissarmyhammer/installation.html](https://swissarmyhammer.github.io/swissarmyhammer/installation.html) for development setup instructions.
 
 ## 🙏 Acknowledgments
 
