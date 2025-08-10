@@ -7,8 +7,8 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde_json::Map;
 use std::sync::Arc;
-use swissarmyhammer::mcp::tool_registry::{ToolContext, ToolRegistry};
-use swissarmyhammer::mcp::{register_issue_tools, register_memo_tools, register_search_tools};
+use swissarmyhammer_tools::{ToolContext, ToolRegistry};
+use swissarmyhammer_tools::{register_issue_tools, register_memo_tools, register_search_tools};
 use tokio::sync::{Mutex, RwLock};
 
 /// Type alias for issue storage to reduce complexity
@@ -86,8 +86,8 @@ impl CliToolContext {
     /// Create tool handlers for backward compatibility
     fn create_tool_handlers(
         memo_storage: Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>>,
-    ) -> Arc<swissarmyhammer::mcp::tool_handlers::ToolHandlers> {
-        Arc::new(swissarmyhammer::mcp::tool_handlers::ToolHandlers::new(
+    ) -> Arc<swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers> {
+        Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(
             memo_storage,
         ))
     }
@@ -316,7 +316,7 @@ mod tests {
                     }),
             )));
 
-        let tool_handlers = Arc::new(swissarmyhammer::mcp::tool_handlers::ToolHandlers::new(
+        let tool_handlers = Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(
             memo_storage.clone(),
         ));
 

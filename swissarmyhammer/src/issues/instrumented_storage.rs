@@ -1,7 +1,7 @@
 use super::filesystem::{Issue, IssueStorage};
 use super::metrics::{MetricsSnapshot, Operation, PerformanceMetrics};
 use crate::error::Result;
-use crate::mcp::types::IssueName;
+use super::IssueName;
 use async_trait::async_trait;
 use tokio::time::Instant;
 

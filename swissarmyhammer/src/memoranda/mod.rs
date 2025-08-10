@@ -441,7 +441,7 @@ pub mod storage;
 pub use storage::{FileSystemMemoStorage, MarkdownMemoStorage, MemoState, MemoStorage};
 
 /// Mock storage implementation for testing
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod mock_storage;
 
 /// Advanced search engine with full-text indexing and query parsing

@@ -261,7 +261,7 @@ fn test_search_engine() {
 
 #[tokio::test]
 async fn test_mcp_server() {
-    use swissarmyhammer::mcp::McpServer;
+    use swissarmyhammer_tools::McpServer;
 
     let mut library = PromptLibrary::new();
     library

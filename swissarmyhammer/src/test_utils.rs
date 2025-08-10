@@ -44,22 +44,8 @@ use crate::{Prompt, PromptLibrary};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-#[cfg(test)]
-use crate::common::rate_limiter::MockRateLimiter;
-#[cfg(test)]
-use crate::git::GitOperations;
-#[cfg(test)]
-use crate::issues::IssueStorage;
-#[cfg(test)]
-use crate::mcp::tool_handlers::ToolHandlers;
-#[cfg(test)]
-use crate::mcp::tool_registry::ToolContext;
-#[cfg(test)]
-use crate::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
-#[cfg(test)]
-use std::sync::Arc;
-#[cfg(test)]
-use tokio::sync::{Mutex as TokioMutex, RwLock};
+// #[cfg(test)]
+// use swissarmyhammer_tools::mcp::{ToolHandlers, ToolContext};
 
 #[cfg(test)]
 use tempfile::TempDir;
@@ -458,38 +444,38 @@ impl TestFileSystem {
     }
 }
 
-/// Create a shared test context for MCP memoranda tool tests
-///
-/// This function creates a consistent ToolContext with mock storage backends
-/// that can be used across all memoranda tool tests, reducing code duplication
-/// and ensuring consistent test behavior.
-///
-/// # Returns
-///
-/// A `ToolContext` configured with:
-/// - Mock issue storage using a test directory
-/// - No git operations (None)
-/// - Mock memo storage for testing
-/// - Tool handlers with all backends connected
-#[cfg(test)]
-pub async fn create_test_context() -> ToolContext {
-    let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-        crate::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
-    )));
-    let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
-    let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-        Arc::new(RwLock::new(Box::new(MockMemoStorage::new())));
-
-    let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-
-    ToolContext::new(
-        tool_handlers,
-        issue_storage,
-        git_ops,
-        memo_storage,
-        Arc::new(MockRateLimiter),
-    )
-}
+// /// Create a shared test context for MCP memoranda tool tests
+// ///
+// /// This function creates a consistent ToolContext with mock storage backends
+// /// that can be used across all memoranda tool tests, reducing code duplication
+// /// and ensuring consistent test behavior.
+// ///
+// /// # Returns
+// ///
+// /// A `ToolContext` configured with:
+// /// - Mock issue storage using a test directory
+// /// - No git operations (None)
+// /// - Mock memo storage for testing
+// /// - Tool handlers with all backends connected
+// #[cfg(test)]
+// pub async fn create_test_context() -> ToolContext {
+//     let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
+//         crate::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+//     )));
+//     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
+//     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
+//         Arc::new(RwLock::new(Box::new(MockMemoStorage::new())));
+// 
+//     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+// 
+//     ToolContext::new(
+//         tool_handlers,
+//         issue_storage,
+//         git_ops,
+//         memo_storage,
+//         Arc::new(MockRateLimiter),
+//     )
+// }
 
 #[cfg(test)]
 mod tests {

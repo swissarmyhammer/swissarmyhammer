@@ -1,7 +1,7 @@
 use crate::common::generate_monotonic_ulid_string;
 use crate::config::Config;
 use crate::error::{Result, SwissArmyHammerError};
-use crate::mcp::types::IssueName;
+use super::IssueName;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
