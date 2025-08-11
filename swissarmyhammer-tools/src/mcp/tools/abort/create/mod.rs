@@ -227,4 +227,202 @@ mod tests {
             .list_tool_names()
             .contains(&"abort_create".to_string()));
     }
+
+    #[test]
+    #[serial]
+    fn test_concurrent_abort_file_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_path).unwrap();
+
+        // Create multiple threads trying to create abort file simultaneously
+        let handles: Vec<_> = (0..5)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    let reason = format!("Concurrent abort reason {}", i);
+                    AbortCreateTool::create_abort_file(&reason)
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        // All threads should succeed
+        for result in results {
+            assert!(result.is_ok());
+        }
+
+        // File should exist
+        let abort_file = temp_path.join(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+    }
+
+    #[test]
+    #[serial]
+    fn test_abort_file_overwrite() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_path).unwrap();
+
+        // Create first abort file
+        let first_reason = "First abort reason";
+        let result1 = AbortCreateTool::create_abort_file(first_reason);
+        assert!(result1.is_ok());
+
+        let abort_file = temp_path.join(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+
+        let content1 = std::fs::read_to_string(&abort_file).unwrap();
+        assert_eq!(content1, first_reason);
+
+        // Create second abort file (should overwrite)
+        let second_reason = "Second abort reason";
+        let result2 = AbortCreateTool::create_abort_file(second_reason);
+        assert!(result2.is_ok());
+
+        let content2 = std::fs::read_to_string(&abort_file).unwrap();
+        assert_eq!(content2, second_reason);
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_parse_empty_reason() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "reason".to_string(),
+            serde_json::Value::String("".to_string()),
+        );
+
+        let request: AbortCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.reason, "");
+    }
+
+    #[test]
+    fn test_parse_whitespace_only_reason() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "reason".to_string(),
+            serde_json::Value::String("   \t\n  ".to_string()),
+        );
+
+        let request: AbortCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.reason, "   \t\n  ");
+    }
+
+    #[test]
+    fn test_parse_long_reason() {
+        let long_reason = "x".repeat(10000);
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "reason".to_string(),
+            serde_json::Value::String(long_reason.clone()),
+        );
+
+        let request: AbortCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.reason, long_reason);
+    }
+
+    #[test]
+    fn test_parse_unicode_reason() {
+        let unicode_reason = "中文测试 🚫 Aborting with émojis and ñoñ-ASCII";
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "reason".to_string(),
+            serde_json::Value::String(unicode_reason.to_string()),
+        );
+
+        let request: AbortCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.reason, unicode_reason);
+    }
+
+    #[test]
+    fn test_parse_invalid_type() {
+        let mut args = serde_json::Map::new();
+        args.insert("reason".to_string(), serde_json::Value::Number(42.into()));
+
+        let result: Result<AbortCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_abort_file_with_unicode() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_path).unwrap();
+
+        let unicode_reason = "Abort with émojis 🚫 and ñoñ-ASCII characters 中文";
+        let result = AbortCreateTool::create_abort_file(unicode_reason);
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+
+        let abort_file = temp_path.join(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+
+        let content = std::fs::read_to_string(&abort_file).unwrap();
+        assert_eq!(content, unicode_reason);
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_abort_file_when_directory_already_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_path).unwrap();
+
+        // Pre-create the .swissarmyhammer directory
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        std::fs::create_dir(&sah_dir).unwrap();
+        assert!(sah_dir.exists());
+
+        let reason = "Test with existing directory";
+        let result = AbortCreateTool::create_abort_file(reason);
+
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+
+        let abort_file = sah_dir.join(".abort");
+        assert!(abort_file.exists());
+
+        let content = std::fs::read_to_string(&abort_file).unwrap();
+        assert_eq!(content, reason);
+    }
+
+    #[test]
+    #[serial]
+    fn test_ensure_sah_directory_idempotent() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_path).unwrap();
+
+        let sah_dir = temp_path.join(".swissarmyhammer");
+
+        // Call ensure_sah_directory multiple times
+        let result1 = AbortCreateTool::ensure_sah_directory();
+        assert!(result1.is_ok());
+        assert!(sah_dir.exists());
+
+        let result2 = AbortCreateTool::ensure_sah_directory();
+        assert!(result2.is_ok());
+        assert!(sah_dir.exists());
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
 }
