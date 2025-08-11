@@ -22,13 +22,14 @@ stateDiagram-v2
     SetVariable --> CheckValue
     CheckValue --> SuccessPath: success
     CheckValue --> FailurePath: failure
+    CheckValue --> FailurePath: default
     SuccessPath --> WaitExample
     FailurePath --> HandleError
     HandleError --> WaitExample
     WaitExample --> BranchDecision
-    BranchDecision --> Branch1: example_var.startsWith('Hello')
+    BranchDecision --> Branch1: result.contains("Hello")
     BranchDecision --> Branch2: is_error == true
-    BranchDecision --> DefaultBranch: always
+    BranchDecision --> DefaultBranch: default
     Branch1 --> Complete
     Branch2 --> Complete
     DefaultBranch --> Complete

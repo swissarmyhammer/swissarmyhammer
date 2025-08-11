@@ -14,6 +14,7 @@ stateDiagram-v2
     are_issues_complete --> loop
     loop --> done: result.matches("(?i)YES")
     loop --> work: result.matches("(?i)NO")
+    loop --> work: default
     work --> are_issues_complete
     done --> [*]
 ```

@@ -24,8 +24,8 @@ swissarmyhammer flow run greeting --set name=John --set language=English
 ```mermaid
 stateDiagram-v2
     [*] --> start
-    start --> greet: Always
-    greet --> farewell: Always  
+    start --> greet
+    greet --> farewell  
     farewell --> [*]
 ```
 

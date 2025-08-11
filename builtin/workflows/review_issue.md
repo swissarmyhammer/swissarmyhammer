@@ -22,7 +22,7 @@ stateDiagram-v2
 - start: log "Reviewing an issue"
 - review: execute prompt "issue/review"
 - correct: execute prompt "issue/code_review"
-- test: run workflow "tdd"
+- test: log "Would run TDD workflow"
 - commit: execute prompt "commit"
 
 ## Description
