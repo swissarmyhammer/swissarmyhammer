@@ -42,12 +42,11 @@ Follow the [Calcutron](https://github.com/swissarmyhammer/calcutron) sample to g
 - **🗂️ Organized Hierarchy** - Built-in, user, and local prompt directories with override precedence
 - **🛠️ Developer Tools** - Rich CLI with diagnostics, validation, and shell completions
 - **📚 Rust Library** - Use as a dependency in your own Rust projects with comprehensive API
-- **🔍 Built-in Library** - 20+ ready-to-use prompts for common development tasks
+- **🔍 Built-in Prompts** - 20+ ready-to-use prompts for common development tasks
 - **🔧 Workflow Engine** - Advanced state-based workflow execution with Mermaid diagrams
 - **📝 Issue Management** - Git-integrated issue tracking with automatic branch management
 - **💾 Memoranda System** - Note-taking and knowledge management with full-text search
 - **🔍 Semantic Search** - Vector-based search with TreeSitter parsing and embedding models
-- **🎯 Extensible Architecture** - Plugin system and tool registry for custom functionality
 
 ### Common Commands
 
@@ -143,7 +142,7 @@ See [https://swissarmyhammer.github.io/swissarmyhammer/installation.html](https:
 Add to your Claude Code [MCP configuration](https://docs.anthropic.com/en/docs/claude-code/mcp)
 
 ```bash
-claude mcp add --scope user sah sah serve
+claude mcp add sah sah serve
 ```
 
 ### Create Your First Prompt
@@ -170,30 +169,7 @@ That's it! Your prompt is now available in Claude Code. You can use it via MCP w
 
 ## 🔧 MCP Tools
 
-SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
-
-### Issue Management Tools
-- `issue_create` - Create new issues with automatic numbering
-- `issue_list` - List all active and completed issues  
-- `issue_show` - Display issue details (supports `current` and `next`)
-- `issue_work` - Switch to work branch for an issue
-- `issue_update` - Update issue content
-- `issue_mark_complete` - Mark issues as completed
-- `issue_merge` - Merge issue branches back to main
-- `issue_all_complete` - Check if all issues are completed
-
-### Memoranda (Notes) Tools
-- `memo_create` - Create new memos with ULID identifiers
-- `memo_list` - List all available memos
-- `memo_get` - Retrieve memo by ID
-- `memo_search` - Search memos by content
-- `memo_update` - Update existing memo content
-- `memo_delete` - Delete memos
-- `memo_get_all_context` - Get all memos for AI context
-
-### Semantic Search Tools
-- `search_index` - Index files for semantic search using TreeSitter
-- `search_query` - Perform semantic search with vector similarity
+SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code.
 
 All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses.
 

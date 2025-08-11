@@ -97,3 +97,31 @@ match workflow_result {
 
 ## Follow-up Issues
 - ABORT_000264_builtin-prompt-updates
+
+## Proposed Solution
+
+After analyzing the code, I found that `ExecutorError::Abort` is already defined in the workflow executor module, but the CLI error handling is using string-based detection because the `ExecutorError` gets wrapped in `SwissArmyHammerError::Other` during error conversion in `flow.rs`.
+
+The solution involves:
+
+### 1. Update Flow Module Error Handling
+In `swissarmyhammer-cli/src/flow.rs` in `execute_workflow_with_progress` function:
+- Import `ExecutorError` from the workflow module
+- Check for `ExecutorError::Abort` before wrapping errors in `SwissArmyHammerError::Other`
+- Create a special error variant or handle abort errors specifically
+
+### 2. Update Main CLI Error Handling 
+In `swissarmyhammer-cli/src/main.rs`:
+- Remove string-based `error_msg.contains("ABORT ERROR")` check
+- Add proper pattern matching for abort errors from the flow module
+- Maintain EXIT_ERROR exit code for abort conditions
+
+### 3. Update Other CLI Command Error Handling
+Update similar patterns in:
+- `swissarmyhammer-cli/src/prompt.rs`
+- `swissarmyhammer-cli/src/test.rs`
+
+### 4. Remove Obsolete String-Based Detection
+Remove the `is_abort_error` helper function from `swissarmyhammer-cli/src/error.rs`
+
+The key insight is that we need to handle the abort detection before the ExecutorError gets wrapped in SwissArmyHammerError::Other, then propagate it properly to the CLI level.

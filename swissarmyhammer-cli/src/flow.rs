@@ -10,9 +10,9 @@ use std::future;
 use std::io::{self, Write};
 use std::time::Duration;
 use swissarmyhammer::workflow::{
-    ExecutionVisualizer, MemoryWorkflowStorage, StateId, TransitionKey, Workflow, WorkflowExecutor,
-    WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend,
-    WorkflowStorage, WorkflowStorageBackend,
+    ExecutionVisualizer, ExecutorError, MemoryWorkflowStorage, StateId, TransitionKey, Workflow,
+    WorkflowExecutor, WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus,
+    WorkflowRunStorageBackend, WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer::{Result, SwissArmyHammerError};
 use tokio::signal;
@@ -121,10 +121,10 @@ struct WorkflowCommandConfig {
 /// Execute a workflow
 async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     // Use proper WorkflowStorage with embedded builtins
-    let workflow_storage = tokio::task::spawn_blocking(move || WorkflowStorage::file_system())
+    let workflow_storage = tokio::task::spawn_blocking(WorkflowStorage::file_system)
         .await
         .map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to create workflow storage: {}", e))
+            SwissArmyHammerError::Other(format!("Failed to create workflow storage: {e}"))
         })??;
 
     let workflow_name_typed = WorkflowName::new(&config.workflow_name);
@@ -752,6 +752,12 @@ async fn logs_workflow_command(
     Ok(())
 }
 
+/// Handle ExecutorError and check for abort condition
+fn handle_executor_error(executor_error: ExecutorError, _context: &str) -> SwissArmyHammerError {
+    // Convert ExecutorError directly to SwissArmyHammerError using From trait
+    SwissArmyHammerError::from(executor_error)
+}
+
 /// Execute workflow with progress display
 async fn execute_workflow_with_progress(
     executor: &mut WorkflowExecutor,
@@ -778,10 +784,10 @@ async fn execute_workflow_with_progress(
 
             // Execute single step
             executor.execute_state(run).await.map_err(|e| {
-                SwissArmyHammerError::Other(format!(
-                    "Failed to execute state '{}': {}",
-                    run.current_state, e
-                ))
+                handle_executor_error(
+                    e,
+                    &format!("Failed to execute state '{}'", run.current_state),
+                )
             })?;
 
             println!("✅ Step completed");
@@ -793,10 +799,13 @@ async fn execute_workflow_with_progress(
     } else {
         // Non-interactive execution
         executor.execute_state(run).await.map_err(|e| {
-            SwissArmyHammerError::Other(format!(
-                "Failed to execute workflow '{}' at state '{}': {}",
-                run.workflow.name, run.current_state, e
-            ))
+            handle_executor_error(
+                e,
+                &format!(
+                    "Failed to execute workflow '{}' at state '{}'",
+                    run.workflow.name, run.current_state
+                ),
+            )
         })?;
     }
 
@@ -1752,16 +1761,14 @@ fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBacke
     let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
     fs::create_dir_all(&local_dir).map_err(|e| {
         SwissArmyHammerError::Other(format!(
-            "Failed to create .swissarmyhammer/workflow-runs directory: {}",
-            e
+            "Failed to create .swissarmyhammer/workflow-runs directory: {e}"
         ))
     })?;
 
     let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
         .map_err(|e| {
             SwissArmyHammerError::Other(format!(
-                "Failed to create local workflow run storage: {}",
-                e
+                "Failed to create local workflow run storage: {e}"
             ))
         })?;
 

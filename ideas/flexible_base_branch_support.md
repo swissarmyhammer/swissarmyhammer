@@ -84,10 +84,6 @@ Based on code analysis, the following locations explicitly reference or require 
    - Add tests for feature branch → issue branch workflows
    - Test merge back to various base branches
 
-5. **Update Documentation**
-   - Update user documentation to explain flexible branching
-   - Update examples to show feature branch workflows
-
 ## Benefits
 
 - **Flexible Development Workflows**: Support feature branches, release branches, etc.
@@ -97,8 +93,8 @@ Based on code analysis, the following locations explicitly reference or require 
 
 ## Edge Cases to Handle
 
-- What happens if the source branch is deleted before merge? Abort
-- How to handle merge conflicts between issue branch and changed source branch? Abort
+- What happens if the source branch is deleted before merge? Abort delegating to the abort tool
+- How to handle merge conflicts between issue branch and changed source branch? Abort delegating to the abort tool
 - Should we allow changing the target branch for merge? No
 
 ## Validation

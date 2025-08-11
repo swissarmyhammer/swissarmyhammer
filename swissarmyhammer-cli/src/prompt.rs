@@ -38,12 +38,23 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
                 debug,
             };
             runner.run(config).await.map(|_| ()).map_err(|e| {
-                let error_msg = e.to_string();
-                if error_msg.contains("ABORT ERROR") {
-                    CliError::new(error_msg, crate::exit_codes::EXIT_ERROR)
-                } else {
-                    CliError::new(error_msg, 1)
+                // Check if the underlying error is a SwissArmyHammerError with abort
+                if let Some(swissarmyhammer_error) = e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+                    if swissarmyhammer_error.is_abort_error() {
+                        if let Some(abort_reason) = swissarmyhammer_error.abort_error_message() {
+                            return CliError::new(
+                                format!("Prompt execution aborted: {abort_reason}"),
+                                crate::exit_codes::EXIT_ERROR,
+                            );
+                        } else {
+                            return CliError::new(
+                                format!("Prompt execution aborted: {swissarmyhammer_error}"),
+                                crate::exit_codes::EXIT_ERROR,
+                            );
+                        }
+                    }
                 }
+                CliError::new(e.to_string(), 1)
             })
         }
         PromptSubcommand::Search {

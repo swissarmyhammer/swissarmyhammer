@@ -277,12 +277,8 @@ impl TestRunner {
             println!("{}", "─".repeat(50));
         }
 
-        // Check for ABORT ERROR pattern in the rendered output and exit immediately if found
-        if let Err(action_error) =
-            swissarmyhammer::common::abort_handler::check_for_abort_error_and_exit(rendered)
-        {
-            return Err(anyhow!("ABORT ERROR detected: {}", action_error));
-        }
+        // Note: ABORT ERROR string-based detection removed - abort handling now done via
+        // ExecutorError::Abort at the workflow execution level
 
         // Copy to clipboard if requested
         if copy {

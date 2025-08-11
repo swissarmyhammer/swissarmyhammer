@@ -114,6 +114,10 @@ pub enum SwissArmyHammerError {
     #[error("Semantic search error: {0}")]
     Semantic(#[from] crate::search::SemanticError),
 
+    /// Workflow executor error
+    #[error("Workflow executor error: {0}")]
+    ExecutorError(#[from] crate::workflow::ExecutorError),
+
     /// Other errors
     #[error("{0}")]
     Other(String),
@@ -624,6 +628,7 @@ impl SwissArmyHammerError {
     pub fn is_abort_error(&self) -> bool {
         match self {
             SwissArmyHammerError::Other(msg) => msg.starts_with(Self::ABORT_ERROR_PREFIX),
+            SwissArmyHammerError::ExecutorError(crate::workflow::ExecutorError::Abort(_)) => true,
             _ => false,
         }
     }
@@ -649,6 +654,9 @@ impl SwissArmyHammerError {
         if self.is_abort_error() {
             match self {
                 SwissArmyHammerError::Other(msg) => Some(msg.clone()),
+                SwissArmyHammerError::ExecutorError(crate::workflow::ExecutorError::Abort(
+                    reason,
+                )) => Some(reason.clone()),
                 _ => None,
             }
         } else {
