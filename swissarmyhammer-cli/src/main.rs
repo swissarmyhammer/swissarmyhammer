@@ -277,13 +277,12 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             // Check if this is an abort error (file-based detection)
-            if let SwissArmyHammerError::ExecutorError(executor_error) = &e {
-                if let swissarmyhammer::workflow::ExecutorError::Abort(abort_reason) =
-                    executor_error
-                {
-                    tracing::error!("Workflow aborted: {}", abort_reason);
-                    return EXIT_ERROR;
-                }
+            if let SwissArmyHammerError::ExecutorError(
+                swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
+            ) = &e
+            {
+                tracing::error!("Workflow aborted: {}", abort_reason);
+                return EXIT_ERROR;
             }
             tracing::error!("Flow error: {}", e);
             EXIT_WARNING
