@@ -116,7 +116,7 @@ pub fn check_installation(checks: &mut Vec<Check>) -> Result<()> {
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    if exe_name == "swissarmyhammer" || exe_name == "swissarmyhammer.exe" {
+    if exe_name == "sah" || exe_name == "sah.exe" {
         checks.push(Check {
             name: check_names::BINARY_NAME.to_string(),
             status: CheckStatus::Ok,
@@ -143,7 +143,7 @@ pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
     let path_var = env::var("PATH").unwrap_or_default();
     let paths: Vec<std::path::PathBuf> = env::split_paths(&path_var).collect();
 
-    let exe_name = "swissarmyhammer";
+    let exe_name = "sah";
     let mut found = false;
     let mut found_path = None;
 
@@ -170,10 +170,9 @@ pub fn check_in_path(checks: &mut Vec<Check>) -> Result<()> {
         checks.push(Check {
             name: check_names::IN_PATH.to_string(),
             status: CheckStatus::Warning,
-            message: "swissarmyhammer not found in PATH".to_string(),
+            message: "sah not found in PATH".to_string(),
             fix: Some(
-                "Add swissarmyhammer to your PATH or use the full path in Claude Code config"
-                    .to_string(),
+                "Add sah to your PATH or use the full path in Claude Code config".to_string(),
             ),
         });
     }
