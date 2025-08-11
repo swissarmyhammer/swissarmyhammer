@@ -455,6 +455,12 @@ impl BaseToolImpl {
 }
 
 /// Tool registration functions for organizing tools by category
+/// Register all abort-related tools with the registry
+pub fn register_abort_tools(registry: &mut ToolRegistry) {
+    use super::tools::abort;
+    abort::register_abort_tools(registry);
+}
+
 /// Register all issue-related tools with the registry
 pub fn register_issue_tools(registry: &mut ToolRegistry) {
     use super::tools::issues;

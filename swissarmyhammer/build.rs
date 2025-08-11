@@ -16,7 +16,6 @@ fn main() {
 
     // Generate builtin workflows
     generate_builtin_workflows(&out_dir);
-
 }
 
 fn generate_builtin_prompts(out_dir: &str) {
@@ -147,4 +146,3 @@ fn collect_workflows(dir: &Path, prefix: &str, code: &mut String) {
         }
     }
 }
-
