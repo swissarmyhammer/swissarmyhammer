@@ -228,30 +228,49 @@ mod tests {
 
     #[test]
     fn test_abort_file_cleanup_when_file_exists() {
-        use std::path::Path;
+        use tempfile::TempDir;
+
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path = sah_dir.join(".abort");
+
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+
+        // Create an abort file
+        std::fs::write(&abort_path, "test abort reason").expect("Failed to write abort file");
+
+        // Verify the file was created
+        assert!(
+            abort_path.exists(),
+            "Abort file should exist after creation"
+        );
 
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        // Create the .swissarmyhammer directory if it doesn't exist
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
-
-        // Create an abort file
-        let abort_path = ".swissarmyhammer/.abort";
-        std::fs::write(abort_path, "test abort reason").unwrap();
-        assert!(Path::new(abort_path).exists());
+        // Change to the temp directory to test the relative path logic
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        std::env::set_current_dir(temp_path).expect("Failed to set current dir");
 
         // Create a new workflow run - this should clean up the abort file
         let _run = WorkflowRun::new(workflow);
 
         // Verify the abort file was cleaned up
-        assert!(!Path::new(abort_path).exists());
+        assert!(
+            !abort_path.exists(),
+            "Abort file should be cleaned up after WorkflowRun::new"
+        );
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).expect("Failed to restore current dir");
     }
 
     #[test]
     fn test_abort_file_cleanup_when_file_does_not_exist() {
-
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));

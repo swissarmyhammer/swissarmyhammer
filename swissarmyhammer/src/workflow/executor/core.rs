@@ -226,6 +226,13 @@ impl WorkflowExecutor {
         let mut current_remaining = remaining_transitions;
 
         loop {
+            // Check for abort file before each iteration
+            if std::path::Path::new(".swissarmyhammer/.abort").exists() {
+                let reason = std::fs::read_to_string(".swissarmyhammer/.abort")
+                    .unwrap_or_else(|_| "Unknown abort reason".to_string());
+                return Err(ExecutorError::Abort(reason));
+            }
+
             tracing::debug!(
                 "Workflow execution loop - current state: {}",
                 run.current_state
