@@ -141,10 +141,10 @@
                         <a href="print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
-                        <a href="https://github.com/swissarmyhammer/swissarmyhammer" title="Git repository" aria-label="Git repository">
+                        <a href="https://github.com/wballard/swissarmyhammer" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/swissarmyhammer/swissarmyhammer/edit/main/doc/src/src/installation.md" title="Suggest an edit" aria-label="Suggest an edit">
+                        <a href="https://github.com/wballard/swissarmyhammer/edit/main/doc/src/src/installation.md" title="Suggest an edit" aria-label="Suggest an edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -178,9 +178,13 @@
 <h2 id="pre-built-binaries"><a class="header" href="#pre-built-binaries">Pre-built Binaries</a></h2>
 <p>Currently, SwissArmyHammer does not provide pre-built binaries for download. This is a planned feature for future releases. For now, please use the Cargo installation method below.</p>
 <h2 id="quick-install-recommended"><a class="header" href="#quick-install-recommended">Quick Install (Recommended)</a></h2>
+<p>To install SwissArmyHammer:</p>
+<pre><code class="language-bash"># Install from git repository
+cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli
+</code></pre>
 <p>To update SwissArmyHammer to the latest version:</p>
 <pre><code class="language-bash"># Update from git repository
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli --force
+cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli --force
 </code></pre>
 <p>The <code>--force</code> flag will overwrite the existing installation.</p>
 <h2 id="clone-and-build"><a class="header" href="#clone-and-build">Clone and Build</a></h2>
@@ -191,7 +195,7 @@ cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swiss
 </ul>
 <p>If you want to build from source or contribute to development:</p>
 <pre><code class="language-bash"># Clone the repository
-git clone https://github.com/swissarmyhammer/swissarmyhammer.git
+git clone https://github.com/wballard/swissarmyhammer.git
 cd swissarmyhammer
 
 # Build the CLI (debug mode for development)
@@ -253,7 +257,7 @@ mkdir -p ~/.config/fish/completions
 swissarmyhammer completion fish &gt; ~/.config/fish/completions/swissarmyhammer.fish
 </code></pre>
 <h2 id="next-steps"><a class="header" href="#next-steps">Next Steps</a></h2>
-<p>Once installed, continue to the <a href="./quick-start.html">Quick Start</a> guide to set up SwissArmyHammer with Claude Code and create your first prompt.</p>
+<p>Once installed, you can start using SwissArmyHammer as an MCP server with Claude Code.</p>
 <h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
 <h3 id="common-issues"><a class="header" href="#common-issues">Common Issues</a></h3>
 <p><strong>Command not found</strong>: Make sure <code>~/.cargo/bin</code> is in your PATH.</p>
@@ -261,7 +265,7 @@ swissarmyhammer completion fish &gt; ~/.config/fish/completions/swissarmyhammer.
 <pre><code class="language-bash">rustup update
 </code></pre>
 <p><strong>Permission errors</strong>: Don’t use <code>sudo</code> with cargo install - it installs to your user directory.</p>
-<p>For more help, check the <a href="./troubleshooting.html">Troubleshooting</a> guide or run:</p>
+<p>For more help, run:</p>
 <pre><code class="language-bash">swissarmyhammer doctor
 </code></pre>
 
@@ -273,9 +277,6 @@ swissarmyhammer completion fish &gt; ~/.config/fish/completions/swissarmyhammer.
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="quick-start.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -287,29 +288,10 @@ swissarmyhammer completion fish &gt; ~/.config/fish/completions/swissarmyhammer.
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="quick-start.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
-                    </a>
             </nav>
 
         </div>
 
-        <!-- Livereload script (if served using the cli tool) -->
-        <script>
-            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsAddress = wsProtocol + "//" + location.host + "/" + "__livereload";
-            const socket = new WebSocket(wsAddress);
-            socket.onmessage = function (event) {
-                if (event.data === "reload") {
-                    socket.close();
-                    location.reload();
-                }
-            };
-
-            window.onbeforeunload = function() {
-                socket.close();
-            }
-        </script>
 
 
 

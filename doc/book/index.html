@@ -141,10 +141,10 @@
                         <a href="print.html" title="Print this book" aria-label="Print this book">
                             <i id="print-button" class="fa fa-print"></i>
                         </a>
-                        <a href="https://github.com/swissarmyhammer/swissarmyhammer" title="Git repository" aria-label="Git repository">
+                        <a href="https://github.com/wballard/swissarmyhammer" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/swissarmyhammer/swissarmyhammer/edit/main/doc/src/src/introduction.md" title="Suggest an edit" aria-label="Suggest an edit">
+                        <a href="https://github.com/wballard/swissarmyhammer/edit/main/doc/src/src/introduction.md" title="Suggest an edit" aria-label="Suggest an edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -195,7 +195,6 @@ Without proper prompt management, teams waste hours recreating existing prompts,
 <p><strong>🔧 Powerful Template Engine</strong>: Stop copy-pasting similar prompts. Use Liquid templating with custom filters to create dynamic, reusable prompts that adapt to different contexts and requirements.</p>
 <p><strong>🤖 Claude Code Integration</strong>: Access your entire prompt library directly in Claude Code through native MCP protocol support. No more switching between tools or hunting for that perfect prompt.</p>
 <p><strong>⚡ Developer-First Tooling</strong>: Rich CLI with instant search, validation, testing, and diagnostics ensures your prompts are always discoverable, reliable, and maintainable.</p>
-<p><strong>The Result</strong>: Teams report 5x faster prompt iteration, zero lost prompts, and dramatically improved prompt quality through systematic organization and collaboration.</p>
 <h2 id="how-swissarmyhammer-works"><a class="header" href="#how-swissarmyhammer-works">How SwissArmyHammer Works</a></h2>
 <p>SwissArmyHammer transforms your prompt workflow through:</p>
 <ul>
@@ -208,7 +207,7 @@ Without proper prompt management, teams waste hours recreating existing prompts,
 </ul>
 <h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
 <h3 id="installation"><a class="header" href="#installation">Installation</a></h3>
-<pre><code class="language-bash">cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli
+<pre><code class="language-bash">cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli
 </code></pre>
 <h3 id="basic-usage"><a class="header" href="#basic-usage">Basic Usage</a></h3>
 <ol>
@@ -309,9 +308,6 @@ Focus on:
 <h2 id="next-steps"><a class="header" href="#next-steps">Next Steps</a></h2>
 <ol>
 <li><strong><a href="./installation.html">Install SwissArmyHammer</a></strong> - Get up and running quickly</li>
-<li><strong><a href="./first-prompt.html">Create Your First Prompt</a></strong> - Learn the basics</li>
-<li><strong><a href="./claude-code-integration.html">Integrate with Claude Code</a></strong> - Connect to your AI assistant</li>
-<li><strong><a href="./advanced-prompts.html">Explore Advanced Features</a></strong> - Unlock the full potential</li>
 </ol>
 <h2 id="why-choose-swissarmyhammer"><a class="header" href="#why-choose-swissarmyhammer">Why Choose SwissArmyHammer?</a></h2>
 <p><strong>Proven Architecture</strong>: Built on well-tested technologies like Rust, Liquid templating, and the MCP protocol.</p>
@@ -320,13 +316,11 @@ Focus on:
 <p><strong>Open Source</strong>: MIT licensed with a welcoming community for contributions and feedback.</p>
 <h2 id="join-the-community"><a class="header" href="#join-the-community">Join the Community</a></h2>
 <ul>
-<li><strong><a href="https://github.com/swissarmyhammer/swissarmyhammer">GitHub Repository</a></strong> - Source code, issues, and discussions</li>
-<li><strong><a href="./contributing.html">Contributing Guide</a></strong> - How to contribute to the project</li>
-<li><strong><a href="https://github.com/swissarmyhammer/swissarmyhammer/issues">Issue Tracker</a></strong> - Report bugs and request features</li>
-<li><strong><a href="https://github.com/swissarmyhammer/swissarmyhammer/discussions">Discussions</a></strong> - Community Q&amp;A and sharing</li>
+<li><strong><a href="https://github.com/wballard/swissarmyhammer">GitHub Repository</a></strong> - Source code, issues, and discussions</li>
+<li><strong><a href="https://github.com/wballard/swissarmyhammer/issues">Issue Tracker</a></strong> - Report bugs and request features</li>
 </ul>
 <h2 id="license"><a class="header" href="#license">License</a></h2>
-<p>SwissArmyHammer is open source software licensed under the MIT License. See the <a href="./license.html">License</a> page for details.</p>
+<p>SwissArmyHammer is open source software licensed under the MIT License.</p>
 
                     </main>
 
@@ -351,22 +345,6 @@ Focus on:
 
         </div>
 
-        <!-- Livereload script (if served using the cli tool) -->
-        <script>
-            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsAddress = wsProtocol + "//" + location.host + "/" + "__livereload";
-            const socket = new WebSocket(wsAddress);
-            socket.onmessage = function (event) {
-                if (event.data === "reload") {
-                    socket.close();
-                    location.reload();
-                }
-            };
-
-            window.onbeforeunload = function() {
-                socket.close();
-            }
-        </script>
 
 
 

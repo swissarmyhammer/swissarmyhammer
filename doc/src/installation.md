@@ -8,11 +8,18 @@ Currently, SwissArmyHammer does not provide pre-built binaries for download. Thi
 
 ## Quick Install (Recommended)
 
+To install SwissArmyHammer:
+
+```bash
+# Install from git repository
+cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli
+```
+
 To update SwissArmyHammer to the latest version:
 
 ```bash
 # Update from git repository
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli --force
+cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli --force
 ```
 
 The `--force` flag will overwrite the existing installation.
@@ -28,7 +35,7 @@ If you want to build from source or contribute to development:
 
 ```bash
 # Clone the repository
-git clone https://github.com/swissarmyhammer/swissarmyhammer.git
+git clone https://github.com/wballard/swissarmyhammer.git
 cd swissarmyhammer
 
 # Build the CLI (debug mode for development)
@@ -108,7 +115,7 @@ swissarmyhammer completion fish > ~/.config/fish/completions/swissarmyhammer.fis
 
 ## Next Steps
 
-Once installed, continue to the [Quick Start](./quick-start.md) guide to set up SwissArmyHammer with Claude Code and create your first prompt.
+Once installed, you can start using SwissArmyHammer as an MCP server with Claude Code.
 
 ## Troubleshooting
 
@@ -124,7 +131,7 @@ rustup update
 
 **Permission errors**: Don't use `sudo` with cargo install - it installs to your user directory.
 
-For more help, check the [Troubleshooting](./troubleshooting.md) guide or run:
+For more help, run:
 
 ```bash
 swissarmyhammer doctor

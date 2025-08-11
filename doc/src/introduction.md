@@ -47,7 +47,7 @@ SwissArmyHammer transforms your prompt workflow through:
 
 ### Installation
 ```bash
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli
+cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli
 ```
 
 ### Basic Usage
@@ -153,9 +153,6 @@ SwissArmyHammer follows a simple but powerful architecture:
 ## Next Steps
 
 1. **[Install SwissArmyHammer](./installation.md)** - Get up and running quickly
-2. **[Create Your First Prompt](./first-prompt.md)** - Learn the basics
-3. **[Integrate with Claude Code](./claude-code-integration.md)** - Connect to your AI assistant
-4. **[Explore Advanced Features](./advanced-prompts.md)** - Unlock the full potential
 
 ## Why Choose SwissArmyHammer?
 
@@ -169,11 +166,9 @@ SwissArmyHammer follows a simple but powerful architecture:
 
 ## Join the Community
 
-- **[GitHub Repository](https://github.com/swissarmyhammer/swissarmyhammer)** - Source code, issues, and discussions
-- **[Contributing Guide](./contributing.md)** - How to contribute to the project
-- **[Issue Tracker](https://github.com/swissarmyhammer/swissarmyhammer/issues)** - Report bugs and request features
-- **[Discussions](https://github.com/swissarmyhammer/swissarmyhammer/discussions)** - Community Q&A and sharing
+- **[GitHub Repository](https://github.com/wballard/swissarmyhammer)** - Source code, issues, and discussions
+- **[Issue Tracker](https://github.com/wballard/swissarmyhammer/issues)** - Report bugs and request features
 
 ## License
 
-SwissArmyHammer is open source software licensed under the MIT License. See the [License](./license.md) page for details.
+SwissArmyHammer is open source software licensed under the MIT License.
