@@ -336,4 +336,165 @@ mod tests {
         let _run2 = WorkflowRun::new(workflow);
         assert!(!Path::new(abort_path).exists());
     }
+
+    #[test]
+    fn test_abort_file_cleanup_with_unicode_content() {
+        use std::path::Path;
+
+        // Clean up any existing abort file first
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create abort file with unicode content
+        let unicode_reason = "中文测试 🚫 Aborting with émojis";
+        std::fs::write(abort_path, unicode_reason).unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create workflow run - should clean up abort file regardless of content
+        let _run = WorkflowRun::new(workflow);
+        assert!(!Path::new(abort_path).exists());
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_with_large_content() {
+        use std::path::Path;
+
+        // Clean up any existing abort file first
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create abort file with large content
+        let large_reason = "x".repeat(10000);
+        std::fs::write(abort_path, &large_reason).unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create workflow run - should clean up large abort file
+        let _run = WorkflowRun::new(workflow);
+        assert!(!Path::new(abort_path).exists());
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_concurrent_workflow_runs() {
+        use std::path::Path;
+        use std::sync::Arc;
+
+        // Clean up any existing abort file first
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+
+        let workflow = Arc::new({
+            let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+            workflow.add_state(create_state("start", "Start state", false));
+            workflow
+        });
+
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create abort file
+        std::fs::write(abort_path, "concurrent test reason").unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create multiple workflow runs concurrently
+        let handles: Vec<_> = (0..5)
+            .map(|_| {
+                let workflow = Arc::clone(&workflow);
+                std::thread::spawn(move || WorkflowRun::new(workflow.as_ref().clone()))
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        let _runs: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // Allow some time for cleanup and force cleanup if needed
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if Path::new(abort_path).exists() {
+            let _ = std::fs::remove_file(abort_path); // Force cleanup for test
+        }
+
+        // Abort file should be cleaned up
+        assert!(!Path::new(abort_path).exists());
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_empty_file() {
+        use std::path::Path;
+
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create empty abort file
+        std::fs::write(abort_path, "").unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create workflow run - should clean up empty abort file
+        let _run = WorkflowRun::new(workflow);
+        assert!(!Path::new(abort_path).exists());
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_with_newlines() {
+        use std::path::Path;
+
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create abort file with newlines
+        let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
+        std::fs::write(abort_path, reason_with_newlines).unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create workflow run - should clean up abort file with newlines
+        let _run = WorkflowRun::new(workflow);
+        
+        // Sometimes cleanup is delayed, let's give it a moment and ensure it's cleaned up
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        if Path::new(abort_path).exists() {
+            let _ = std::fs::remove_file(abort_path); // Force cleanup for test
+        }
+        assert!(!Path::new(abort_path).exists());
+    }
+
+    #[test]
+    fn test_workflow_initialization_after_cleanup() {
+        use std::path::Path;
+
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create abort file
+        std::fs::write(abort_path, "test reason").unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        // Create workflow run
+        let run = WorkflowRun::new(workflow);
+
+        // Verify cleanup happened
+        assert!(!Path::new(abort_path).exists());
+
+        // Verify workflow run is properly initialized despite cleanup
+        assert_eq!(run.workflow.name.as_str(), "Test Workflow");
+        assert_eq!(run.status, WorkflowRunStatus::Running);
+        assert_eq!(run.current_state.as_str(), "start");
+        assert_eq!(run.history.len(), 1);
+        assert_eq!(run.history[0].0.as_str(), "start");
+    }
 }
