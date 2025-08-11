@@ -46,5 +46,5 @@ swissarmyhammer-cli/.swissarmyhammer
 
 .work
 
-# SwissArmyHammer temporary files
-.swissarmyhammer/tmp/
+# SwissArmyHammer workflow runs (keep config files but ignore run history)
+.swissarmyhammer/workflow-runs/

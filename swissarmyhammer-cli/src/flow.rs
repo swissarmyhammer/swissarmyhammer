@@ -120,10 +120,10 @@ struct WorkflowCommandConfig {
 
 /// Execute a workflow
 async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
-    // Bypass the problematic FileSystemWorkflowStorage and load workflow directly
-    let workflow = tokio::task::spawn_blocking(move || {
-        load_workflow_directly(&config.workflow_name)
-    }).await.map_err(|e| SwissArmyHammerError::Other(format!("Failed to load workflow: {}", e)))??;
+    // Use lazy-loading storage that only loads workflows on demand
+    let storage = LazyWorkflowStorage::new();
+    let workflow_name_typed = WorkflowName::new(&config.workflow_name);
+    let workflow = storage.get_workflow(&workflow_name_typed)?;
     
 
     // Parse variables
@@ -334,8 +334,8 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         }
     };
 
-    // Create simple in-memory storage for workflow runs  
-    let mut run_storage = swissarmyhammer::workflow::MemoryWorkflowRunStorage::new();
+    // Create local workflow run storage with cleanup
+    let mut run_storage = create_local_workflow_run_storage()?;
     run_storage.store_run(&run)?;
 
     match execution_result {
@@ -343,6 +343,11 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
             WorkflowRunStatus::Completed => {
                 tracing::info!("✅ Workflow completed successfully");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
+                
+                // Clean up successful runs after a delay to keep only recent ones
+                if let Err(e) = cleanup_old_successful_runs(&mut run_storage, 50) {
+                    tracing::warn!("Failed to cleanup old workflow runs: {}", e);
+                }
             }
             WorkflowRunStatus::Failed => {
                 tracing::error!("❌ Workflow failed");
@@ -360,7 +365,10 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         Err(e) => {
             tracing::error!("❌ Workflow execution failed: {}", e);
             run.fail();
-            // Skip storage for now - run storage was only for persistence
+            // Store failed runs for debugging
+            if let Err(storage_err) = run_storage.store_run(&run) {
+                tracing::warn!("Failed to store failed run: {}", storage_err);
+            }
         }
     }
 
@@ -1724,7 +1732,67 @@ mod tests {
     }
 }
 
-/// Load a workflow directly from builtin workflows without using FileSystemWorkflowStorage
+/// Lazy-loading workflow storage that only loads workflows on demand
+struct LazyWorkflowStorage {
+    cache: std::collections::HashMap<WorkflowName, Workflow>,
+}
+
+impl LazyWorkflowStorage {
+    fn new() -> Self {
+        Self {
+            cache: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl WorkflowStorageBackend for LazyWorkflowStorage {
+    fn store_workflow(&mut self, workflow: Workflow) -> Result<()> {
+        self.cache.insert(workflow.name.clone(), workflow);
+        Ok(())
+    }
+
+    fn get_workflow(&self, name: &WorkflowName) -> Result<Workflow> {
+        // For now, just load directly since the trait requires &self
+        // In a real implementation, we'd use Arc<Mutex<HashMap>> for interior mutability
+        load_workflow_directly(name.as_str())
+    }
+
+    fn list_workflows(&self) -> Result<Vec<Workflow>> {
+        // For listing, we need to scan the builtin directory
+        let mut workflows = Vec::new();
+        
+        let builtin_dir = std::path::PathBuf::from("builtin/workflows");
+        if builtin_dir.exists() {
+            for entry in std::fs::read_dir(&builtin_dir)
+                .map_err(|e| SwissArmyHammerError::Other(format!("Failed to read workflows directory: {}", e)))?
+            {
+                let entry = entry.map_err(|e| SwissArmyHammerError::Other(format!("Failed to read directory entry: {}", e)))?;
+                let path = entry.path();
+                
+                if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(workflow) = load_workflow_directly(stem) {
+                            workflows.push(workflow);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(workflows)
+    }
+
+    fn remove_workflow(&mut self, name: &WorkflowName) -> Result<()> {
+        self.cache.remove(name);
+        Ok(())
+    }
+
+    fn clone_box(&self) -> Box<dyn WorkflowStorageBackend> {
+        Box::new(LazyWorkflowStorage::new())
+    }
+}
+
+/// Load a workflow directly from builtin workflows
 fn load_workflow_directly(workflow_name: &str) -> Result<Workflow> {
     use std::path::PathBuf;
     
@@ -1745,4 +1813,54 @@ fn load_workflow_directly(workflow_name: &str) -> Result<Workflow> {
         .map_err(|e| SwissArmyHammerError::Other(format!("Failed to parse workflow: {}", e)))?;
     
     Ok(workflow)
+}
+
+/// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
+fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
+    use std::fs;
+    
+    // Create local .swissarmyhammer/workflow-runs directory 
+    let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
+    fs::create_dir_all(&local_dir)
+        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create .swissarmyhammer/workflow-runs directory: {}", e)))?;
+    
+    let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
+        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {}", e)))?;
+    
+    Ok(Box::new(run_storage))
+}
+
+/// Clean up old successful workflow runs, keeping only the most recent ones
+fn cleanup_old_successful_runs(
+    storage: &mut Box<dyn WorkflowRunStorageBackend>, 
+    keep_count: usize
+) -> Result<()> {
+    // Get all runs
+    let mut runs = storage.list_runs()?;
+    
+    // Filter to only successful runs and sort by completion time (newest first)
+    runs.retain(|run| run.status == WorkflowRunStatus::Completed);
+    runs.sort_by(|a, b| {
+        b.completed_at.cmp(&a.completed_at)
+    });
+    
+    // Remove older runs beyond the keep limit
+    if runs.len() > keep_count {
+        let runs_to_remove = &runs[keep_count..];
+        for run in runs_to_remove {
+            if let Err(e) = storage.remove_run(&run.id) {
+                tracing::warn!("Failed to remove old workflow run {}: {}", 
+                    workflow_run_id_to_string(&run.id), e);
+            } else {
+                tracing::debug!("Cleaned up old successful workflow run: {}", 
+                    workflow_run_id_to_string(&run.id));
+            }
+        }
+        
+        if runs_to_remove.len() > 0 {
+            tracing::info!("Cleaned up {} old successful workflow runs", runs_to_remove.len());
+        }
+    }
+    
+    Ok(())
 }

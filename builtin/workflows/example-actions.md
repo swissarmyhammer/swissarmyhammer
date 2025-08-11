@@ -27,7 +27,7 @@ stateDiagram-v2
     FailurePath --> HandleError
     HandleError --> WaitExample
     WaitExample --> BranchDecision
-    BranchDecision --> Branch1: result.contains("Hello")
+    BranchDecision --> Branch1: example_var.startsWith("Hello")
     BranchDecision --> Branch2: is_error == true
     BranchDecision --> DefaultBranch: default
     Branch1 --> Complete
