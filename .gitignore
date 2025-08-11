@@ -51,3 +51,6 @@ swissarmyhammer-cli/.swissarmyhammer
 
 # SwissArmyHammer abort files (temporary test files)
 .swissarmyhammer/.abort
+
+# SwissArmyHammer temporary files
+.swissarmyhammer/tmp/

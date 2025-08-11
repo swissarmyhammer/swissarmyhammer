@@ -921,13 +921,12 @@ impl Action for AbortAction {
 
         // Return an execution error to indicate action failure
         Err(ActionError::ExecutionError(format!(
-            "Workflow aborted: {}",
-            message
+            "Workflow aborted: {message}"
         )))
     }
 
     fn description(&self) -> String {
-        format!("Abort workflow execution with message: {}", self.message)
+        format!("Abort workflow execution with message: {message}", message = self.message)
     }
 
     fn action_type(&self) -> &'static str {

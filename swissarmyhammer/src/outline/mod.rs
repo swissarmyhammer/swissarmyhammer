@@ -8,12 +8,12 @@
 //! - Multiple output formatting options with extensible architecture
 //!
 //! The module is organized into several key components:
-//! - [`file_discovery`]: File system traversal and pattern matching
-//! - [`parser`]: Tree-sitter integration and language-specific parsing
-//! - [`extractors`]: Language-specific symbol extraction logic
-//! - [`hierarchy`]: Organization of parsed symbols into hierarchical structures
-//! - [`types`]: Core data structures and type definitions
-//! - [`utils`]: Utility functions and helpers
+//! - `file_discovery`: File system traversal and pattern matching
+//! - `parser`: Tree-sitter integration and language-specific parsing
+//! - `extractors`: Language-specific symbol extraction logic
+//! - `hierarchy`: Organization of parsed symbols into hierarchical structures
+//! - `types`: Core data structures and type definitions
+//! - `utils`: Utility functions and helpers
 
 use thiserror::Error;
 
