@@ -274,12 +274,12 @@ fn test_error_conversion() {
     assert!(cli_error.message.contains("test error"));
     assert_eq!(cli_error.exit_code, 1);
 
-    // Test abort error detection
-    let abort_error = McpError::internal_error("ABORT ERROR: Cannot proceed".to_string(), None);
-    let cli_abort_error: CliError = abort_error.into();
+    // Test error handling continues to work normally
+    let general_error = McpError::internal_error("Cannot proceed".to_string(), None);
+    let cli_general_error: CliError = general_error.into();
 
-    assert!(cli_abort_error.message.contains("MCP error"));
-    assert!(cli_abort_error.message.contains("ABORT ERROR"));
+    assert!(cli_general_error.message.contains("MCP error"));
+    assert!(cli_general_error.message.contains("Cannot proceed"));
 }
 
 #[tokio::test]

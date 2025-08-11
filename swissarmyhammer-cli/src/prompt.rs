@@ -42,15 +42,11 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
                 if let Some(swissarmyhammer_error) =
                     e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>()
                 {
-                    if swissarmyhammer_error.is_abort_error() {
-                        if let Some(abort_reason) = swissarmyhammer_error.abort_error_message() {
+                    // Check for file-based abort detection
+                    if let swissarmyhammer::SwissArmyHammerError::ExecutorError(executor_error) = swissarmyhammer_error {
+                        if let swissarmyhammer::workflow::ExecutorError::Abort(abort_reason) = executor_error {
                             return CliError::new(
                                 format!("Prompt execution aborted: {abort_reason}"),
-                                crate::exit_codes::EXIT_ERROR,
-                            );
-                        } else {
-                            return CliError::new(
-                                format!("Prompt execution aborted: {swissarmyhammer_error}"),
                                 crate::exit_codes::EXIT_ERROR,
                             );
                         }

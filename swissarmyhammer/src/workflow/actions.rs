@@ -82,9 +82,6 @@ pub enum ActionError {
         /// How long to wait before retrying
         wait_time: Duration,
     },
-    /// Abort error that should exit workflow immediately
-    #[error("ABORT ERROR: {0}")]
-    AbortError(String),
 }
 
 /// Result type for action operations
@@ -619,8 +616,7 @@ impl PromptAction {
             );
         }
 
-        // Check for ABORT ERROR pattern in the response using common helper
-        crate::common::check_for_abort_error(response_text)?;
+        // Note: String-based abort detection removed - abort handling now done via file-based mechanism
 
         // Display the output as YAML
         if !quiet && !response_text.is_empty() {
@@ -917,8 +913,11 @@ impl Action for AbortAction {
         // Substitute variables in message
         let message = self.substitute_string(&self.message, context);
 
-        // Return an abort error which will propagate up and terminate the workflow
-        Err(ActionError::AbortError(message))
+        // Set a special context variable to signal abort request
+        context.insert("__ABORT_REQUESTED__".to_string(), Value::String(message.clone()));
+
+        // Return an execution error to indicate action failure
+        Err(ActionError::ExecutionError(format!("Workflow aborted: {}", message)))
     }
 
     fn description(&self) -> String {
@@ -1828,15 +1827,8 @@ impl Action for SubWorkflowAction {
                 // Check if the sub-workflow failed due to an abort error
                 // Look for abort error indication in the context
                 if let Some(result) = run.context.get("result") {
-                    if let Some(result_str) = result.as_str() {
-                        if result_str.starts_with("ABORT ERROR:") {
-                            // Extract the abort error message and propagate it
-                            let abort_message = result_str
-                                .trim_start_matches("ABORT ERROR:")
-                                .trim()
-                                .to_string();
-                            return Err(ActionError::AbortError(abort_message));
-                        }
+                    if let Some(_result_str) = result.as_str() {
+                        // Note: String-based abort detection removed - abort handling now done via file-based mechanism
                     }
                 }
 
@@ -2451,6 +2443,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_abort_action_execution() {
+        // Clean up any existing abort file before test
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        
         let action = AbortAction::new("Test abort message".to_string());
         let mut context = HashMap::new();
 
@@ -2459,15 +2454,21 @@ mod tests {
 
         let error = result.unwrap_err();
         match error {
-            ActionError::AbortError(msg) => {
-                assert_eq!(msg, "Test abort message");
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("Test abort message"));
             }
-            _ => panic!("Expected AbortError, got {error:?}"),
+            _ => panic!("Expected ExecutionError, got {error:?}"),
         }
+        
+        // Clean up abort file after test
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
     }
 
     #[tokio::test]
     async fn test_abort_action_with_variable_substitution() {
+        // Clean up any existing abort file before test
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        
         let action = AbortAction::new("Error in ${file}: ${error}".to_string());
         let mut context = HashMap::new();
         context.insert("file".to_string(), Value::String("test.rs".to_string()));
@@ -2481,19 +2482,25 @@ mod tests {
 
         let error = result.unwrap_err();
         match error {
-            ActionError::AbortError(msg) => {
-                assert_eq!(msg, "Error in test.rs: compilation failed");
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("Error in test.rs: compilation failed"));
             }
-            _ => panic!("Expected AbortError, got {error:?}"),
+            _ => panic!("Expected ExecutionError, got {error:?}"),
         }
+        
+        // Clean up abort file after test
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
     }
 
     #[tokio::test]
     async fn test_end_to_end_error_propagation() {
+        // Clean up any existing abort file before test
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
+        
         // Test that abort errors propagate correctly through the system
         use crate::workflow::definition::Workflow;
         use crate::workflow::executor::core::WorkflowExecutor;
-        use crate::workflow::run::WorkflowRunStatus;
+        use crate::workflow::executor::ExecutorError;
         use crate::workflow::state::{State, StateId, StateType};
         use crate::workflow::storage::WorkflowStorage;
         use crate::workflow::transition::{ConditionType, Transition, TransitionCondition};
@@ -2557,20 +2564,25 @@ mod tests {
         // Clean up test storage
         clear_test_storage();
 
-        // The workflow execution should complete (return Ok) but the workflow should be in Failed status
-        assert!(
-            result.is_ok(),
-            "Workflow execution should complete successfully"
-        );
-        assert_eq!(
-            run.status,
-            WorkflowRunStatus::Failed,
-            "Workflow should be marked as failed due to abort action"
-        );
+        // With the new abort system, the workflow execution should return an Abort error
+        match result {
+            Err(executor_error) => {
+                match executor_error {
+                    ExecutorError::Abort(reason) => {
+                        assert!(reason.contains("Test abort error"), "Abort reason should contain expected message: {}", reason);
+                    }
+                    _ => panic!("Expected ExecutorError::Abort, got: {:?}", executor_error)
+                }
+            }
+            Ok(_) => panic!("Expected abort error but workflow completed successfully")
+        }
 
         // Check that the abort action was executed - the context should contain the error
         // The abort action should have been executed and the workflow should have been marked as failed
         // This validates that the error propagation is working correctly
+        
+        // Clean up abort file after test
+        let _ = std::fs::remove_file(".swissarmyhammer/.abort");
     }
 
     #[test]

@@ -22,6 +22,7 @@ use clap::CommandFactory;
 use cli::{Cli, Commands};
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
+use swissarmyhammer::SwissArmyHammerError;
 
 #[tokio::main]
 async fn main() {
@@ -275,18 +276,15 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
     match flow::run_flow_command(subcommand).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
-            // Check if this is an abort error and use appropriate exit code
-            if e.is_abort_error() {
-                if let Some(abort_reason) = e.abort_error_message() {
+            // Check if this is an abort error (file-based detection)
+            if let SwissArmyHammerError::ExecutorError(executor_error) = &e {
+                if let swissarmyhammer::workflow::ExecutorError::Abort(abort_reason) = executor_error {
                     tracing::error!("Workflow aborted: {}", abort_reason);
-                } else {
-                    tracing::error!("Workflow aborted: {}", e);
+                    return EXIT_ERROR;
                 }
-                EXIT_ERROR
-            } else {
-                tracing::error!("Flow error: {}", e);
-                EXIT_WARNING
             }
+            tracing::error!("Flow error: {}", e);
+            EXIT_WARNING
         }
     }
 }
