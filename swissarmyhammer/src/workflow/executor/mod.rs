@@ -42,6 +42,9 @@ pub enum ExecutorError {
     /// Manual intervention required to continue workflow
     #[error("Manual intervention required: {0}")]
     ManualInterventionRequired(String),
+    /// Workflow aborted via abort file
+    #[error("Workflow aborted: {0}")]
+    Abort(String),
 }
 
 /// Result type for executor operations

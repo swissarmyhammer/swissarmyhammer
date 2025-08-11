@@ -119,3 +119,43 @@ pub enum ExecutorError {
 
 ## Follow-up Issues
 - ABORT_000263_cli-error-handling-updates
+
+## Proposed Solution
+
+I will implement the abort file detection by making the following changes:
+
+### 1. Add ExecutorError::Abort Variant
+Add a new error variant to `ExecutorError` enum in `/swissarmyhammer/src/workflow/executor/mod.rs`:
+```rust
+#[error("Workflow aborted: {0}")]
+Abort(String),
+```
+
+### 2. Integrate Abort File Check in execute_state_with_limit
+Add abort file detection at the beginning of the main execution loop in `execute_state_with_limit` function at line 228:
+```rust
+loop {
+    // Check for abort file before each iteration
+    if std::path::Path::new(".swissarmyhammer/.abort").exists() {
+        let reason = std::fs::read_to_string(".swissarmyhammer/.abort")
+            .unwrap_or_else(|_| "Unknown abort reason".to_string());
+        return Err(ExecutorError::Abort(reason));
+    }
+
+    // ... existing loop logic ...
+}
+```
+
+### 3. Implementation Strategy
+- Place abort check at the very beginning of each loop iteration for maximum responsiveness
+- Handle file read errors gracefully with fallback message
+- Return immediately on abort detection to minimize delay
+- Preserve abort reason for error reporting
+
+### 4. Error Propagation  
+The new `ExecutorError::Abort` variant will propagate correctly through:
+- `execute_state_with_limit` → `start_and_execute_workflow` / `resume_workflow`
+- Metrics completion in lines 104-106 will log abort as workflow failure
+- CLI layer will receive proper abort error for handling
+
+This approach ensures immediate termination when abort is requested while maintaining error context and following existing patterns.
