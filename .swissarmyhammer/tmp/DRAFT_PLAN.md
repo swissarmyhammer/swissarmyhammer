@@ -1,91 +1,120 @@
-# Draft Plan: Outline Tool Implementation
+# Draft Plan: MCP Abort Tool Implementation
 
-## Overview
-Implementation of the outline tool as specified in `./specification/outline_tool.md`. This tool provides structured code overviews using Tree-sitter parsing across multiple programming languages (Rust, TypeScript, JavaScript, Dart, Python).
+## Specification Analysis
+Based on the `specification/abort.md` file, we need to implement a comprehensive replacement for the brittle string-based "ABORT ERROR" detection system with a robust MCP tool that allows controlled termination.
 
-## Current State Analysis
-- MCP tools follow established pattern in `src/mcp/tools/` with noun/verb structure
-- Existing search tools use Tree-sitter and are in `src/mcp/tools/search/`
-- Tree-sitter parsing infrastructure already exists in `src/search/parser.rs`
-- DuckDB storage infrastructure exists in `src/search/storage.rs`
-- Multi-language parsing capabilities already implemented
+## Current Implementation Analysis
+The existing system uses string-based detection for "ABORT ERROR" patterns across:
+- CLI error detection (multiple locations)
+- Workflow system execution
+- Test files for abort testing
+- Built-in prompts
 
-## Requirements from Specification
-1. Tree-sitter parsing for multiple languages (Rust, TS, JS, Dart, Python)
-2. Hierarchical YAML output structure mirroring file system
-3. Extracts: types, functions, methods, properties, docs, signatures, line numbers
-4. Glob pattern input with gitignore respect
-5. Error handling for parsing failures
-6. Language-specific handling for constructs
-7. MCP tool integration following existing patterns
-
-## Architecture Analysis
-The outline tool should:
-- Leverage existing Tree-sitter infrastructure from search module
-- Create new MCP tool under `src/mcp/tools/outline/` following established patterns
-- Reuse gitignore handling and file discovery logic
-- Generate YAML output instead of search indexing
-- Extract detailed symbol information including signatures and documentation
+## Problem to Solve
+Replace the unreliable string-based abort detection with a file-based MCP tool approach that is:
+- More robust across process boundaries
+- Language/framework agnostic
+- Easier to test and maintain
+- Provides atomic operations
 
 ## Implementation Strategy
 
-### Phase 1: Core Infrastructure Setup
-1. Create MCP tool structure following established patterns
-2. Set up basic outline data structures and types
-3. Implement file discovery with gitignore respect
-4. Create YAML output formatting infrastructure
+### Phase 1: Foundation Setup
+1. **Project Setup and MCP Tool Infrastructure**
+   - Set up the abort tool in the MCP tool registry
+   - Create the basic abort tool structure following the noun/verb pattern
+   - Implement tool registration and parameter validation
 
-### Phase 2: Tree-sitter Integration
-5. Extend existing Tree-sitter parser for outline extraction
-6. Implement language-specific symbol extraction
-7. Create hierarchical symbol tree building
-8. Add signature and documentation extraction
+2. **Core Abort Tool Implementation**
+   - Implement the `abort` MCP tool with required parameters
+   - Add file creation logic to `.swissarmyhammer/.abort`
+   - Ensure atomic file operations and proper error handling
 
-### Phase 3: Output Generation
-9. Implement file system hierarchy mirroring in YAML
-10. Create detailed symbol information formatting
-11. Add error handling and reporting
-12. Implement comprehensive testing
+### Phase 2: Workflow System Integration
+3. **WorkflowRun Cleanup Integration**
+   - Add abort file cleanup logic to `WorkflowRun::new()`
+   - Ensure proper error handling for cleanup operations
+   - Add appropriate logging for cleanup operations
 
-### Phase 4: Integration and Polish
-13. Register tool with MCP server
-14. Add CLI integration if needed
-15. Create comprehensive documentation
-16. Performance optimization and cleanup
+4. **Executor Integration**
+   - Add file-based abort detection to `execute_state_with_limit`
+   - Implement the abort check loop before each workflow iteration
+   - Add proper error handling and logging
 
-## Implementation Breakdown
+5. **Error Type Extension**
+   - Add new `ExecutorError::Abort` variant
+   - Update error propagation throughout the system
+   - Ensure proper error context preservation
 
-### Small Incremental Steps
+### Phase 3: CLI Integration and Error Handling
+6. **CLI Error Handling Updates**
+   - Update CLI error handling to detect `ExecutorError::Abort`
+   - Remove string-based abort detection from CLI code
+   - Maintain proper exit codes and error messaging
 
-1. **Project Setup & Tool Structure** - Create MCP tool directory structure, basic types
-2. **File Discovery** - Implement glob pattern processing with gitignore integration
-3. **Tree-sitter Core Integration** - Extend parser for outline-specific extraction
-4. **Rust Language Support** - Implement Rust-specific symbol extraction
-5. **TypeScript/JavaScript Support** - Implement TS/JS symbol extraction
-6. **Dart Language Support** - Implement Dart symbol extraction  
-7. **Python Language Support** - Implement Python symbol extraction
-8. **Hierarchical Structure Builder** - Build nested symbol trees
-9. **YAML Output Formatter** - Generate structured YAML output
-10. **Signature Extraction** - Extract function/method signatures
-11. **Documentation Extraction** - Extract and format documentation comments
-12. **Error Handling** - Robust error handling for parsing failures
-13. **Testing Infrastructure** - Comprehensive unit and integration tests
-14. **MCP Registration** - Register tool with MCP server
-15. **Performance Optimization** - Optimize for large codebases
+7. **Built-in Prompt Updates**
+   - Update `builtin/prompts/abort.md` to use the new MCP tool
+   - Ensure the prompt provides clear instructions for the tool usage
+   - Update any other prompts that reference abort functionality
 
-Each step should be small enough to implement safely (< 500 lines of code) and build incrementally on previous steps.
+### Phase 4: Testing and Migration
+8. **Comprehensive Testing**
+   - Unit tests for abort tool functionality
+   - Integration tests for end-to-end abort flow
+   - Tests for file cleanup and error propagation
+   - Regression tests to ensure existing behavior is maintained
 
-## Dependencies
-- Existing Tree-sitter infrastructure in `src/search/`
-- MCP tool patterns from `src/mcp/tools/`
-- YAML serialization capabilities (serde_yaml)
-- File system utilities from existing codebase
-- Gitignore processing from existing search tools
+9. **String-Based System Removal**
+   - Remove all string-based "ABORT ERROR" detection code
+   - Update test files that relied on string-based detection
+   - Clean up obsolete modules and functions
 
-## Success Criteria
-- Tool generates accurate YAML outlines for all supported languages
-- Respects gitignore patterns correctly
-- Provides rich symbol information (signatures, docs, locations)
-- Follows established MCP tool patterns
-- Comprehensive test coverage
-- Performance suitable for large codebases
+### Phase 5: Documentation and Cleanup
+10. **Documentation Updates**
+    - Update workflow documentation to reflect new abort system
+    - Add MCP tool documentation for the abort tool
+    - Update error handling patterns in memos
+
+11. **Final Integration Testing**
+    - End-to-end testing across all components
+    - Performance validation
+    - Cross-platform compatibility testing
+
+## Implementation Details
+
+### File-Based Approach
+- Use `.swissarmyhammer/.abort` for abort state storage
+- Plain text file containing abort reason
+- Atomic file creation for thread safety
+
+### MCP Tool Specification
+```json
+{
+  "tool": "abort", 
+  "parameters": {
+    "reason": "User cancelled the destructive operation"
+  }
+}
+```
+
+### Error Flow
+1. MCP tool creates abort file with reason
+2. Workflow executor detects file in main loop
+3. ExecutorError::Abort is raised with reason
+4. CLI handles error and exits with appropriate code
+
+## Key Benefits
+- Reliability through file-based detection
+- Testability through simple file operations
+- Maintainability with single source of truth
+- Cross-process compatibility
+- Atomic operations
+
+## Migration Strategy
+The plan follows a phased approach:
+1. Add new system alongside existing
+2. Update usage to new system
+3. Remove old string-based system
+4. Comprehensive testing and documentation
+
+This approach ensures backward compatibility during migration and provides comprehensive testing at each phase.
