@@ -39,7 +39,9 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             };
             runner.run(config).await.map(|_| ()).map_err(|e| {
                 // Check if the underlying error is a SwissArmyHammerError with abort
-                if let Some(swissarmyhammer_error) = e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+                if let Some(swissarmyhammer_error) =
+                    e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>()
+                {
                     if swissarmyhammer_error.is_abort_error() {
                         if let Some(abort_reason) = swissarmyhammer_error.abort_error_message() {
                             return CliError::new(

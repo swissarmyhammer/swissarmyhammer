@@ -1767,9 +1767,7 @@ fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBacke
 
     let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
         .map_err(|e| {
-            SwissArmyHammerError::Other(format!(
-                "Failed to create local workflow run storage: {e}"
-            ))
+            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
         })?;
 
     Ok(Box::new(run_storage))
