@@ -169,9 +169,14 @@ That's it! Your prompt is now available in Claude Code. You can use it via MCP w
 
 ## 🔧 MCP Tools
 
-SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code.
+SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
 
-All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses.
+- **Abort Tool** - Controlled workflow termination with file-based abort detection
+- **Issue Management** - Complete issue tracking with Git branch integration  
+- **Memoranda System** - Note-taking and knowledge management with search
+- **Semantic Search** - Vector-based code and content search with TreeSitter parsing
+
+All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The abort tool provides robust workflow control, replacing legacy string-based detection with a reliable file-based approach.
 
 
 ---

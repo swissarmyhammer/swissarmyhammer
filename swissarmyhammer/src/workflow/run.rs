@@ -343,7 +343,7 @@ mod tests {
 
         // Clean up any existing abort file first
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
-        
+
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
@@ -461,7 +461,7 @@ mod tests {
 
         // Create workflow run - should clean up abort file with newlines
         let _run = WorkflowRun::new(workflow);
-        
+
         // Sometimes cleanup is delayed, let's give it a moment and ensure it's cleaned up
         std::thread::sleep(std::time::Duration::from_millis(10));
         if Path::new(abort_path).exists() {

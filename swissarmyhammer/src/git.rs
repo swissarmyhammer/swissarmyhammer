@@ -696,7 +696,6 @@ mod tests {
         assert!(error_msg.contains("Cannot switch to issue branch from another issue branch"));
     }
 
-
     #[test]
     fn test_create_work_branch_with_branch_detection_failure() {
         use std::fs;

@@ -546,7 +546,7 @@ impl WorkflowExecutor {
         action_error: ActionError,
     ) -> ExecutorResult<()> {
         // Note: Abort error handling removed - abort detection now file-based
-        
+
         // Set standard variables that are available after every action
         run.context
             .insert("success".to_string(), Value::Bool(false));

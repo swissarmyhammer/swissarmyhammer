@@ -485,7 +485,6 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
-
 /// Helper functions for creating standardized error messages
 impl SwissArmyHammerError {
     /// Create a git operation error with consistent formatting
@@ -566,7 +565,6 @@ impl SwissArmyHammerError {
     pub fn memo_validation_failed(reason: &str) -> Self {
         SwissArmyHammerError::MemoValidationFailed(reason.to_string())
     }
-
 }
 
 /// Extension trait for error types to format the full error chain

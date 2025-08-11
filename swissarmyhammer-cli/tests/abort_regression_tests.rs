@@ -86,14 +86,15 @@ transitions:
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        
+
         // Should NOT contain abort-related error messages
         assert!(
             !stderr.contains("abort") && !stderr.contains("Abort"),
             "Normal workflow should not fail due to abort: stderr={}, stdout={}",
-            stderr, stdout
+            stderr,
+            stdout
         );
-        
+
         // If it fails, it should be for legitimate reasons (missing MCP server, etc.)
         // not abort-related
     }
@@ -121,12 +122,13 @@ fn test_prompt_commands_still_work() -> Result<()> {
         // Commands may fail due to MCP server issues but should not fail due to abort
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             // Should not contain abort-related errors
             assert!(
                 !stderr.contains("abort") && !stderr.contains("Abort"),
                 "Command {:?} should not fail due to abort: {}",
-                command_args, stderr
+                command_args,
+                stderr
             );
         }
     }
@@ -140,11 +142,7 @@ fn test_help_and_version_commands_unchanged() -> Result<()> {
     ensure_no_abort_file();
 
     // Test basic CLI commands that should always work
-    let basic_commands = vec![
-        vec!["--help"],
-        vec!["--version"],
-        vec!["help"],
-    ];
+    let basic_commands = vec![vec!["--help"], vec!["--version"], vec!["help"]];
 
     for command_args in basic_commands {
         let output = Command::cargo_bin("swissarmyhammer")
@@ -158,7 +156,10 @@ fn test_help_and_version_commands_unchanged() -> Result<()> {
             let stdout = String::from_utf8_lossy(&output.stdout);
             panic!(
                 "Basic command {:?} should always succeed: exit_code={:?}, stderr={}, stdout={}",
-                command_args, output.status.code(), stderr, stdout
+                command_args,
+                output.status.code(),
+                stderr,
+                stdout
             );
         }
     }
@@ -202,7 +203,7 @@ transitions:
     assert!(!output.status.success(), "Invalid workflow should fail");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    
+
     // Should contain validation/workflow errors, not abort errors
     assert!(
         !stderr.contains("abort") && !stderr.contains("Abort"),
@@ -212,9 +213,12 @@ transitions:
 
     // Should contain some indication of the real problem
     assert!(
-        stderr.contains("error") || stderr.contains("Error") || 
-        stderr.contains("invalid") || stderr.contains("Invalid") ||
-        stderr.contains("state") || stderr.contains("workflow"),
+        stderr.contains("error")
+            || stderr.contains("Error")
+            || stderr.contains("invalid")
+            || stderr.contains("Invalid")
+            || stderr.contains("state")
+            || stderr.contains("workflow"),
         "Should contain meaningful error message: {}",
         stderr
     );
@@ -238,7 +242,7 @@ fn test_existing_abort_prompt_compatibility() -> Result<()> {
     // It may succeed (using MCP tool) or fail (missing MCP server), but should be consistent
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     println!("Abort prompt test - stderr: {}", stderr);
     println!("Abort prompt test - stdout: {}", stdout);
 
@@ -280,7 +284,8 @@ fn test_exit_codes_remain_consistent() -> Result<()> {
         assert!(
             !stderr.contains("abort") && !stderr.contains("Abort"),
             "{} should not mention abort: {}",
-            description, stderr
+            description,
+            stderr
         );
     }
 
@@ -428,7 +433,8 @@ transitions:
             assert!(
                 !stderr.contains("abort") && !stderr.contains("Abort"),
                 "Sequential execution {} should not fail due to abort: {}",
-                i, stderr
+                i,
+                stderr
             );
         }
 
@@ -457,10 +463,13 @@ fn test_error_messages_format_unchanged() -> Result<()> {
         .output()?;
 
     // Should fail because file doesn't exist
-    assert!(!output.status.success(), "Should fail for non-existent file");
+    assert!(
+        !output.status.success(),
+        "Should fail for non-existent file"
+    );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    
+
     // Should not mention abort
     assert!(
         !stderr.contains("abort") && !stderr.contains("Abort"),
@@ -470,8 +479,10 @@ fn test_error_messages_format_unchanged() -> Result<()> {
 
     // Should contain meaningful error about missing file
     assert!(
-        stderr.contains("file") || stderr.contains("File") || 
-        stderr.contains("not found") || stderr.contains("No such file"),
+        stderr.contains("file")
+            || stderr.contains("File")
+            || stderr.contains("not found")
+            || stderr.contains("No such file"),
         "Should contain file-related error message: {}",
         stderr
     );
@@ -525,7 +536,8 @@ transitions: []
                     assert!(
                         !stderr.contains("abort") && !stderr.contains("Abort"),
                         "Concurrent execution {} should not fail due to abort: {}",
-                        i, stderr
+                        i,
+                        stderr
                     );
                 }
             }
