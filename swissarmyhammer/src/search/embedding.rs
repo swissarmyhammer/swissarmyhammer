@@ -293,7 +293,8 @@ impl EmbeddingEngine {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
+    #[allow(dead_code)]
     /// Generate a simple deterministic mock embedding for testing
     /// Creates consistent embeddings without complex semantic modeling
     fn generate_deterministic_mock_embedding(&self, text: &str) -> Vec<f32> {
@@ -428,7 +429,7 @@ impl EmbeddingEngine {
         result.chars().take(self.config.max_text_length).collect()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     /// Create embedding engine for testing using mock model (no network required)
     pub async fn new_for_testing() -> Result<Self> {
         Self::new_for_testing_with_config(EmbeddingConfig {
@@ -445,7 +446,7 @@ impl EmbeddingEngine {
         .await
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     /// Create embedding engine for testing with custom config (no network required)
     pub async fn new_for_testing_with_config(config: EmbeddingConfig) -> Result<Self> {
         info!("Creating mock embedding engine for testing (no network required)");

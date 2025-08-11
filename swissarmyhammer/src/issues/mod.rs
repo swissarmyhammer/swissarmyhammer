@@ -68,6 +68,152 @@
 //! # }
 //! ```
 
+use crate::config::Config;
+use serde::{Deserialize, Serialize};
+
+/// A wrapper type for issue names to prevent mixing up different string types
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct IssueName(pub String);
+
+impl IssueName {
+    /// Create a new issue name with strict validation for MCP interface
+    ///
+    /// Uses configurable length limit and rejects filesystem-unsafe characters.
+    /// Intended for user-provided input through the MCP interface.
+    /// Empty names are allowed for nameless issues, but whitespace-only strings are rejected.
+    pub fn new(name: String) -> Result<Self, String> {
+        let trimmed = name.trim();
+
+        // Allow truly empty names for nameless issues, but reject whitespace-only strings
+        if name.trim().is_empty() && !name.is_empty() {
+            return Err("Issue name cannot be empty".to_string());
+        }
+
+        let config = Config::global();
+        if trimmed.len() > config.max_issue_name_length {
+            return Err(format!(
+                "Issue name cannot exceed {} characters",
+                config.max_issue_name_length
+            ));
+        }
+
+        // Check for invalid characters - reject problematic characters for MCP interface
+        if trimmed.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0']) {
+            return Err("Issue name contains invalid characters".to_string());
+        }
+
+        Ok(IssueName(trimmed.to_string()))
+    }
+
+    /// Create a new issue name with relaxed validation for internal filesystem use
+    ///
+    /// Uses hard-coded length limit and allows filesystem-safe characters.
+    /// Intended for filesystem operations and internal use.
+    pub fn new_internal(name: String) -> Result<Self, String> {
+        const FILESYSTEM_MAX_ISSUE_NAME_LENGTH: usize = 200;
+
+        let trimmed = name.trim();
+
+        if trimmed.is_empty() {
+            return Err("Issue name cannot be empty".to_string());
+        }
+
+        if trimmed.len() > FILESYSTEM_MAX_ISSUE_NAME_LENGTH {
+            return Err(format!(
+                "Issue name cannot exceed {FILESYSTEM_MAX_ISSUE_NAME_LENGTH} characters"
+            ));
+        }
+
+        // More permissive validation for filesystem operations
+        if trimmed.contains(['\0', '/']) {
+            return Err("Issue name contains invalid characters".to_string());
+        }
+
+        Ok(IssueName(trimmed.to_string()))
+    }
+
+    /// Create a new issue name with relaxed validation for internal filesystem use
+    ///
+    /// Uses a fixed length limit and only rejects null bytes.
+    /// Intended for parsing existing filenames from the filesystem.
+    /// Empty names are allowed for nameless issues like 000123.md, but whitespace-only strings are rejected.
+    pub fn from_filesystem(name: String) -> Result<Self, String> {
+        const FILESYSTEM_MAX_ISSUE_NAME_LENGTH: usize = 200;
+
+        let trimmed = name.trim();
+
+        // Allow truly empty names for nameless issues, but reject whitespace-only strings
+        if name.trim().is_empty() && !name.is_empty() {
+            return Err("Issue name cannot be empty".to_string());
+        }
+
+        // For filesystem names, allow up to a fixed limit and only reject null bytes
+        if trimmed.len() > FILESYSTEM_MAX_ISSUE_NAME_LENGTH {
+            return Err(format!(
+                "Issue name cannot exceed {FILESYSTEM_MAX_ISSUE_NAME_LENGTH} characters"
+            ));
+        }
+
+        // Only reject null bytes for filesystem names
+        if trimmed.contains('\0') {
+            return Err("Issue name contains invalid characters".to_string());
+        }
+
+        Ok(IssueName(trimmed.to_string()))
+    }
+
+    /// Get the inner string value (alias for as_str)
+    pub fn get(&self) -> &str {
+        &self.0
+    }
+
+    /// Create from string with validation (alias for new)
+    pub fn from_string(name: String) -> Result<Self, String> {
+        Self::new(name)
+    }
+
+    /// Get the inner string value
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert into the inner string value
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for IssueName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for IssueName {
+    fn from(name: String) -> Self {
+        IssueName(name)
+    }
+}
+
+impl From<&str> for IssueName {
+    fn from(name: &str) -> Self {
+        IssueName(name.to_string())
+    }
+}
+
+impl From<IssueName> for String {
+    fn from(issue_name: IssueName) -> Self {
+        issue_name.0
+    }
+}
+
+impl AsRef<str> for IssueName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Filesystem-based issue storage implementation
 pub mod filesystem;
 /// Storage wrapper that collects performance metrics for all operations

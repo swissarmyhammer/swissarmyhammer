@@ -1,0 +1,40 @@
+[package]
+name = "swissarmyhammer-tools"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP tools and server implementation for SwissArmyHammer"
+keywords = ["mcp", "tools", "ai", "assistant", "protocol"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Core library dependency
+swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
+
+# Async and JSON processing
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+# MCP protocol
+rmcp = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Async traits
+async-trait = "0.1"
+
+# Additional dependencies needed by MCP tools
+chrono = { workspace = true }
+dirs = { workspace = true }
+regex = { workspace = true }
+schemars = "0.8"
+
+[dev-dependencies]
+tokio-test = "0.4"
+serial_test = { workspace = true }
+tempfile = { workspace = true }

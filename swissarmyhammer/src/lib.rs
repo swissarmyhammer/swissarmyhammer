@@ -51,9 +51,6 @@ pub mod prompt_resolver;
 /// Template engine and rendering
 pub mod template;
 
-/// Model Context Protocol (MCP) server support
-pub mod mcp;
-
 /// Storage abstractions and implementations
 pub mod storage;
 
@@ -192,7 +189,6 @@ pub mod prelude {
         SwissArmyHammerPlugin, Template, TemplateEngine,
     };
 
-    pub use crate::mcp::McpServer;
     pub use crate::prompt_search::{SearchEngine, SearchResult};
     pub use crate::search_advanced::{
         generate_excerpt, AdvancedSearchEngine, AdvancedSearchOptions, AdvancedSearchResult,

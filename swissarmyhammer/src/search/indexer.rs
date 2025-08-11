@@ -518,7 +518,7 @@ impl FileIndexer {
         self.index_glob(pattern, true).await
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     /// Create a FileIndexer for testing with mock embedding engine (no network required)
     pub async fn new_for_testing(storage: VectorStorage) -> Result<Self> {
         let embedding_engine = EmbeddingEngine::new_for_testing().await?;

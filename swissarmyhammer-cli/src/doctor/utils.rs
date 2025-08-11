@@ -32,11 +32,11 @@ pub fn count_files_with_extension(path: &Path, extension: &str) -> usize {
 pub fn get_claude_add_command() -> String {
     r#"Add swissarmyhammer to Claude Code using this command:
 
-claude mcp add --scope user swissarmyhammer swissarmyhammer serve
+claude mcp add --scope user user user serve
 
 Or if swissarmyhammer is not in your PATH, use the full path:
 
-claude mcp add --scope user  swissarmyhammer /path/to/swissarmyhammer serve"#
+claude mcp add --scope user sah sah serve"#
         .to_string()
 }
 

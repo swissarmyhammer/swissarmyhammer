@@ -183,7 +183,8 @@ async fn main() {
 async fn run_server() -> i32 {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
-    use swissarmyhammer::{mcp::McpServer, PromptLibrary};
+    use swissarmyhammer::PromptLibrary;
+    use swissarmyhammer_tools::McpServer;
 
     // Create library and server
     let library = PromptLibrary::new();

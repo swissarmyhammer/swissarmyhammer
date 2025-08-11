@@ -1,7 +1,8 @@
 //! Example showing async usage and MCP server integration
 
 use rmcp::ServerHandler;
-use swissarmyhammer::{mcp::McpServer, Prompt, PromptLibrary};
+use swissarmyhammer::{Prompt, PromptLibrary};
+use swissarmyhammer_tools::McpServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
