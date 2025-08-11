@@ -485,56 +485,6 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
-/// Constants for error message patterns
-///
-/// # ABORT ERROR Pattern
-///
-/// The ABORT ERROR pattern is used for errors that should cause complete termination
-/// of the current operation without recovery suggestions or retry attempts.
-///
-/// ## When to use ABORT ERROR:
-/// - User policy violations that should not be recovered from automatically
-/// - Operations that would leave the system in an inconsistent state if continued
-/// - Workflow rules that must be strictly enforced (e.g., branching restrictions)
-///
-/// ## Usage Pattern:
-/// ```rust,no_run
-/// use swissarmyhammer::SwissArmyHammerError;
-///
-/// // Creating an ABORT ERROR
-/// let error = SwissArmyHammerError::cannot_create_issue_from_issue();
-///
-/// // Checking for ABORT ERROR
-/// if error.is_abort_error() {
-///     let message = error.abort_error_message().unwrap();
-///     // Handle abort - usually means exit immediately without recovery
-/// }
-/// ```
-///
-/// ## Implementation Guidelines:
-/// - ABORT ERROR messages must start with "ABORT ERROR:" prefix
-/// - Use specific helper methods instead of raw string construction
-/// - MCP handlers should return ABORT ERRORs directly without wrapping
-/// - CLI handlers should exit with error code without showing recovery options
-impl SwissArmyHammerError {
-    /// Prefix for ABORT ERROR messages that should exit completely
-    ///
-    /// All ABORT ERROR messages must start with this prefix to be properly
-    /// detected by the `is_abort_error()` method.
-    pub const ABORT_ERROR_PREFIX: &'static str = "ABORT ERROR";
-
-    /// Error message for attempting to switch from issue branch to issue branch
-    ///
-    /// This enforces the branching rule that switching between issue branches
-    /// must go through the main branch first.
-    pub const CANNOT_SWITCH_ISSUE_TO_ISSUE: &'static str = "ABORT ERROR: Cannot switch to issue branch from another issue branch. Please switch to main first.";
-
-    /// Error message for attempting to create issue branch from issue branch
-    ///
-    /// This enforces the branching rule that new issue branches can only be
-    /// created from the main branch.
-    pub const CANNOT_CREATE_ISSUE_FROM_ISSUE: &'static str = "ABORT ERROR: Cannot create new issue branch from another issue branch. Must be on main branch.";
-}
 
 /// Helper functions for creating standardized error messages
 impl SwissArmyHammerError {
@@ -617,69 +567,6 @@ impl SwissArmyHammerError {
         SwissArmyHammerError::MemoValidationFailed(reason.to_string())
     }
 
-    /// Check if an error is an ABORT ERROR that should exit completely
-    ///
-    /// ABORT ERRORs are special errors that indicate complete termination
-    /// of the operation is required. They should not be recovered from
-    /// and should not show recovery suggestions to the user.
-    ///
-    /// # Returns
-    /// `true` if this error is an ABORT ERROR, `false` otherwise
-    pub fn is_abort_error(&self) -> bool {
-        match self {
-            SwissArmyHammerError::Other(msg) => msg.starts_with(Self::ABORT_ERROR_PREFIX),
-            SwissArmyHammerError::ExecutorError(crate::workflow::ExecutorError::Abort(_)) => true,
-            _ => false,
-        }
-    }
-
-    /// Extract the ABORT ERROR message if this is an abort error
-    ///
-    /// This method should be used in combination with `is_abort_error()`
-    /// to safely extract the error message for ABORT ERRORs.
-    ///
-    /// # Returns
-    /// `Some(message)` if this is an ABORT ERROR, `None` otherwise
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// use swissarmyhammer::SwissArmyHammerError;
-    ///
-    /// let error = SwissArmyHammerError::cannot_switch_issue_to_issue();
-    /// if let Some(msg) = error.abort_error_message() {
-    ///     println!("Abort error: {}", msg);
-    /// }
-    /// ```
-    pub fn abort_error_message(&self) -> Option<String> {
-        if self.is_abort_error() {
-            match self {
-                SwissArmyHammerError::Other(msg) => Some(msg.clone()),
-                SwissArmyHammerError::ExecutorError(crate::workflow::ExecutorError::Abort(
-                    reason,
-                )) => Some(reason.clone()),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    }
-
-    /// Create an ABORT ERROR for issue branch switching restriction
-    ///
-    /// This error is returned when attempting to switch from one issue branch
-    /// to another issue branch without going through main first. This enforces
-    /// the branching workflow rules.
-    pub fn cannot_switch_issue_to_issue() -> Self {
-        SwissArmyHammerError::Other(Self::CANNOT_SWITCH_ISSUE_TO_ISSUE.to_string())
-    }
-
-    /// Create an ABORT ERROR for issue branch creation restriction
-    ///
-    /// This error is returned when attempting to create a new issue branch
-    /// while not on the main branch. This enforces the branching workflow rules.
-    pub fn cannot_create_issue_from_issue() -> Self {
-        SwissArmyHammerError::Other(Self::CANNOT_CREATE_ISSUE_FROM_ISSUE.to_string())
-    }
 }
 
 /// Extension trait for error types to format the full error chain

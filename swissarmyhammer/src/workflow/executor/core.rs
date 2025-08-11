@@ -157,6 +157,20 @@ impl WorkflowExecutor {
         // Execute the state and capture any errors
         let state_error = self.execute_state_and_capture_errors(run).await?;
 
+        // Check if abort was requested via context variable (after state execution)
+        if let Some(abort_reason_value) = run.context.get("__ABORT_REQUESTED__") {
+            if let Some(abort_reason) = abort_reason_value.as_str() {
+                // Create abort file for external detection
+                if let Err(e) = std::fs::create_dir_all(".swissarmyhammer") {
+                    tracing::warn!("Failed to create .swissarmyhammer directory: {}", e);
+                }
+                if let Err(e) = std::fs::write(".swissarmyhammer/.abort", abort_reason) {
+                    tracing::warn!("Failed to write abort file: {}", e);
+                }
+                return Err(ExecutorError::Abort(abort_reason.to_string()));
+            }
+        }
+
         // Check if workflow is complete after state execution
         if self.is_workflow_finished(run) {
             return Ok(false); // No transition needed, workflow finished
@@ -531,19 +545,8 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         action_error: ActionError,
     ) -> ExecutorResult<()> {
-        // Check if this is an abort error - if so, propagate immediately
-        if matches!(action_error, ActionError::AbortError(_)) {
-            // Log the abort error
-            let error_details = self.format_action_error(&action_error);
-            self.log_event(ExecutionEventType::Failed, error_details);
-
-            // Mark workflow as failed
-            run.status = WorkflowRunStatus::Failed;
-
-            // Propagate the error immediately
-            return Err(ExecutorError::ActionError(action_error));
-        }
-
+        // Note: Abort error handling removed - abort detection now file-based
+        
         // Set standard variables that are available after every action
         run.context
             .insert("success".to_string(), Value::Bool(false));
@@ -592,7 +595,8 @@ impl WorkflowExecutor {
             return Ok(());
         }
 
-        // Propagate the error
+        // Don't immediately mark workflow as failed - let transitions handle the error
+        // The workflow only fails if there's no error transition available
         Err(ExecutorError::ActionError(action_error))
     }
 
@@ -625,7 +629,6 @@ impl WorkflowExecutor {
             ActionError::RateLimit { message, wait_time } => {
                 format!("Rate limit reached: {message}. Please wait {wait_time:?} before retrying.")
             }
-            ActionError::AbortError(msg) => format!("ABORT ERROR: {msg}"),
         }
     }
 

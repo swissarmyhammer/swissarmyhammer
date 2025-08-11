@@ -105,3 +105,62 @@ Based on specification analysis:
 
 ## Follow-up Issues
 - ABORT_000267_test-suite-updates
+
+## Proposed Solution
+
+Based on my analysis of the codebase, I'll systematically remove all string-based "ABORT ERROR" detection code in the following order:
+
+### 1. **Remove Common Abort Handler Module**
+- **File**: `swissarmyhammer/src/common/abort_handler.rs`
+- **Action**: Remove entire module since it's dedicated to string-based detection
+- **Impact**: Update module imports that reference this module
+
+### 2. **Remove Error Module String Constants and Functions**
+- **File**: `swissarmyhammer/src/error.rs`
+- **Action**: Remove:
+  - `ABORT_ERROR_PREFIX` constant
+  - `CANNOT_SWITCH_ISSUE_TO_ISSUE` constant  
+  - `CANNOT_CREATE_ISSUE_FROM_ISSUE` constant
+  - `is_abort_error()` method
+  - `extract_abort_message()` method
+  - `cannot_switch_issue_to_issue()` method
+  - `cannot_create_issue_from_issue()` method
+- **Keep**: Other error handling functionality not related to string detection
+
+### 3. **Remove Git Module String Detection**
+- **File**: `swissarmyhammer/src/git.rs`
+- **Action**: Replace hardcoded "ABORT ERROR:" strings with regular error handling
+- **Impact**: Use standard error propagation instead of string-based detection
+
+### 4. **Remove Workflow Actions String Detection** 
+- **File**: `swissarmyhammer/src/workflow/actions.rs`
+- **Action**: Remove:
+  - `ActionError::AbortError` variant with ABORT ERROR string formatting
+  - String checking logic for "ABORT ERROR:" prefixes
+  - Replace with file-based detection already implemented
+
+### 5. **Remove Workflow Executor String Detection**
+- **File**: `swissarmyhammer/src/workflow/executor/core.rs`
+- **Action**: Remove ActionError::AbortError formatting that adds "ABORT ERROR:" prefix
+- **Impact**: The file-based detection is already implemented, just need to remove string formatting
+
+### 6. **Update All Test Files**
+- **Files**: Remove or update tests that expect string-based detection:
+  - `swissarmyhammer/tests/abort_error_integration_tests.rs`
+  - `swissarmyhammer/tests/abort_error_pattern_tests.rs` 
+  - `swissarmyhammer-cli/tests/abort_error_cli_test.rs`
+  - `swissarmyhammer-cli/tests/cli_mcp_integration_test.rs`
+  - `swissarmyhammer/src/workflow/actions_tests/prompt_action_tests.rs`
+- **Action**: Either remove obsolete tests or update to test file-based abort functionality
+
+### 7. **Clean Up CLI Test Reference**
+- **File**: `swissarmyhammer-cli/src/test.rs`
+- **Action**: Remove comment referencing old ABORT ERROR detection
+
+### Implementation Strategy
+1. Remove modules and constants first (clean compile errors)
+2. Update actual detection logic to use file-based system
+3. Update tests to validate new system
+4. Run comprehensive test suite to ensure no regressions
+
+This approach ensures we completely remove the old string-based system while preserving all abort functionality through the new file-based mechanism that's already implemented and tested.
