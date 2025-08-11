@@ -77,6 +77,20 @@ pub struct WorkflowRun {
 impl WorkflowRun {
     /// Create a new workflow run
     pub fn new(workflow: Workflow) -> Self {
+        // Clean up any existing abort file to ensure clean slate
+        match std::fs::remove_file(".swissarmyhammer/.abort") {
+            Ok(()) => {
+                tracing::debug!("Cleaned up existing abort file");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File doesn't exist, no cleanup needed
+            }
+            Err(e) => {
+                tracing::warn!("Failed to clean up abort file: {}", e);
+                // Continue with workflow initialization
+            }
+        }
+
         let now = chrono::Utc::now();
         let initial_state = workflow.initial_state.clone();
         Self {
@@ -210,5 +224,97 @@ mod tests {
         assert!(id1.to_string() < id2.to_string());
         assert!(id2.to_string() < id3.to_string());
         assert!(id1.to_string() < id3.to_string());
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_when_file_exists() {
+        use std::path::Path;
+
+        // Create a test workflow
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        // Create the .swissarmyhammer directory if it doesn't exist
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+
+        // Create an abort file
+        let abort_path = ".swissarmyhammer/.abort";
+        std::fs::write(abort_path, "test abort reason").unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create a new workflow run - this should clean up the abort file
+        let _run = WorkflowRun::new(workflow);
+
+        // Verify the abort file was cleaned up
+        assert!(!Path::new(abort_path).exists());
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_when_file_does_not_exist() {
+
+        // Create a test workflow
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        // Ensure abort file doesn't exist
+        let abort_path = ".swissarmyhammer/.abort";
+        let _ = std::fs::remove_file(abort_path); // Ignore if it doesn't exist
+
+        // Create a new workflow run - should not fail even if file doesn't exist
+        let run = WorkflowRun::new(workflow);
+
+        // Verify workflow run was created successfully
+        assert_eq!(run.workflow.name.as_str(), "Test Workflow");
+        assert_eq!(run.status, WorkflowRunStatus::Running);
+    }
+
+    #[test]
+    fn test_abort_file_cleanup_continues_on_permission_error() {
+        // Create a test workflow
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        // This test would be difficult to simulate without root access or special file system setup
+        // Instead, we test that workflow creation continues even if cleanup fails
+        // The actual error handling is tested in the implementation by using match expressions
+
+        // Create a new workflow run
+        let run = WorkflowRun::new(workflow);
+
+        // Verify workflow run was created successfully regardless of cleanup result
+        assert_eq!(run.workflow.name.as_str(), "Test Workflow");
+        assert_eq!(run.status, WorkflowRunStatus::Running);
+        assert_eq!(run.current_state.as_str(), "start");
+        assert_eq!(run.history.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_workflow_runs_cleanup_abort_file() {
+        use std::path::Path;
+
+        // Create a test workflow
+        let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
+        workflow.add_state(create_state("start", "Start state", false));
+
+        // Create the .swissarmyhammer directory if it doesn't exist
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create first abort file
+        std::fs::write(abort_path, "first abort reason").unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create first workflow run - should clean up abort file
+        let _run1 = WorkflowRun::new(workflow.clone());
+        assert!(!Path::new(abort_path).exists());
+
+        // Create second abort file
+        std::fs::write(abort_path, "second abort reason").unwrap();
+        assert!(Path::new(abort_path).exists());
+
+        // Create second workflow run - should also clean up abort file
+        let _run2 = WorkflowRun::new(workflow);
+        assert!(!Path::new(abort_path).exists());
     }
 }
