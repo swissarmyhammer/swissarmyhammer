@@ -3,7 +3,6 @@
 //! This module provides shared utilities to eliminate code duplication
 //! throughout the SwissArmyHammer codebase.
 
-
 /// Error handling utilities and context helpers
 pub mod error_context;
 

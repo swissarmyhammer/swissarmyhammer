@@ -1657,7 +1657,7 @@ async fn test_abort_file_detection_during_multiple_state_transitions() {
 
     // Let it execute one transition first
     let result = executor.execute_state_with_limit(&mut run, 1).await;
-    
+
     // The first execution might fail due to MCP issues, so let's be flexible
     if result.is_err() {
         // If it fails, it might be due to missing MCP server

@@ -171,3 +171,33 @@ Based on specification analysis:
 
 ## Follow-up Issues
 - ABORT_000269_final-integration-testing
+
+## Proposed Solution
+
+Based on the abort specification and existing memo context, I will systematically update all documentation to reflect the new file-based abort system:
+
+### 1. Core Documentation Updates
+- **Workflow Documentation**: Update `doc/src/workflows.md` to replace ABORT ERROR string references with file-based abort tool usage
+- **Error Handling Memo**: Update the Error Handling and Resilience Patterns memo to remove ABORT ERROR patterns and add file-based abort patterns
+- **Comprehensive Search**: Search entire codebase for documentation references to ABORT ERROR and update them
+
+### 2. New Documentation Creation
+- Create comprehensive MCP abort tool documentation with parameters, examples, and best practices
+- Add integration examples showing how the abort tool works with the workflow system
+- Document the `.swissarmyhammer/.abort` file pattern and cleanup mechanisms
+
+### 3. Generated Documentation
+- Regenerate mdBook documentation (print.html, workflows.html, searchindex.js)
+- Ensure all cross-references and links work correctly
+- Verify the documentation build process completes without warnings
+
+### 4. Implementation Steps
+1. Start by reading existing workflow documentation to understand current ABORT ERROR references
+2. Update workflow documentation with new file-based patterns
+3. Update the Error Handling memo to remove old patterns and add new ones
+4. Search for any remaining documentation references and update them
+5. Create comprehensive abort tool documentation
+6. Regenerate all derived documentation
+7. Verify all documentation builds successfully
+
+This approach ensures complete migration from the old string-based system to the new file-based approach while maintaining comprehensive user-facing documentation.

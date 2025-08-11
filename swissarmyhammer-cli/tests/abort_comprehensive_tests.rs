@@ -24,7 +24,7 @@ fn cleanup_abort_file() {
 fn assert_abort_file_exists(expected_reason: &str) -> Result<()> {
     let abort_path = Path::new(".swissarmyhammer/.abort");
     assert!(abort_path.exists(), "Abort file should exist");
-    
+
     let content = std::fs::read_to_string(abort_path)?;
     assert_eq!(content, expected_reason, "Abort file content mismatch");
     Ok(())
@@ -53,22 +53,23 @@ fn assert_abort_error_handling(output: &Output) {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("Actual stderr: {}", stderr);
-    
-    // For now, we expect workflow not found errors since our test workflows 
+
+    // For now, we expect workflow not found errors since our test workflows
     // aren't in the proper directories. The abort detection may happen at a higher level
     // or be handled differently than expected.
     // The main point is the command should fail when abort file is present.
     assert!(
         output.status.code() == Some(1) || output.status.code() == Some(2),
-        "Exit code should be 1 (general error) or 2 (EXIT_ERROR). Got: {:?}, Stderr: {}", 
-        output.status.code(), stderr
+        "Exit code should be 1 (general error) or 2 (EXIT_ERROR). Got: {:?}, Stderr: {}",
+        output.status.code(),
+        stderr
     );
 }
 
 #[test]
 fn test_workflow_execution_with_abort_file_present() -> Result<()> {
     cleanup_abort_file();
-    
+
     // Create a simple workflow file for testing
     let workflow_content = r#"---
 name: Test Workflow
@@ -95,7 +96,7 @@ transitions:
 "#;
 
     std::fs::write("test_abort_workflow.md", workflow_content)?;
-    
+
     // Create abort file before workflow execution
     create_abort_file("CLI integration test abort")?;
 
@@ -113,7 +114,7 @@ transitions:
     Ok(())
 }
 
-#[test] 
+#[test]
 fn test_prompt_command_with_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -144,11 +145,7 @@ fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     create_abort_file("Stale abort file")?;
 
     // Commands that don't use workflows should succeed despite abort file
-    let commands = vec![
-        vec!["prompt", "list"],
-        vec!["--help"],
-        vec!["--version"],
-    ];
+    let commands = vec![vec!["prompt", "list"], vec!["--help"], vec!["--version"]];
 
     for command_args in commands {
         let output = Command::cargo_bin("swissarmyhammer")
@@ -210,7 +207,7 @@ transitions:
     let _ = std::fs::remove_file("unicode_abort_test.md");
 
     assert_abort_error_handling(&output);
-    
+
     // Check that unicode is preserved in error message
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Unicode might be in the error message depending on how it's propagated
@@ -227,13 +224,16 @@ fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
 
     // Create abort file
     create_abort_file("Test cleanup reason")?;
-    
+
     // Verify the file was created - if this fails, check file creation
     let abort_path = Path::new(".swissarmyhammer/.abort");
     if !abort_path.exists() {
         // Debug information for failing test
         println!("Working directory: {:?}", std::env::current_dir());
-        println!("SwissArmyHammer dir exists: {:?}", Path::new(".swissarmyhammer").exists());
+        println!(
+            "SwissArmyHammer dir exists: {:?}",
+            Path::new(".swissarmyhammer").exists()
+        );
         // Skip the assertion for now since this is just a documentation test
         println!("Skipping abort file existence check - may be working directory issue in test");
     } else {
@@ -281,7 +281,7 @@ transitions:
 
     let output = Command::cargo_bin("swissarmyhammer")
         .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1") 
+        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "large_reason_test.md"])
         .output()?;
 
@@ -334,7 +334,7 @@ transitions:
     Ok(())
 }
 
-#[test] 
+#[test]
 fn test_empty_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -419,8 +419,14 @@ transitions:
 
     // Should succeed normally
     if !output.status.success() {
-        println!("Normal workflow stderr: {}", String::from_utf8_lossy(&output.stderr));
-        println!("Normal workflow stdout: {}", String::from_utf8_lossy(&output.stdout));
+        println!(
+            "Normal workflow stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!(
+            "Normal workflow stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     // Verify still no abort file exists after successful run
@@ -484,11 +490,16 @@ transitions:
                     // Should fail with either general error or abort error
                     assert!(
                         output.status.code() == Some(1) || output.status.code() == Some(2),
-                        "Thread {} should exit with code 1 or 2, got {:?}", i, output.status.code()
+                        "Thread {} should exit with code 1 or 2, got {:?}",
+                        i,
+                        output.status.code()
                     );
                 } else {
                     // Might succeed if abort file was cleaned up by another instance
-                    println!("Thread {} succeeded (abort file may have been cleaned up)", i);
+                    println!(
+                        "Thread {} succeeded (abort file may have been cleaned up)",
+                        i
+                    );
                 }
             }
             Err(e) => panic!("Thread {} failed to execute command: {}", i, e),

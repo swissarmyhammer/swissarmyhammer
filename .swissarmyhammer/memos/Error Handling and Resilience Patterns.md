@@ -46,27 +46,50 @@ pub trait ErrorContext<T> {
 - Helper functions for consistent error creation
 - Standardized error message formats
 
-## Special Error Handling: ABORT ERROR Pattern
+## File-Based Abort System
 
-**Critical Failure Pattern**
+**Modern Abort Pattern**
 ```rust
-impl SwissArmyHammerError {
-    pub const ABORT_ERROR_PREFIX: &'static str = "ABORT ERROR";
-    
-    pub fn is_abort_error(&self) -> bool {
-        // Pattern detection for immediate termination
-    }
-    
-    pub fn cannot_switch_issue_to_issue() -> Self {
-        // Enforces branching workflow rules
-    }
+// File-based abort detection in workflow executor
+if std::path::Path::new(".swissarmyhammer/.abort").exists() {
+    let reason = std::fs::read_to_string(".swissarmyhammer/.abort")
+        .unwrap_or_else(|_| "Unknown abort reason".to_string());
+    return Err(ExecutorError::Abort(reason));
 }
 ```
 
-**Use Cases for ABORT ERROR**
-- User policy violations that shouldn't be recovered from
-- Operations leaving system in inconsistent state
-- Workflow rules that must be strictly enforced
+**ExecutorError::Abort Variant**
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutorError {
+    // ... existing variants ...
+    
+    #[error("Workflow aborted: {0}")]
+    Abort(String),
+}
+```
+
+**MCP Abort Tool Usage**
+```json
+{
+  "tool": "abort",
+  "parameters": {
+    "reason": "User cancelled the destructive operation"
+  }
+}
+```
+
+**Use Cases for Abort Tool**
+- User-initiated cancellation
+- Safety violations detected
+- Prerequisites cannot be met
+- System consistency violations
+
+**File-Based Abort Benefits**
+- Robust across process boundaries
+- Language/framework agnostic
+- Simple to implement and test
+- Atomic operation (file creation is atomic)
 
 ## Resilience and Recovery Patterns
 
