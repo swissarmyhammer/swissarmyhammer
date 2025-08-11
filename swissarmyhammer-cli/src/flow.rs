@@ -11,8 +11,8 @@ use std::io::{self, Write};
 use std::time::Duration;
 use swissarmyhammer::workflow::{
     ExecutionVisualizer, MemoryWorkflowStorage, StateId, TransitionKey, Workflow, WorkflowExecutor,
-    WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowStorage,
-    WorkflowStorageBackend, WorkflowRunStorageBackend,
+    WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend,
+    WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer::{Result, SwissArmyHammerError};
 use tokio::signal;
@@ -121,13 +121,14 @@ struct WorkflowCommandConfig {
 /// Execute a workflow
 async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     // Use proper WorkflowStorage with embedded builtins
-    let workflow_storage = tokio::task::spawn_blocking(move || {
-        WorkflowStorage::file_system()
-    }).await.map_err(|e| SwissArmyHammerError::Other(format!("Failed to create workflow storage: {}", e)))??;
-    
+    let workflow_storage = tokio::task::spawn_blocking(move || WorkflowStorage::file_system())
+        .await
+        .map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to create workflow storage: {}", e))
+        })??;
+
     let workflow_name_typed = WorkflowName::new(&config.workflow_name);
     let workflow = workflow_storage.get_workflow(&workflow_name_typed)?;
-    
 
     // Parse variables
     let mut variables = HashMap::new();
@@ -345,14 +346,14 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
             WorkflowRunStatus::Completed => {
                 tracing::info!("✅ Workflow completed successfully");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-                
+
                 // Don't store successful runs to avoid accumulating thousands of runs
                 // Only failed runs are stored for debugging purposes
             }
             WorkflowRunStatus::Failed => {
                 tracing::error!("❌ Workflow failed");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-                
+
                 // Store failed runs for debugging
                 if let Err(storage_err) = run_storage.store_run(&run) {
                     tracing::warn!("Failed to store failed run: {}", storage_err);
@@ -361,7 +362,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
             WorkflowRunStatus::Cancelled => {
                 tracing::warn!("🚫 Workflow cancelled");
                 tracing::info!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
-                
+
                 // Store cancelled runs for debugging
                 if let Err(storage_err) = run_storage.store_run(&run) {
                     tracing::warn!("Failed to store cancelled run: {}", storage_err);
@@ -375,7 +376,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         Err(e) => {
             tracing::error!("❌ Workflow execution failed: {}", e);
             run.fail();
-            
+
             // Store failed runs for debugging
             if let Err(storage_err) = run_storage.store_run(&run) {
                 tracing::warn!("Failed to store failed run: {}", storage_err);
@@ -1743,19 +1744,26 @@ mod tests {
     }
 }
 
-
 /// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
 fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
     use std::fs;
-    
-    // Create local .swissarmyhammer/workflow-runs directory 
+
+    // Create local .swissarmyhammer/workflow-runs directory
     let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
-    fs::create_dir_all(&local_dir)
-        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create .swissarmyhammer/workflow-runs directory: {}", e)))?;
-    
+    fs::create_dir_all(&local_dir).map_err(|e| {
+        SwissArmyHammerError::Other(format!(
+            "Failed to create .swissarmyhammer/workflow-runs directory: {}",
+            e
+        ))
+    })?;
+
     let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
-        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {}", e)))?;
-    
+        .map_err(|e| {
+            SwissArmyHammerError::Other(format!(
+                "Failed to create local workflow run storage: {}",
+                e
+            ))
+        })?;
+
     Ok(Box::new(run_storage))
 }
-

@@ -35,6 +35,7 @@
 //! - **Documentation**: Comprehensive descriptions co-located with implementation
 //! - **Type Safety**: Strong typing through schema validation and Rust's type system
 
+pub mod abort;
 pub mod issues;
 pub mod memoranda;
 pub mod outline;
