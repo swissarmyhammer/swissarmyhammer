@@ -1,7 +1,7 @@
+use super::IssueName;
 use crate::common::generate_monotonic_ulid_string;
 use crate::config::Config;
 use crate::error::{Result, SwissArmyHammerError};
-use super::IssueName;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;

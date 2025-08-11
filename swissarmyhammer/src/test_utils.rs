@@ -465,9 +465,9 @@ impl TestFileSystem {
 //     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
 //     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
 //         Arc::new(RwLock::new(Box::new(MockMemoStorage::new())));
-// 
+//
 //     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
-// 
+//
 //     ToolContext::new(
 //         tool_handlers,
 //         issue_storage,

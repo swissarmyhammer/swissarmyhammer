@@ -237,7 +237,7 @@ pub fn check_claude_config(checks: &mut Vec<Check>) -> Result<()> {
                 let stdout = String::from_utf8_lossy(&output.stdout);
 
                 // Check if swissarmyhammer is in the list
-                if stdout.contains("swissarmyhammer") {
+                if stdout.contains("sah") {
                     checks.push(Check {
                         name: check_names::CLAUDE_CONFIG.to_string(),
                         status: CheckStatus::Ok,

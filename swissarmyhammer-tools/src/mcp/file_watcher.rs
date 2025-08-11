@@ -1,9 +1,9 @@
 //! File watching functionality for MCP server
 
-use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
-use swissarmyhammer::{Result, SwissArmyHammerError};
 use rmcp::RoleServer;
 use std::sync::Arc;
+use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
+use swissarmyhammer::{Result, SwissArmyHammerError};
 use tokio::sync::Mutex;
 
 /// Callback implementation for file watcher that handles prompt reloading

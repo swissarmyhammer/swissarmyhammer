@@ -112,7 +112,7 @@ impl IssueName {
     /// Intended for filesystem operations and internal use.
     pub fn new_internal(name: String) -> Result<Self, String> {
         const FILESYSTEM_MAX_ISSUE_NAME_LENGTH: usize = 200;
-        
+
         let trimmed = name.trim();
 
         if trimmed.is_empty() {
@@ -140,7 +140,7 @@ impl IssueName {
     /// Empty names are allowed for nameless issues like 000123.md, but whitespace-only strings are rejected.
     pub fn from_filesystem(name: String) -> Result<Self, String> {
         const FILESYSTEM_MAX_ISSUE_NAME_LENGTH: usize = 200;
-        
+
         let trimmed = name.trim();
 
         // Allow truly empty names for nameless issues, but reject whitespace-only strings
@@ -229,8 +229,6 @@ pub use filesystem::{
     is_issue_file, parse_any_issue_filename, parse_issue_filename, sanitize_issue_name,
     validate_issue_name, FileSystemIssueStorage, Issue, IssueState, IssueStorage,
 };
-
-
 
 // Export metrics types
 pub use metrics::{MetricsSnapshot, Operation, PerformanceMetrics};

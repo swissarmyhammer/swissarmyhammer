@@ -5,11 +5,11 @@
 use crate::mcp::search_types::{SearchIndexRequest, SearchIndexResponse};
 use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use swissarmyhammer::search::{FileIndexer, SemanticConfig, VectorStorage};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::Instant;
+use swissarmyhammer::search::{FileIndexer, SemanticConfig, VectorStorage};
 
 /// Tool for indexing files for semantic search
 #[derive(Default)]

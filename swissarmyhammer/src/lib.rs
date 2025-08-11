@@ -51,7 +51,6 @@ pub mod prompt_resolver;
 /// Template engine and rendering
 pub mod template;
 
-
 /// Storage abstractions and implementations
 pub mod storage;
 

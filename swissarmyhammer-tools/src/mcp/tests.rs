@@ -6,10 +6,10 @@ use super::types::{
     UpdateIssueRequest, WorkIssueRequest,
 };
 use super::utils::validate_issue_name;
-use swissarmyhammer::prompts::Prompt;
-use swissarmyhammer::PromptLibrary;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
+use swissarmyhammer::prompts::Prompt;
+use swissarmyhammer::PromptLibrary;
 
 #[tokio::test]
 async fn test_mcp_server_creation() {

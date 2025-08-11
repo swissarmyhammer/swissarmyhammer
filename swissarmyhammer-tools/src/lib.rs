@@ -24,12 +24,12 @@
 //! ```rust,no_run
 //! use swissarmyhammer_tools::McpServer;
 //! use swissarmyhammer::PromptLibrary;
-//! 
+//!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let library = PromptLibrary::new();
 //! let server = McpServer::new(library).await?;
-//! 
+//!
 //! // Server is ready to handle MCP requests
 //! # Ok(())
 //! # }
@@ -46,8 +46,8 @@ pub mod test_utils;
 
 // Re-export key types for convenience
 pub use mcp::McpServer;
-pub use mcp::{ToolContext, ToolRegistry};
 pub use mcp::{register_issue_tools, register_memo_tools, register_search_tools};
+pub use mcp::{ToolContext, ToolRegistry};
 
 /// Version of this crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

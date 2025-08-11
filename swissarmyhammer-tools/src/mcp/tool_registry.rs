@@ -72,14 +72,14 @@
 //! ```
 
 use super::tool_handlers::ToolHandlers;
-use swissarmyhammer::common::rate_limiter::RateLimitChecker;
-use swissarmyhammer::git::GitOperations;
-use swissarmyhammer::issues::IssueStorage;
-use swissarmyhammer::memoranda::MemoStorage;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::Error as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
+use swissarmyhammer::common::rate_limiter::RateLimitChecker;
+use swissarmyhammer::git::GitOperations;
+use swissarmyhammer::issues::IssueStorage;
+use swissarmyhammer::memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
 
 /// Context shared by all tools during execution
@@ -590,15 +590,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
+        use std::path::PathBuf;
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
         use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
-        use std::path::PathBuf;
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock storage and handlers for context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+                .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =

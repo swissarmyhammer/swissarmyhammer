@@ -3,10 +3,10 @@
 use super::memo_types::*;
 use super::responses::create_success_response;
 use super::shared_utils::{McpErrorHandler, McpFormatter, McpValidation};
-use swissarmyhammer::memoranda::{MemoId, MemoStorage};
 use rmcp::model::*;
 use rmcp::Error as McpError;
 use std::sync::Arc;
+use swissarmyhammer::memoranda::{MemoId, MemoStorage};
 use tokio::sync::RwLock;
 
 /// Preview length for memo list operations (characters)
@@ -39,7 +39,10 @@ impl ToolHandlers {
     /// # Returns
     ///
     /// * `String` - Formatted memo preview
-    fn format_memo_preview(memo: &swissarmyhammer::memoranda::Memo, preview_length: usize) -> String {
+    fn format_memo_preview(
+        memo: &swissarmyhammer::memoranda::Memo,
+        preview_length: usize,
+    ) -> String {
         format!(
             "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
             memo.title,
@@ -62,7 +65,10 @@ impl ToolHandlers {
     /// # Returns
     ///
     /// * `McpError` - Appropriate MCP error response
-    fn handle_memo_error(error: swissarmyhammer::error::SwissArmyHammerError, operation: &str) -> McpError {
+    fn handle_memo_error(
+        error: swissarmyhammer::error::SwissArmyHammerError,
+        operation: &str,
+    ) -> McpError {
         McpErrorHandler::handle_error(error, operation)
     }
 

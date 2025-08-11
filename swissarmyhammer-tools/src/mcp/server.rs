@@ -1,5 +1,12 @@
 //! MCP server implementation for serving prompts and workflows
 
+use rmcp::model::*;
+use rmcp::service::RequestContext;
+use rmcp::{Error as McpError, RoleServer, ServerHandler};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::get_rate_limiter;
 use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
 use swissarmyhammer::git::GitOperations;
@@ -10,13 +17,6 @@ use swissarmyhammer::workflow::{
     WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer::{PromptLibrary, PromptResolver, Result, SwissArmyHammerError};
-use rmcp::model::*;
-use rmcp::service::RequestContext;
-use rmcp::{Error as McpError, RoleServer, ServerHandler};
-use serde_json::Value;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
@@ -301,7 +301,9 @@ impl McpServer {
     /// # Returns
     ///
     /// * `Option<Vec<PromptArgument>>` - The converted MCP arguments or None if empty
-    fn convert_prompt_arguments(args: &[swissarmyhammer::ArgumentSpec]) -> Option<Vec<PromptArgument>> {
+    fn convert_prompt_arguments(
+        args: &[swissarmyhammer::ArgumentSpec],
+    ) -> Option<Vec<PromptArgument>> {
         if args.is_empty() {
             None
         } else {

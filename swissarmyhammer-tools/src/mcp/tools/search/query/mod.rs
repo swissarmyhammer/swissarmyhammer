@@ -5,11 +5,11 @@
 use crate::mcp::search_types::{SearchQueryRequest, SearchQueryResponse, SearchResult};
 use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use swissarmyhammer::search::{SearchQuery, SemanticConfig, SemanticSearcher, VectorStorage};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::Instant;
+use swissarmyhammer::search::{SearchQuery, SemanticConfig, SemanticSearcher, VectorStorage};
 
 /// Tool for performing semantic search queries
 #[derive(Default)]

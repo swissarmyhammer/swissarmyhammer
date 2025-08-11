@@ -1,16 +1,16 @@
 //! Test utilities for MCP tools
 
-use crate::mcp::tool_registry::ToolContext;
 use crate::mcp::tool_handlers::ToolHandlers;
+use crate::mcp::tool_registry::ToolContext;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex as TokioMutex, RwLock};
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// Creates a test context with mock storage backends for testing MCP tools
-/// 
+///
 /// This function creates a ToolContext similar to the one in swissarmyhammer,
 /// but available for testing MCP tools in swissarmyhammer-tools
 #[cfg(test)]
@@ -26,5 +26,11 @@ pub async fn create_test_context() -> ToolContext {
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
-    ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage, rate_limiter)
+    ToolContext::new(
+        tool_handlers,
+        issue_storage,
+        git_ops,
+        memo_storage,
+        rate_limiter,
+    )
 }

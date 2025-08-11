@@ -3,9 +3,9 @@
 //! This module provides common functionality used across MCP tool handlers
 //! to reduce code duplication and ensure consistent behavior.
 
-use swissarmyhammer::{Result, SwissArmyHammerError};
 use rmcp::Error as McpError;
 use std::collections::HashMap;
+use swissarmyhammer::{Result, SwissArmyHammerError};
 
 /// Standard response format for MCP operations
 #[derive(Debug)]
@@ -162,9 +162,7 @@ impl McpErrorHandler {
             SwissArmyHammerError::Semantic(err) => {
                 McpError::internal_error(format!("Semantic search error: {err}"), None)
             }
-            _ => {
-                McpError::internal_error(format!("Unexpected error: {error}"), None)
-            }
+            _ => McpError::internal_error(format!("Unexpected error: {error}"), None),
         }
     }
 
@@ -315,7 +313,10 @@ impl McpFormatter {
     ///
     /// This provides standardized formatting for memo displays across all tools,
     /// ensuring consistent presentation in list, search, and other operations.
-    pub fn format_memo_preview(memo: &swissarmyhammer::memoranda::Memo, preview_length: usize) -> String {
+    pub fn format_memo_preview(
+        memo: &swissarmyhammer::memoranda::Memo,
+        preview_length: usize,
+    ) -> String {
         format!(
             "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
             memo.title,
@@ -401,8 +402,8 @@ mod tests {
 
     #[test]
     fn test_formatter_memo_preview() {
-        use swissarmyhammer::memoranda::{Memo, MemoId};
         use chrono::Utc;
+        use swissarmyhammer::memoranda::{Memo, MemoId};
 
         let memo = Memo {
             id: MemoId::new(),

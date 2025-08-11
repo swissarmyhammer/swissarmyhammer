@@ -2,13 +2,13 @@
 //!
 //! This module provides the ListIssuesTool for listing existing issues through the MCP protocol.
 
-use swissarmyhammer::issues::Issue;
 use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde::{Deserialize, Serialize};
+use swissarmyhammer::issues::Issue;
 
 /// Request structure for listing issues
 #[derive(Debug, Deserialize, Serialize)]

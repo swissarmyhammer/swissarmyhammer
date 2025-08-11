@@ -11,10 +11,10 @@ use swissarmyhammer::common::rate_limiter::MockRateLimiter;
 use swissarmyhammer::config::Config;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::issues::show::ShowIssueTool;
-use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, RwLock};
 

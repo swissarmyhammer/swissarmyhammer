@@ -1,7 +1,7 @@
 //! Error handling and retry logic for MCP operations
 
-use swissarmyhammer::{PromptLibrary, PromptResolver, Result, SwissArmyHammerError};
 use std::sync::Arc;
+use swissarmyhammer::{PromptLibrary, PromptResolver, Result, SwissArmyHammerError};
 use tokio::sync::RwLock;
 
 /// Error handling implementation for MCP server

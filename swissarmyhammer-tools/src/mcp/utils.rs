@@ -1,10 +1,10 @@
 //! Utility functions for MCP operations
 
-use swissarmyhammer::config::Config;
 use rmcp::Error as McpError;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use swissarmyhammer::config::Config;
 
 /// Convert a JSON map to a string map for template arguments
 pub fn convert_prompt_arguments(arguments: &HashMap<String, Value>) -> HashMap<String, String> {

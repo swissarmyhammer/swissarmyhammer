@@ -153,15 +153,16 @@ impl McpTool for OutlineGenerateTool {
         let start_time = std::time::Instant::now();
 
         // Use the new file discovery functionality
-        let file_discovery = match swissarmyhammer::outline::FileDiscovery::new(request.patterns.clone()) {
-            Ok(discovery) => discovery,
-            Err(e) => {
-                return Err(McpError::invalid_params(
-                    format!("Failed to create file discovery: {e}"),
-                    None,
-                ));
-            }
-        };
+        let file_discovery =
+            match swissarmyhammer::outline::FileDiscovery::new(request.patterns.clone()) {
+                Ok(discovery) => discovery,
+                Err(e) => {
+                    return Err(McpError::invalid_params(
+                        format!("Failed to create file discovery: {e}"),
+                        None,
+                    ));
+                }
+            };
 
         let (discovered_files, discovery_report) = match file_discovery.discover_files() {
             Ok(result) => result,
@@ -180,11 +181,12 @@ impl McpTool for OutlineGenerateTool {
             swissarmyhammer::outline::FileDiscovery::filter_supported_files(discovered_files);
 
         // Process all supported files and generate outline
-        let outline_parser =
-            swissarmyhammer::outline::OutlineParser::new(swissarmyhammer::outline::OutlineParserConfig::default())
-                .map_err(|e| {
-                    McpError::internal_error(format!("Failed to create outline parser: {e}"), None)
-                })?;
+        let outline_parser = swissarmyhammer::outline::OutlineParser::new(
+            swissarmyhammer::outline::OutlineParserConfig::default(),
+        )
+        .map_err(|e| {
+            McpError::internal_error(format!("Failed to create outline parser: {e}"), None)
+        })?;
 
         // Build hierarchical structure using HierarchyBuilder
         let mut hierarchy_builder = swissarmyhammer::outline::HierarchyBuilder::new();
@@ -325,7 +327,9 @@ fn convert_outline_node_with_children(
 }
 
 /// Convert internal OutlineNodeType to MCP tool OutlineKind
-fn convert_outline_node_type(node_type: &swissarmyhammer::outline::types::OutlineNodeType) -> OutlineKind {
+fn convert_outline_node_type(
+    node_type: &swissarmyhammer::outline::types::OutlineNodeType,
+) -> OutlineKind {
     use swissarmyhammer::outline::types::OutlineNodeType;
 
     match node_type {
@@ -484,17 +488,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution_invalid_empty_patterns() {
-        use swissarmyhammer::git::GitOperations;
-        use swissarmyhammer::issues::IssueStorage;
         use crate::mcp::tool_handlers::ToolHandlers;
-        use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
         use std::path::PathBuf;
         use std::sync::Arc;
+        use swissarmyhammer::git::GitOperations;
+        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+                .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
@@ -522,17 +527,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution_valid_patterns() {
-        use swissarmyhammer::git::GitOperations;
-        use swissarmyhammer::issues::IssueStorage;
         use crate::mcp::tool_handlers::ToolHandlers;
-        use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
         use std::path::PathBuf;
         use std::sync::Arc;
+        use swissarmyhammer::git::GitOperations;
+        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+                .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =

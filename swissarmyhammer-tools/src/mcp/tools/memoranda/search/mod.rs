@@ -123,8 +123,8 @@ mod tests {
 
     #[test]
     fn test_format_memo_preview() {
-        use swissarmyhammer::memoranda::{Memo, MemoId};
         use chrono::Utc;
+        use swissarmyhammer::memoranda::{Memo, MemoId};
 
         let memo = Memo {
             id: MemoId::new(),
