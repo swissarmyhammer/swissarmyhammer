@@ -15,7 +15,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://github.com/anthropics/model-context-protocol)
 
-[📖 Documentation](https://wballard.github.io/swissarmyhammer) • [🦀 API Docs](https://docs.rs/swissarmyhammer)
+[📖 Documentation](https://swissarmyhammer.github.io/swissarmyhammer) • [🦀 API Docs](https://docs.rs/swissarmyhammer)
 
 </div>
 
@@ -136,7 +136,7 @@ sah validate
 
 ### Install
 
-See [https://wballard.github.io/swissarmyhammer/installation.html](https://wballard.github.io/swissarmyhammer/installation.html) for detailed installation instructions.
+See [https://swissarmyhammer.github.io/swissarmyhammer/installation.html](https://swissarmyhammer.github.io/swissarmyhammer/installation.html) for detailed installation instructions.
 
 ### Configure Claude Code
 
@@ -197,23 +197,6 @@ SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
 
 All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses.
 
-## 📖 Documentation
-
-- **[Installation Guide](https://wballard.github.io/swissarmyhammer/installation.html)** - All installation methods
-- **[Quick Start](https://wballard.github.io/swissarmyhammer/quick-start.html)** - Get up and running
-- **[Creating Prompts](https://wballard.github.io/swissarmyhammer/creating-prompts.html)** - Prompt creation guide
-- **[Claude Code Integration](https://wballard.github.io/swissarmyhammer/claude-code-integration.html)** - Setup with Claude Code
-- **[Built-in Prompts](https://wballard.github.io/swissarmyhammer/builtin-prompts.html)** - Ready-to-use prompts
-
-### Development Setup
-
-See [https://wballard.github.io/swissarmyhammer/installation.html](https://wballard.github.io/swissarmyhammer/installation.html) for development setup instructions.
-
-## 🙏 Acknowledgments
-
-- Built with [Rust](https://www.rust-lang.org/) and the [rmcp](https://github.com/rockerBOO/rmcp) MCP framework
-- Inspired by the [Model Context Protocol](https://github.com/anthropics/model-context-protocol)
-- Documentation powered by [mdBook](https://rust-lang.github.io/mdBook/)
 
 ---
 
