@@ -1,0 +1,6 @@
+- Do not overdo it on examples:
+  - do not create shell script examples
+  - do create simple workflows with mermaid
+  - do create simple prompts with liquid
+  - do link to builtin prompts rather than create new examples -- this way we know they are tested and work
+- Do not assume or dictate usage scenarions, i.e. 'solo developer' or 'enterprise' -- there is no way you actually know this
