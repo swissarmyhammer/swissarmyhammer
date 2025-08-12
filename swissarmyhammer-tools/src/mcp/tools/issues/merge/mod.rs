@@ -9,6 +9,8 @@ use crate::mcp::types::MergeIssueRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
+use std::fs;
+use std::path::Path;
 
 /// Tool for merging an issue work branch
 #[derive(Default)]
@@ -23,6 +25,17 @@ impl MergeIssueTool {
     /// Format the issue branch name with the standard prefix
     fn format_issue_branch_name(issue_name: &str) -> String {
         format!("issue/{issue_name}")
+    }
+
+    /// Create abort file with the given reason
+    fn create_abort_file(reason: &str) -> std::result::Result<(), std::io::Error> {
+        let sah_dir = Path::new(".swissarmyhammer");
+        if !sah_dir.exists() {
+            fs::create_dir_all(sah_dir)?;
+        }
+        let abort_file_path = sah_dir.join(".abort");
+        fs::write(abort_file_path, reason)?;
+        Ok(())
     }
 }
 
@@ -61,6 +74,47 @@ impl McpTool for MergeIssueTool {
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: MergeIssueRequest = BaseToolImpl::parse_arguments(arguments)?;
+
+        // Validate we're on an issue branch before proceeding
+        let git_ops = context.git_ops.lock().await;
+        match git_ops.as_ref() {
+            Some(ops) => {
+                match ops.current_branch() {
+                    Ok(current_branch) => {
+                        if !current_branch.starts_with("issue/") {
+                            let abort_reason = format!(
+                                "Cannot merge issue '{}' from branch '{}'. Merge operations must be performed from an issue branch. Switch to the appropriate issue branch first.",
+                                request.name, current_branch
+                            );
+                            
+                            tracing::warn!("Invalid branch for merge operation: {}", abort_reason);
+                            
+                            // Create abort file to signal workflow termination
+                            if let Err(e) = Self::create_abort_file(&abort_reason) {
+                                tracing::error!("Failed to create abort file: {}", e);
+                                return Err(McpError::internal_error(
+                                    format!("Invalid branch for merge and failed to create abort file: {}", e),
+                                    None,
+                                ));
+                            }
+                            
+                            return Err(McpError::invalid_params(abort_reason, None));
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to get current branch: {}", e);
+                        tracing::error!("{}", error_msg);
+                        return Err(McpErrorHandler::handle_error(e, "get current branch for merge validation"));
+                    }
+                }
+            }
+            None => {
+                return Ok(create_error_response(
+                    "Git operations not available for branch validation".to_string(),
+                ));
+            }
+        }
+        drop(git_ops); // Release the lock before proceeding
 
         // Get the issue to determine its details
         let issue_storage = context.issue_storage.read().await;

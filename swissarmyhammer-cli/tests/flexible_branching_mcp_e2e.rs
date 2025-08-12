@@ -207,6 +207,67 @@ fn test_mcp_issue_work_from_develop_branch() {
     assert_eq!(env.get_current_branch(), "issue/dev-feature");
 }
 
+/// Test that issue merge validates current branch and creates abort file
+#[test]
+fn test_mcp_issue_merge_requires_issue_branch() {
+    let env = McpTestEnvironment::new();
+
+    // Start from feature branch
+    env.switch_to_branch("feature/user-management");
+
+    // Create and complete an issue
+    let output = env.run_cli_command(&[
+        "issue",
+        "create",
+        "test-validation",
+        "--content",
+        "# Test Validation\n\nTest branch validation for merge",
+    ]);
+    assert!(output.status.success());
+
+    let output = env.run_cli_command(&["issue", "work", "test-validation"]);
+    assert!(output.status.success());
+
+    // Make changes and commit
+    std::fs::write(
+        env.temp_dir.path().join("test.rs"),
+        "// Test file",
+    )
+    .expect("Failed to write test file");
+
+    StdCommand::new("git")
+        .current_dir(env.temp_dir.path())
+        .args(["add", "test.rs"])
+        .output()
+        .unwrap();
+    StdCommand::new("git")
+        .current_dir(env.temp_dir.path())
+        .args(["commit", "-m", "Add test file"])
+        .output()
+        .unwrap();
+
+    let output = env.run_cli_command(&["issue", "complete", "test-validation"]);
+    assert!(output.status.success());
+
+    // Switch to a non-issue branch (main)
+    env.switch_to_branch("main");
+    assert_eq!(env.get_current_branch(), "main");
+
+    // Try to merge from non-issue branch - should fail
+    let output = env.run_cli_command(&["issue", "merge", "test-validation"]);
+    assert!(!output.status.success(), "Merge should fail when not on issue branch");
+
+    // Check that abort file was created
+    let abort_file = env.temp_dir.path().join(".swissarmyhammer/.abort");
+    assert!(abort_file.exists(), "Abort file should be created when merge fails due to invalid branch");
+
+    // Abort file should contain reason
+    let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+    assert!(abort_content.contains("Cannot merge issue"));
+    assert!(abort_content.contains("main"));
+    assert!(abort_content.contains("test-validation"));
+}
+
 /// Test issue merge back to correct source branch
 #[test]
 fn test_mcp_issue_merge_to_source_branch() {
@@ -248,6 +309,10 @@ fn test_mcp_issue_merge_to_source_branch() {
 
     // Mark issue complete
     let output = env.run_cli_command(&["issue", "complete", "user-validation"]);
+    assert!(output.status.success());
+
+    // Ensure we're on the issue branch before merging (required by new validation)
+    let output = env.run_cli_command(&["issue", "work", "user-validation"]);
     assert!(output.status.success());
 
     // Merge issue back to its source branch (feature/user-management)
