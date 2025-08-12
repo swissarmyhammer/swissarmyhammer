@@ -46,14 +46,8 @@ swissarmyhammer-cli/.swissarmyhammer
 
 .work
 
-# SwissArmyHammer workflow runs (keep config files but ignore run history)
-.swissarmyhammer/workflow-runs/
-
-# SwissArmyHammer abort files (temporary test files)
-.swissarmyhammer/.abort
-
-# SwissArmyHammer temporary files
-.swissarmyhammer/tmp/
+# SwissArmyHammer working directory (exclude all internal files)
+.swissarmyhammer/
 
 # built docs
 doc/book

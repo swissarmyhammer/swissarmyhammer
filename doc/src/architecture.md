@@ -210,11 +210,11 @@ SwissArmyHammer integrates with Claude Code through the Model Context Protocol:
 ```
 
 **Available Tools:**
-- `mcp__sah__issue_*` - Issue management tools
-- `mcp__sah__memo_*` - Memoranda tools  
-- `mcp__sah__search_*` - Semantic search tools
-- `mcp__sah__outline_*` - Code outline tools
-- `mcp__sah__abort_*` - Workflow control tools
+- `issue_*` - Issue management tools (issue_create, issue_list, issue_work, etc.)
+- `memo_*` - Memoranda tools (memo_create, memo_list, memo_get, etc.)
+- `search_*` - Semantic search tools (search_index, search_query)
+- `outline_*` - Code outline tools (outline_generate)
+- `abort_*` - Workflow control tools (abort_create)
 
 ### Git Integration
 

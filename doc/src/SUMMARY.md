@@ -11,6 +11,7 @@
 # Core Concepts
 
 - [Architecture Overview](architecture.md)
+- [Features Overview](features-overview.md)
 - [Prompts](prompts.md)
 - [Workflows](workflows.md)
 - [Template System](templates.md)
@@ -21,6 +22,8 @@
 - [Memoranda System](memoranda.md)
 - [Semantic Search](search.md)
 - [MCP Integration](mcp.md)
+- [Built-in Resources](builtin-resources.md)
+- [Use Cases and Examples](use-cases.md)
 
 # Advanced Usage
 
