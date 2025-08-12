@@ -227,7 +227,7 @@ pub mod utils;
 pub use filesystem::{
     create_safe_filename, extract_issue_name_from_filename, get_issue_name_from_filename,
     is_issue_file, parse_any_issue_filename, parse_issue_filename, sanitize_issue_name,
-    validate_issue_name, FileSystemIssueStorage, Issue, IssueState, IssueStorage,
+    validate_issue_name, FileSystemIssueStorage, Issue, IssueInfo, IssueState, IssueStorage,
 };
 
 // Export metrics types

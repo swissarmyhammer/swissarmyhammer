@@ -1,4 +1,4 @@
-use super::filesystem::{Issue, IssueStorage};
+use super::filesystem::{Issue, IssueInfo, IssueStorage};
 use super::metrics::{MetricsSnapshot, Operation, PerformanceMetrics};
 use super::IssueName;
 use crate::error::Result;
@@ -81,6 +81,24 @@ impl IssueStorage for InstrumentedIssueStorage {
         let duration = start.elapsed();
 
         self.metrics.record_operation(Operation::List, duration);
+        result
+    }
+
+    async fn list_issues_info(&self) -> Result<Vec<IssueInfo>> {
+        let start = Instant::now();
+        let result = self.storage.list_issues_info().await;
+        let duration = start.elapsed();
+
+        self.metrics.record_operation(Operation::List, duration);
+        result
+    }
+
+    async fn get_issue_info(&self, name: &str) -> Result<IssueInfo> {
+        let start = Instant::now();
+        let result = self.storage.get_issue_info(name).await;
+        let duration = start.elapsed();
+
+        self.metrics.record_operation(Operation::Read, duration);
         result
     }
 

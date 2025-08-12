@@ -19,12 +19,64 @@ pub struct Issue {
     pub name: String,
     /// The full content of the issue markdown file
     pub content: String,
-    /// Whether the issue is completed
+}
+
+impl Issue {
+    /// Check if this issue is completed based on file path location
+    pub fn is_completed(&self, file_path: &Path, completed_dir: &Path) -> bool {
+        file_path
+            .parent()
+            .map(|parent| parent == completed_dir)
+            .unwrap_or(false)
+    }
+
+    /// Get the file path for this issue based on its location (completed or active)
+    pub fn get_file_path(&self, base_dir: &Path, completed: bool) -> PathBuf {
+        let dir = if completed {
+            base_dir.join("complete")
+        } else {
+            base_dir.to_path_buf()
+        };
+        dir.join(format!("{}.md", self.name))
+    }
+
+    /// Get the creation time from file metadata
+    pub fn get_created_at(file_path: &Path) -> DateTime<Utc> {
+        file_path
+            .metadata()
+            .and_then(|m| m.created())
+            .or_else(|_| {
+                file_path
+                    .metadata()
+                    .and_then(|m| m.modified())
+            })
+            .map(DateTime::<Utc>::from)
+            .unwrap_or_else(|_| Utc::now())
+    }
+}
+
+/// Extended issue information that includes derived metadata
+#[derive(Debug, Clone)]
+pub struct IssueInfo {
+    pub issue: Issue,
     pub completed: bool,
-    /// The file path of the issue
     pub file_path: PathBuf,
-    /// When the issue was created
     pub created_at: DateTime<Utc>,
+}
+
+impl IssueInfo {
+    /// Create issue info from an issue and its file path
+    pub fn from_issue_and_path(issue: Issue, file_path: PathBuf, completed_dir: &Path) -> Self {
+        let completed = issue.is_completed(&file_path, completed_dir);
+        let created_at = Issue::get_created_at(&file_path);
+        
+        Self {
+            issue,
+            completed,
+            file_path,
+            created_at,
+        }
+    }
 }
 
 /// Represents the current state of the issue system
@@ -42,8 +94,14 @@ pub trait IssueStorage: Send + Sync {
     /// List all issues (both pending and completed)
     async fn list_issues(&self) -> Result<Vec<Issue>>;
 
+    /// List all issues with extended information (includes completion status and file paths)
+    async fn list_issues_info(&self) -> Result<Vec<IssueInfo>>;
+
     /// Get a specific issue by name
     async fn get_issue(&self, name: &str) -> Result<Issue>;
+
+    /// Get a specific issue with extended information by name
+    async fn get_issue_info(&self, name: &str) -> Result<IssueInfo>;
 
     /// Create a new issue - if name is empty, generates a ULID
     async fn create_issue(&self, name: String, content: String) -> Result<Issue>;
@@ -181,59 +239,12 @@ impl FileSystemIssueStorage {
         // Use the full filename (without .md extension) to preserve issue numbers
         let name = filename.to_string();
 
-        // Read file content
-        let file_content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
-
-        // Parse YAML frontmatter if present
-        let (yaml_metadata, content) = if file_content.starts_with("---\n") {
-            if let Some(end_marker) = file_content[4..].find("\n---\n") {
-                let yaml_content = &file_content[4..end_marker + 4];
-                let mut markdown_content = &file_content[end_marker + 8..]; // Skip past "---\n"
-                
-                // Remove leading newline if present
-                if markdown_content.starts_with('\n') {
-                    markdown_content = &markdown_content[1..];
-                }
-                
-                // Parse YAML frontmatter
-                match serde_yaml::from_str::<serde_yaml::Value>(yaml_content) {
-                    Ok(yaml) => (Some(yaml), markdown_content.to_string()),
-                    Err(_) => (None, file_content), // Fallback to treating entire content as markdown
-                }
-            } else {
-                (None, file_content) // Malformed frontmatter, treat as plain content
-            }
-        } else {
-            (None, file_content) // No frontmatter
-        };
-
-        // Extract metadata from YAML frontmatter with fallbacks
-        let frontmatter_completed = yaml_metadata
-            .as_ref()
-            .and_then(|yaml| yaml.get("completed"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // Determine if completed: prioritize file location over frontmatter
-        let completed = path
-            .parent()
-            .map(|parent| parent == self.state.completed_dir)
-            .unwrap_or(frontmatter_completed);
-
-        // Get file creation time for created_at
-        let created_at = path
-            .metadata()
-            .and_then(|m| m.created())
-            .or_else(|_| path.metadata().and_then(|m| m.modified()))
-            .map(DateTime::<Utc>::from)
-            .unwrap_or_else(|_| Utc::now());
+        // Read file content - treat entire content as markdown
+        let content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
 
         Ok(Issue {
             name,
             content,
-            completed,
-            file_path: path.to_path_buf(),
-            created_at,
         })
     }
 
@@ -352,27 +363,30 @@ impl FileSystemIssueStorage {
     async fn update_issue_impl_by_name(&self, name: &str, content: String) -> Result<Issue> {
         debug!("Updating issue {}", name);
 
-        // Find the issue by name
+        // Find the issue to get its current file path  
         let issue = self.get_issue(name).await?;
-        let path = &issue.file_path;
-
-        // Create content with preserved YAML frontmatter
-        let content_with_frontmatter = format!(
-            "---\ncompleted: {}\n---\n{}",
-            issue.completed, content
-        );
-
-        // Atomic write using temp file and rename
-        let temp_path = path.with_extension("tmp");
-        std::fs::write(&temp_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
-        std::fs::rename(&temp_path, path).map_err(SwissArmyHammerError::Io)?;
+        let current_path = &issue.file_path;
+        
+        // Atomic write using temp file and rename - write pure markdown content
+        let temp_path = current_path.with_extension("tmp");
+        std::fs::write(&temp_path, &content).map_err(SwissArmyHammerError::Io)?;
+        std::fs::rename(&temp_path, &current_path).map_err(SwissArmyHammerError::Io)?;
 
         debug!(
             "Successfully updated issue {} at path {}",
             name,
-            path.display()
+            current_path.display()
         );
-        Ok(Issue { content, ..issue })
+        
+        // Return updated issue - derive deprecated fields from current path
+        let completed = current_path
+            .parent()
+            .map(|parent| parent == self.state.completed_dir)
+            .unwrap_or(false);
+        Ok(Issue {
+            name: name.to_string(),
+            content,
+        })
     }
 
     /// Cleanup duplicate files that may exist in the source directory
@@ -386,16 +400,16 @@ impl FileSystemIssueStorage {
     /// - Handles common I/O errors gracefully (NotFound, PermissionDenied, Interrupted)
     /// - Logs errors but doesn't fail the main operation for non-critical cleanup issues
     /// - Retries once for interrupted operations
-    fn cleanup_duplicate_if_exists(&self, issue: &Issue, source_dir: &Path) -> Result<()> {
-        let filename = issue.file_path.file_name().ok_or_else(|| {
+    fn cleanup_duplicate_if_exists(&self, file_path: &Path, source_dir: &Path) -> Result<()> {
+        let filename = file_path.file_name().ok_or_else(|| {
             SwissArmyHammerError::Other(format!(
                 "Invalid file path: cannot extract filename from {}",
-                issue.file_path.display()
+                file_path.display()
             ))
         })?;
         let potential_duplicate = source_dir.join(filename);
 
-        if potential_duplicate.exists() && potential_duplicate != issue.file_path {
+        if potential_duplicate.exists() && potential_duplicate != *file_path {
             debug!(
                 "Found duplicate file at {}, removing it",
                 potential_duplicate.display()
@@ -565,15 +579,7 @@ impl FileSystemIssueStorage {
         } else {
             &self.state.completed_dir
         };
-        let temp_issue = Issue {
-            file_path: target_path.clone(),
-            ..issue.clone()
-        };
-        self.cleanup_duplicate_if_exists(&temp_issue, source_dir)?;
-
-        // Update issue struct
-        issue.file_path = target_path.clone();
-        issue.completed = to_completed;
+        self.cleanup_duplicate_if_exists(&target_path, source_dir)?;
 
         Ok(issue)
     }
@@ -589,12 +595,50 @@ impl IssueStorage for FileSystemIssueStorage {
         Ok(all_issues)
     }
 
+    async fn list_issues_info(&self) -> Result<Vec<IssueInfo>> {
+        let issues = self.list_issues().await?;
+        let mut issue_infos = Vec::new();
+        
+        for issue in issues {
+            // Find the file path for this issue by checking both directories
+            let pending_path = self.state.issues_dir.join(format!("{}.md", issue.name));
+            let completed_path = self.state.completed_dir.join(format!("{}.md", issue.name));
+            
+            let (file_path, completed) = if pending_path.exists() {
+                (pending_path, false)
+            } else if completed_path.exists() {
+                (completed_path, true)
+            } else {
+                // This shouldn't happen if list_issues is working correctly
+                continue;
+            };
+            
+            let created_at = Issue::get_created_at(&file_path);
+            issue_infos.push(IssueInfo {
+                issue,
+                completed,
+                file_path,
+                created_at,
+            });
+        }
+        
+        Ok(issue_infos)
+    }
+
     async fn get_issue(&self, name: &str) -> Result<Issue> {
         // Use existing list_issues() method to avoid duplicating search logic
         let all_issues = self.list_issues().await?;
         all_issues
             .into_iter()
             .find(|issue| issue.name == name)
+            .ok_or_else(|| SwissArmyHammerError::IssueNotFound(name.to_string()))
+    }
+
+    async fn get_issue_info(&self, name: &str) -> Result<IssueInfo> {
+        let all_issue_infos = self.list_issues_info().await?;
+        all_issue_infos
+            .into_iter()
+            .find(|issue_info| issue_info.issue.name == name)
             .ok_or_else(|| SwissArmyHammerError::IssueNotFound(name.to_string()))
     }
 
@@ -613,21 +657,12 @@ impl IssueStorage for FileSystemIssueStorage {
         let filename = create_safe_filename(&issue_name);
         let file_path = self.state.issues_dir.join(format!("{filename}.md"));
 
-        // Create YAML frontmatter without source_branch
-        let content_with_frontmatter = format!(
-            "---\ncompleted: false\n---\n{}",
-            content
-        );
-        fs::write(&file_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
-
-        let created_at = Utc::now();
+        // Write pure markdown content (no YAML front matter)
+        fs::write(&file_path, &content).map_err(SwissArmyHammerError::Io)?;
 
         Ok(Issue {
             name: issue_name,
             content,
-            completed: false,
-            file_path,
-            created_at,
         })
     }
 
@@ -1379,13 +1414,9 @@ mod tests {
 
     #[test]
     fn test_issue_serialization() {
-        let created_at = Utc::now();
         let issue = Issue {
             name: "test_issue".to_string(),
             content: "Test content".to_string(),
-            completed: false,
-            file_path: PathBuf::from("/tmp/issues/000123_test_issue.md"),
-            created_at,
         };
 
         // Test serialization
@@ -1395,8 +1426,6 @@ mod tests {
         assert_eq!(issue, deserialized);
         assert_eq!(deserialized.name.as_str(), "test_issue");
         assert_eq!(deserialized.content, "Test content");
-        assert!(!deserialized.completed);
-        assert_eq!(deserialized.created_at, created_at);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! to ensure consistent behavior and reduce code duplication.
 
 use crate::git::GitOperations;
-use crate::issues::{Issue, IssueStorage};
+use crate::issues::{Issue, IssueInfo, IssueStorage};
 use crate::{Result, SwissArmyHammerError};
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -137,13 +137,6 @@ pub async fn merge_issue_branch<S: IssueStorage>(
     // Get the issue to ensure it exists
     let issue = storage.get_issue(issue_name).await?;
 
-    // Validate that the issue is completed
-    if !issue.completed {
-        return Err(SwissArmyHammerError::Other(format!(
-            "Issue '{issue_name}' must be completed before merging"
-        )));
-    }
-
     let branch_name = format!("issue/{}", issue.name);
 
     // Merge the issue branch back using git merge-base to determine target
@@ -205,12 +198,12 @@ pub struct ProjectStatus {
 }
 
 impl ProjectStatus {
-    /// Create a new project status from a list of issues
-    pub fn from_issues(issues: Vec<Issue>) -> Self {
-        let completed_issues: Vec<Issue> = issues.iter().filter(|i| i.completed).cloned().collect();
-        let active_issues: Vec<Issue> = issues.iter().filter(|i| !i.completed).cloned().collect();
+    /// Create a new project status from a list of issue infos
+    pub fn from_issue_infos(issue_infos: Vec<IssueInfo>) -> Self {
+        let completed_issues: Vec<Issue> = issue_infos.iter().filter(|i| i.completed).map(|i| i.issue.clone()).collect();
+        let active_issues: Vec<Issue> = issue_infos.iter().filter(|i| !i.completed).map(|i| i.issue.clone()).collect();
 
-        let total_issues = issues.len();
+        let total_issues = issue_infos.len();
         let completed_count = completed_issues.len();
         let active_count = active_issues.len();
 
@@ -287,8 +280,8 @@ impl ProjectStatus {
 
 /// Get comprehensive project status
 pub async fn get_project_status<S: IssueStorage>(storage: &S) -> Result<ProjectStatus> {
-    let all_issues = storage.list_issues().await?;
-    Ok(ProjectStatus::from_issues(all_issues))
+    let all_issue_infos = storage.list_issues_info().await?;
+    Ok(ProjectStatus::from_issue_infos(all_issue_infos))
 }
 
 /// Get the next issue to work on
