@@ -89,8 +89,10 @@ impl McpTool for MergeIssueTool {
                 // First merge the branch back to its source branch
                 match ops.merge_issue_branch(&issue_name, Some(&issue.source_branch)) {
                     Ok(_) => {
-                        let mut success_message =
-                            format!("Merged work branch for issue {issue_name} to {}", issue.source_branch);
+                        let mut success_message = format!(
+                            "Merged work branch for issue {issue_name} to {}",
+                            issue.source_branch
+                        );
 
                         // Get commit information after successful merge
                         let commit_info = match ops.get_last_commit_info() {

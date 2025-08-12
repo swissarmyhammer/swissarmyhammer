@@ -47,9 +47,17 @@ impl IssueStorage for InstrumentedIssueStorage {
         result
     }
 
-    async fn create_issue_with_source_branch(&self, name: String, content: String, source_branch: String) -> Result<Issue> {
+    async fn create_issue_with_source_branch(
+        &self,
+        name: String,
+        content: String,
+        source_branch: String,
+    ) -> Result<Issue> {
         let start = Instant::now();
-        let result = self.storage.create_issue_with_source_branch(name, content, source_branch).await;
+        let result = self
+            .storage
+            .create_issue_with_source_branch(name, content, source_branch)
+            .await;
         let duration = start.elapsed();
 
         self.metrics.record_operation(Operation::Create, duration);

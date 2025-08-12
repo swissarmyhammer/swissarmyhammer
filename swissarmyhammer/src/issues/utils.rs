@@ -112,7 +112,8 @@ pub async fn work_on_issue<S: IssueStorage>(
     let created_new_branch = current_branch != branch_name;
 
     // Create or switch to the work branch
-    let (actual_branch_name, _source_branch) = git_ops.create_work_branch_with_source(&issue.name, Some(&issue.source_branch))?;
+    let (actual_branch_name, _source_branch) =
+        git_ops.create_work_branch_with_source(&issue.name, Some(&issue.source_branch))?;
 
     Ok(IssueBranchResult {
         issue,

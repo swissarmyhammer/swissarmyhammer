@@ -93,19 +93,24 @@ impl McpTool for CreateIssueTool {
                             if branch.starts_with("issue/") {
                                 return Err(McpError::invalid_params(
                                     format!("Cannot create issue from issue branch '{}'", branch),
-                                    None
+                                    None,
                                 ));
                             }
                             branch
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to get current branch: {}. Using default 'main'", e);
+                            tracing::warn!(
+                                "Failed to get current branch: {}. Using default 'main'",
+                                e
+                            );
                             "main".to_string()
                         }
                     }
                 }
                 None => {
-                    tracing::warn!("Git operations not available. Using default source branch 'main'");
+                    tracing::warn!(
+                        "Git operations not available. Using default source branch 'main'"
+                    );
                     "main".to_string()
                 }
             }
@@ -117,7 +122,11 @@ impl McpTool for CreateIssueTool {
             .await
         {
             Ok(issue) => {
-                tracing::info!("Created issue {} from branch {}", issue.name, issue.source_branch);
+                tracing::info!(
+                    "Created issue {} from branch {}",
+                    issue.name,
+                    issue.source_branch
+                );
                 Ok(create_issue_response(&issue))
             }
             Err(e) => Err(McpErrorHandler::handle_error(e, "create issue")),

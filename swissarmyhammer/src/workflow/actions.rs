@@ -926,7 +926,10 @@ impl Action for AbortAction {
     }
 
     fn description(&self) -> String {
-        format!("Abort workflow execution with message: {message}", message = self.message)
+        format!(
+            "Abort workflow execution with message: {message}",
+            message = self.message
+        )
     }
 
     fn action_type(&self) -> &'static str {
