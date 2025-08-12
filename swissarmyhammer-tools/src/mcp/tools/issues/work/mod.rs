@@ -9,6 +9,8 @@ use crate::mcp::types::WorkIssueRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
+use std::fs;
+use std::path::Path;
 
 /// Tool for switching to work on an issue
 #[derive(Default)]
@@ -18,6 +20,25 @@ impl WorkIssueTool {
     /// Creates a new instance of the WorkIssueTool
     pub fn new() -> Self {
         Self
+    }
+
+    /// Creates an abort file to signal workflow termination
+    ///
+    /// This method creates a `.swissarmyhammer/.abort` file with the provided reason,
+    /// enabling file-based abort detection throughout the workflow system.
+    fn create_abort_file(reason: &str) -> std::result::Result<(), std::io::Error> {
+        // Ensure .swissarmyhammer directory exists
+        let sah_dir = Path::new(".swissarmyhammer");
+        if !sah_dir.exists() {
+            fs::create_dir_all(sah_dir)?;
+        }
+
+        // Create abort file with reason
+        let abort_file_path = sah_dir.join(".abort");
+        fs::write(&abort_file_path, reason)?;
+
+        tracing::info!("Created abort file: {}", abort_file_path.display());
+        Ok(())
     }
 }
 
@@ -71,11 +92,22 @@ impl McpTool for WorkIssueTool {
         // First check if we're already on the correct issue branch - if so, no need to abort
         let target_branch = format!("issue/{}", request.name.0);
         if current_branch.starts_with("issue/") && current_branch != target_branch {
-            let error_msg = format!(
-                "Cannot work on issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches. Switch to a non-issue branch (like main, develop, or feature branch) first.",
+            let abort_reason = format!(
+                "Cannot work on issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches to prevent circular dependencies. Switch to a non-issue branch (like main, develop, or feature branch) first.",
                 request.name.0, current_branch
             );
-            return Err(McpError::invalid_params(error_msg, None));
+
+            // Create abort file to signal workflow termination
+            if let Err(abort_err) = Self::create_abort_file(&abort_reason) {
+                tracing::error!("Failed to create abort file: {}", abort_err);
+            } else {
+                tracing::info!(
+                    "Created abort file due to issue branching validation failure: {}",
+                    abort_reason
+                );
+            }
+
+            return Err(McpError::invalid_params(abort_reason, None));
         }
 
         let issue_storage = context.issue_storage.read().await;
@@ -91,9 +123,7 @@ impl McpTool for WorkIssueTool {
             let branch_name = issue.name.clone();
 
             match git_ops.as_mut() {
-                Some(ops) => match ops
-                    .create_work_branch_with_source(&branch_name, None)
-                {
+                Some(ops) => match ops.create_work_branch_with_source(&branch_name, None) {
                     Ok((branch_name, source_branch)) => Ok(create_success_response(format!(
                         "Switched to work branch: {branch_name} (created from {source_branch})"
                     ))),
@@ -111,5 +141,37 @@ impl McpTool for WorkIssueTool {
                 None,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    #[test]
+    #[serial]
+    fn test_create_abort_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Change to temp directory for test
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_path).unwrap();
+
+        let reason = "Test abort reason for issue branching";
+        let result = WorkIssueTool::create_abort_file(reason);
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_ok());
+
+        let abort_file = temp_path.join(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+
+        let content = std::fs::read_to_string(&abort_file).unwrap();
+        assert_eq!(content, reason);
     }
 }

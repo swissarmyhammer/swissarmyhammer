@@ -128,10 +128,7 @@ async fn test_source_branch_deleted_mid_workflow() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue_name.clone(),
-                issue_content,
-            )
+            .create_issue(issue_name.clone(), issue_content)
             .await
             .expect("Failed to create issue");
     }
@@ -212,10 +209,7 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue_name.clone(),
-                issue_content,
-            )
+            .create_issue(issue_name.clone(), issue_content)
             .await
             .expect("Failed to create issue");
     }
@@ -325,10 +319,7 @@ async fn test_source_branch_validation_before_merge() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue_name.clone(),
-                "# Validation Test".to_string(),
-            )
+            .create_issue(issue_name.clone(), "# Validation Test".to_string())
             .await
             .expect("Failed to create issue");
     }
@@ -437,10 +428,7 @@ async fn test_uncommitted_changes_during_merge() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue_name.clone(),
-                "# Dirty Work".to_string(),
-            )
+            .create_issue(issue_name.clone(), "# Dirty Work".to_string())
             .await
             .expect("Failed to create issue");
     }

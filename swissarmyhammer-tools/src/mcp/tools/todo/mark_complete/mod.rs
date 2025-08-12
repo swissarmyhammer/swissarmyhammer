@@ -62,12 +62,16 @@ impl McpTool for MarkCompleteTodoTool {
                 McpError::invalid_params(e.to_string(), None)
             })?;
 
-        tracing::debug!("Marking todo item '{}' complete in list: {}", request.id, request.todo_list);
+        tracing::debug!(
+            "Marking todo item '{}' complete in list: {}",
+            request.id,
+            request.todo_list
+        );
 
         // Validate todo list name and ID
         McpValidation::validate_not_empty(&request.todo_list, "todo list name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
-        
+
         McpValidation::validate_not_empty(&request.id, "todo item ID")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo item ID"))?;
 
@@ -80,9 +84,16 @@ impl McpTool for MarkCompleteTodoTool {
             .map_err(|e| McpErrorHandler::handle_error(e, "parse todo ID"))?;
 
         // Mark the item as complete
-        match storage.mark_todo_complete(&request.todo_list, &todo_id).await {
+        match storage
+            .mark_todo_complete(&request.todo_list, &todo_id)
+            .await
+        {
             Ok(()) => {
-                tracing::info!("Marked todo item {} complete in list {}", todo_id, request.todo_list);
+                tracing::info!(
+                    "Marked todo item {} complete in list {}",
+                    todo_id,
+                    request.todo_list
+                );
                 Ok(BaseToolImpl::create_success_response(
                     json!({
                         "message": format!("Marked todo item '{}' as complete in list '{}'", todo_id, request.todo_list),

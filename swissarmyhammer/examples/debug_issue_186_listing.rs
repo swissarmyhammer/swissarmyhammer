@@ -34,14 +34,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Created: {}", issue_info.created_at);
         println!(
             "  Content preview: {}",
-            issue_info.issue.content.lines().take(2).collect::<Vec<_>>().join("\n")
+            issue_info
+                .issue
+                .content
+                .lines()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     } else {
         println!("\n❌ Issue 186 not found!");
     }
 
     // Filter to pending issues only
-    let pending_issues: Vec<_> = all_issues.iter().filter(|issue_info| !issue_info.completed).collect();
+    let pending_issues: Vec<_> = all_issues
+        .iter()
+        .filter(|issue_info| !issue_info.completed)
+        .collect();
 
     println!("\n📋 Pending issues: {}", pending_issues.len());
     for (i, issue_info) in pending_issues.iter().enumerate() {
@@ -60,7 +69,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Show completed issues count
-    let completed_count = all_issues.iter().filter(|issue_info| issue_info.completed).count();
+    let completed_count = all_issues
+        .iter()
+        .filter(|issue_info| issue_info.completed)
+        .count();
     println!("\n✅ Completed issues: {completed_count}");
 
     // Check the next issue logic specifically

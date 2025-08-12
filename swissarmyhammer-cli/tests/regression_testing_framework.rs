@@ -225,8 +225,7 @@ impl RegressionTestSuite {
         test_case: &ExpectedOutput,
         working_dir: Option<&PathBuf>,
     ) -> RegressionTestResult {
-        let mut cmd =
-            Command::cargo_bin("sah").expect("Failed to find swissarmyhammer binary");
+        let mut cmd = Command::cargo_bin("sah").expect("Failed to find swissarmyhammer binary");
 
         cmd.args(&test_case.command);
 

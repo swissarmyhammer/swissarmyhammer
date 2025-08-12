@@ -102,7 +102,10 @@ impl ListIssuesTool {
                 "- **Created**: {}\n",
                 issue_info.created_at.format("%Y-%m-%d")
             ));
-            result.push_str(&format!("- **File**: {}\n\n", issue_info.file_path.display()));
+            result.push_str(&format!(
+                "- **File**: {}\n\n",
+                issue_info.file_path.display()
+            ));
 
             if !issue_info.issue.content.is_empty() {
                 result.push_str("### Content\n\n");
@@ -204,7 +207,10 @@ impl McpTool for ListIssuesTool {
         let response = match format.as_str() {
             "json" => {
                 // Convert IssueInfo to Issue for JSON serialization
-                let issues_for_json: Vec<Issue> = filtered_issue_infos.iter().map(|info| info.issue.clone()).collect();
+                let issues_for_json: Vec<Issue> = filtered_issue_infos
+                    .iter()
+                    .map(|info| info.issue.clone())
+                    .collect();
                 serde_json::to_string_pretty(&issues_for_json).map_err(|e| {
                     McpError::internal_error(format!("Failed to serialize issues: {e}"), None)
                 })?

@@ -47,7 +47,6 @@ impl IssueStorage for InstrumentedIssueStorage {
         result
     }
 
-
     async fn get_issue(&self, name: &str) -> Result<Issue> {
         let start = Instant::now();
         let result = self.storage.get_issue(name).await;

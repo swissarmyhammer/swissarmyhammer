@@ -314,7 +314,7 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
 
@@ -339,7 +339,7 @@ mod tests {
         // Create second workflow run - should also clean up abort file
         let _run2 = WorkflowRun::new(workflow);
         assert!(!Path::new(abort_path).exists());
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
@@ -352,7 +352,7 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
 
@@ -369,7 +369,7 @@ mod tests {
         // Create workflow run - should clean up abort file regardless of content
         let _run = WorkflowRun::new(workflow);
         assert!(!Path::new(abort_path).exists());
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
@@ -382,7 +382,7 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
 
@@ -399,7 +399,7 @@ mod tests {
         // Create workflow run - should clean up large abort file
         let _run = WorkflowRun::new(workflow);
         assert!(!Path::new(abort_path).exists());
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
@@ -413,7 +413,7 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
 
@@ -448,7 +448,7 @@ mod tests {
 
         // Abort file should be cleaned up
         assert!(!Path::new(abort_path).exists());
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
@@ -461,7 +461,7 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
 
@@ -477,7 +477,7 @@ mod tests {
         // Create workflow run - should clean up empty abort file
         let _run = WorkflowRun::new(workflow);
         assert!(!Path::new(abort_path).exists());
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
@@ -490,7 +490,7 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
 
@@ -513,7 +513,7 @@ mod tests {
             let _ = std::fs::remove_file(abort_path); // Force cleanup for test
         }
         assert!(!Path::new(abort_path).exists());
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
@@ -526,10 +526,10 @@ mod tests {
 
         let guard = IsolatedTestHome::new();
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Change to the isolated test directory
         std::env::set_current_dir(guard.home_path()).unwrap();
-        
+
         let abort_path = ".swissarmyhammer/.abort";
 
         // Create abort file
@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(run.current_state.as_str(), "start");
         assert_eq!(run.history.len(), 1);
         assert_eq!(run.history[0].0.as_str(), "start");
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
         drop(guard);
