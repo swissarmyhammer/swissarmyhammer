@@ -19,15 +19,6 @@ pub struct Issue {
     pub name: String,
     /// The full content of the issue markdown file
     pub content: String,
-    /// Whether the issue is completed (derived from file location)
-    #[deprecated(note = "Use Issue::is_completed() method instead")]
-    pub completed: bool,
-    /// The file path of the issue (derived from name and location)
-    #[deprecated(note = "Use Issue::get_file_path() method instead")]
-    pub file_path: PathBuf,
-    /// When the issue was created (derived from file metadata)
-    #[deprecated(note = "Use Issue::get_created_at() method instead")]
-    pub created_at: DateTime<Utc>,
 }
 
 impl Issue {
@@ -103,8 +94,14 @@ pub trait IssueStorage: Send + Sync {
     /// List all issues (both pending and completed)
     async fn list_issues(&self) -> Result<Vec<Issue>>;
 
+    /// List all issues with extended information (includes completion status and file paths)
+    async fn list_issues_info(&self) -> Result<Vec<IssueInfo>>;
+
     /// Get a specific issue by name
     async fn get_issue(&self, name: &str) -> Result<Issue>;
+
+    /// Get a specific issue with extended information by name
+    async fn get_issue_info(&self, name: &str) -> Result<IssueInfo>;
 
     /// Create a new issue - if name is empty, generates a ULID
     async fn create_issue(&self, name: String, content: String) -> Result<Issue>;
@@ -245,19 +242,9 @@ impl FileSystemIssueStorage {
         // Read file content - treat entire content as markdown
         let content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
 
-        // Derive deprecated fields from file system
-        let completed = path
-            .parent()
-            .map(|parent| parent == self.state.completed_dir)
-            .unwrap_or(false);
-        let created_at = Issue::get_created_at(path);
-
         Ok(Issue {
             name,
             content,
-            completed,
-            file_path: path.to_path_buf(),
-            created_at,
         })
     }
 
@@ -396,14 +383,9 @@ impl FileSystemIssueStorage {
             .parent()
             .map(|parent| parent == self.state.completed_dir)
             .unwrap_or(false);
-        let created_at = Issue::get_created_at(current_path);
-        
         Ok(Issue {
             name: name.to_string(),
             content,
-            completed,
-            file_path: current_path.clone(),
-            created_at,
         })
     }
 
@@ -418,16 +400,16 @@ impl FileSystemIssueStorage {
     /// - Handles common I/O errors gracefully (NotFound, PermissionDenied, Interrupted)
     /// - Logs errors but doesn't fail the main operation for non-critical cleanup issues
     /// - Retries once for interrupted operations
-    fn cleanup_duplicate_if_exists(&self, issue: &Issue, source_dir: &Path) -> Result<()> {
-        let filename = issue.file_path.file_name().ok_or_else(|| {
+    fn cleanup_duplicate_if_exists(&self, file_path: &Path, source_dir: &Path) -> Result<()> {
+        let filename = file_path.file_name().ok_or_else(|| {
             SwissArmyHammerError::Other(format!(
                 "Invalid file path: cannot extract filename from {}",
-                issue.file_path.display()
+                file_path.display()
             ))
         })?;
         let potential_duplicate = source_dir.join(filename);
 
-        if potential_duplicate.exists() && potential_duplicate != issue.file_path {
+        if potential_duplicate.exists() && potential_duplicate != *file_path {
             debug!(
                 "Found duplicate file at {}, removing it",
                 potential_duplicate.display()
@@ -597,15 +579,7 @@ impl FileSystemIssueStorage {
         } else {
             &self.state.completed_dir
         };
-        let temp_issue = Issue {
-            file_path: target_path.clone(),
-            ..issue.clone()
-        };
-        self.cleanup_duplicate_if_exists(&temp_issue, source_dir)?;
-
-        // Update issue struct
-        issue.file_path = target_path.clone();
-        issue.completed = to_completed;
+        self.cleanup_duplicate_if_exists(&target_path, source_dir)?;
 
         Ok(issue)
     }
@@ -621,12 +595,50 @@ impl IssueStorage for FileSystemIssueStorage {
         Ok(all_issues)
     }
 
+    async fn list_issues_info(&self) -> Result<Vec<IssueInfo>> {
+        let issues = self.list_issues().await?;
+        let mut issue_infos = Vec::new();
+        
+        for issue in issues {
+            // Find the file path for this issue by checking both directories
+            let pending_path = self.state.issues_dir.join(format!("{}.md", issue.name));
+            let completed_path = self.state.completed_dir.join(format!("{}.md", issue.name));
+            
+            let (file_path, completed) = if pending_path.exists() {
+                (pending_path, false)
+            } else if completed_path.exists() {
+                (completed_path, true)
+            } else {
+                // This shouldn't happen if list_issues is working correctly
+                continue;
+            };
+            
+            let created_at = Issue::get_created_at(&file_path);
+            issue_infos.push(IssueInfo {
+                issue,
+                completed,
+                file_path,
+                created_at,
+            });
+        }
+        
+        Ok(issue_infos)
+    }
+
     async fn get_issue(&self, name: &str) -> Result<Issue> {
         // Use existing list_issues() method to avoid duplicating search logic
         let all_issues = self.list_issues().await?;
         all_issues
             .into_iter()
             .find(|issue| issue.name == name)
+            .ok_or_else(|| SwissArmyHammerError::IssueNotFound(name.to_string()))
+    }
+
+    async fn get_issue_info(&self, name: &str) -> Result<IssueInfo> {
+        let all_issue_infos = self.list_issues_info().await?;
+        all_issue_infos
+            .into_iter()
+            .find(|issue_info| issue_info.issue.name == name)
             .ok_or_else(|| SwissArmyHammerError::IssueNotFound(name.to_string()))
     }
 
@@ -648,15 +660,9 @@ impl IssueStorage for FileSystemIssueStorage {
         // Write pure markdown content (no YAML front matter)
         fs::write(&file_path, &content).map_err(SwissArmyHammerError::Io)?;
 
-        // Derive deprecated fields - new issues are always not completed initially
-        let created_at = Utc::now();
-
         Ok(Issue {
             name: issue_name,
             content,
-            completed: false,
-            file_path,
-            created_at,
         })
     }
 
@@ -1408,13 +1414,9 @@ mod tests {
 
     #[test]
     fn test_issue_serialization() {
-        let created_at = Utc::now();
         let issue = Issue {
             name: "test_issue".to_string(),
             content: "Test content".to_string(),
-            completed: false,
-            file_path: PathBuf::from("/tmp/issues/000123_test_issue.md"),
-            created_at,
         };
 
         // Test serialization
@@ -1424,8 +1426,6 @@ mod tests {
         assert_eq!(issue, deserialized);
         assert_eq!(deserialized.name.as_str(), "test_issue");
         assert_eq!(deserialized.content, "Test content");
-        assert!(!deserialized.completed);
-        assert_eq!(deserialized.created_at, created_at);
     }
 
     #[test]
