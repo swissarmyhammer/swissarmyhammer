@@ -1087,6 +1087,261 @@ mod tests {
         assert_eq!(current_branch, "issue/test_issue_from_feature");
     }
 
+    // Comprehensive flexible branching workflow tests
+
+    #[test]
+    fn test_complete_feature_branch_workflow() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Start on main branch
+        let main_branch = git_ops.main_branch().unwrap();
+        
+        // Create a feature branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/user-auth"])
+            .output()
+            .unwrap();
+        
+        // Add initial feature work
+        fs::write(temp_dir.path().join("auth.rs"), "// Auth module").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "auth.rs"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Initial auth module"])
+            .output()
+            .unwrap();
+
+        // Create issue branch from feature branch
+        let (issue_branch, source_branch) = git_ops
+            .create_work_branch_with_source("auth-tests", None)
+            .unwrap();
+        
+        assert_eq!(issue_branch, "issue/auth-tests");
+        assert_eq!(source_branch, "feature/user-auth");
+        
+        // Make changes on issue branch
+        fs::write(temp_dir.path().join("auth_tests.rs"), "// Auth tests").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "auth_tests.rs"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add auth tests"])
+            .output()
+            .unwrap();
+
+        // Merge back to feature branch
+        git_ops.merge_issue_branch("auth-tests", "feature/user-auth").unwrap();
+        
+        // Verify we're back on feature branch with the changes
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, "feature/user-auth");
+        assert!(temp_dir.path().join("auth_tests.rs").exists());
+    }
+
+    #[test]
+    fn test_multiple_issues_from_same_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create a release branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "release/v1.0"])
+            .output()
+            .unwrap();
+
+        // Create first issue branch from release branch
+        let (issue1_branch, source1) = git_ops
+            .create_work_branch_with_source("bug-fix-1", None)
+            .unwrap();
+        assert_eq!(issue1_branch, "issue/bug-fix-1");
+        assert_eq!(source1, "release/v1.0");
+
+        // Switch back to release branch
+        git_ops.checkout_branch("release/v1.0").unwrap();
+
+        // Create second issue branch from release branch  
+        let (issue2_branch, source2) = git_ops
+            .create_work_branch_with_source("bug-fix-2", None)
+            .unwrap();
+        assert_eq!(issue2_branch, "issue/bug-fix-2");
+        assert_eq!(source2, "release/v1.0");
+
+        // Both issue branches should exist
+        assert!(git_ops.branch_exists("issue/bug-fix-1").unwrap());
+        assert!(git_ops.branch_exists("issue/bug-fix-2").unwrap());
+    }
+
+    #[test] 
+    fn test_merge_issue_to_correct_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create develop branch from main
+        let main_branch = git_ops.main_branch().unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "develop"])
+            .output()
+            .unwrap();
+
+        // Add file to develop branch to differentiate it
+        fs::write(temp_dir.path().join("develop.txt"), "develop branch file").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "develop.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add develop file"])
+            .output()
+            .unwrap();
+
+        // Create issue from develop branch
+        let (issue_branch, source_branch) = git_ops
+            .create_work_branch_with_source("develop-feature", None)
+            .unwrap();
+        assert_eq!(source_branch, "develop");
+
+        // Make changes on issue branch
+        fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "feature.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add feature"])
+            .output()
+            .unwrap();
+
+        // Merge back to develop (not main)
+        git_ops.merge_issue_branch("develop-feature", "develop").unwrap();
+        
+        // Verify we're on develop branch with both files
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, "develop");
+        assert!(temp_dir.path().join("develop.txt").exists());
+        assert!(temp_dir.path().join("feature.txt").exists());
+
+        // Verify main branch does NOT have the feature file
+        git_ops.checkout_branch(&main_branch).unwrap();
+        assert!(!temp_dir.path().join("feature.txt").exists());
+    }
+
+    #[test]
+    fn test_create_work_branch_with_explicit_source() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create multiple branches
+        let main_branch = git_ops.main_branch().unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/api"])
+            .output()
+            .unwrap();
+        
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/ui"])
+            .output()
+            .unwrap();
+
+        // While on feature/ui, create issue from feature/api explicitly
+        let (issue_branch, source_branch) = git_ops
+            .create_work_branch_with_source("api-tests", Some("feature/api"))
+            .unwrap();
+
+        assert_eq!(issue_branch, "issue/api-tests");
+        assert_eq!(source_branch, "feature/api");
+        
+        // Verify the issue branch was created correctly
+        assert!(git_ops.branch_exists("issue/api-tests").unwrap());
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, "issue/api-tests");
+    }
+
+    #[test]
+    fn test_validation_prevents_issue_from_issue_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create first issue branch
+        git_ops.create_work_branch_simple("first-issue").unwrap();
+        
+        // Try to create issue from issue branch (current branch)
+        let result = git_ops.validate_branch_creation("second-issue", None);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot create issue 'second-issue' from issue branch"));
+
+        // Try to create issue with explicit issue branch as source
+        let result = git_ops.validate_branch_creation("third-issue", Some("issue/first-issue"));
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot create issue 'third-issue' from issue branch"));
+    }
+
+    #[test]
+    fn test_validation_with_non_existent_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Try to create issue from non-existent source branch
+        let result = git_ops.validate_branch_creation("test-issue", Some("non-existent-branch"));
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Source branch 'non-existent-branch' for issue 'test-issue' does not exist"));
+    }
+
+    #[test]
+    fn test_backwards_compatibility_with_simple_methods() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test that simple methods still work (backwards compatibility)
+        let result = git_ops.create_work_branch_simple("test-issue");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "issue/test-issue");
+
+        // Make a change and commit
+        fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "test.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Test change"])
+            .output()
+            .unwrap();
+
+        // Test simple merge (should merge to main)
+        let result = git_ops.merge_issue_branch_simple("test-issue");
+        assert!(result.is_ok());
+        
+        // Should be back on main branch
+        let main_branch = git_ops.main_branch().unwrap();
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, main_branch);
+        
+        // Changes should be present
+        assert!(temp_dir.path().join("test.txt").exists());
+    }
+
     // Tests for the new create_work_branch_with_source method
 
     #[test]
