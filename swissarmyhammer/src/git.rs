@@ -425,7 +425,7 @@ impl GitOperations {
     /// branch was originally created from.
     /// Store the source branch for an issue using git config
     pub fn store_issue_source_branch(&self, issue_name: &str, source_branch: &str) -> Result<()> {
-        let config_key = format!("swissarmyhammer.issue.{}.source", issue_name);
+        let config_key = format!("swissarmyhammer.issue.{issue_name}.source");
 
         let output = Command::new("git")
             .current_dir(&self.work_dir)
@@ -434,36 +434,27 @@ impl GitOperations {
 
         if !output.status.success() {
             return Err(SwissArmyHammerError::Other(format!(
-                "Failed to store source branch for issue '{}'",
-                issue_name
+                "Failed to store source branch for issue '{issue_name}'"
             )));
         }
 
         Ok(())
     }
 
-    /// Retrieve the stored source branch for an issue
+    /// Retrieve the source branch for an issue using git merge-base analysis
     pub fn get_issue_source_branch(&self, issue_name: &str) -> Result<String> {
-        let config_key = format!("swissarmyhammer.issue.{}.source", issue_name);
-
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args(["config", &config_key])
-            .output()?;
-
-        if output.status.success() {
-            let source_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !source_branch.is_empty() {
-                return Ok(source_branch);
+        // Primary: Use git merge-base analysis to determine source branch
+        match self.find_merge_target_branch_using_merge_base(issue_name) {
+            Ok(source_branch) => Ok(source_branch),
+            Err(_) => {
+                // Fallback: Try stored source branch from git config
+                self.get_stored_source_branch_fallback(issue_name)
             }
         }
-
-        // Fallback to old behavior if no stored source branch found
-        self.find_merge_target_branch_fallback(issue_name)
     }
 
-    /// Fallback method for finding merge target (legacy behavior)
-    fn find_merge_target_branch_fallback(&self, issue_name: &str) -> Result<String> {
+    /// Find merge target branch using git merge-base analysis (primary method)
+    fn find_merge_target_branch_using_merge_base(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
 
         // First check if the issue branch exists
@@ -537,13 +528,39 @@ impl GitOperations {
         Ok(main_branch)
     }
 
-    /// Find the appropriate target branch for merging an issue branch
+    /// Fallback method that only tries stored git config (last resort)
+    fn get_stored_source_branch_fallback(&self, issue_name: &str) -> Result<String> {
+        let config_key = format!("swissarmyhammer.issue.{issue_name}.source");
+
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["config", &config_key])
+            .output()?;
+
+        if output.status.success() {
+            let source_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !source_branch.is_empty() {
+                return Ok(source_branch);
+            }
+        }
+
+        // If no stored source branch found, default to main branch as final fallback
+        self.main_branch()
+    }
+
+    /// Find the appropriate target branch for merging an issue branch using git merge-base
     ///
-    /// This method first tries to retrieve the stored source branch for the issue,
-    /// falling back to merge-base analysis if no stored information is available.
+    /// This method uses git's merge-base to determine the original branch point,
+    /// falling back to stored source branch information only if merge-base analysis fails.
     pub fn find_merge_target_branch(&self, issue_name: &str) -> Result<String> {
-        // First try to get the stored source branch
-        self.get_issue_source_branch(issue_name)
+        // Primary: Use git merge-base analysis to determine target branch
+        match self.find_merge_target_branch_using_merge_base(issue_name) {
+            Ok(target_branch) => Ok(target_branch),
+            Err(_) => {
+                // Fallback: Try stored source branch from git config
+                self.get_stored_source_branch_fallback(issue_name)
+            }
+        }
     }
 
     /// Merge issue branch using git merge-base to determine target
@@ -597,8 +614,7 @@ impl GitOperations {
                 "merge",
                 &branch_name,
                 &format!(
-                    "Failed to merge to target branch '{}': {stderr}",
-                    target_branch
+                    "Failed to merge to target branch '{target_branch}': {stderr}"
                 ),
             ));
         }
