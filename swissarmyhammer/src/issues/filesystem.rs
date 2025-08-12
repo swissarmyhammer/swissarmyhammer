@@ -57,7 +57,12 @@ pub trait IssueStorage: Send + Sync {
     async fn create_issue(&self, name: String, content: String) -> Result<Issue>;
 
     /// Create a new issue with explicit source branch
-    async fn create_issue_with_source_branch(&self, name: String, content: String, source_branch: String) -> Result<Issue>;
+    async fn create_issue_with_source_branch(
+        &self,
+        name: String,
+        content: String,
+        source_branch: String,
+    ) -> Result<Issue>;
 
     /// Update an existing issue's content by name
     async fn update_issue(&self, name: &str, content: String) -> Result<Issue>;
@@ -576,10 +581,16 @@ impl IssueStorage for FileSystemIssueStorage {
 
     async fn create_issue(&self, name: String, content: String) -> Result<Issue> {
         // Delegate to create_issue_with_source_branch with default branch
-        self.create_issue_with_source_branch(name, content, default_source_branch()).await
+        self.create_issue_with_source_branch(name, content, default_source_branch())
+            .await
     }
 
-    async fn create_issue_with_source_branch(&self, name: String, content: String, source_branch: String) -> Result<Issue> {
+    async fn create_issue_with_source_branch(
+        &self,
+        name: String,
+        content: String,
+        source_branch: String,
+    ) -> Result<Issue> {
         // Lock to ensure atomic issue creation (prevents race conditions)
         let _lock = self.creation_lock.lock().await;
 
@@ -3412,7 +3423,7 @@ mod tests {
         // Test deserializing an issue without source_branch field (backward compatibility)
         let json_without_source_branch = r#"{"name":"test_issue","content":"Test content","completed":false,"file_path":"/tmp/issues/test_issue.md","created_at":"2023-01-01T00:00:00Z"}"#;
         let deserialized: Issue = serde_json::from_str(json_without_source_branch).unwrap();
-        
+
         assert_eq!(deserialized.source_branch, "main");
         assert_eq!(deserialized.name, "test_issue");
         assert_eq!(deserialized.content, "Test content");

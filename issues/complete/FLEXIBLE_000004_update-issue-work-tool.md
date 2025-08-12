@@ -49,3 +49,26 @@ Update the issue work tool to use flexible base branch support and store source 
 - Integration with flexible git operations works correctly
 
 This step connects the issue management layer with the flexible git operations to enable flexible branching workflows.
+
+## Proposed Solution
+
+After analyzing the current implementation, I've identified that the WorkIssueTool needs to be updated to:
+
+1. **Capture Current Branch Before Switching**: Get the current branch before attempting to create the work branch to ensure the source branch information is properly available for new issues.
+
+2. **Handle New Issue Creation**: When working on a new issue (doesn't exist yet), the tool should capture the current branch and store it as the source branch in the issue metadata.
+
+3. **Source Branch Validation**: Prevent creating issue branches from other issue branches by validating the current branch before proceeding.
+
+4. **Integration with Issue Storage**: Ensure that when a new issue is created via the work tool, it gets the proper source branch information stored.
+
+### Implementation Steps:
+
+1. Modify `WorkIssueTool::execute()` in `/Users/wballard/github/swissarmyhammer/swissarmyhammer-tools/src/mcp/tools/issues/work/mod.rs`
+2. Get current branch before any git operations
+3. For existing issues, use stored source branch (current behavior)
+4. For new issues, capture current branch and create issue with source branch information
+5. Add validation to prevent issue-to-issue work operations
+6. Update error handling to provide clear messages
+
+This approach will enable flexible base branch support while maintaining backward compatibility.
