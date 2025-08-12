@@ -127,10 +127,26 @@ impl McpErrorHandler {
                 operation: git_op,
                 branch,
                 details,
-            } => McpError::invalid_params(
-                format!("Git {git_op} failed for branch '{branch}': {details}"),
-                None,
-            ),
+            } => {
+                // Enhanced error handling for branch operations with recovery suggestions
+                let error_message = format!("Git {} operation failed for branch '{}': {}", git_op, branch, details);
+                
+                // Add context-specific recovery suggestions
+                let recovery_message = match git_op.as_str() {
+                    "merge" if details.contains("does not exist") => {
+                        format!("{}\n\nRecovery: The source branch may have been deleted. Check with your team to determine the correct target branch for merging.", error_message)
+                    },
+                    "merge" if details.contains("CONFLICT") || details.contains("Manual resolution required") => {
+                        format!("{}\n\nRecovery: Merge conflicts require manual resolution. Use 'git status' to see conflicted files and resolve them manually.", error_message)
+                    },
+                    "create" if details.contains("Issue branches cannot be used as source") => {
+                        format!("{}\n\nRecovery: Switch to a non-issue branch (main, develop, or feature branch) before creating a new issue branch.", error_message)
+                    },
+                    _ => error_message
+                };
+                
+                McpError::invalid_params(recovery_message, None)
+            },
             // System errors
             SwissArmyHammerError::Io(err) => {
                 McpError::internal_error(format!("IO error: {err}"), None)

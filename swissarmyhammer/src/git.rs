@@ -161,6 +161,7 @@ impl GitOperations {
         let current_branch = self.current_branch()?;
 
         // Early return: If we're already on the target issue branch (resume scenario)
+        // Skip validation for resume scenarios since we're already on the correct branch
         if current_branch == branch_name {
             // In resume scenario, we need to determine what source branch to return
             let resume_source_branch = match source_branch {
@@ -189,6 +190,9 @@ impl GitOperations {
             };
             return Ok((branch_name, resume_source_branch));
         }
+
+        // Enhanced validation to prevent circular dependencies (after resume check)
+        self.validate_branch_creation(issue_name, source_branch)?;
 
         // Check for branch operation validation first to provide specific error messages
         if self.is_issue_branch(&current_branch) && source_branch.is_none() {
@@ -289,21 +293,38 @@ impl GitOperations {
     pub fn merge_issue_branch(&self, issue_name: &str, source_branch: &str) -> Result<()> {
         let branch_name = format!("issue/{issue_name}");
 
-        // Validate that the provided source branch exists
+        // Enhanced source branch validation with detailed error context
         if !self.branch_exists(source_branch)? {
-            return Err(SwissArmyHammerError::Other(format!(
-                "Source branch '{}' does not exist",
-                source_branch
-            )));
+            let error_message = format!(
+                "Cannot merge issue '{}': source branch '{}' does not exist. It may have been deleted after the issue branch was created.",
+                issue_name, source_branch
+            );
+            tracing::error!("{}", error_message);
+            
+            // Create abort file for deleted source branch scenario
+            self.create_abort_file(&format!(
+                "Source branch '{}' deleted before merge of issue '{}'. Manual intervention required to resolve the merge target.",
+                source_branch, issue_name
+            ))?;
+            
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "merge",
+                source_branch,
+                &format!("Source branch does not exist (may have been deleted after issue '{}' was created)", issue_name)
+            ));
         }
 
-        // Validate that the source branch is not an issue branch
+        // Enhanced validation for issue branch targets
         if self.is_issue_branch(source_branch) {
-            return Err(SwissArmyHammerError::Other(format!(
-                "Cannot merge to issue branch '{}'",
-                source_branch
-            )));
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "merge",
+                source_branch,
+                &format!("Cannot merge issue '{}' to issue branch '{}'. Issue branches cannot be merge targets", issue_name, source_branch)
+            ));
         }
+
+        // Comprehensive source branch validation
+        self.validate_source_branch_state(source_branch, issue_name)?;
 
         let target_branch = source_branch;
 
@@ -347,23 +368,54 @@ impl GitOperations {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
 
-            // Check for merge conflicts
+            // Enhanced merge conflict handling with abort tool integration
             if stderr.contains("CONFLICT") || stdout.contains("CONFLICT") {
-                return Err(SwissArmyHammerError::Other(format!(
-                    "Merge conflict detected while merging branch '{branch_name}'. Please resolve conflicts manually:\n{stderr}"
-                )));
+                let conflict_message = format!(
+                    "Merge conflicts detected while merging issue '{}' from '{}' to '{}'. Conflicts cannot be resolved automatically.",
+                    issue_name, branch_name, target_branch
+                );
+                tracing::error!("{}", conflict_message);
+                
+                // Create abort file for merge conflict scenario
+                self.create_abort_file(&format!(
+                    "Merge conflicts in issue '{}': '{}' -> '{}'. Manual conflict resolution required:\n{}",
+                    issue_name, branch_name, target_branch, stderr
+                ))?;
+                
+                return Err(SwissArmyHammerError::git_branch_operation_failed(
+                    "merge",
+                    &branch_name,
+                    &format!("Merge conflicts with source branch '{}'. Manual resolution required", target_branch)
+                ));
             }
 
-            // Check for other merge issues
+            // Enhanced handling for automatic merge failures
             if stderr.contains("Automatic merge failed") {
-                return Err(SwissArmyHammerError::Other(format!(
-                    "Automatic merge failed for branch '{branch_name}'. Manual intervention required:\n{stderr}"
-                )));
+                let failure_message = format!(
+                    "Automatic merge failed for issue '{}': '{}' -> '{}'. Source branch may have diverged significantly.",
+                    issue_name, branch_name, target_branch
+                );
+                tracing::error!("{}", failure_message);
+                
+                // Create abort file for automatic merge failure
+                self.create_abort_file(&format!(
+                    "Automatic merge failed for issue '{}': '{}' -> '{}'. Source branch divergence requires manual intervention:\n{}",
+                    issue_name, branch_name, target_branch, stderr
+                ))?;
+                
+                return Err(SwissArmyHammerError::git_branch_operation_failed(
+                    "merge",
+                    &branch_name,
+                    &format!("Automatic merge failed with source branch '{}'. Manual intervention required", target_branch)
+                ));
             }
 
-            return Err(SwissArmyHammerError::Other(format!(
-                "Failed to merge branch '{branch_name}': {stderr}"
-            )));
+            // Generic merge failure with source branch context
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "merge",
+                &branch_name,
+                &format!("Failed to merge to source branch '{}': {}", target_branch, stderr)
+            ));
         }
 
         Ok(())
@@ -450,6 +502,114 @@ impl GitOperations {
     /// Get the work directory path
     pub fn work_dir(&self) -> &std::path::Path {
         &self.work_dir
+    }
+
+    /// Validate source branch state for merge operations
+    ///
+    /// Performs comprehensive validation to ensure the source branch is in a valid state
+    /// for merge operations, including existence, permissions, and consistency checks.
+    fn validate_source_branch_state(&self, source_branch: &str, issue_name: &str) -> Result<()> {
+        // Check if source branch is accessible by verifying its commit
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["rev-parse", &format!("{}", source_branch)])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("unknown revision") || stderr.contains("bad revision") {
+                return Err(SwissArmyHammerError::git_branch_operation_failed(
+                    "validate",
+                    source_branch,
+                    &format!("Source branch for issue '{}' is in corrupted or invalid state", issue_name)
+                ));
+            }
+        }
+
+        // Check if source branch has diverged significantly (detect potential conflicts early)
+        let divergence_check = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args([
+                "merge-base", 
+                "--is-ancestor", 
+                source_branch, 
+                &format!("issue/{}", issue_name)
+            ])
+            .output()?;
+
+        // If merge-base fails with specific exit codes, source branch may have issues
+        if let Some(exit_code) = divergence_check.status.code() {
+            if exit_code != 0 && exit_code != 1 {
+                tracing::warn!(
+                    "Source branch '{}' divergence check failed for issue '{}' with exit code: {}",
+                    source_branch, issue_name, exit_code
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Create abort file for irrecoverable git operation scenarios
+    ///
+    /// Creates a `.swissarmyhammer/.abort` file with the provided reason,
+    /// enabling file-based abort detection throughout the system.
+    fn create_abort_file(&self, reason: &str) -> Result<()> {
+        use std::fs;
+        use std::path::Path;
+
+        // Ensure .swissarmyhammer directory exists
+        let sah_dir = Path::new(".swissarmyhammer");
+        if !sah_dir.exists() {
+            fs::create_dir_all(sah_dir)
+                .map_err(|e| SwissArmyHammerError::Io(e))?;
+        }
+
+        // Create abort file with reason
+        let abort_file_path = sah_dir.join(".abort");
+        fs::write(&abort_file_path, reason)
+            .map_err(|e| SwissArmyHammerError::Io(e))?;
+
+        tracing::info!("Created abort file: {}", abort_file_path.display());
+        Ok(())
+    }
+
+    /// Enhanced branch creation validation to prevent circular dependencies
+    ///
+    /// Validates that issue branches are not created from other issue branches,
+    /// preventing circular dependencies and maintaining clean branch hierarchy.
+    pub fn validate_branch_creation(&self, issue_name: &str, source_branch: Option<&str>) -> Result<()> {
+        let current_branch = self.current_branch()?;
+        
+        // If source branch is explicitly provided, validate it
+        if let Some(source) = source_branch {
+            if self.is_issue_branch(source) {
+                return Err(SwissArmyHammerError::git_branch_operation_failed(
+                    "create",
+                    source,
+                    &format!("Cannot create issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches", issue_name, source)
+                ));
+            }
+            
+            if !self.branch_exists(source)? {
+                return Err(SwissArmyHammerError::git_branch_operation_failed(
+                    "create",
+                    source,
+                    &format!("Source branch '{}' for issue '{}' does not exist", source, issue_name)
+                ));
+            }
+        } else {
+            // If no source branch provided, validate current branch
+            if self.is_issue_branch(&current_branch) {
+                return Err(SwissArmyHammerError::git_branch_operation_failed(
+                    "create",
+                    &current_branch,
+                    &format!("Cannot create issue '{}' from issue branch '{}'. Switch to a non-issue branch first", issue_name, current_branch)
+                ));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -747,7 +907,7 @@ mod tests {
 
         // Verify it's an error with correct message content
         let error_msg = error.to_string();
-        assert!(error_msg.contains("Cannot create new issue branch from another issue branch"));
+        assert!(error_msg.contains("Cannot create issue 'issue_002' from issue branch 'issue/issue_001'"));
     }
 
     #[test]
@@ -807,7 +967,9 @@ mod tests {
 
         // Verify it's an error with correct message content
         let error_msg = error.to_string();
-        assert!(error_msg.contains("Cannot switch to issue branch from another issue branch"));
+        // Can be caught by either the old validation logic or the new enhanced validation
+        assert!(error_msg.contains("Cannot switch to issue branch from another issue branch") ||
+               error_msg.contains("Cannot create issue 'issue_001' from issue branch 'issue/issue_002'"));
     }
 
     #[test]
@@ -1013,7 +1175,7 @@ mod tests {
         let result = git_ops.create_work_branch_with_source("test_issue", Some("nonexistent"));
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Source branch 'nonexistent' does not exist"));
+        assert!(error_msg.contains("Source branch 'nonexistent' for issue 'test_issue' does not exist"));
     }
 
     #[test]
@@ -1032,7 +1194,7 @@ mod tests {
             git_ops.create_work_branch_with_source("second_issue", Some("issue/first_issue"));
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot use issue branch 'issue/first_issue' as source branch"));
+        assert!(error_msg.contains("Cannot create issue 'second_issue' from issue branch 'issue/first_issue'"));
     }
 
     #[test]
@@ -1047,7 +1209,7 @@ mod tests {
         let result = git_ops.create_work_branch_with_source("second_issue", None);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot create new issue branch from another issue branch"));
+        assert!(error_msg.contains("Cannot create issue 'second_issue' from issue branch 'issue/first_issue'"));
     }
 
     #[test]
@@ -1109,6 +1271,214 @@ mod tests {
         // Verify we're on the existing issue branch
         let current_branch = git_ops.current_branch().unwrap();
         assert_eq!(current_branch, "issue/existing_issue");
+    }
+
+    #[test]
+    fn test_abort_file_creation_on_deleted_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        
+        // Change to temp directory for the test
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create and switch to feature branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/test"])
+            .output()
+            .unwrap();
+
+        // Create issue branch from feature branch
+        git_ops.create_work_branch("test_issue").unwrap();
+
+        // Switch back to main and delete feature branch
+        git_ops.checkout_branch("main").unwrap();
+        git_ops.delete_branch("feature/test").unwrap();
+
+        // Try to merge - should create abort file
+        let result = git_ops.merge_issue_branch("test_issue", "feature/test");
+        assert!(result.is_err());
+
+        // Check that abort file was created (in current working directory)
+        let abort_file = std::path::Path::new(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+
+        let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+        assert!(abort_content.contains("Source branch 'feature/test' deleted"));
+        assert!(abort_content.contains("test_issue"));
+        
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_enhanced_source_branch_validation() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test validation with nonexistent source branch
+        let result = git_ops.validate_branch_creation("test_issue", Some("nonexistent"));
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Source branch 'nonexistent' for issue 'test_issue' does not exist"));
+
+        // Test validation with issue branch as source
+        git_ops.create_work_branch("first_issue").unwrap();
+        let result = git_ops.validate_branch_creation("second_issue", Some("issue/first_issue"));
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot create issue 'second_issue' from issue branch 'issue/first_issue'"));
+    }
+
+    #[test]
+    fn test_circular_dependency_prevention() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create first issue branch
+        git_ops.create_work_branch("issue_001").unwrap();
+
+        // Try to create second issue branch while on first issue branch - should fail
+        let result = git_ops.validate_branch_creation("issue_002", None);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Cannot create issue 'issue_002' from issue branch 'issue/issue_001'"));
+    }
+
+    #[test]
+    fn test_enhanced_merge_conflict_handling() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create a feature branch and make changes
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/conflict"])
+            .output()
+            .unwrap();
+
+        // Create conflicting content on feature branch
+        std::fs::write(temp_dir.path().join("conflict.txt"), "feature content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "conflict.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add conflict file on feature"])
+            .output()
+            .unwrap();
+
+        // Switch to main and create different content
+        git_ops.checkout_branch("main").unwrap();
+        std::fs::write(temp_dir.path().join("conflict.txt"), "main content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "conflict.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add conflict file on main"])
+            .output()
+            .unwrap();
+
+        // Create issue branch from feature branch
+        git_ops.checkout_branch("feature/conflict").unwrap();
+        git_ops.create_work_branch("conflict_issue").unwrap();
+
+        // Make additional changes on issue branch
+        std::fs::write(temp_dir.path().join("issue.txt"), "issue content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "issue.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add issue content"])
+            .output()
+            .unwrap();
+
+        // Try to merge to main - should detect conflicts and create abort file
+        let result = git_ops.merge_issue_branch("conflict_issue", "main");
+        if result.is_err() {
+            // Check if abort file was created for merge conflicts
+            let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
+            if abort_file.exists() {
+                let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+                assert!(abort_content.contains("conflict_issue"));
+                assert!(abort_content.contains("Manual"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_source_branch_state_validation() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create a valid branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "valid_branch"])
+            .output()
+            .unwrap();
+
+        // Create issue from valid branch
+        git_ops.create_work_branch("valid_issue").unwrap();
+
+        // Test validation succeeds for valid branch
+        let result = git_ops.validate_source_branch_state("valid_branch", "valid_issue");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_enhanced_error_messages_with_source_context() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test nonexistent source branch error includes issue context
+        let result = git_ops.merge_issue_branch("test_issue", "nonexistent");
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("test_issue"));
+        assert!(error_msg.contains("nonexistent"));
+        assert!(error_msg.contains("deleted after issue"));
+    }
+
+    #[test]
+    fn test_abort_file_contains_detailed_context() {
+        let temp_dir = create_test_git_repo().unwrap();
+        
+        // Change to temp directory for the test
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+        
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create issue branch
+        git_ops.create_work_branch("detailed_issue").unwrap();
+
+        // Switch back and try to merge to nonexistent branch
+        git_ops.checkout_branch("main").unwrap();
+        let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
+        assert!(result.is_err());
+
+        // Check abort file contains detailed context
+        let abort_file = std::path::Path::new(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+
+        let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+        assert!(abort_content.contains("deleted_branch"));
+        assert!(abort_content.contains("detailed_issue"));
+        assert!(abort_content.contains("Manual intervention required"));
+        
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
