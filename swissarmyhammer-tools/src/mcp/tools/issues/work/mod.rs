@@ -67,12 +67,13 @@ impl McpTool for WorkIssueTool {
             }
         };
 
-        // Check if we're trying to work on an issue from another issue branch
+        // Enhanced validation for working on issues from other issue branches
         if current_branch.starts_with("issue/") {
-            return Err(McpError::invalid_params(
-                format!("Cannot work on issue from another issue branch '{}'. Please switch to a non-issue branch first.", current_branch),
-                None,
-            ));
+            let error_msg = format!(
+                "Cannot work on issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches. Switch to a non-issue branch (like main, develop, or feature branch) first.",
+                request.name.0, current_branch
+            );
+            return Err(McpError::invalid_params(error_msg, None));
         }
 
         let issue_storage = context.issue_storage.read().await;
