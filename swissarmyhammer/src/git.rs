@@ -108,14 +108,19 @@ impl GitOperations {
         Ok(output.status.success())
     }
 
+    /// Check if a branch name follows the issue branch pattern
+    fn is_issue_branch(&self, branch: &str) -> bool {
+        branch.starts_with("issue/")
+    }
+
     /// Create and switch to issue work branch
     ///
     /// This method enforces branching rules to prevent creating or switching to
     /// issue branches from other issue branches. It follows these rules:
     ///
     /// 1. If already on the target branch, return success (resume scenario)
-    /// 2. If switching to existing branch, must be on main branch first
-    /// 3. If creating new branch, must be on main branch
+    /// 2. If switching to existing branch, must be on a non-issue branch first
+    /// 3. If creating new branch, must be on a non-issue branch
     /// 4. Returns error if branching rules are violated
     pub fn create_work_branch(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
@@ -143,22 +148,22 @@ impl GitOperations {
 
     /// Validate that branch operations follow the required rules
     ///
-    /// Ensures that issue branch creation/switching only happens from main branch
+    /// Ensures that issue branch creation/switching only happens from non-issue branches
     fn validate_branch_operation(
         &self,
         current_branch: &str,
-        main_branch: &str,
+        _main_branch: &str,
         target_branch: &str,
     ) -> Result<()> {
-        // If not on main branch, check what operation is being attempted
-        if current_branch != main_branch {
+        // If on an issue branch, prevent operations to other issue branches
+        if self.is_issue_branch(current_branch) {
             if self.branch_exists(target_branch)? {
                 return Err(SwissArmyHammerError::Other(
-                    "Cannot switch to issue branch from another issue branch. Please switch to main first.".to_string()
+                    "Cannot switch to issue branch from another issue branch. Please switch to a non-issue branch first.".to_string()
                 ));
             } else {
                 return Err(SwissArmyHammerError::Other(
-                    "Cannot create new issue branch from another issue branch. Must be on main branch.".to_string()
+                    "Cannot create new issue branch from another issue branch. Must be on a non-issue branch.".to_string()
                 ));
             }
         }
@@ -793,5 +798,28 @@ mod tests {
         let result = git_ops.create_work_branch("issue_003");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/issue_003");
+    }
+
+    #[test]
+    fn test_create_work_branch_from_feature_branch_succeeds() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        
+        // Create and switch to a feature branch
+        git_ops.checkout_branch("main").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/new-feature"])
+            .output()
+            .unwrap();
+
+        // Verify we can create issue branch from feature branch
+        let result = git_ops.create_work_branch("test_issue_from_feature");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "issue/test_issue_from_feature");
+        
+        // Verify we're on the new issue branch
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, "issue/test_issue_from_feature");
     }
 }
