@@ -1,0 +1,1 @@
+When we go to merge an issue, we need to verify that we are on an issue branch, if not we need to delegate to the abort tool

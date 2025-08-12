@@ -19,12 +19,73 @@ pub struct Issue {
     pub name: String,
     /// The full content of the issue markdown file
     pub content: String,
-    /// Whether the issue is completed
+    /// Whether the issue is completed (derived from file location)
+    #[deprecated(note = "Use Issue::is_completed() method instead")]
     pub completed: bool,
-    /// The file path of the issue
+    /// The file path of the issue (derived from name and location)
+    #[deprecated(note = "Use Issue::get_file_path() method instead")]
     pub file_path: PathBuf,
-    /// When the issue was created
+    /// When the issue was created (derived from file metadata)
+    #[deprecated(note = "Use Issue::get_created_at() method instead")]
     pub created_at: DateTime<Utc>,
+}
+
+impl Issue {
+    /// Check if this issue is completed based on file path location
+    pub fn is_completed(&self, file_path: &Path, completed_dir: &Path) -> bool {
+        file_path
+            .parent()
+            .map(|parent| parent == completed_dir)
+            .unwrap_or(false)
+    }
+
+    /// Get the file path for this issue based on its location (completed or active)
+    pub fn get_file_path(&self, base_dir: &Path, completed: bool) -> PathBuf {
+        let dir = if completed {
+            base_dir.join("complete")
+        } else {
+            base_dir.to_path_buf()
+        };
+        dir.join(format!("{}.md", self.name))
+    }
+
+    /// Get the creation time from file metadata
+    pub fn get_created_at(file_path: &Path) -> DateTime<Utc> {
+        file_path
+            .metadata()
+            .and_then(|m| m.created())
+            .or_else(|_| {
+                file_path
+                    .metadata()
+                    .and_then(|m| m.modified())
+            })
+            .map(DateTime::<Utc>::from)
+            .unwrap_or_else(|_| Utc::now())
+    }
+}
+
+/// Extended issue information that includes derived metadata
+#[derive(Debug, Clone)]
+pub struct IssueInfo {
+    pub issue: Issue,
+    pub completed: bool,
+    pub file_path: PathBuf,
+    pub created_at: DateTime<Utc>,
+}
+
+impl IssueInfo {
+    /// Create issue info from an issue and its file path
+    pub fn from_issue_and_path(issue: Issue, file_path: PathBuf, completed_dir: &Path) -> Self {
+        let completed = issue.is_completed(&file_path, completed_dir);
+        let created_at = Issue::get_created_at(&file_path);
+        
+        Self {
+            issue,
+            completed,
+            file_path,
+            created_at,
+        }
+    }
 }
 
 /// Represents the current state of the issue system
@@ -181,52 +242,15 @@ impl FileSystemIssueStorage {
         // Use the full filename (without .md extension) to preserve issue numbers
         let name = filename.to_string();
 
-        // Read file content
-        let file_content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
+        // Read file content - treat entire content as markdown
+        let content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
 
-        // Parse YAML frontmatter if present
-        let (yaml_metadata, content) = if file_content.starts_with("---\n") {
-            if let Some(end_marker) = file_content[4..].find("\n---\n") {
-                let yaml_content = &file_content[4..end_marker + 4];
-                let mut markdown_content = &file_content[end_marker + 8..]; // Skip past "---\n"
-                
-                // Remove leading newline if present
-                if markdown_content.starts_with('\n') {
-                    markdown_content = &markdown_content[1..];
-                }
-                
-                // Parse YAML frontmatter
-                match serde_yaml::from_str::<serde_yaml::Value>(yaml_content) {
-                    Ok(yaml) => (Some(yaml), markdown_content.to_string()),
-                    Err(_) => (None, file_content), // Fallback to treating entire content as markdown
-                }
-            } else {
-                (None, file_content) // Malformed frontmatter, treat as plain content
-            }
-        } else {
-            (None, file_content) // No frontmatter
-        };
-
-        // Extract metadata from YAML frontmatter with fallbacks
-        let frontmatter_completed = yaml_metadata
-            .as_ref()
-            .and_then(|yaml| yaml.get("completed"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // Determine if completed: prioritize file location over frontmatter
+        // Derive deprecated fields from file system
         let completed = path
             .parent()
             .map(|parent| parent == self.state.completed_dir)
-            .unwrap_or(frontmatter_completed);
-
-        // Get file creation time for created_at
-        let created_at = path
-            .metadata()
-            .and_then(|m| m.created())
-            .or_else(|_| path.metadata().and_then(|m| m.modified()))
-            .map(DateTime::<Utc>::from)
-            .unwrap_or_else(|_| Utc::now());
+            .unwrap_or(false);
+        let created_at = Issue::get_created_at(path);
 
         Ok(Issue {
             name,
@@ -352,27 +376,35 @@ impl FileSystemIssueStorage {
     async fn update_issue_impl_by_name(&self, name: &str, content: String) -> Result<Issue> {
         debug!("Updating issue {}", name);
 
-        // Find the issue by name
+        // Find the issue to get its current file path  
         let issue = self.get_issue(name).await?;
-        let path = &issue.file_path;
-
-        // Create content with preserved YAML frontmatter
-        let content_with_frontmatter = format!(
-            "---\ncompleted: {}\n---\n{}",
-            issue.completed, content
-        );
-
-        // Atomic write using temp file and rename
-        let temp_path = path.with_extension("tmp");
-        std::fs::write(&temp_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
-        std::fs::rename(&temp_path, path).map_err(SwissArmyHammerError::Io)?;
+        let current_path = &issue.file_path;
+        
+        // Atomic write using temp file and rename - write pure markdown content
+        let temp_path = current_path.with_extension("tmp");
+        std::fs::write(&temp_path, &content).map_err(SwissArmyHammerError::Io)?;
+        std::fs::rename(&temp_path, &current_path).map_err(SwissArmyHammerError::Io)?;
 
         debug!(
             "Successfully updated issue {} at path {}",
             name,
-            path.display()
+            current_path.display()
         );
-        Ok(Issue { content, ..issue })
+        
+        // Return updated issue - derive deprecated fields from current path
+        let completed = current_path
+            .parent()
+            .map(|parent| parent == self.state.completed_dir)
+            .unwrap_or(false);
+        let created_at = Issue::get_created_at(current_path);
+        
+        Ok(Issue {
+            name: name.to_string(),
+            content,
+            completed,
+            file_path: current_path.clone(),
+            created_at,
+        })
     }
 
     /// Cleanup duplicate files that may exist in the source directory
@@ -613,13 +645,10 @@ impl IssueStorage for FileSystemIssueStorage {
         let filename = create_safe_filename(&issue_name);
         let file_path = self.state.issues_dir.join(format!("{filename}.md"));
 
-        // Create YAML frontmatter without source_branch
-        let content_with_frontmatter = format!(
-            "---\ncompleted: false\n---\n{}",
-            content
-        );
-        fs::write(&file_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
+        // Write pure markdown content (no YAML front matter)
+        fs::write(&file_path, &content).map_err(SwissArmyHammerError::Io)?;
 
+        // Derive deprecated fields - new issues are always not completed initially
         let created_at = Utc::now();
 
         Ok(Issue {
