@@ -251,7 +251,7 @@ Basic usage:
   swissarmyhammer issue update <number>         # Update issue content
   swissarmyhammer issue complete <number>       # Mark issue as complete
   swissarmyhammer issue work <number>           # Start working on issue (creates git branch)
-  swissarmyhammer issue merge <number>          # Merge completed issue to main
+  swissarmyhammer issue merge <number>          # Merge completed issue to source branch
   swissarmyhammer issue current                 # Show current issue
   swissarmyhammer issue next                    # Show next issue to work on
   swissarmyhammer issue status                  # Show project status

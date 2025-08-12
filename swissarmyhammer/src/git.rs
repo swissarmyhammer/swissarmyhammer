@@ -2,7 +2,7 @@
 //!
 //! This module provides git integration for managing issue branches,
 //! including creating work branches, switching branches, and merging
-//! completed work back to the main branch.
+//! completed work back to the source branch.
 
 use crate::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
@@ -424,7 +424,7 @@ impl GitOperations {
     /// Merge issue branch to main branch (backward compatibility)
     ///
     /// This is a convenience method that calls merge_issue_branch with the main branch
-    /// for backward compatibility with existing code.
+    /// for backward compatibility with existing code that doesn't specify a source branch.
     pub fn merge_issue_branch_simple(&self, issue_name: &str) -> Result<()> {
         let main_branch = self.main_branch()?;
         self.merge_issue_branch(issue_name, &main_branch)

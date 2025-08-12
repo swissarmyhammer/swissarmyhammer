@@ -1,4 +1,4 @@
-Merge the work branch for an issue back to the main branch.
+Merge the work branch for an issue back to the source branch.
 
 ## Parameters
 
@@ -24,4 +24,4 @@ Merge an issue and delete the branch:
 
 ## Returns
 
-Returns confirmation that the issue work branch has been merged back to the main branch, and whether the branch was deleted if requested.
+Returns confirmation that the issue work branch has been merged back to the source branch, and whether the branch was deleted if requested.
