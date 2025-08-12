@@ -15,4 +15,4 @@ Start working on an issue:
 
 ## Returns
 
-Returns confirmation that you've switched to the work branch for the specified issue. If the branch doesn't exist, it will be created automatically with the pattern `issue/<issue_name>`.
+Returns confirmation that you've switched to the work branch for the specified issue. If the branch doesn't exist, it will be created automatically with the pattern `issue/<issue_name>`. The issue must already exist - use `issue_create` to create new issues first.

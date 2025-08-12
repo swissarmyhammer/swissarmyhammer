@@ -100,7 +100,7 @@ transitions:
     // Create abort file before workflow execution
     create_abort_file("CLI integration test abort")?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "test_abort_workflow.md"])
@@ -121,7 +121,7 @@ fn test_prompt_command_with_abort_file() -> Result<()> {
     // Create abort file
     create_abort_file("Prompt command abort test")?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["prompt", "test", "example"])
@@ -148,7 +148,7 @@ fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     let commands = vec![vec!["prompt", "list"], vec!["--help"], vec!["--version"]];
 
     for command_args in commands {
-        let output = Command::cargo_bin("swissarmyhammer")
+        let output = Command::cargo_bin("sah")
             .unwrap()
             .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
             .args(&command_args)
@@ -197,7 +197,7 @@ transitions:
     let unicode_reason = "中文测试 🚫 Abort with émojis and ñoñ-ASCII";
     create_abort_file(unicode_reason)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "unicode_abort_test.md"])
@@ -279,7 +279,7 @@ transitions:
     let large_reason = "x".repeat(1000);
     create_abort_file(&large_reason)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "large_reason_test.md"])
@@ -321,7 +321,7 @@ transitions:
     let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
     create_abort_file(reason_with_newlines)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "newline_test.md"])
@@ -363,7 +363,7 @@ transitions:
     // Create empty abort file
     create_abort_file("")?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "empty_abort_test.md"])
@@ -409,7 +409,7 @@ transitions:
     cleanup_abort_file();
     assert_abort_file_not_exists();
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "normal_test.md"])
@@ -468,7 +468,7 @@ transitions:
     let handles: Vec<_> = (0..3)
         .map(|_| {
             std::thread::spawn(|| {
-                Command::cargo_bin("swissarmyhammer")
+                Command::cargo_bin("sah")
                     .unwrap()
                     .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
                     .args(["flow", "run", "concurrent_test.md"])

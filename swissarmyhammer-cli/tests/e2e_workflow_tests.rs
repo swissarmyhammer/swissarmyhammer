@@ -65,7 +65,7 @@ fn try_search_index(temp_path: &std::path::Path, patterns: &[&str], force: bool)
         .as_nanos();
     let test_id = format!("{thread_id:?}_{timestamp}");
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer")?;
+    let mut cmd = Command::cargo_bin("sah")?;
     cmd.args(&cmd_args)
         .current_dir(temp_path)
         .env("SWISSARMYHAMMER_TEST_MODE", "1")
@@ -113,7 +113,7 @@ fn mock_search_workflow(temp_path: &std::path::Path) -> Result<()> {
 
     // Just verify the command structure works without actual indexing
     // Should complete quickly and skip model downloads with SKIP_SEARCH_TESTS=1
-    let output = Command::cargo_bin("swissarmyhammer")?
+    let output = Command::cargo_bin("sah")?
         .args(["--help"])
         .current_dir(temp_path)
         .env("SWISSARMYHAMMER_TEST_MODE", "1")
@@ -147,7 +147,7 @@ fn run_optimized_command(args: &[&str], temp_path: &std::path::Path) -> Result<C
         .as_nanos();
     let test_id = format!("{thread_id:?}_{timestamp}");
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer")?;
+    let mut cmd = Command::cargo_bin("sah")?;
     cmd.args(args)
         .current_dir(temp_path)
         .env("SWISSARMYHAMMER_TEST_MODE", "1")
@@ -215,7 +215,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     let (_temp_dir, temp_path) = setup_e2e_test_environment()?;
 
     // Step 1: Create a new issue
-    let create_output = Command::cargo_bin("swissarmyhammer")?
+    let create_output = Command::cargo_bin("sah")?
         .args([
             "issue",
             "create",
@@ -236,7 +236,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 2: List issues to verify creation
-    let list_output = Command::cargo_bin("swissarmyhammer")?
+    let list_output = Command::cargo_bin("sah")?
         .args(["issue", "list"])
         .current_dir(&temp_path)
         .assert()
@@ -249,7 +249,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 3: Show the issue details
-    let show_output = Command::cargo_bin("swissarmyhammer")?
+    let show_output = Command::cargo_bin("sah")?
         .args(["issue", "show", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
         .assert()
@@ -263,7 +263,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 4: Update the issue
-    Command::cargo_bin("swissarmyhammer")?
+    Command::cargo_bin("sah")?
         .args([
             "issue",
             "update",
@@ -277,7 +277,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
         .success();
 
     // Step 5: Verify the update
-    let updated_show_output = Command::cargo_bin("swissarmyhammer")?
+    let updated_show_output = Command::cargo_bin("sah")?
         .args(["issue", "show", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
         .assert()
@@ -290,14 +290,14 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 6: Work on the issue (creates git branch)
-    Command::cargo_bin("swissarmyhammer")?
+    Command::cargo_bin("sah")?
         .args(["issue", "work", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
         .assert()
         .success();
 
     // Step 7: Check current issue
-    let current_output = Command::cargo_bin("swissarmyhammer")?
+    let current_output = Command::cargo_bin("sah")?
         .args(["issue", "current"])
         .current_dir(&temp_path)
         .assert()
@@ -310,21 +310,21 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 8: Complete the issue
-    Command::cargo_bin("swissarmyhammer")?
+    Command::cargo_bin("sah")?
         .args(["issue", "complete", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
         .assert()
         .success();
 
     // Step 9: Merge the issue
-    Command::cargo_bin("swissarmyhammer")?
+    Command::cargo_bin("sah")?
         .args(["issue", "merge", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
         .assert()
         .success();
 
     // Step 10: Verify issue is completed
-    let final_list_output = Command::cargo_bin("swissarmyhammer")?
+    let final_list_output = Command::cargo_bin("sah")?
         .args(["issue", "list", "--completed"])
         .current_dir(&temp_path)
         .assert()
@@ -371,7 +371,7 @@ fn test_complete_memo_workflow() -> Result<()> {
     let mut memo_ids = vec![];
 
     for (title, content) in &memo_data {
-        let create_output = Command::cargo_bin("swissarmyhammer")?
+        let create_output = Command::cargo_bin("sah")?
             .args(["memo", "create", title, "--content", content])
             .current_dir(&temp_path)
             .assert()
@@ -386,7 +386,7 @@ fn test_complete_memo_workflow() -> Result<()> {
     }
 
     // Step 2: List all memos
-    let list_output = Command::cargo_bin("swissarmyhammer")?
+    let list_output = Command::cargo_bin("sah")?
         .args(["memo", "list"])
         .current_dir(&temp_path)
         .assert()
@@ -402,7 +402,7 @@ fn test_complete_memo_workflow() -> Result<()> {
 
     // Step 3: Get specific memo details
     if let Some(first_id) = memo_ids.first() {
-        let get_output = Command::cargo_bin("swissarmyhammer")?
+        let get_output = Command::cargo_bin("sah")?
             .args(["memo", "get", first_id])
             .current_dir(&temp_path)
             .assert()
@@ -416,7 +416,7 @@ fn test_complete_memo_workflow() -> Result<()> {
     }
 
     // Step 4: Search memos
-    let search_output = Command::cargo_bin("swissarmyhammer")?
+    let search_output = Command::cargo_bin("sah")?
         .args(["memo", "search", "testing"])
         .current_dir(&temp_path)
         .assert()
@@ -430,7 +430,7 @@ fn test_complete_memo_workflow() -> Result<()> {
 
     // Step 5: Update a memo
     if let Some(second_id) = memo_ids.get(1) {
-        Command::cargo_bin("swissarmyhammer")?
+        Command::cargo_bin("sah")?
             .args([
                 "memo",
                 "update",
@@ -443,7 +443,7 @@ fn test_complete_memo_workflow() -> Result<()> {
             .success();
 
         // Verify update
-        let updated_get_output = Command::cargo_bin("swissarmyhammer")?
+        let updated_get_output = Command::cargo_bin("sah")?
             .args(["memo", "get", second_id])
             .current_dir(&temp_path)
             .assert()
@@ -458,7 +458,7 @@ fn test_complete_memo_workflow() -> Result<()> {
     }
 
     // Step 6: Get all context for AI
-    let context_output = Command::cargo_bin("swissarmyhammer")?
+    let context_output = Command::cargo_bin("sah")?
         .args(["memo", "context"])
         .current_dir(&temp_path)
         .assert()
@@ -475,14 +475,14 @@ fn test_complete_memo_workflow() -> Result<()> {
 
     // Step 7: Delete a memo
     if let Some(last_id) = memo_ids.last() {
-        Command::cargo_bin("swissarmyhammer")?
+        Command::cargo_bin("sah")?
             .args(["memo", "delete", last_id])
             .current_dir(&temp_path)
             .assert()
             .success();
 
         // Verify deletion
-        Command::cargo_bin("swissarmyhammer")?
+        Command::cargo_bin("sah")?
             .args(["memo", "get", last_id])
             .current_dir(&temp_path)
             .assert()
@@ -537,7 +537,7 @@ fn test_search_cli_arguments() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
     // Test various argument combinations without actually executing search
-    let help_output = Command::cargo_bin("swissarmyhammer")?
+    let help_output = Command::cargo_bin("sah")?
         .args(["search", "index", "--help"])
         .current_dir(&temp_path)
         .output()?;
@@ -602,7 +602,7 @@ fn test_realistic_load_workflow() -> Result<()> {
 
     // Create multiple issues and memos to simulate realistic usage
     for i in 1..=5 {
-        Command::cargo_bin("swissarmyhammer")?
+        Command::cargo_bin("sah")?
             .args([
                 "issue",
                 "create",
@@ -614,7 +614,7 @@ fn test_realistic_load_workflow() -> Result<()> {
             .assert()
             .success();
 
-        Command::cargo_bin("swissarmyhammer")?
+        Command::cargo_bin("sah")?
             .args([
                 "memo",
                 "create",
@@ -630,13 +630,13 @@ fn test_realistic_load_workflow() -> Result<()> {
     // Perform various operations to test performance
     let start_time = std::time::Instant::now();
 
-    Command::cargo_bin("swissarmyhammer")?
+    Command::cargo_bin("sah")?
         .args(["issue", "list"])
         .current_dir(&temp_path)
         .assert()
         .success();
 
-    Command::cargo_bin("swissarmyhammer")?
+    Command::cargo_bin("sah")?
         .args(["memo", "list"])
         .current_dir(&temp_path)
         .assert()

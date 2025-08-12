@@ -103,41 +103,11 @@ impl McpTool for WorkIssueTool {
                 )),
             }
         } else {
-            // Issue doesn't exist - create the work branch from current branch
-            let issue_name = request.name.clone();
-
-            match git_ops.as_mut() {
-                Some(ops) => match ops.create_work_branch_with_source(&issue_name.0, None) {
-                    Ok((branch_name, source_branch)) => {
-                        // Drop git_ops lock before issue storage operations
-                        drop(git_ops);
-
-                        // Create the issue with the captured source branch
-                        drop(issue_storage); // Drop read lock
-                        let issue_storage = context.issue_storage.write().await;
-
-                        let issue_content =
-                            format!("# {}\n\nWorking on issue {}", issue_name.0, issue_name.0);
-
-                        match issue_storage.create_issue_with_source_branch(
-                            issue_name.0.clone(),
-                            issue_content,
-                            source_branch.clone()
-                        ).await {
-                            Ok(_) => Ok(create_success_response(format!(
-                                "Created issue {} and switched to work branch: {} (created from {})",
-                                issue_name.0, branch_name, source_branch
-                            ))),
-                            Err(e) => Err(McpErrorHandler::handle_error(e, "create issue")),
-                        }
-                    }
-                    Err(e) => Err(McpErrorHandler::handle_error(e, "create work branch")),
-                },
-                None => Err(McpError::internal_error(
-                    "Git operations not available".to_string(),
-                    None,
-                )),
-            }
+            // Issue doesn't exist - return error (consistent with other issue operations)
+            Err(McpError::invalid_params(
+                format!("Issue '{}' not found", request.name.0),
+                None,
+            ))
         }
     }
 }

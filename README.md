@@ -6,16 +6,14 @@
 
 **Program all the things, just by writing markdown. Really.**
 
-📚 **[Complete Documentation & Guides](https://swissarmyhammer.github.io/swissarmyhammer)** 📚
+📚 **[Complete Documentation & Guides](https://wballard.github.io/sahdoc)** 📚
 
-🦀 **[Rust API Documentation](https://docs.rs/swissarmyhammer)** 🦀
-
-[![CI](https://github.com/swissarmyhammer/swissarmyhammer/workflows/CI/badge.svg)](https://github.com/swissarmyhammer/swissarmyhammer/actions)
+[![CI](https://github.com/wballard/sahdoc/workflows/CI/badge.svg)](https://github.com/wballard/sahdoc/actions)
 [![License](https://img.shields.io/badge/License-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://github.com/anthropics/model-context-protocol)
 
-[📖 Documentation](https://swissarmyhammer.github.io/swissarmyhammer) • [🦀 API Docs](https://docs.rs/swissarmyhammer)
+[📖 Documentation](https://wballard.github.io/sahdoc)
 
 </div>
 
@@ -23,15 +21,25 @@
 
 ## ✨ What is SwissArmyHammer?
 
-SwissArmyHammer transforms how you work with AI prompts and workflows by letting you manage them as simple markdown files.
+**SwissArmyHammer transforms AI prompt and workflow management by treating them as simple markdown files.**
 
-- a command line app that uses Claude Code as a sub agent
-- a powerful Model Context Protocol (MCP) server that seamlessly integrates with Claude Code
-- a flexible Rust library for building prompt-based applications.
+### The Problem
+Working with AI assistants involves repetitive prompt crafting, context loss, inconsistent results, limited automation, and poor organization of prompts scattered across different tools.
+
+### The Solution
+SwissArmyHammer provides a unified, file-based approach with three integrated components:
+
+- **Command Line Application** - A powerful CLI that uses Claude Code as a sub-agent for executing prompts and workflows
+- **MCP Server** - Seamless integration with Claude Code via the Model Context Protocol, providing a comprehensive tool suite  
+- **Rust Library** - A flexible library for building prompt-based applications with comprehensive APIs
 
 ## TLDR
 
-Follow the [Calcutron](https://github.com/swissarmyhammer/calcutron) sample to get started.
+Install and get started:
+```bash
+cargo install --git https://github.com/wballard/sahdoc swissarmyhammer-cli
+claude mcp add sah sah serve
+```
 
 ## 🎯 Key Features
 
@@ -135,7 +143,11 @@ sah validate
 
 ### Install
 
-See [https://swissarmyhammer.github.io/swissarmyhammer/installation.html](https://swissarmyhammer.github.io/swissarmyhammer/installation.html) for detailed installation instructions.
+```bash
+cargo install --git https://github.com/wballard/sahdoc swissarmyhammer-cli
+```
+
+See [installation guide](https://wballard.github.io/sahdoc/installation.html) for detailed instructions.
 
 ### Configure Claude Code
 
@@ -167,6 +179,21 @@ EOF
 
 That's it! Your prompt is now available in Claude Code. You can use it via MCP with `/helper`.
 
+### Try a Built-in Workflow
+
+SwissArmyHammer comes with built-in workflows. Try the hello-world example:
+
+```bash
+sah flow run hello-world
+```
+
+This simple workflow demonstrates:
+- Basic state transitions
+- Prompt execution with templating
+- Variable passing between states
+
+You can also run it through Claude Code using the MCP integration to see how workflows integrate with AI interactions.
+
 ## 🔧 MCP Tools
 
 SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
@@ -183,6 +210,6 @@ All tools integrate seamlessly with Claude Code's MCP protocol and provide struc
 
 <div align="center">
 
-**[⭐ Star this repo](https://github.com/swissarmyhammer/swissarmyhammer/stargazers)** if you find SwissArmyHammer useful!
+**[⭐ Star this repo](https://github.com/wballard/sahdoc/stargazers)** if you find SwissArmyHammer useful!
 
 </div>

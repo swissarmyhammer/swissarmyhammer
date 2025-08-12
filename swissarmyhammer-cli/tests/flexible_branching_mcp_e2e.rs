@@ -2,7 +2,8 @@
 //!
 //! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
 
-use std::process::Command;
+use assert_cmd::Command;
+use std::process::Command as StdCommand;
 use tempfile::TempDir;
 
 /// Test environment for MCP tool testing
@@ -27,20 +28,20 @@ impl McpTestEnvironment {
         let path = temp_dir.path();
 
         // Initialize git repo
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["init"])
             .output()
             .unwrap();
 
         // Configure git
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["config", "user.name", "Test User"])
             .output()
             .unwrap();
 
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["config", "user.email", "test@example.com"])
             .output()
@@ -49,19 +50,19 @@ impl McpTestEnvironment {
         // Create initial commit on main
         std::fs::write(path.join("README.md"), "# MCP Test Project")
             .expect("Failed to write README.md");
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["add", "README.md"])
             .output()
             .unwrap();
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["commit", "-m", "Initial commit"])
             .output()
             .unwrap();
 
         // Create feature branch
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["checkout", "-b", "feature/user-management"])
             .output()
@@ -69,24 +70,24 @@ impl McpTestEnvironment {
 
         std::fs::write(path.join("user.rs"), "// User management module")
             .expect("Failed to write user.rs");
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["add", "user.rs"])
             .output()
             .unwrap();
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["commit", "-m", "Add user management"])
             .output()
             .unwrap();
 
         // Create develop branch from main
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["checkout", "main"])
             .output()
             .unwrap();
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["checkout", "-b", "develop"])
             .output()
@@ -94,12 +95,12 @@ impl McpTestEnvironment {
 
         std::fs::write(path.join("develop.md"), "# Development branch")
             .expect("Failed to write develop.md");
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["add", "develop.md"])
             .output()
             .unwrap();
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(path)
             .args(["commit", "-m", "Add development documentation"])
             .output()
@@ -107,16 +108,16 @@ impl McpTestEnvironment {
     }
 
     fn run_cli_command(&self, args: &[&str]) -> std::process::Output {
-        Command::new("cargo")
+        Command::cargo_bin("sah")
+            .expect("Failed to find sah binary")
             .current_dir(self.temp_dir.path())
-            .args(&["run", "--bin", "swissarmyhammer", "--"])
             .args(args)
             .output()
             .expect("Failed to run CLI command")
     }
 
     fn get_current_branch(&self) -> String {
-        let output = Command::new("git")
+        let output = StdCommand::new("git")
             .current_dir(self.temp_dir.path())
             .args(["branch", "--show-current"])
             .output()
@@ -126,7 +127,7 @@ impl McpTestEnvironment {
     }
 
     fn switch_to_branch(&self, branch: &str) {
-        Command::new("git")
+        StdCommand::new("git")
             .current_dir(self.temp_dir.path())
             .args(["checkout", branch])
             .output()
@@ -147,7 +148,6 @@ fn test_mcp_issue_work_from_feature_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "user-tests",
         "--content",
         "# User Tests\n\nImplement tests for user management",
@@ -194,7 +194,6 @@ fn test_mcp_issue_work_from_develop_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "dev-feature",
         "--content",
         "# Development Feature\n\nNew feature for develop branch",
@@ -220,7 +219,6 @@ fn test_mcp_issue_merge_to_source_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "user-validation",
         "--content",
         "# User Validation\n\nAdd validation to user management",
@@ -237,19 +235,19 @@ fn test_mcp_issue_merge_to_source_branch() {
     )
     .expect("Failed to write validation file");
 
-    Command::new("git")
+    StdCommand::new("git")
         .current_dir(env.temp_dir.path())
         .args(["add", "validation.rs"])
         .output()
         .unwrap();
-    Command::new("git")
+    StdCommand::new("git")
         .current_dir(env.temp_dir.path())
         .args(["commit", "-m", "Add user validation"])
         .output()
         .unwrap();
 
     // Mark issue complete
-    let output = env.run_cli_command(&["issue", "mark-complete", "user-validation"]);
+    let output = env.run_cli_command(&["issue", "complete", "user-validation"]);
     assert!(output.status.success());
 
     // Merge issue back to its source branch (feature/user-management)
@@ -281,7 +279,6 @@ fn test_mcp_issue_work_prevents_issue_from_issue_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "first-issue",
         "--content",
         "# First Issue\n\nFirst issue from main",
@@ -295,7 +292,6 @@ fn test_mcp_issue_work_prevents_issue_from_issue_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "second-issue",
         "--content",
         "# Second Issue\n\nAttempt from issue branch",
@@ -333,11 +329,14 @@ fn test_mcp_backwards_compatibility_main_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "main-branch-issue",
         "--content",
         "# Main Branch Issue\n\nTraditional main branch workflow",
     ]);
+    if !output.status.success() {
+        eprintln!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("STDERR: {}", String::from_utf8_lossy(&output.stderr));
+    }
     assert!(output.status.success());
 
     // Work on issue (should default to main branch behavior)
@@ -354,19 +353,19 @@ fn test_mcp_backwards_compatibility_main_branch() {
     )
     .expect("Failed to write main feature file");
 
-    Command::new("git")
+    StdCommand::new("git")
         .current_dir(env.temp_dir.path())
         .args(["add", "main_feature.rs"])
         .output()
         .unwrap();
-    Command::new("git")
+    StdCommand::new("git")
         .current_dir(env.temp_dir.path())
         .args(["commit", "-m", "Add main branch feature"])
         .output()
         .unwrap();
 
     // Mark complete and merge
-    let output = env.run_cli_command(&["issue", "mark-complete", "main-branch-issue"]);
+    let output = env.run_cli_command(&["issue", "complete", "main-branch-issue"]);
     assert!(output.status.success());
 
     let output = env.run_cli_command(&["issue", "merge", "main-branch-issue"]);
@@ -393,7 +392,6 @@ fn test_mcp_error_handling_invalid_source() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "invalid-source-test",
         "--content",
         "# Invalid Source Test\n\nTesting error handling",
@@ -416,7 +414,6 @@ fn test_mcp_multiple_issues_same_source() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "develop-feature-a",
         "--content",
         "# Develop Feature A\n\nFirst feature for develop branch",
@@ -427,7 +424,6 @@ fn test_mcp_multiple_issues_same_source() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "develop-feature-b",
         "--content",
         "# Develop Feature B\n\nSecond feature for develop branch",
@@ -446,7 +442,7 @@ fn test_mcp_multiple_issues_same_source() {
     assert_eq!(env.get_current_branch(), "issue/develop-feature-b");
 
     // Both issue branches should exist
-    let output = Command::new("git")
+    let output = StdCommand::new("git")
         .current_dir(env.temp_dir.path())
         .args(["branch", "--list"])
         .output()
@@ -467,7 +463,6 @@ fn test_mcp_issue_list_shows_source_branches() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "main-issue",
         "--content",
         "# Main Issue\n\nIssue from main",
@@ -478,7 +473,6 @@ fn test_mcp_issue_list_shows_source_branches() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "feature-issue",
         "--content",
         "# Feature Issue\n\nIssue from feature branch",
@@ -489,7 +483,6 @@ fn test_mcp_issue_list_shows_source_branches() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "develop-issue",
         "--content",
         "# Develop Issue\n\nIssue from develop branch",
@@ -522,7 +515,6 @@ fn test_mcp_issue_show_displays_source_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "--name",
         "feature-details",
         "--content",
         "# Feature Details\n\nDetailed feature implementation",

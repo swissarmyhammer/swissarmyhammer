@@ -72,7 +72,7 @@ transitions:
 
     std::fs::write("normal_regression_test.md", workflow_content)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "normal_regression_test.md"])
@@ -113,7 +113,7 @@ fn test_prompt_commands_still_work() -> Result<()> {
     ];
 
     for command_args in test_commands {
-        let output = Command::cargo_bin("swissarmyhammer")
+        let output = Command::cargo_bin("sah")
             .unwrap()
             .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
             .args(&command_args)
@@ -145,7 +145,7 @@ fn test_help_and_version_commands_unchanged() -> Result<()> {
     let basic_commands = vec![vec!["--help"], vec!["--version"], vec!["help"]];
 
     for command_args in basic_commands {
-        let output = Command::cargo_bin("swissarmyhammer")
+        let output = Command::cargo_bin("sah")
             .unwrap()
             .args(&command_args)
             .output()?;
@@ -191,7 +191,7 @@ transitions:
 
     std::fs::write("invalid_regression_test.md", invalid_workflow)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "invalid_regression_test.md"])
@@ -232,7 +232,7 @@ fn test_existing_abort_prompt_compatibility() -> Result<()> {
     ensure_no_abort_file();
 
     // Test that the existing abort prompt still works (it should use the new MCP tool)
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["prompt", "test", "abort"])
@@ -265,7 +265,7 @@ fn test_exit_codes_remain_consistent() -> Result<()> {
     ];
 
     for (command_args, expected_success, description) in test_cases {
-        let output = Command::cargo_bin("swissarmyhammer")
+        let output = Command::cargo_bin("sah")
             .unwrap()
             .args(&command_args)
             .output()?;
@@ -364,7 +364,7 @@ transitions:
     std::fs::write("main_regression.md", main_workflow)?;
     std::fs::write("sub_regression.md", sub_workflow)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "main_regression.md"])
@@ -421,7 +421,7 @@ transitions:
 
     // Run the same workflow multiple times sequentially
     for i in 0..3 {
-        let output = Command::cargo_bin("swissarmyhammer")
+        let output = Command::cargo_bin("sah")
             .unwrap()
             .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
             .args(["flow", "run", "sequential_test.md"])
@@ -457,7 +457,7 @@ fn test_error_messages_format_unchanged() -> Result<()> {
     ensure_no_abort_file();
 
     // Test that error message formats are consistent with previous behavior
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["flow", "run", "nonexistent_file.md"])
         .output()?;
@@ -513,7 +513,7 @@ transitions: []
     let handles: Vec<_> = (0..3)
         .map(|i| {
             std::thread::spawn(move || {
-                Command::cargo_bin("swissarmyhammer")
+                Command::cargo_bin("sah")
                     .unwrap()
                     .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
                     .args(["flow", "run", "concurrent_regression.md"])

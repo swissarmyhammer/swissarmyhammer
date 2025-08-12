@@ -4,92 +4,16 @@ SwissArmyHammer is available through multiple installation methods. Choose the o
 
 ## Quick Install (Recommended)
 
-### One-liner install script
+### Cargo Install from Git
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wballard/swissarmyhammer/main/dist/install.sh | bash
+cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli
 ```
 
-This script will:
-- Detect your platform automatically
-- Download the appropriate binary
-- Install it to `~/.local/bin` (or `$INSTALL_DIR` if set)
-- Add the binary to your PATH
-- Verify the installation
-
-## Platform-Specific Installation
-
-### macOS
-
-#### Option 1: Homebrew (Recommended)
-
-```bash
-# Add the tap (once the formula is published)
-brew tap wballard/swissarmyhammer
-brew install swissarmyhammer
-```
-
-#### Option 2: Direct Download
-
-```bash
-# Intel Macs
-curl -L https://github.com/wballard/swissarmyhammer/releases/latest/download/swissarmyhammer-x86_64-apple-darwin -o swissarmyhammer
-chmod +x swissarmyhammer
-sudo mv swissarmyhammer /usr/local/bin/
-
-# Apple Silicon Macs
-curl -L https://github.com/wballard/swissarmyhammer/releases/latest/download/swissarmyhammer-aarch64-apple-darwin -o swissarmyhammer
-chmod +x swissarmyhammer
-sudo mv swissarmyhammer /usr/local/bin/
-```
-
-### Linux
-
-#### Option 1: Direct Download
-
-```bash
-# x86_64 (most common)
-curl -L https://github.com/wballard/swissarmyhammer/releases/latest/download/swissarmyhammer-x86_64-unknown-linux-gnu -o swissarmyhammer
-chmod +x swissarmyhammer
-sudo mv swissarmyhammer /usr/local/bin/
-
-# x86_64 (static binary, works on any Linux distribution)
-curl -L https://github.com/wballard/swissarmyhammer/releases/latest/download/swissarmyhammer-x86_64-unknown-linux-musl -o swissarmyhammer
-chmod +x swissarmyhammer
-sudo mv swissarmyhammer /usr/local/bin/
-
-# ARM64 (for ARM-based servers/systems)
-curl -L https://github.com/wballard/swissarmyhammer/releases/latest/download/swissarmyhammer-aarch64-unknown-linux-gnu -o swissarmyhammer
-chmod +x swissarmyhammer
-sudo mv swissarmyhammer /usr/local/bin/
-```
-
-#### Option 2: Package Managers (Future)
-
-We plan to add support for:
-- `apt` packages for Debian/Ubuntu
-- `yum`/`dnf` packages for RHEL/Fedora
-- Snap packages
-- Flatpak
-
-### Windows
-
-#### Option 1: Direct Download
-
-```powershell
-# Download the latest release
-Invoke-WebRequest https://github.com/wballard/swissarmyhammer/releases/latest/download/swissarmyhammer-x86_64-pc-windows-msvc.exe -OutFile swissarmyhammer.exe
-
-# Move to a directory in your PATH (optional)
-Move-Item swissarmyhammer.exe $env:USERPROFILE\bin\
-```
-
-#### Option 2: Package Managers (Future)
-
-We plan to add support for:
-- Chocolatey
-- Scoop
-- winget
+This will:
+- Install the latest version directly from the Git repository
+- Place the `sah` binary in `~/.cargo/bin` (make sure it's in your PATH)
+- Work on all platforms supported by Rust
 
 ## Install from Source
 
@@ -118,11 +42,8 @@ cp target/release/swissarmyhammer /usr/local/bin/
 ### Using Cargo
 
 ```bash
-# Install directly from crates.io (once published)
-cargo install swissarmyhammer
-
-# Or install from the git repository
-cargo install --git https://github.com/wballard/swissarmyhammer.git
+# Install from the git repository (recommended)
+cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli
 ```
 
 ## Verification
@@ -194,7 +115,7 @@ brew update && brew upgrade swissarmyhammer
 ### Cargo
 
 ```bash
-cargo install swissarmyhammer --force
+cargo install --git https://github.com/swissarmyhammer/swissarmyhammer.git swissarmyhammer-cli --force
 ```
 
 ## Troubleshooting

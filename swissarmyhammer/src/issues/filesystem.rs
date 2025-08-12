@@ -197,14 +197,50 @@ impl FileSystemIssueStorage {
         let name = filename.to_string();
 
         // Read file content
-        let content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
+        let file_content = fs::read_to_string(path).map_err(SwissArmyHammerError::Io)?;
 
-        // Determine if completed based on path - only mark as completed if directly in the
-        // specific completed directory, not just any directory named "complete"
+        // Parse YAML frontmatter if present
+        let (yaml_metadata, content) = if file_content.starts_with("---\n") {
+            if let Some(end_marker) = file_content[4..].find("\n---\n") {
+                let yaml_content = &file_content[4..end_marker + 4];
+                let mut markdown_content = &file_content[end_marker + 8..]; // Skip past "---\n"
+                
+                // Remove leading newline if present
+                if markdown_content.starts_with('\n') {
+                    markdown_content = &markdown_content[1..];
+                }
+                
+                // Parse YAML frontmatter
+                match serde_yaml::from_str::<serde_yaml::Value>(yaml_content) {
+                    Ok(yaml) => (Some(yaml), markdown_content.to_string()),
+                    Err(_) => (None, file_content), // Fallback to treating entire content as markdown
+                }
+            } else {
+                (None, file_content) // Malformed frontmatter, treat as plain content
+            }
+        } else {
+            (None, file_content) // No frontmatter
+        };
+
+        // Extract metadata from YAML frontmatter with fallbacks
+        let source_branch = yaml_metadata
+            .as_ref()
+            .and_then(|yaml| yaml.get("source_branch"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&default_source_branch())
+            .to_string();
+
+        let frontmatter_completed = yaml_metadata
+            .as_ref()
+            .and_then(|yaml| yaml.get("completed"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Determine if completed: prioritize file location over frontmatter
         let completed = path
             .parent()
             .map(|parent| parent == self.state.completed_dir)
-            .unwrap_or(false);
+            .unwrap_or(frontmatter_completed);
 
         // Get file creation time for created_at
         let created_at = path
@@ -220,7 +256,7 @@ impl FileSystemIssueStorage {
             completed,
             file_path: path.to_path_buf(),
             created_at,
-            source_branch: default_source_branch(),
+            source_branch,
         })
     }
 
@@ -343,9 +379,15 @@ impl FileSystemIssueStorage {
         let issue = self.get_issue(name).await?;
         let path = &issue.file_path;
 
+        // Create content with preserved YAML frontmatter
+        let content_with_frontmatter = format!(
+            "---\nsource_branch: \"{}\"\ncompleted: {}\n---\n{}",
+            issue.source_branch, issue.completed, content
+        );
+
         // Atomic write using temp file and rename
         let temp_path = path.with_extension("tmp");
-        std::fs::write(&temp_path, &content).map_err(SwissArmyHammerError::Io)?;
+        std::fs::write(&temp_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
         std::fs::rename(&temp_path, path).map_err(SwissArmyHammerError::Io)?;
 
         debug!(
@@ -605,8 +647,12 @@ impl IssueStorage for FileSystemIssueStorage {
         let filename = create_safe_filename(&issue_name);
         let file_path = self.state.issues_dir.join(format!("{filename}.md"));
 
-        // Write the content to the file
-        fs::write(&file_path, &content).map_err(SwissArmyHammerError::Io)?;
+        // Create YAML frontmatter and write to file
+        let content_with_frontmatter = format!(
+            "---\nsource_branch: \"{}\"\ncompleted: false\n---\n{}",
+            source_branch, content
+        );
+        fs::write(&file_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
 
         let created_at = Utc::now();
 
@@ -1994,9 +2040,9 @@ mod tests {
         assert_eq!(updated_issue.file_path, issue.file_path);
         assert_eq!(updated_issue.completed, issue.completed);
 
-        // Verify file was updated
-        let file_content = std::fs::read_to_string(&updated_issue.file_path).unwrap();
-        assert_eq!(file_content, updated_content);
+        // Verify file was updated - content should match what's in the Issue struct, not raw file
+        // Raw file now contains YAML frontmatter, so we check the parsed content instead
+        assert_eq!(updated_issue.content, updated_content);
     }
 
     #[tokio::test]

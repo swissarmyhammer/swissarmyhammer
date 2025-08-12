@@ -11,7 +11,7 @@ fn test_mcp_server_exits_on_client_disconnect() {
     // the stdio transport is closed.
 
     // Start the MCP server
-    let mut server = Command::cargo_bin("swissarmyhammer")
+    let mut server = Command::cargo_bin("sah")
         .unwrap()
         .arg("serve")
         .stdin(Stdio::piped())
@@ -66,7 +66,7 @@ fn test_mcp_server_responds_to_ctrl_c() {
     use nix::unistd::Pid;
 
     // Start the MCP server
-    let mut server = Command::cargo_bin("swissarmyhammer")
+    let mut server = Command::cargo_bin("sah")
         .unwrap()
         .arg("serve")
         .stdin(Stdio::piped())

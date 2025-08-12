@@ -12,8 +12,7 @@ stateDiagram-v2
     [*] --> start
     start --> review
     review --> correct
-    correct --> test
-    test --> commit
+    correct --> commit
     commit --> [*]
 ```
 
@@ -22,9 +21,8 @@ stateDiagram-v2
 - start: log "Reviewing an issue"
 - review: execute prompt "issue/review"
 - correct: execute prompt "issue/code_review"
-- test: log "Would run TDD workflow"
 - commit: execute prompt "commit"
 
 ## Description
 
-This workflow reviews a working branch and then implements that review.
+This workflow reviews the documentation and then implements those corrections.

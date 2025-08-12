@@ -88,16 +88,7 @@ impl McpTool for CreateIssueTool {
             match git_ops_guard.as_ref() {
                 Some(git_ops) => {
                     match git_ops.current_branch() {
-                        Ok(branch) => {
-                            // Validate that we're not creating an issue from another issue branch
-                            if branch.starts_with("issue/") {
-                                return Err(McpError::invalid_params(
-                                    format!("Cannot create issue from issue branch '{branch}'"),
-                                    None,
-                                ));
-                            }
-                            branch
-                        }
+                        Ok(branch) => branch,
                         Err(e) => {
                             tracing::warn!(
                                 "Failed to get current branch: {}. Using default 'main'",

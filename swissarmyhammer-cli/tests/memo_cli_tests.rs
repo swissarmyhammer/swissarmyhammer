@@ -18,7 +18,7 @@ use tempfile::{NamedTempFile, TempDir};
 
 /// Helper to create a CLI command with environment setup
 fn memo_cmd() -> Command {
-    Command::cargo_bin("swissarmyhammer").unwrap()
+    Command::cargo_bin("sah").unwrap()
 }
 
 /// Helper to create a memo command with custom memos directory
@@ -782,7 +782,7 @@ fn test_cli_memo_concurrent_operations() {
         .map(|i| {
             let temp_dir_path = temp_dir.path().to_path_buf();
             std::thread::spawn(move || {
-                let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+                let mut cmd = Command::cargo_bin("sah").unwrap();
                 cmd.env("SWISSARMYHAMMER_MEMOS_DIR", temp_dir_path.join("memos"));
                 cmd.args(["memo", "create", &format!("Concurrent Memo {i}")])
                     .arg("--content")

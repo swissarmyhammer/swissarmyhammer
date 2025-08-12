@@ -127,7 +127,7 @@ fn test_abort_performance_impact_baseline() -> Result<()> {
 
     // Baseline measurement without abort file
     let start_time = Instant::now();
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -164,7 +164,7 @@ fn test_abort_performance_with_checking_overhead() -> Result<()> {
     env.create_abort_file("Performance test abort")?;
 
     let start_time = Instant::now();
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -213,7 +213,7 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
             std::env::set_current_dir(current_dir)?;
             barrier.wait();
 
-            let output = Command::cargo_bin("swissarmyhammer")
+            let output = Command::cargo_bin("sah")
                 .unwrap()
                 .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
                 .args(["flow", "run", &workflow_file])
@@ -296,7 +296,7 @@ fn test_large_abort_reasons() -> Result<()> {
     let large_reason = "X".repeat(10240);
     env.create_abort_file(&large_reason)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -330,7 +330,7 @@ fn test_unicode_abort_reasons() -> Result<()> {
     env.create_abort_file(unicode_reason)?;
     env.verify_abort_file(unicode_reason)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -377,7 +377,7 @@ fn test_abort_error_messages_user_experience() -> Result<()> {
     let abort_reason = "User initiated cancellation for testing UX";
     env.create_abort_file(abort_reason)?;
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -410,7 +410,7 @@ fn test_abort_file_cleanup_between_runs() -> Result<()> {
     // First run with abort file
     env.create_abort_file("First run abort")?;
 
-    let output1 = Command::cargo_bin("swissarmyhammer")
+    let output1 = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -422,7 +422,7 @@ fn test_abort_file_cleanup_between_runs() -> Result<()> {
     );
 
     // Second run without abort file - should clean up and succeed
-    let output2 = Command::cargo_bin("swissarmyhammer")
+    let output2 = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])
@@ -451,7 +451,7 @@ fn test_abort_with_different_cli_commands() -> Result<()> {
     env.create_abort_file("CLI command test abort")?;
 
     // Test prompt list command - should not be affected by abort file
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["prompt", "list"])
@@ -465,7 +465,7 @@ fn test_abort_with_different_cli_commands() -> Result<()> {
     );
 
     // Test flow command with non-existent workflow
-    let output2 = Command::cargo_bin("swissarmyhammer")
+    let output2 = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", "nonexistent.md"])
@@ -490,7 +490,7 @@ fn test_regression_normal_workflow_execution() -> Result<()> {
     // Ensure no abort file exists
     env.verify_no_abort_file();
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
         .args(["flow", "run", &workflow_file])

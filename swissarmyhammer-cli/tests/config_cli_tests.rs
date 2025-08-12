@@ -12,7 +12,7 @@ use tempfile::TempDir;
 fn test_config_show_no_file() {
     let temp_dir = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path()).args(["config", "show"]);
 
     cmd.assert().success().stdout(predicate::str::contains(
@@ -38,7 +38,7 @@ fn test_config_show_with_file() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path()).args(["config", "show"]);
 
     cmd.assert()
@@ -65,7 +65,7 @@ fn test_config_show_json_format() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "show", "--format", "json"]);
 
@@ -91,7 +91,7 @@ fn test_config_show_yaml_format() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "show", "--format", "yaml"]);
 
@@ -106,7 +106,7 @@ fn test_config_show_yaml_format() {
 fn test_config_variables_no_file() {
     let temp_dir = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "variables"]);
 
@@ -131,7 +131,7 @@ fn test_config_variables_with_file() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "variables"]);
 
@@ -158,7 +158,7 @@ fn test_config_variables_verbose() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "variables", "--verbose"]);
 
@@ -183,7 +183,7 @@ fn test_config_variables_json_format() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "variables", "--format", "json"]);
 
@@ -204,7 +204,7 @@ fn test_config_test_template_from_stdin() {
 
     let template_content = "App: {{ app_name }} v{{ version }}";
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test"])
         .write_stdin(template_content);
@@ -227,7 +227,7 @@ fn test_config_test_template_from_file() {
     let template_path = temp_dir.path().join("template.txt");
     fs::write(&template_path, template_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test", template_path.to_str().unwrap()]);
 
@@ -247,7 +247,7 @@ fn test_config_test_with_variable_overrides() {
 
     let template_content = "{{ name }} in {{ env }} mode";
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test", "--var", "env=production"])
         .write_stdin(template_content);
@@ -268,7 +268,7 @@ fn test_config_test_debug_mode() {
 
     let template_content = "{{ debug_app }}: {{ level }}";
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test", "--debug"])
         .write_stdin(template_content);
@@ -287,7 +287,7 @@ fn test_config_test_debug_mode() {
 fn test_config_env_no_file() {
     let temp_dir = TempDir::new().unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path()).args(["config", "env"]);
 
     cmd.assert()
@@ -311,7 +311,7 @@ fn test_config_env_with_variables() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path()).args(["config", "env"]);
 
     cmd.assert().success().stdout(predicate::str::contains(
@@ -338,7 +338,7 @@ fn test_config_env_missing_only() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "env", "--missing"]);
 
@@ -362,7 +362,7 @@ fn test_config_env_json_format() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "env", "--format", "json"]);
 
@@ -381,7 +381,7 @@ fn test_config_invalid_template_syntax() {
 
     let invalid_template = "{{ unclosed tag";
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test"])
         .write_stdin(invalid_template);
@@ -399,7 +399,7 @@ fn test_config_missing_template_file() {
     let config_path = temp_dir.path().join("sah.toml");
     fs::write(&config_path, config_content).unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test", "nonexistent.txt"]);
 
@@ -418,7 +418,7 @@ fn test_config_invalid_variable_format() {
 
     let template_content = "{{ name }}";
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test", "--var", "invalid_format"])
         .write_stdin(template_content);
@@ -454,7 +454,7 @@ fn test_config_complex_template_with_nested_access() {
         "Team Size: {{ team.members | size }} members"
     );
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["config", "test"])
         .write_stdin(template_content);

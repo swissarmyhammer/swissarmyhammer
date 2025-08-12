@@ -3,7 +3,7 @@ use predicates::prelude::*;
 
 #[test]
 fn test_swissarmyhammer_binary_exists() {
-    Command::cargo_bin("swissarmyhammer")
+    Command::cargo_bin("sah")
         .unwrap()
         .arg("--version")
         .assert()
@@ -13,7 +13,7 @@ fn test_swissarmyhammer_binary_exists() {
 
 #[test]
 fn test_swissarmyhammer_has_expected_commands() {
-    Command::cargo_bin("swissarmyhammer")
+    Command::cargo_bin("sah")
         .unwrap()
         .arg("--help")
         .assert()

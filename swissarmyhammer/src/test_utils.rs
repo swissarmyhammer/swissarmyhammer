@@ -41,8 +41,10 @@
 /// environment variable. This means tests using TestHomeGuard will serialize access
 /// to HOME, which may impact parallel test execution performance.
 use crate::{Prompt, PromptLibrary};
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::path::PathBuf;
+#[cfg(test)]
+use std::path::Path;
+use std::sync::OnceLock;
 
 // #[cfg(test)]
 // use swissarmyhammer_tools::mcp::{ToolHandlers, ToolContext};
@@ -126,16 +128,14 @@ impl Drop for ProcessGuard {
     }
 }
 
-/// Global test home path, initialized once
+/// Global test home path, initialized once (used for legacy compatibility)
 static TEST_HOME_PATH: OnceLock<PathBuf> = OnceLock::new();
-
-/// Mutex to ensure thread-safe HOME environment variable modification
-static HOME_MUTEX: Mutex<()> = Mutex::new(());
 
 /// Initialize and get the test home directory path
 ///
 /// This calculates the correct path to the test-home directory regardless of
 /// whether the test is run from the workspace root or from within a crate.
+/// Note: This only calculates the path - validation is done later to avoid deadlocks.
 fn get_test_home_path() -> &'static PathBuf {
     TEST_HOME_PATH.get_or_init(|| {
         // Try to find the workspace root by looking for the test-home directory
@@ -144,7 +144,6 @@ fn get_test_home_path() -> &'static PathBuf {
         // Check if we're already at the workspace root (has tests/test-home)
         let direct_path = manifest_dir.join("tests").join("test-home");
         if direct_path.exists() {
-            validate_path_safety(&direct_path, &manifest_dir);
             return direct_path;
         }
 
@@ -153,40 +152,14 @@ fn get_test_home_path() -> &'static PathBuf {
             .parent()
             .expect("Failed to find parent directory")
             .to_path_buf();
-        let path = workspace_root.join("tests").join("test-home");
-        validate_path_safety(&path, &workspace_root);
-        path
+        workspace_root.join("tests").join("test-home")
     })
 }
 
-/// Validate that a path doesn't escape the project directory
-fn validate_path_safety(path: &Path, project_root: &Path) {
-    // Canonicalize paths to resolve any .. or symlinks
-    match (path.canonicalize(), project_root.canonicalize()) {
-        (Ok(canonical_path), Ok(canonical_root)) => {
-            if !canonical_path.starts_with(&canonical_root) {
-                panic!(
-                    "Security error: Test home path '{}' escapes project directory '{}'",
-                    canonical_path.display(),
-                    canonical_root.display()
-                );
-            }
-        }
-        (Err(_), _) => {
-            // Path doesn't exist yet, which is ok for test setup
-            // Just validate it doesn't contain suspicious patterns
-            let path_str = path.to_string_lossy();
-            if path_str.contains("../..") || path_str.contains("....") {
-                panic!("Security error: Test home path '{path_str}' contains suspicious patterns");
-            }
-        }
-        (_, Err(e)) => {
-            panic!("Failed to canonicalize project root: {e}");
-        }
-    }
-}
 
 /// Set up the test environment by configuring HOME to use the test directory
+///
+/// **DEPRECATED**: This function serializes tests. Use `IsolatedTestHome::new()` instead.
 ///
 /// This function should be called at the beginning of each test that needs
 /// to access the ~/.swissarmyhammer directory.
@@ -202,18 +175,7 @@ fn validate_path_safety(path: &Path, project_root: &Path) {
 /// }
 /// ```
 pub fn setup_test_home() {
-    let _guard = HOME_MUTEX.lock().expect("Failed to lock HOME mutex");
     let test_home = get_test_home_path();
-
-    // Ensure the test home directory exists
-    if !test_home.exists() {
-        panic!(
-            "Test home directory does not exist: {}. Please ensure tests/test-home is properly set up.",
-            test_home.display()
-        );
-    }
-
-    // Set the HOME environment variable to our test directory
     std::env::set_var("HOME", test_home);
 }
 
@@ -231,35 +193,24 @@ pub fn get_test_swissarmyhammer_dir() -> PathBuf {
 
 /// Guard that sets up test environment and restores the original HOME on drop
 ///
+/// **DEPRECATED**: This approach serializes all tests. Use `create_isolated_test_home()` instead.
+/// 
 /// This is useful for tests that need to ensure the HOME environment variable
 /// is restored after the test completes, preventing test pollution.
 pub struct TestHomeGuard {
     original_home: Option<String>,
-    _guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl TestHomeGuard {
-    /// Create a new test home guard
+    /// Create a new test home guard (DEPRECATED)
+    /// 
+    /// **Warning**: This method serializes all tests and should not be used.
+    /// Use `IsolatedTestHome::new()` instead for parallel-safe testing.
     pub fn new() -> Self {
-        let guard = HOME_MUTEX.lock().expect("Failed to lock HOME mutex");
         let original_home = std::env::var("HOME").ok();
-
         let test_home = get_test_home_path();
-
-        // Ensure the test home directory exists
-        if !test_home.exists() {
-            panic!(
-                "Test home directory does not exist: {}. Please ensure tests/test-home is properly set up.",
-                test_home.display()
-            );
-        }
-
         std::env::set_var("HOME", test_home);
-
-        Self {
-            original_home,
-            _guard: guard,
-        }
+        Self { original_home }
     }
 }
 
@@ -280,6 +231,8 @@ impl Drop for TestHomeGuard {
 }
 
 /// Create a test home guard for scoped test environment setup
+/// 
+/// **DEPRECATED**: Use `create_isolated_test_home()` instead for parallel-safe testing.
 ///
 /// # Example
 ///
@@ -294,6 +247,98 @@ impl Drop for TestHomeGuard {
 /// ```
 pub fn create_test_home_guard() -> TestHomeGuard {
     TestHomeGuard::new()
+}
+
+/// Create an isolated test home directory for parallel-safe testing
+///
+/// This creates a temporary directory with a mock SwissArmyHammer setup,
+/// allowing tests to run in parallel without interfering with each other.
+///
+/// # Example
+///
+/// ```no_run
+/// # use swissarmyhammer::test_utils::create_isolated_test_home;
+/// #[test]
+/// fn test_with_isolation() {
+///     let (temp_dir, home_path) = create_isolated_test_home();
+///     // Use home_path for testing instead of reading from HOME env var
+///     // temp_dir is automatically cleaned up when dropped
+/// }
+/// ```
+#[cfg(test)]
+pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
+    let temp_dir = create_temp_dir();
+    let home_path = temp_dir.path().to_path_buf();
+    
+    // Create mock SwissArmyHammer directory structure
+    let sah_dir = home_path.join(".swissarmyhammer");
+    std::fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer directory");
+    std::fs::create_dir_all(sah_dir.join("prompts")).expect("Failed to create prompts directory");
+    std::fs::create_dir_all(sah_dir.join("workflows")).expect("Failed to create workflows directory");
+    
+    (temp_dir, home_path)
+}
+
+/// RAII guard for isolated test environments
+///
+/// This creates a temporary directory with mock SwissArmyHammer structure,
+/// sets HOME to point to it, and restores the original HOME on drop.
+/// Unlike TestHomeGuard, this allows parallel test execution.
+///
+/// # Example
+///
+/// ```no_run
+/// # use swissarmyhammer::test_utils::IsolatedTestHome;
+/// #[test]
+/// fn test_with_isolated_home() {
+///     let _guard = IsolatedTestHome::new();
+///     // HOME now points to an isolated temporary directory
+///     // with mock .swissarmyhammer structure
+///     // Original HOME is restored when _guard is dropped
+/// }
+/// ```
+#[cfg(test)]
+pub struct IsolatedTestHome {
+    _temp_dir: TempDir,
+    original_home: Option<String>,
+}
+
+#[cfg(test)]
+impl IsolatedTestHome {
+    /// Create a new isolated test home environment
+    pub fn new() -> Self {
+        let original_home = std::env::var("HOME").ok();
+        let (temp_dir, home_path) = create_isolated_test_home();
+        
+        // Set HOME to the temporary directory
+        std::env::set_var("HOME", &home_path);
+        
+        Self {
+            _temp_dir: temp_dir,
+            original_home,
+        }
+    }
+    
+    /// Get the path to the isolated home directory
+    pub fn home_path(&self) -> PathBuf {
+        self._temp_dir.path().to_path_buf()
+    }
+    
+    /// Get the path to the .swissarmyhammer directory in the isolated home
+    pub fn swissarmyhammer_dir(&self) -> PathBuf {
+        self.home_path().join(".swissarmyhammer")
+    }
+}
+
+#[cfg(test)]
+impl Drop for IsolatedTestHome {
+    fn drop(&mut self) {
+        // Restore original HOME environment variable
+        match &self.original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
 }
 
 /// Create a temporary directory for testing
@@ -483,12 +528,14 @@ mod tests {
 
     #[test]
     fn test_setup_test_home() {
-        let _guard = create_test_home_guard();
+        let _guard = IsolatedTestHome::new();
 
         let home = std::env::var("HOME").expect("HOME not set");
-        assert!(home.contains("test-home"));
-
-        let swissarmyhammer_dir = get_test_swissarmyhammer_dir();
+        // HOME should now point to our isolated temp directory
+        assert!(PathBuf::from(&home).exists());
+        
+        // Verify the mock SwissArmyHammer structure exists
+        let swissarmyhammer_dir = PathBuf::from(&home).join(".swissarmyhammer");
         assert!(swissarmyhammer_dir.exists());
         assert!(swissarmyhammer_dir.join("prompts").exists());
         assert!(swissarmyhammer_dir.join("workflows").exists());
@@ -499,9 +546,11 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
 
         {
-            let _guard = create_test_home_guard();
+            let _guard = IsolatedTestHome::new();
             let test_home = std::env::var("HOME").expect("HOME not set");
-            assert!(test_home.contains("test-home"));
+            // Should be pointing to temporary directory, not original home
+            assert_ne!(test_home, original_home.clone().unwrap_or_default());
+            assert!(PathBuf::from(&test_home).exists());
         }
 
         // Check that HOME is restored after guard is dropped

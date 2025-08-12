@@ -68,7 +68,7 @@ fn test_workflow_with_set_variables() {
     fs::write(&prompt_path, create_test_prompt()).unwrap();
 
     // Run workflow with --set variables
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("test-template")
@@ -115,7 +115,7 @@ stateDiagram-v2
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("some-workflow")
@@ -158,7 +158,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with both --var and --set
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("simple")
@@ -214,7 +214,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with template variables
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("template-workflow")
@@ -270,7 +270,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow without providing required variables
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("missing-vars")
@@ -337,7 +337,7 @@ stateDiagram-v2
 "#).unwrap();
 
     // Run workflow with complex template variables
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("complex-templates")
@@ -391,7 +391,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with template variables
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("malformed-templates")
@@ -443,7 +443,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with potentially malicious input
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("injection-test")
@@ -489,7 +489,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with empty set value
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("empty-value-test")
@@ -537,7 +537,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with special characters
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("special-chars-test")
@@ -548,7 +548,7 @@ stateDiagram-v2
     cmd.assert().success();
 
     // Test with spaces and quotes
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("special-chars-test")
@@ -591,7 +591,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with conflicting names
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("conflict-test")
@@ -639,7 +639,7 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with equals sign in value
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("equals-test")
@@ -680,7 +680,7 @@ Version: {{ version | default: "1.0" }}
     .unwrap();
 
     // Test with empty set value
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("prompt")
         .arg("test")
         .arg("empty-test")
@@ -725,7 +725,7 @@ Message: {{ message }}
     .unwrap();
 
     // Test with --set overriding --arg
-    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("prompt")
         .arg("test")
         .arg("override-test")

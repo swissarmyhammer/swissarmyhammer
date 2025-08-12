@@ -27,7 +27,7 @@ async fn test_mcp_logging_to_current_directory() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("swissarmyhammer");
+        .join("sah");
 
     let mut child = Command::new(&binary_path)
         .args(["serve"])
@@ -97,7 +97,7 @@ async fn test_mcp_logging_env_var_override() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("swissarmyhammer");
+        .join("sah");
 
     let child = Command::new(&binary_path)
         .args(["serve"])
@@ -152,7 +152,7 @@ async fn test_mcp_logging_creates_directory() {
         .unwrap()
         .parent()
         .unwrap()
-        .join("swissarmyhammer");
+        .join("sah");
 
     let child = Command::new(&binary_path)
         .args(["serve"])

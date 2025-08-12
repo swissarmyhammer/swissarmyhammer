@@ -9,7 +9,7 @@ use test_utils::create_semantic_test_guard;
 /// Test that the old --glob flag version no longer works (breaking change)
 #[test]
 fn test_search_index_old_glob_flag_rejected() -> Result<()> {
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["search", "index", "--glob", "**/*.rs"])
         .output()?;
@@ -35,7 +35,7 @@ fn test_search_index_positional_glob() -> Result<()> {
     let _guard = create_semantic_test_guard();
 
     // Use a pattern that won't match many files to avoid heavy indexing
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["search", "index", "nonexistent/**/*.xyz"])
         .timeout(std::time::Duration::from_secs(10)) // Fail fast if this takes too long
@@ -65,7 +65,7 @@ fn test_search_index_with_force() -> Result<()> {
     let _guard = create_semantic_test_guard();
 
     // Use a pattern that won't match many files to avoid heavy indexing
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["search", "index", "nonexistent/**/*.xyz", "--force"])
         .timeout(std::time::Duration::from_secs(10)) // Fail fast if this takes too long
@@ -96,7 +96,7 @@ fn test_search_index_with_force() -> Result<()> {
 fn test_search_query() -> Result<()> {
     let _guard = create_semantic_test_guard();
 
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["search", "query", "error handling"])
         .output()?;
@@ -116,7 +116,7 @@ fn test_search_query() -> Result<()> {
 /// Test search help output
 #[test]
 fn test_search_help() -> Result<()> {
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["search", "--help"])
         .output()?;
@@ -139,7 +139,7 @@ fn test_search_help() -> Result<()> {
 /// Test search index help shows correct usage
 #[test]
 fn test_search_index_help() -> Result<()> {
-    let output = Command::cargo_bin("swissarmyhammer")
+    let output = Command::cargo_bin("sah")
         .unwrap()
         .args(["search", "index", "--help"])
         .output()?;
