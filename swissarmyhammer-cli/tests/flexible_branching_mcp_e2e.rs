@@ -229,11 +229,8 @@ fn test_mcp_issue_merge_requires_issue_branch() {
     assert!(output.status.success());
 
     // Make changes and commit
-    std::fs::write(
-        env.temp_dir.path().join("test.rs"),
-        "// Test file",
-    )
-    .expect("Failed to write test file");
+    std::fs::write(env.temp_dir.path().join("test.rs"), "// Test file")
+        .expect("Failed to write test file");
 
     StdCommand::new("git")
         .current_dir(env.temp_dir.path())
@@ -255,11 +252,17 @@ fn test_mcp_issue_merge_requires_issue_branch() {
 
     // Try to merge from non-issue branch - should fail
     let output = env.run_cli_command(&["issue", "merge", "test-validation"]);
-    assert!(!output.status.success(), "Merge should fail when not on issue branch");
+    assert!(
+        !output.status.success(),
+        "Merge should fail when not on issue branch"
+    );
 
     // Check that abort file was created
     let abort_file = env.temp_dir.path().join(".swissarmyhammer/.abort");
-    assert!(abort_file.exists(), "Abort file should be created when merge fails due to invalid branch");
+    assert!(
+        abort_file.exists(),
+        "Abort file should be created when merge fails due to invalid branch"
+    );
 
     // Abort file should contain reason
     let abort_content = std::fs::read_to_string(&abort_file).unwrap();

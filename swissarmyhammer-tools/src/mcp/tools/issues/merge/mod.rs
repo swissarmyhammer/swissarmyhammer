@@ -86,9 +86,9 @@ impl McpTool for MergeIssueTool {
                                 "Cannot merge issue '{}' from branch '{}'. Merge operations must be performed from an issue branch. Switch to the appropriate issue branch first.",
                                 request.name, current_branch
                             );
-                            
+
                             tracing::warn!("Invalid branch for merge operation: {}", abort_reason);
-                            
+
                             // Create abort file to signal workflow termination
                             if let Err(e) = Self::create_abort_file(&abort_reason) {
                                 tracing::error!("Failed to create abort file: {}", e);
@@ -97,14 +97,17 @@ impl McpTool for MergeIssueTool {
                                     None,
                                 ));
                             }
-                            
+
                             return Err(McpError::invalid_params(abort_reason, None));
                         }
                     }
                     Err(e) => {
                         let error_msg = format!("Failed to get current branch: {}", e);
                         tracing::error!("{}", error_msg);
-                        return Err(McpErrorHandler::handle_error(e, "get current branch for merge validation"));
+                        return Err(McpErrorHandler::handle_error(
+                            e,
+                            "get current branch for merge validation",
+                        ));
                     }
                 }
             }
