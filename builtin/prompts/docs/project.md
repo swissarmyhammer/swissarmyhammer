@@ -8,12 +8,14 @@ description: Create comprehensive project documentation in ./doc
 
 Create high quality markdown project documentation for the project in ./doc.
 
+Do not write API or developer documentation at this time.
+
 {% render "principals" %}
 {% render "documentation" %}
 
 ## Documentation Strategy
 
-### 1. Architecture Documentation
+### Architecture Documentation
 
 #### System Overview
 
@@ -29,7 +31,7 @@ Create high quality markdown project documentation for the project in ./doc.
 - Dependencies and interfaces
 - Configuration options
 
-### 2. User Documentation
+### User Documentation
 
 #### Getting Started
 
@@ -45,32 +47,7 @@ Create high quality markdown project documentation for the project in ./doc.
 - Best practices
 - Troubleshooting guides
 
-### 3. Developer Documentation
-
-#### Code Organization
-
-- Directory structure
-- Module boundaries
-- Naming conventions
-- File organization patterns
-
-### 4. API Documentation
-
-#### Public Interfaces
-
-- Function signatures
-- Parameter descriptions
-- Return values
-- Error conditions
-
-#### Usage Examples
-
-- Common patterns
-- Integration examples
-- Performance considerations
-- Version compatibility
-
-### 5. Documentation Standards
+### Documentation Standards
 
 #### Structure and Format
 
