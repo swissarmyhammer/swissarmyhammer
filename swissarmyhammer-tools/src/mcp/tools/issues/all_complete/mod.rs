@@ -49,9 +49,9 @@ impl McpTool for AllCompleteIssueTool {
 
         let issue_storage = context.issue_storage.read().await;
 
-        // Get all issues with comprehensive error handling
-        let all_issues = match issue_storage.list_issues().await {
-            Ok(issues) => issues,
+        // Get all issues with extended info for completion status
+        let all_issue_infos = match issue_storage.list_issues_info().await {
+            Ok(issue_infos) => issue_infos,
             Err(e) => {
                 return Err(McpErrorHandler::handle_error(
                     e,
@@ -64,11 +64,11 @@ impl McpTool for AllCompleteIssueTool {
         let mut active_issues = Vec::new();
         let mut completed_issues = Vec::new();
 
-        for issue in all_issues {
-            if issue.completed {
-                completed_issues.push(issue);
+        for issue_info in all_issue_infos {
+            if issue_info.completed {
+                completed_issues.push(issue_info.issue);
             } else {
-                active_issues.push(issue);
+                active_issues.push(issue_info.issue);
             }
         }
 

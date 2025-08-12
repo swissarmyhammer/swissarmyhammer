@@ -38,21 +38,21 @@ async fn debug_issue_completion_detection() {
         .unwrap();
 
     // List all issues and debug their status
-    let all_issues = issue_storage.read().await.list_issues().await.unwrap();
+    let all_issue_infos = issue_storage.read().await.list_issues_info().await.unwrap();
 
-    println!("Total issues found: {}", all_issues.len());
-    for issue in &all_issues {
+    println!("Total issues found: {}", all_issue_infos.len());
+    for issue_info in &all_issue_infos {
         println!(
             "Issue: name='{}', completed={}, path='{}'",
-            issue.name,
-            issue.completed,
-            issue.file_path.display()
+            issue_info.issue.name,
+            issue_info.completed,
+            issue_info.file_path.display()
         );
     }
 
     // Verify completion counts
-    let completed_count = all_issues.iter().filter(|i| i.completed).count();
-    let active_count = all_issues.iter().filter(|i| !i.completed).count();
+    let completed_count = all_issue_infos.iter().filter(|i| i.completed).count();
+    let active_count = all_issue_infos.iter().filter(|i| !i.completed).count();
 
     println!("Completed count: {completed_count}, Active count: {active_count}");
 

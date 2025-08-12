@@ -89,11 +89,17 @@ impl McpTool for CreateIssueTool {
             .await
         {
             Ok(issue) => {
-                tracing::info!(
-                    "Created issue {} from current branch",
-                    issue.name
-                );
-                Ok(create_issue_response(&issue))
+                // Get the full issue info for the response (includes file path)
+                match issue_storage.get_issue_info(&issue.name).await {
+                    Ok(issue_info) => {
+                        tracing::info!(
+                            "Created issue {} from current branch",
+                            issue_info.issue.name
+                        );
+                        Ok(create_issue_response(&issue_info))
+                    }
+                    Err(e) => Err(McpErrorHandler::handle_error(e, "get created issue info")),
+                }
             }
             Err(e) => Err(McpErrorHandler::handle_error(e, "create issue")),
         }

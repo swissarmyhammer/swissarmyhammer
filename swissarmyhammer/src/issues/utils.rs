@@ -450,33 +450,39 @@ mod tests {
         let active_issue1 = Issue {
             name: "active1".to_string(),
             content: "Active issue 1".to_string(),
-            completed: false,
-            file_path: PathBuf::from("/test/active1.md"),
-            created_at: Utc::now(),
         };
 
         let active_issue2 = Issue {
             name: "active2".to_string(),
             content: "Active issue 2".to_string(),
-            completed: false,
-            file_path: PathBuf::from("/test/active2.md"),
-            created_at: Utc::now(),
         };
 
         let completed_issue = Issue {
             name: "completed1".to_string(),
             content: "Completed issue".to_string(),
-            completed: true,
-            file_path: PathBuf::from("/test/completed/completed1.md"),
-            created_at: Utc::now(),
         };
 
-        let issues = vec![
-            active_issue1.clone(),
-            active_issue2.clone(),
-            completed_issue.clone(),
+        let issue_infos = vec![
+            IssueInfo {
+                issue: active_issue1.clone(),
+                completed: false,
+                file_path: PathBuf::from("/test/active1.md"),
+                created_at: Utc::now(),
+            },
+            IssueInfo {
+                issue: active_issue2.clone(),
+                completed: false,
+                file_path: PathBuf::from("/test/active2.md"),
+                created_at: Utc::now(),
+            },
+            IssueInfo {
+                issue: completed_issue.clone(),
+                completed: true,
+                file_path: PathBuf::from("/test/completed/completed1.md"),
+                created_at: Utc::now(),
+            },
         ];
-        let status = ProjectStatus::from_issues(issues);
+        let status = ProjectStatus::from_issue_infos(issue_infos);
 
         // Check counts
         assert_eq!(status.total_issues, 3);
@@ -497,13 +503,18 @@ mod tests {
         assert_eq!(summary, "Total: 3, Active: 2, Completed: 1 (33%)");
 
         // Test all complete case
-        let all_completed = vec![completed_issue.clone()];
-        let all_complete_status = ProjectStatus::from_issues(all_completed);
+        let all_completed = vec![IssueInfo {
+            issue: completed_issue.clone(),
+            completed: true,
+            file_path: PathBuf::from("/test/completed/completed1.md"),
+            created_at: Utc::now(),
+        }];
+        let all_complete_status = ProjectStatus::from_issue_infos(all_completed);
         assert!(all_complete_status.all_complete);
         assert_eq!(all_complete_status.completion_percentage, 100);
 
         // Test empty case
-        let empty_status = ProjectStatus::from_issues(vec![]);
+        let empty_status = ProjectStatus::from_issue_infos(vec![]);
         assert_eq!(empty_status.total_issues, 0);
         assert_eq!(empty_status.completion_percentage, 0);
         assert!(!empty_status.all_complete); // Empty project is not "complete"

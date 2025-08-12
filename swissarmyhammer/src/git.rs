@@ -180,10 +180,9 @@ impl GitOperations {
                     source.to_string()
                 }
                 None => {
-                    // For resume scenario without explicit source, we can't determine the original source
-                    // Return main branch as a safe default
-                    // TODO: In future, we could store/retrieve the original source branch
-                    self.main_branch().unwrap_or_else(|_| "main".to_string())
+                    // For resume scenario without explicit source, try to get the stored source branch
+                    self.get_issue_source_branch(issue_name)
+                        .unwrap_or_else(|_| self.main_branch().unwrap_or_else(|_| "main".to_string()))
                 }
             };
             return Ok((branch_name, resume_source_branch));
@@ -230,6 +229,8 @@ impl GitOperations {
         // Handle existing branch: switch to it
         if self.branch_exists(&branch_name)? {
             self.checkout_branch(&branch_name)?;
+            // Store the source branch information for existing branches too
+            let _ = self.store_issue_source_branch(issue_name, &actual_source_branch);
             return Ok((branch_name, actual_source_branch));
         }
 
@@ -239,6 +240,10 @@ impl GitOperations {
         }
 
         self.create_and_checkout_branch(&branch_name)?;
+        
+        // Store the source branch information for the newly created issue branch
+        let _ = self.store_issue_source_branch(issue_name, &actual_source_branch);
+        
         Ok((branch_name, actual_source_branch))
     }
 
@@ -416,7 +421,46 @@ impl GitOperations {
     /// This method uses git's merge-base to find the common ancestor commit between
     /// the issue branch and potential target branches, determining where the issue
     /// branch was originally created from.
-    pub fn find_merge_target_branch(&self, issue_name: &str) -> Result<String> {
+    /// Store the source branch for an issue using git config
+    pub fn store_issue_source_branch(&self, issue_name: &str, source_branch: &str) -> Result<()> {
+        let config_key = format!("swissarmyhammer.issue.{}.source", issue_name);
+        
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["config", &config_key, source_branch])
+            .output()?;
+            
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::Other(format!(
+                "Failed to store source branch for issue '{}'", issue_name
+            )));
+        }
+        
+        Ok(())
+    }
+    
+    /// Retrieve the stored source branch for an issue
+    pub fn get_issue_source_branch(&self, issue_name: &str) -> Result<String> {
+        let config_key = format!("swissarmyhammer.issue.{}.source", issue_name);
+        
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["config", &config_key])
+            .output()?;
+            
+        if output.status.success() {
+            let source_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !source_branch.is_empty() {
+                return Ok(source_branch);
+            }
+        }
+        
+        // Fallback to old behavior if no stored source branch found
+        self.find_merge_target_branch_fallback(issue_name)
+    }
+
+    /// Fallback method for finding merge target (legacy behavior)
+    fn find_merge_target_branch_fallback(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
         
         // First check if the issue branch exists
@@ -448,33 +492,55 @@ impl GitOperations {
             })
             .collect();
 
-        // Try to find merge-base with main/master first
-        let main_branch = self.main_branch()?;
-        if candidate_branches.contains(&main_branch.as_str()) {
-            let output = Command::new("git")
-                .current_dir(&self.work_dir)
-                .args(["merge-base", &branch_name, &main_branch])
-                .output()?;
-            
-            if output.status.success() {
-                return Ok(main_branch);
-            }
-        }
-
-        // Fall back to first valid candidate branch
-        for candidate in candidate_branches {
-            let output = Command::new("git")
+        // Find the best merge target by analyzing merge-base depth
+        // The branch with the most recent common ancestor should be the target
+        let mut best_candidate = None;
+        let mut best_merge_base_time = 0;
+        
+        for candidate in &candidate_branches {
+            let merge_base_output = Command::new("git")
                 .current_dir(&self.work_dir)
                 .args(["merge-base", &branch_name, candidate])
                 .output()?;
             
-            if output.status.success() {
-                return Ok(candidate.to_string());
+            if !merge_base_output.status.success() {
+                continue;
+            }
+            
+            let merge_base_commit = String::from_utf8_lossy(&merge_base_output.stdout).trim().to_string();
+            
+            // Get the timestamp of the merge-base commit
+            let timestamp_output = Command::new("git")
+                .current_dir(&self.work_dir)
+                .args(["show", "-s", "--format=%ct", &merge_base_commit])
+                .output()?;
+                
+            if let Ok(timestamp_str) = String::from_utf8(timestamp_output.stdout) {
+                if let Ok(timestamp) = timestamp_str.trim().parse::<u64>() {
+                    if timestamp > best_merge_base_time {
+                        best_merge_base_time = timestamp;
+                        best_candidate = Some(candidate.to_string());
+                    }
+                }
             }
         }
 
-        // If no merge-base found, default to main branch
+        if let Some(candidate) = best_candidate {
+            return Ok(candidate);
+        }
+
+        // If no merge-base found with any branch, default to main branch
+        let main_branch = self.main_branch()?;
         Ok(main_branch)
+    }
+
+    /// Find the appropriate target branch for merging an issue branch
+    ///
+    /// This method first tries to retrieve the stored source branch for the issue,
+    /// falling back to merge-base analysis if no stored information is available.
+    pub fn find_merge_target_branch(&self, issue_name: &str) -> Result<String> {
+        // First try to get the stored source branch
+        self.get_issue_source_branch(issue_name)
     }
 
     /// Merge issue branch using git merge-base to determine target

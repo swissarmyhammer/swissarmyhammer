@@ -57,3 +57,6 @@ swissarmyhammer-cli/.swissarmyhammer
 
 
 doc/book
+
+# Claude Code configuration
+.claude/

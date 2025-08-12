@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde::{Deserialize, Serialize};
-use swissarmyhammer::issues::Issue;
+use swissarmyhammer::issues::{Issue, IssueInfo};
 
 /// Request structure for listing issues
 #[derive(Debug, Deserialize, Serialize)]
@@ -32,17 +32,17 @@ impl ListIssuesTool {
     }
 
     /// Format issues as a table
-    fn format_as_table(issues: &[Issue]) -> String {
-        if issues.is_empty() {
+    fn format_as_table(issue_infos: &[IssueInfo]) -> String {
+        if issue_infos.is_empty() {
             return "No issues found.".to_string();
         }
 
-        let active_issues: Vec<_> = issues.iter().filter(|i| !i.completed).collect();
-        let completed_issues: Vec<_> = issues.iter().filter(|i| i.completed).collect();
+        let active_issue_infos: Vec<_> = issue_infos.iter().filter(|i| !i.completed).collect();
+        let completed_issue_infos: Vec<_> = issue_infos.iter().filter(|i| i.completed).collect();
 
-        let total_issues = issues.len();
-        let completed_count = completed_issues.len();
-        let active_count = active_issues.len();
+        let total_issues = issue_infos.len();
+        let completed_count = completed_issue_infos.len();
+        let active_count = active_issue_infos.len();
         let completion_percentage = if total_issues > 0 {
             (completed_count * 100) / total_issues
         } else {
@@ -59,19 +59,19 @@ impl ListIssuesTool {
         if active_count > 0 {
             result.push('\n');
             result.push_str("Active Issues:\n");
-            for issue in active_issues {
-                result.push_str(&format!("  🔄 {}\n", issue.name));
+            for issue_info in active_issue_infos {
+                result.push_str(&format!("  🔄 {}\n", issue_info.issue.name));
             }
         }
 
         if completed_count > 0 {
             result.push('\n');
             result.push_str("Recently Completed:\n");
-            let mut sorted_completed = completed_issues;
+            let mut sorted_completed = completed_issue_infos;
             sorted_completed.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-            for issue in sorted_completed.iter().take(5) {
-                result.push_str(&format!("  ✅ {}\n", issue.name));
+            for issue_info in sorted_completed.iter().take(5) {
+                result.push_str(&format!("  ✅ {}\n", issue_info.issue.name));
             }
         }
 
@@ -79,20 +79,20 @@ impl ListIssuesTool {
     }
 
     /// Format issues as markdown
-    fn format_as_markdown(issues: &[Issue]) -> String {
+    fn format_as_markdown(issue_infos: &[IssueInfo]) -> String {
         let mut result = String::from("# Issues\n\n");
 
-        if issues.is_empty() {
+        if issue_infos.is_empty() {
             result.push_str("No issues found.\n");
             return result;
         }
 
-        for issue in issues {
-            let status = if issue.completed { "✅" } else { "🔄" };
-            result.push_str(&format!("## {} - {}\n\n", status, issue.name));
+        for issue_info in issue_infos {
+            let status = if issue_info.completed { "✅" } else { "🔄" };
+            result.push_str(&format!("## {} - {}\n\n", status, issue_info.issue.name));
             result.push_str(&format!(
                 "- **Status**: {}\n",
-                if issue.completed {
+                if issue_info.completed {
                     "Completed"
                 } else {
                     "Active"
@@ -100,13 +100,13 @@ impl ListIssuesTool {
             ));
             result.push_str(&format!(
                 "- **Created**: {}\n",
-                issue.created_at.format("%Y-%m-%d")
+                issue_info.created_at.format("%Y-%m-%d")
             ));
-            result.push_str(&format!("- **File**: {}\n\n", issue.file_path.display()));
+            result.push_str(&format!("- **File**: {}\n\n", issue_info.file_path.display()));
 
-            if !issue.content.is_empty() {
+            if !issue_info.issue.content.is_empty() {
                 result.push_str("### Content\n\n");
-                result.push_str(&issue.content);
+                result.push_str(&issue_info.issue.content);
                 result.push_str("\n\n");
             }
             result.push_str("---\n\n");
@@ -176,8 +176,8 @@ impl McpTool for ListIssuesTool {
         );
 
         let issue_storage = context.issue_storage.read().await;
-        let all_issues = issue_storage
-            .list_issues()
+        let all_issue_infos = issue_storage
+            .list_issues_info()
             .await
             .map_err(|e| McpErrorHandler::handle_error(e, "list issues"))?;
 
@@ -186,15 +186,15 @@ impl McpTool for ListIssuesTool {
         let format = request.format.unwrap_or_else(|| "table".to_string());
 
         // Filter issues based on criteria
-        let filtered_issues: Vec<_> = all_issues
+        let filtered_issue_infos: Vec<_> = all_issue_infos
             .into_iter()
-            .filter(|issue| {
+            .filter(|issue_info| {
                 if show_completed && show_active {
                     true // show all
                 } else if show_completed {
-                    issue.completed
+                    issue_info.completed
                 } else if show_active {
-                    !issue.completed
+                    !issue_info.completed
                 } else {
                     true // default: show all
                 }
@@ -202,14 +202,18 @@ impl McpTool for ListIssuesTool {
             .collect();
 
         let response = match format.as_str() {
-            "json" => serde_json::to_string_pretty(&filtered_issues).map_err(|e| {
-                McpError::internal_error(format!("Failed to serialize issues: {e}"), None)
-            })?,
-            "markdown" => Self::format_as_markdown(&filtered_issues),
-            _ => Self::format_as_table(&filtered_issues),
+            "json" => {
+                // Convert IssueInfo to Issue for JSON serialization
+                let issues_for_json: Vec<Issue> = filtered_issue_infos.iter().map(|info| info.issue.clone()).collect();
+                serde_json::to_string_pretty(&issues_for_json).map_err(|e| {
+                    McpError::internal_error(format!("Failed to serialize issues: {e}"), None)
+                })?
+            }
+            "markdown" => Self::format_as_markdown(&filtered_issue_infos),
+            _ => Self::format_as_table(&filtered_issue_infos),
         };
 
-        tracing::info!("Listed {} issues", filtered_issues.len());
+        tracing::info!("Listed {} issues", filtered_issue_infos.len());
         Ok(BaseToolImpl::create_success_response(&response))
     }
 }

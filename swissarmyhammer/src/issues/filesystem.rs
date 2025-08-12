@@ -58,9 +58,13 @@ impl Issue {
 /// Extended issue information that includes derived metadata
 #[derive(Debug, Clone)]
 pub struct IssueInfo {
+    /// The core issue data
     pub issue: Issue,
+    /// Whether this issue is completed (in completed directory)
     pub completed: bool,
+    /// Full path to the issue file
     pub file_path: PathBuf,
+    /// When this issue was created
     pub created_at: DateTime<Utc>,
 }
 
@@ -364,8 +368,8 @@ impl FileSystemIssueStorage {
         debug!("Updating issue {}", name);
 
         // Find the issue to get its current file path  
-        let issue = self.get_issue(name).await?;
-        let current_path = &issue.file_path;
+        let issue_info = self.get_issue_info(name).await?;
+        let current_path = &issue_info.file_path;
         
         // Atomic write using temp file and rename - write pure markdown content
         let temp_path = current_path.with_extension("tmp");
@@ -378,13 +382,9 @@ impl FileSystemIssueStorage {
             current_path.display()
         );
         
-        // Return updated issue - derive deprecated fields from current path
-        let completed = current_path
-            .parent()
-            .map(|parent| parent == self.state.completed_dir)
-            .unwrap_or(false);
+        // Return updated issue with new content
         Ok(Issue {
-            name: name.to_string(),
+            name: issue_info.issue.name,
             content,
         })
     }
@@ -461,35 +461,32 @@ impl FileSystemIssueStorage {
 
     /// Check if all issues are completed
     pub async fn all_complete(&self) -> Result<bool> {
-        let pending_issues = self.list_issues_in_dir(&self.state.issues_dir)?;
-        let pending_count = pending_issues
-            .into_iter()
-            .filter(|issue| !issue.completed)
-            .count();
-
+        let all_issue_infos = self.list_issues_info().await?;
+        // Check if there are any non-completed issues
+        let pending_count = all_issue_infos.iter().filter(|info| !info.completed).count();
         Ok(pending_count == 0)
     }
 
     /// Get issue for mark_complete operation with deterministic duplicate handling
     async fn get_issue_for_mark_complete(&self, name: &str) -> Result<Issue> {
-        let all_issues = self.list_issues().await?;
-        let matching_issues: Vec<_> = all_issues
+        let all_issue_infos = self.list_issues_info().await?;
+        let matching_issue_infos: Vec<_> = all_issue_infos
             .into_iter()
-            .filter(|issue| issue.name == name)
+            .filter(|issue_info| issue_info.issue.name == name)
             .collect();
 
-        if matching_issues.is_empty() {
+        if matching_issue_infos.is_empty() {
             return Err(SwissArmyHammerError::IssueNotFound(name.to_string()));
         }
 
         // For mark_complete, prioritize pending issues first (normal completion flow)
-        if let Some(pending_issue) = matching_issues.iter().find(|issue| !issue.completed) {
-            return Ok(pending_issue.clone());
+        if let Some(pending_issue_info) = matching_issue_infos.iter().find(|issue_info| !issue_info.completed) {
+            return Ok(pending_issue_info.issue.clone());
         }
 
         // If no pending issue, return completed issue (idempotent behavior)
-        if let Some(completed_issue) = matching_issues.iter().find(|issue| issue.completed) {
-            return Ok(completed_issue.clone());
+        if let Some(completed_issue_info) = matching_issue_infos.iter().find(|issue_info| issue_info.completed) {
+            return Ok(completed_issue_info.issue.clone());
         }
 
         // Fallback (shouldn't happen)
@@ -497,44 +494,62 @@ impl FileSystemIssueStorage {
     }
 
     /// Move a specific issue to completed/pending state, avoiding duplicate lookup issues
-    async fn move_issue_with_issue(&self, mut issue: Issue, to_completed: bool) -> Result<Issue> {
+    async fn move_issue_with_issue(&self, issue: Issue, to_completed: bool) -> Result<Issue> {
+        let issue_name = &issue.name;
+        
+        // Get all issue infos to work with completion status and file paths
+        let all_issue_infos = self.list_issues_info().await?;
+        let matching_issue_infos: Vec<_> = all_issue_infos
+            .into_iter()
+            .filter(|issue_info| issue_info.issue.name == *issue_name)
+            .collect();
+
+        if matching_issue_infos.is_empty() {
+            return Err(SwissArmyHammerError::IssueNotFound(issue_name.to_string()));
+        }
+
         // Special case for mark_complete: if we're trying to complete a pending issue,
         // but there's already a completed version, use file timestamps to determine precedence
-        if to_completed && !issue.completed {
-            // Check if there's already a completed version
-            let all_issues = self.list_issues().await?;
-            let matching_issues: Vec<_> = all_issues
-                .into_iter()
-                .filter(|i| i.name == issue.name)
-                .collect();
-
-            if let Some(existing_completed) = matching_issues.iter().find(|i| i.completed) {
+        if to_completed {
+            let pending_issue_info = matching_issue_infos.iter().find(|info| !info.completed);
+            let completed_issue_info = matching_issue_infos.iter().find(|info| info.completed);
+            
+            if let (Some(pending_info), Some(completed_info)) = (pending_issue_info, completed_issue_info) {
                 // Compare file modification times to determine which file was created first
-                let pending_mtime = std::fs::metadata(&issue.file_path)
+                let pending_mtime = std::fs::metadata(&pending_info.file_path)
                     .and_then(|m| m.modified())
                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                let completed_mtime = std::fs::metadata(&existing_completed.file_path)
+                let completed_mtime = std::fs::metadata(&completed_info.file_path)
                     .and_then(|m| m.modified())
                     .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-                // If the completed file is newer than the pending file, it likely means:
-                // - Pending file was created first (legitimate)
-                // - Completed file was created later (duplicate)
-                // So we should proceed with moving the pending file to overwrite the completed duplicate
 
                 // If the pending file is newer than the completed file, it might be a stale duplicate
                 // created after legitimate completion, so we should keep the completed file
                 if pending_mtime > completed_mtime {
                     // Clean up the pending duplicate
-                    let _ = std::fs::remove_file(&issue.file_path); // Ignore errors for cleanup
-
-                    return Ok(existing_completed.clone());
+                    let _ = std::fs::remove_file(&pending_info.file_path); // Ignore errors for cleanup
+                    return Ok(completed_info.issue.clone());
                 }
             }
         }
 
+        // Find the issue info we're working with
+        let current_issue_info = if to_completed {
+            // For completing, prefer pending version
+            matching_issue_infos.iter().find(|info| !info.completed)
+                .or_else(|| matching_issue_infos.first())
+        } else {
+            // For uncompleting, prefer completed version  
+            matching_issue_infos.iter().find(|info| info.completed)
+                .or_else(|| matching_issue_infos.first())
+        };
+
+        let current_issue_info = current_issue_info.ok_or_else(|| 
+            SwissArmyHammerError::IssueNotFound(issue_name.to_string())
+        )?;
+
         // Check if already in target state
-        if issue.completed == to_completed {
+        if current_issue_info.completed == to_completed {
             // Clean up any duplicates that might exist in the opposite directory
             let opposite_dir = if to_completed {
                 &self.state.issues_dir // Clean up any pending duplicates
@@ -543,17 +558,16 @@ impl FileSystemIssueStorage {
             };
 
             // Find and remove duplicates in the opposite directory
-            let filename = issue
-                .file_path
+            let filename = current_issue_info.file_path
                 .file_name()
                 .ok_or_else(|| SwissArmyHammerError::Other("Invalid file path".to_string()))?;
             let potential_duplicate = opposite_dir.join(filename);
 
-            if potential_duplicate.exists() && potential_duplicate != issue.file_path {
+            if potential_duplicate.exists() && potential_duplicate != current_issue_info.file_path {
                 let _ = std::fs::remove_file(&potential_duplicate); // Ignore errors for cleanup
             }
 
-            return Ok(issue);
+            return Ok(current_issue_info.issue.clone());
         }
 
         // Determine source and target paths
@@ -564,14 +578,13 @@ impl FileSystemIssueStorage {
         };
 
         // Create target path with same filename
-        let filename = issue
-            .file_path
+        let filename = current_issue_info.file_path
             .file_name()
             .ok_or_else(|| SwissArmyHammerError::Other("Invalid file path".to_string()))?;
         let target_path = target_dir.join(filename);
 
         // Move file atomically
-        std::fs::rename(&issue.file_path, &target_path).map_err(SwissArmyHammerError::Io)?;
+        std::fs::rename(&current_issue_info.file_path, &target_path).map_err(SwissArmyHammerError::Io)?;
 
         // Clean up any duplicate files in the source directory
         let source_dir = if to_completed {
@@ -604,22 +617,30 @@ impl IssueStorage for FileSystemIssueStorage {
             let pending_path = self.state.issues_dir.join(format!("{}.md", issue.name));
             let completed_path = self.state.completed_dir.join(format!("{}.md", issue.name));
             
-            let (file_path, completed) = if pending_path.exists() {
-                (pending_path, false)
-            } else if completed_path.exists() {
-                (completed_path, true)
-            } else {
+            // Handle duplicate cases correctly - if both exist, create entries for both
+            let mut paths_to_process = Vec::new();
+            
+            if pending_path.exists() {
+                paths_to_process.push((pending_path, false));
+            }
+            if completed_path.exists() {
+                paths_to_process.push((completed_path, true));
+            }
+            
+            if paths_to_process.is_empty() {
                 // This shouldn't happen if list_issues is working correctly
                 continue;
-            };
+            }
             
-            let created_at = Issue::get_created_at(&file_path);
-            issue_infos.push(IssueInfo {
-                issue,
-                completed,
-                file_path,
-                created_at,
-            });
+            for (file_path, completed) in paths_to_process {
+                let created_at = Issue::get_created_at(&file_path);
+                issue_infos.push(IssueInfo {
+                    issue: issue.clone(),
+                    completed,
+                    file_path,
+                    created_at,
+                });
+            }
         }
         
         Ok(issue_infos)
@@ -636,10 +657,22 @@ impl IssueStorage for FileSystemIssueStorage {
 
     async fn get_issue_info(&self, name: &str) -> Result<IssueInfo> {
         let all_issue_infos = self.list_issues_info().await?;
-        all_issue_infos
+        let matching_infos: Vec<_> = all_issue_infos
             .into_iter()
-            .find(|issue_info| issue_info.issue.name == name)
-            .ok_or_else(|| SwissArmyHammerError::IssueNotFound(name.to_string()))
+            .filter(|issue_info| issue_info.issue.name == name)
+            .collect();
+        
+        if matching_infos.is_empty() {
+            return Err(SwissArmyHammerError::IssueNotFound(name.to_string()));
+        }
+        
+        // If there are multiple matches (duplicates), prefer the completed version
+        if let Some(completed_info) = matching_infos.iter().find(|info| info.completed) {
+            return Ok(completed_info.clone());
+        }
+        
+        // Otherwise, return the first match (pending version)
+        Ok(matching_infos.into_iter().next().unwrap())
     }
 
     async fn create_issue(&self, name: String, content: String) -> Result<Issue> {
@@ -738,14 +771,14 @@ impl IssueStorage for FileSystemIssueStorage {
     }
 
     async fn get_next_issue(&self) -> Result<Option<Issue>> {
-        let all_issues = self.list_issues().await?;
+        let all_issue_infos = self.list_issues_info().await?;
         // Filter to pending issues and sort alphabetically by name
-        let mut pending_issues: Vec<Issue> = all_issues
+        let mut pending_issue_infos: Vec<IssueInfo> = all_issue_infos
             .into_iter()
-            .filter(|issue| !issue.completed)
+            .filter(|issue_info| !issue_info.completed)
             .collect();
-        pending_issues.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(pending_issues.into_iter().next())
+        pending_issue_infos.sort_by(|a, b| a.issue.name.cmp(&b.issue.name));
+        Ok(pending_issue_infos.into_iter().next().map(|info| info.issue))
     }
 
     // Type-safe implementations using IssueName
@@ -1498,8 +1531,8 @@ mod tests {
         let issue = storage.parse_issue_from_file(&test_file).unwrap();
         assert_eq!(issue.name.as_str(), "test_issue");
         assert_eq!(issue.content, "# Test Issue\\n\\nThis is a test issue.");
-        assert!(!issue.completed);
-        assert_eq!(issue.file_path, test_file);
+        // Note: parse_issue_from_file only returns Issue with name and content
+        // For completed status and file_path info, use get_issue_info() instead
     }
 
     #[test]
@@ -1516,8 +1549,8 @@ mod tests {
         let issue = storage.parse_issue_from_file(&test_file).unwrap();
         assert_eq!(issue.name.as_str(), "000456_completed_issue");
         assert_eq!(issue.content, "# Completed Issue\\n\\nThis is completed.");
-        assert!(issue.completed);
-        assert_eq!(issue.file_path, test_file);
+        // Note: parse_issue_from_file only returns Issue with name and content
+        // For completed status and file_path info, use get_issue_info() instead
     }
 
     #[test]
@@ -1588,12 +1621,9 @@ mod tests {
         // Number assertion removed - name-based approach
         assert_eq!(issue.name.as_str(), "test_issue");
         assert_eq!(issue.content, "# Test\\n\\nContent");
-        assert!(!issue.completed);
-
-        // Check file was created
+        // Verify file was created in active directory (not completed)
         let expected_path = issues_dir.join("test_issue.md");
         assert!(expected_path.exists());
-        assert_eq!(issue.file_path, expected_path);
     }
 
     #[tokio::test]
@@ -1613,7 +1643,6 @@ mod tests {
         // Check file was created with safe filename
         let expected_path = issues_dir.join("test-issue-with-spaces.md");
         assert!(expected_path.exists());
-        assert_eq!(issue.file_path, expected_path);
     }
 
     // Test removed - get_next_issue_number method no longer exists in name-based system
@@ -1647,25 +1676,25 @@ mod tests {
         .unwrap();
         fs::write(completed_dir.join("000004_done.md"), "done content").unwrap();
 
-        let issues = storage.list_issues().await.unwrap();
-        assert_eq!(issues.len(), 4);
+        let issue_infos = storage.list_issues_info().await.unwrap();
+        assert_eq!(issue_infos.len(), 4);
 
         // Should be sorted by name
         // Number assertion removed - name-based approach
-        assert_eq!(issues[0].name.as_str(), "000001_another");
-        assert!(!issues[0].completed);
+        assert_eq!(issue_infos[0].issue.name.as_str(), "000001_another");
+        assert!(!issue_infos[0].completed);
 
         // Number assertion removed - name-based approach
-        assert_eq!(issues[1].name.as_str(), "000002_completed");
-        assert!(issues[1].completed);
+        assert_eq!(issue_infos[1].issue.name.as_str(), "000002_completed");
+        assert!(issue_infos[1].completed);
 
         // Number assertion removed - name-based approach
-        assert_eq!(issues[2].name.as_str(), "000003_pending");
-        assert!(!issues[2].completed);
+        assert_eq!(issue_infos[2].issue.name.as_str(), "000003_pending");
+        assert!(!issue_infos[2].completed);
 
         // Number assertion removed - name-based approach
-        assert_eq!(issues[3].name.as_str(), "000004_done");
-        assert!(issues[3].completed);
+        assert_eq!(issue_infos[3].issue.name.as_str(), "000004_done");
+        assert!(issue_infos[3].completed);
     }
 
     #[tokio::test]
@@ -1703,11 +1732,11 @@ mod tests {
         let completed_dir = issues_dir.join("complete");
         fs::write(completed_dir.join("completed.md"), "completed content").unwrap();
 
-        let issue = storage.get_issue("completed").await.unwrap();
+        let issue_info = storage.get_issue_info("completed").await.unwrap();
         // Number assertion removed - name-based approach
-        assert_eq!(issue.name.as_str(), "completed");
-        assert_eq!(issue.content, "completed content");
-        assert!(issue.completed);
+        assert_eq!(issue_info.issue.name.as_str(), "completed");
+        assert_eq!(issue_info.issue.content, "completed content");
+        assert!(issue_info.completed);
     }
 
     #[tokio::test]
@@ -2027,15 +2056,15 @@ mod tests {
             .await
             .unwrap();
 
-        // Number assertion removed - name-based approach
+        // Verify basic issue data
         assert_eq!(updated_issue.name, issue.name);
         assert_eq!(updated_issue.content, updated_content);
-        assert_eq!(updated_issue.file_path, issue.file_path);
-        assert_eq!(updated_issue.completed, issue.completed);
 
-        // Verify file was updated - content should match what's in the Issue struct, not raw file
-        // Raw file now contains YAML frontmatter, so we check the parsed content instead
-        assert_eq!(updated_issue.content, updated_content);
+        // Verify file was updated on disk
+        let file_path = issues_dir.join("test_issue.md");
+        assert!(file_path.exists());
+        let file_content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(file_content, updated_content);
     }
 
     #[tokio::test]
@@ -2063,21 +2092,21 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!issue.completed);
+        // Verify initial file location (in active directory)
+        let initial_path = issues_dir.join("test_issue.md");
+        assert!(initial_path.exists());
 
         // Mark as complete
         let completed_issue = storage.mark_complete("test_issue").await.unwrap();
 
-        // Number assertion removed - name-based approach
+        // Basic issue data should be preserved
         assert_eq!(completed_issue.name, issue.name);
         assert_eq!(completed_issue.content, issue.content);
-        assert!(completed_issue.completed);
 
         // Verify file was moved to completed directory
         let expected_path = issues_dir.join("complete").join("test_issue.md");
-        assert_eq!(completed_issue.file_path, expected_path);
         assert!(expected_path.exists());
-        assert!(!issue.file_path.exists());
+        assert!(!initial_path.exists());
     }
 
     #[tokio::test]
@@ -2097,8 +2126,13 @@ mod tests {
         // Try to mark as complete again - should be no-op
         let completed_again = storage.mark_complete(&issue.name).await.unwrap();
 
-        assert_eq!(completed_issue.file_path, completed_again.file_path);
-        assert!(completed_again.completed);
+        // Both should have same basic issue data
+        assert_eq!(completed_issue.name, completed_again.name);
+        assert_eq!(completed_issue.content, completed_again.content);
+        
+        // Verify the file is still in completed directory
+        let completed_path = issues_dir.join("complete").join("test_issue.md");
+        assert!(completed_path.exists());
     }
 
     #[tokio::test]
@@ -2116,7 +2150,9 @@ mod tests {
             .unwrap();
 
         let completed_issue = storage.mark_complete(&issue.name).await.unwrap();
-        assert!(completed_issue.completed);
+        // Verify the issue was marked complete (file should be in complete directory)
+        let completed_path = issues_dir.join("complete").join("test_issue.md");
+        assert!(completed_path.exists());
 
         // Simulate a duplicate file appearing in the original location
         // This could happen due to external interference or failed cleanup
@@ -2129,8 +2165,10 @@ mod tests {
 
         // Verify the duplicate file was cleaned up
         assert!(!duplicate_path.exists());
-        assert_eq!(completed_issue.file_path, completed_again.file_path);
-        assert!(completed_again.completed);
+        
+        // Both issues should have same data
+        assert_eq!(completed_issue.name, completed_again.name);
+        assert_eq!(completed_issue.content, completed_again.content);
     }
 
     #[tokio::test]
@@ -2509,10 +2547,9 @@ mod tests {
             .await
             .unwrap();
 
-        // Number assertion removed - name-based approach
+        // Verify basic issue data
         assert_eq!(issue1.name.as_str(), "test_issue");
         assert_eq!(issue1.content, "Test content");
-        assert!(!issue1.completed);
 
         // Create second issue - should auto-increment
         let _issue2 = storage
@@ -2623,19 +2660,22 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!issue.completed);
-
         // Mark it complete
         let completed = storage.mark_complete(&issue.name).await.unwrap();
-        assert!(completed.completed);
+        assert_eq!(completed.name, issue.name);
+        assert_eq!(completed.content, issue.content);
 
-        // Verify file was moved
-        assert!(completed.file_path.to_string_lossy().contains("complete"));
+        // Verify file was moved to complete directory
+        let temp_dir = _temp.path();
+        let completed_path = temp_dir.join("issues").join("complete").join("test_issue.md");
+        assert!(completed_path.exists());
+        let active_path = temp_dir.join("issues").join("test_issue.md");
+        assert!(!active_path.exists());
 
-        // Verify it appears in completed list
-        let all_issues = storage.list_issues().await.unwrap();
-        let completed_issues: Vec<_> = all_issues.iter().filter(|i| i.completed).collect();
-        assert_eq!(completed_issues.len(), 1);
+        // Verify it appears in completed list  
+        let all_issue_infos = storage.list_issues_info().await.unwrap();
+        let completed_issue_infos: Vec<_> = all_issue_infos.iter().filter(|i| i.completed).collect();
+        assert_eq!(completed_issue_infos.len(), 1);
     }
 
     #[tokio::test]
@@ -2653,7 +2693,8 @@ mod tests {
         // Mark complete again - should be idempotent
         let result = storage.mark_complete(&issue.name).await;
         assert!(result.is_ok());
-        assert!(result.unwrap().completed);
+        let completed_issue = result.unwrap();
+        assert_eq!(completed_issue.name, issue.name);
     }
 
     #[tokio::test]
@@ -2961,16 +3002,15 @@ mod tests {
         let completed_issues = storage.mark_complete_batch(names).await.unwrap();
 
         assert_eq!(completed_issues.len(), 3);
-        assert!(completed_issues[0].completed);
-        assert!(completed_issues[1].completed);
-        assert!(completed_issues[2].completed);
+        // Basic issue data should be preserved
+        assert_eq!(completed_issues[0].name, "issue_1");
+        assert_eq!(completed_issues[1].name, "issue_2"); 
+        assert_eq!(completed_issues[2].name, "issue_3");
 
-        // Verify issues were marked complete
-        let retrieved_issue1 = storage
-            ./*get_issue_by_number*/ get_issue(&issue1.name)
-            .await
-            .unwrap();
-        assert!(retrieved_issue1.completed);
+        // Verify issues were marked complete (check filesystem)
+        let temp_dir = _temp.path(); 
+        let completed_path1 = temp_dir.join("issues/complete/issue_1.md");
+        assert!(completed_path1.exists());
     }
 
     #[tokio::test]
@@ -3059,10 +3099,10 @@ mod tests {
         assert_eq!(completed_issues.len(), batch_size / 2);
 
         // Verify final state
-        let all_issues = storage.list_issues().await.unwrap();
-        assert_eq!(all_issues.len(), batch_size);
+        let all_issue_infos = storage.list_issues_info().await.unwrap();
+        assert_eq!(all_issue_infos.len(), batch_size);
 
-        let completed_count = all_issues.iter().filter(|i| i.completed).count();
+        let completed_count = all_issue_infos.iter().filter(|i| i.completed).count();
         assert_eq!(completed_count, batch_size / 2);
     }
 
@@ -3193,19 +3233,19 @@ mod tests {
         assert_eq!(parsed_issue.name.as_str(), "my-custom-issue");
 
         // Test that both issues are included in list and properly sorted
-        let all_issues = storage.list_issues().await.unwrap();
-        assert_eq!(all_issues.len(), 2);
+        let all_issue_infos = storage.list_issues_info().await.unwrap();
+        assert_eq!(all_issue_infos.len(), 2);
 
         // Issues should be sorted lexicographically by filename
         // 000001_feature_request.md should come before my-custom-issue.md
         assert!(
-            all_issues[0]
+            all_issue_infos[0]
                 .file_path
                 .file_name()
                 .unwrap()
                 .to_str()
                 .unwrap()
-                < all_issues[1]
+                < all_issue_infos[1]
                     .file_path
                     .file_name()
                     .unwrap()
@@ -3239,7 +3279,7 @@ mod tests {
 
         // Verify both methods return the same issue
         assert_eq!(retrieved_by_string.content, retrieved_by_name.content);
-        assert_eq!(retrieved_by_string.completed, retrieved_by_name.completed);
+        // Note: basic Issue objects do not carry completion status
 
         // For now, let's verify that the issue name extraction works correctly
         // for different filename formats
@@ -3274,13 +3314,13 @@ mod tests {
         let pending_issues = storage.list_issues_in_dir(&issues_dir).unwrap();
         println!("Found {} pending issues:", pending_issues.len());
         for issue in &pending_issues {
-            println!("  {} - {}", issue.name, issue.file_path.display());
+            println!("  {}", issue.name);
         }
 
         let completed_issues = storage.list_issues_in_dir(&complete_dir).unwrap();
         println!("Found {} completed issues:", completed_issues.len());
         for issue in &completed_issues {
-            println!("  {} - {}", issue.name, issue.file_path.display());
+            println!("  {}", issue.name);
         }
 
         // get_next_issue_number method removed - name-based system doesn't use sequential numbers
@@ -3296,11 +3336,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Name-based system now uses sanitized name as filename
-        assert!(new_issue
-            .file_path
-            .to_string_lossy()
-            .ends_with("test_new_issue.md"));
+        // Verify issue was created with correct name
+        assert_eq!(new_issue.name, "test_new_issue");
     }
 
     #[tokio::test]
@@ -3393,7 +3430,7 @@ mod tests {
             .create_issue("test_issue".to_string(), "Test content".to_string())
             .await
             .unwrap();
-        assert!(!issue.completed);
+        // Note: issue.completed not available on basic Issue - new issues are always in active directory
 
         // Manually create a duplicate file in the completed directory to simulate the scenario
         let completed_dir = issues_dir.join("complete");
@@ -3406,19 +3443,18 @@ mod tests {
         let completed_issue = storage.mark_complete("test_issue").await.unwrap();
 
         // Verify the issue was moved
-        assert!(completed_issue.completed);
+        // Verify the issue data is correct
         assert_eq!(completed_issue.name, issue.name);
-        assert!(completed_issue
-            .file_path
-            .to_string_lossy()
-            .contains("complete"));
-        assert!(completed_issue.file_path.exists());
-
-        // Verify the original file was moved (no longer exists in issues dir)
-        assert!(!issue.file_path.exists());
+        
+        // Check filesystem directly for completion status
+        let completed_path = issues_dir.join("complete/test_issue.md");
+        let active_path = issues_dir.join("test_issue.md");
+        
+        assert!(completed_path.exists());
+        assert!(!active_path.exists());
 
         // Read the final content to verify it's the correct file (from the original issue, not the duplicate)
-        let final_content = std::fs::read_to_string(&completed_issue.file_path).unwrap();
+        let final_content = std::fs::read_to_string(&completed_path).unwrap();
         assert!(final_content.contains("Test content"));
         assert!(!final_content.contains("Duplicate content"));
     }
@@ -3435,8 +3471,8 @@ mod tests {
             .create_issue("test_issue".to_string(), "Original content".to_string())
             .await
             .unwrap();
-        let completed_issue = storage.mark_complete("test_issue").await.unwrap();
-        assert!(completed_issue.completed);
+        let _completed_issue = storage.mark_complete("test_issue").await.unwrap();
+        // Note: completed_issue is basic Issue - check filesystem for completion status
 
         // Manually create a duplicate in the pending directory to simulate a leftover file
         let pending_duplicate = issues_dir.join("test_issue.md");
@@ -3446,13 +3482,13 @@ mod tests {
         // Try to mark as complete again - should cleanup the duplicate
         let result = storage.mark_complete("test_issue").await.unwrap();
 
-        // Verify the issue is still completed and the duplicate was cleaned up
-        assert!(result.completed);
+        // Verify the issue data is correct and duplicate was cleaned up
         assert_eq!(result.name, "test_issue");
         assert!(!pending_duplicate.exists()); // Duplicate should be cleaned up
 
-        // Verify the original completed file still exists and has correct content
-        let final_content = std::fs::read_to_string(&result.file_path).unwrap();
+        // Verify the original completed file still exists and has correct content  
+        let completed_path = issues_dir.join("complete/test_issue.md");
+        let final_content = std::fs::read_to_string(&completed_path).unwrap();
         assert!(final_content.contains("Original content"));
         assert!(!final_content.contains("Stale duplicate"));
     }

@@ -1,7 +1,7 @@
 //! Response creation utilities for MCP operations
 
 use rmcp::model::*;
-use swissarmyhammer::issues::Issue;
+use swissarmyhammer::issues::{Issue, IssueInfo};
 
 /// Create a success response for MCP tool calls
 pub fn create_success_response(message: String) -> CallToolResult {
@@ -37,14 +37,14 @@ pub fn create_error_response(message: String) -> CallToolResult {
 /// # Returns
 ///
 /// * `CallToolResult` - Standardized response with artifact support
-pub fn create_issue_response(issue: &Issue) -> CallToolResult {
+pub fn create_issue_response(issue_info: &IssueInfo) -> CallToolResult {
     let response = serde_json::json!({
-        "name": issue.name,
-        "file_path": issue.file_path.to_string_lossy(),
+        "name": issue_info.issue.name,
+        "file_path": issue_info.file_path.to_string_lossy(),
         "message": format!(
             "Created issue {} at {}",
-            issue.name,
-            issue.file_path.display()
+            issue_info.issue.name,
+            issue_info.file_path.display()
         )
     });
 
@@ -79,11 +79,11 @@ pub fn create_mark_complete_response(issue: &Issue) -> CallToolResult {
 }
 
 /// Create a standardized response for issue update operations
-pub fn create_update_response(issue: &Issue) -> CallToolResult {
+pub fn create_update_response(issue_info: &IssueInfo) -> CallToolResult {
     let response = serde_json::json!({
-        "name": issue.name,
-        "file_path": issue.file_path.to_string_lossy(),
-        "message": format!("Updated issue {}", issue.name)
+        "name": issue_info.issue.name,
+        "file_path": issue_info.file_path.to_string_lossy(),
+        "message": format!("Updated issue {}", issue_info.issue.name)
     });
 
     CallToolResult {

@@ -64,13 +64,13 @@ impl McpTool for MergeIssueTool {
 
         // Get the issue to determine its details
         let issue_storage = context.issue_storage.read().await;
-        let issue = match issue_storage.get_issue(request.name.as_str()).await {
-            Ok(issue) => issue,
+        let issue_info = match issue_storage.get_issue_info(request.name.as_str()).await {
+            Ok(issue_info) => issue_info,
             Err(e) => return Err(McpErrorHandler::handle_error(e, "get issue for merge")),
         };
 
         // Validate that the issue is completed before allowing merge
-        if !issue.completed {
+        if !issue_info.completed {
             return Ok(create_error_response(format!(
                 "Issue '{}' must be completed before merging",
                 request.name
@@ -82,7 +82,7 @@ impl McpTool for MergeIssueTool {
 
         // Merge branch
         let mut git_ops = context.git_ops.lock().await;
-        let issue_name = issue.name.clone();
+        let issue_name = issue_info.issue.name.clone();
 
         match git_ops.as_mut() {
             Some(ops) => {

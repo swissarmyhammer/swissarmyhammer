@@ -103,7 +103,7 @@ async fn test_complete_issue_workflow() {
     let issue_name = &issue.name;
 
     // Step 2: Check all complete (should be false)
-    let issues = env.issue_storage.read().await.list_issues().await.unwrap();
+    let issues = env.issue_storage.read().await.list_issues_info().await.unwrap();
     let active_issues: Vec<_> = issues.iter().filter(|i| !i.completed).collect();
     assert_eq!(active_issues.len(), 1);
     assert!(!active_issues[0].completed);
@@ -133,7 +133,7 @@ async fn test_complete_issue_workflow() {
         .contains("JWT authentication implementation completed"));
 
     // Step 5: Mark issue as complete
-    let completed_issue = env
+    let _completed_issue = env
         .issue_storage
         .write()
         .await
@@ -141,10 +141,18 @@ async fn test_complete_issue_workflow() {
         .await
         .unwrap();
 
-    assert!(completed_issue.completed);
+    // Verify the issue is now completed by getting its extended info
+    let completed_issue_info = env
+        .issue_storage
+        .read()
+        .await
+        .get_issue_info(issue_name)
+        .await
+        .unwrap();
+    assert!(completed_issue_info.completed);
 
     // Step 6: Check all complete (should be true now)
-    let issues = env.issue_storage.read().await.list_issues().await.unwrap();
+    let issues = env.issue_storage.read().await.list_issues_info().await.unwrap();
     let active_issues: Vec<_> = issues.iter().filter(|i| !i.completed).collect();
     assert_eq!(active_issues.len(), 0);
 

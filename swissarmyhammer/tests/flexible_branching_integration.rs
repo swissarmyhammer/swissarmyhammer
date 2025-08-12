@@ -182,20 +182,19 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
         "# Authentication Tests\n\nImplement comprehensive tests for the authentication module"
             .to_string();
 
-    // Create the issue with source branch tracking
-    let created_issue = {
+    // Create the issue
+    let _created_issue = {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue_with_source_branch(
+            .create_issue(
                 issue_name.clone(),
                 issue_content,
-                "feature/user-authentication".to_string(),
             )
             .await
             .expect("Failed to create issue")
     };
 
-    assert_eq!(created_issue.source_branch, "feature/user-authentication");
+    // Note: source_branch field no longer exists - using git's merge-base instead
 
     // Create and switch to issue branch
     {
@@ -281,10 +280,9 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue_with_source_branch(
+            .create_issue(
                 issue1_name.clone(),
                 issue1_content,
-                "develop".to_string(),
             )
             .await
             .expect("Failed to create first issue");
@@ -297,10 +295,9 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue_with_source_branch(
+            .create_issue(
                 issue2_name.clone(),
                 issue2_content,
-                "develop".to_string(),
             )
             .await
             .expect("Failed to create second issue");
@@ -355,10 +352,9 @@ async fn test_release_branch_issue_workflow() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue_with_source_branch(
+            .create_issue(
                 issue_name.clone(),
                 issue_content,
-                "release/v1.0".to_string(),
             )
             .await
             .expect("Failed to create hotfix issue");
@@ -451,8 +447,9 @@ async fn test_backwards_compatibility_main_branch_workflow() {
             .expect("Failed to create traditional issue");
 
         // In backwards compatible mode, source branch should default to main
-        // (This depends on how the storage implementation handles backward compatibility)
-        assert!(issue.source_branch == "main" || issue.source_branch.is_empty());
+        // Note: source_branch field no longer exists - using git's merge-base instead
+        // Basic issue data should be correct
+        assert_eq!(issue.name, issue_name);
     }
 
     // Create issue branch using simple method (backwards compatibility)
@@ -513,10 +510,9 @@ async fn test_error_handling_invalid_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         let _issue = issue_storage
-            .create_issue_with_source_branch(
+            .create_issue(
                 issue_name.clone(),
                 issue_content,
-                "non-existent-branch".to_string(),
             )
             .await
             .expect("Issue storage should succeed");

@@ -68,7 +68,9 @@ impl McpTool for WorkIssueTool {
         };
 
         // Enhanced validation for working on issues from other issue branches
-        if current_branch.starts_with("issue/") {
+        // First check if we're already on the correct issue branch - if so, no need to abort
+        let target_branch = format!("issue/{}", request.name.0);
+        if current_branch.starts_with("issue/") && current_branch != target_branch {
             let error_msg = format!(
                 "Cannot work on issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches. Switch to a non-issue branch (like main, develop, or feature branch) first.",
                 request.name.0, current_branch

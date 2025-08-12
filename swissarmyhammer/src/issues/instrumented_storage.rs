@@ -388,9 +388,9 @@ mod tests {
         assert_eq!(snapshot.total_operations(), 1);
         assert!(snapshot.avg_delete_time > 0.0);
 
-        // Verify the issue was actually marked complete
+        // Verify the issue data is preserved
         assert_eq!(completed_issue.name, issue.name);
-        assert!(completed_issue.completed);
+        assert_eq!(completed_issue.content, issue.content);
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde::{Deserialize, Serialize};
 use swissarmyhammer::config::Config;
-use swissarmyhammer::issues::Issue;
+use swissarmyhammer::issues::IssueInfo;
 
 /// Request structure for showing an issue
 #[derive(Debug, Deserialize, Serialize)]
@@ -40,16 +40,16 @@ impl ShowIssueTool {
     }
 
     /// Format issue for display
-    fn format_issue_display(issue: &Issue) -> String {
-        let status = Self::format_issue_status(issue.completed);
+    fn format_issue_display(issue_info: &IssueInfo) -> String {
+        let status = Self::format_issue_status(issue_info.completed);
 
-        let mut result = format!("{} Issue: {}\n", status, issue.name);
-        result.push_str(&format!("📁 File: {}\n", issue.file_path.display()));
+        let mut result = format!("{} Issue: {}\n", status, issue_info.issue.name);
+        result.push_str(&format!("📁 File: {}\n", issue_info.file_path.display()));
         result.push_str(&format!(
             "📅 Created: {}\n\n",
-            issue.created_at.format("%Y-%m-%d %H:%M:%S")
+            issue_info.created_at.format("%Y-%m-%d %H:%M:%S")
         ));
-        result.push_str(&issue.content);
+        result.push_str(&issue_info.issue.content);
 
         result
     }
@@ -107,7 +107,7 @@ impl McpTool for ShowIssueTool {
         tracing::debug!("Showing issue: {}", request.name);
 
         // Handle special parameters
-        let issue = if request.name == "current" {
+        let issue_info = if request.name == "current" {
             // Get current issue name from git branch
             let git_ops = context.git_ops.lock().await;
             let issue_name = match git_ops.as_ref() {
@@ -135,22 +135,28 @@ impl McpTool for ShowIssueTool {
 
             // Find the current issue in storage
             let issue_storage = context.issue_storage.read().await;
-            let all_issues = issue_storage
-                .list_issues()
-                .await
-                .map_err(|e| McpErrorHandler::handle_error(e, "list issues"))?;
-
-            all_issues
-                .into_iter()
-                .find(|i| i.name == issue_name)
-                .ok_or_else(|| {
-                    McpError::invalid_params(format!("Issue '{issue_name}' not found"), None)
-                })?
+            match issue_storage.get_issue_info(&issue_name).await {
+                Ok(issue_info) => issue_info,
+                Err(_) => {
+                    return Err(McpError::invalid_params(
+                        format!("Issue '{issue_name}' not found"),
+                        None,
+                    ));
+                }
+            }
         } else if request.name == "next" {
-            // Get next pending issue
+            // Get next pending issue and then get its info
             let issue_storage = context.issue_storage.read().await;
             match issue_storage.get_next_issue().await {
-                Ok(Some(next_issue)) => next_issue,
+                Ok(Some(next_issue)) => {
+                    // Get the full issue info for the next issue
+                    match issue_storage.get_issue_info(&next_issue.name).await {
+                        Ok(issue_info) => issue_info,
+                        Err(e) => {
+                            return Err(McpErrorHandler::handle_error(e, "get next issue info"));
+                        }
+                    }
+                }
                 Ok(None) => {
                     return Ok(BaseToolImpl::create_success_response(
                         "No pending issues found. All issues are completed!",
@@ -161,28 +167,26 @@ impl McpTool for ShowIssueTool {
                 }
             }
         } else {
-            // Regular issue name lookup
+            // Regular issue name lookup - get the issue with extended info
             let issue_storage = context.issue_storage.read().await;
-            let all_issues = issue_storage
-                .list_issues()
-                .await
-                .map_err(|e| McpErrorHandler::handle_error(e, "list issues"))?;
-
-            all_issues
-                .into_iter()
-                .find(|i| i.name == request.name)
-                .ok_or_else(|| {
-                    McpError::invalid_params(format!("Issue '{}' not found", request.name), None)
-                })?
+            match issue_storage.get_issue_info(&request.name).await {
+                Ok(issue_info) => issue_info,
+                Err(_) => {
+                    return Err(McpError::invalid_params(
+                        format!("Issue '{}' not found", request.name),
+                        None,
+                    ));
+                }
+            }
         };
 
         let response = if request.raw.unwrap_or(false) {
-            issue.content
+            issue_info.issue.content
         } else {
-            Self::format_issue_display(&issue)
+            Self::format_issue_display(&issue_info)
         };
 
-        tracing::info!("Showed issue {}", issue.name);
+        tracing::info!("Showed issue {}", issue_info.issue.name);
         Ok(BaseToolImpl::create_success_response(&response))
     }
 }
