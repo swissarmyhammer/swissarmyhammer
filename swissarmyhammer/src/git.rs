@@ -285,36 +285,27 @@ impl GitOperations {
     /// # Arguments
     ///
     /// * `issue_name` - The name of the issue
-    /// * `source_branch` - Optional target branch for merge. If None, uses main branch for backward compatibility
-    pub fn merge_issue_branch(&self, issue_name: &str, source_branch: Option<&str>) -> Result<()> {
+    /// * `source_branch` - Target branch for merge (required)
+    pub fn merge_issue_branch(&self, issue_name: &str, source_branch: &str) -> Result<()> {
         let branch_name = format!("issue/{issue_name}");
 
-        // Determine the target branch for merge
-        let target_branch = match source_branch {
-            Some(branch) => {
-                // Validate that the provided source branch exists
-                if !self.branch_exists(branch)? {
-                    return Err(SwissArmyHammerError::Other(format!(
-                        "Source branch '{}' does not exist",
-                        branch
-                    )));
-                }
+        // Validate that the provided source branch exists
+        if !self.branch_exists(source_branch)? {
+            return Err(SwissArmyHammerError::Other(format!(
+                "Source branch '{}' does not exist",
+                source_branch
+            )));
+        }
 
-                // Validate that the source branch is not an issue branch
-                if self.is_issue_branch(branch) {
-                    return Err(SwissArmyHammerError::Other(format!(
-                        "Cannot merge to issue branch '{}'",
-                        branch
-                    )));
-                }
+        // Validate that the source branch is not an issue branch
+        if self.is_issue_branch(source_branch) {
+            return Err(SwissArmyHammerError::Other(format!(
+                "Cannot merge to issue branch '{}'",
+                source_branch
+            )));
+        }
 
-                branch.to_string()
-            }
-            None => {
-                // Fall back to main branch for backward compatibility
-                self.main_branch()?
-            }
-        };
+        let target_branch = source_branch;
 
         // Debug: List all branches before checking
         let list_output = Command::new("git")
@@ -348,7 +339,7 @@ impl GitOperations {
                 "--no-ff",
                 &branch_name,
                 "-m",
-                &format!("Merge {branch_name}"),
+                &format!("Merge {branch_name} into {target_branch}"),
             ])
             .output()?;
 
@@ -380,10 +371,11 @@ impl GitOperations {
 
     /// Merge issue branch to main branch (backward compatibility)
     ///
-    /// This is a convenience method that calls merge_issue_branch with source_branch = None
+    /// This is a convenience method that calls merge_issue_branch with the main branch
     /// for backward compatibility with existing code.
     pub fn merge_issue_branch_simple(&self, issue_name: &str) -> Result<()> {
-        self.merge_issue_branch(issue_name, None)
+        let main_branch = self.main_branch()?;
+        self.merge_issue_branch(issue_name, &main_branch)
     }
 
     /// Delete a branch

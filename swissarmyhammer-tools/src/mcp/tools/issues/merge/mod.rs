@@ -87,7 +87,7 @@ impl McpTool for MergeIssueTool {
         match git_ops.as_mut() {
             Some(ops) => {
                 // First merge the branch back to its source branch
-                match ops.merge_issue_branch(&issue_name, Some(&issue.source_branch)) {
+                match ops.merge_issue_branch(&issue_name, &issue.source_branch) {
                     Ok(_) => {
                         let mut success_message = format!(
                             "Merged work branch for issue {issue_name} to {}",

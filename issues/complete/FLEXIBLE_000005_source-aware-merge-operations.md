@@ -144,3 +144,69 @@ The source-aware merge operations feature is **fully functional and production-r
 5. Handles all edge cases with appropriate error messages
 
 This implementation enables flexible development workflows including feature branches, release branches, and complex Git Flow patterns while preserving the existing user experience.
+
+## Proposed Solution
+
+After examining the current implementation in `git.rs`, I can see that the `merge_issue_branch` method already accepts an optional `source_branch` parameter but defaults to the main branch for backward compatibility. The issue is that the parameter name and documentation suggest it should be a required parameter for source-aware merging.
+
+### Analysis of Current Implementation
+
+The current `merge_issue_branch` method (lines 289-370):
+- Takes `issue_name: &str` and `source_branch: Option<&str>`
+- When `source_branch` is `None`, falls back to `self.main_branch()` 
+- Validates the source branch exists and is not an issue branch
+- Switches to target branch before merging
+- Handles merge conflicts appropriately
+
+### Required Changes
+
+1. **Update Method Signature**: Change from `Option<&str>` to required `&str` parameter
+2. **Remove Fallback Logic**: Remove the fallback to main branch
+3. **Update Method Documentation**: Clarify that source branch is required
+4. **Update Backward Compatibility Method**: Keep `merge_issue_branch_simple` for legacy use
+5. **Update Tests**: Pass explicit source branch parameter to all test calls
+6. **Update Merge Commit Message**: Include source branch name in commit message
+
+### Implementation Steps
+
+1. Modify `merge_issue_branch` to require source branch parameter
+2. Update validation logic to always validate the provided source branch
+3. Update commit message format to reference source branch
+4. Update all test calls to provide source branch parameter
+5. Verify backward compatibility through `merge_issue_branch_simple`
+## Implementation Complete
+
+### Summary of Changes
+
+Successfully updated the `merge_issue_branch` method to require a source branch parameter instead of defaulting to main branch:
+
+#### Method Signature Changes (`swissarmyhammer/src/git.rs:289`)
+- **Before**: `merge_issue_branch(&self, issue_name: &str, source_branch: Option<&str>)`  
+- **After**: `merge_issue_branch(&self, issue_name: &str, source_branch: &str)`
+
+#### Logic Improvements
+1. **Removed Fallback**: No longer defaults to main branch when `source_branch` is `None`
+2. **Simplified Validation**: Direct validation of the required `source_branch` parameter
+3. **Enhanced Commit Messages**: Merge commits now include both branch names: `"Merge {branch_name} into {target_branch}"`
+4. **Backward Compatibility**: Maintained through `merge_issue_branch_simple()` method
+
+#### Updated Callers
+- ✅ `/swissarmyhammer/src/issues/utils.rs:150` - Updated to pass `&issue.source_branch` directly
+- ✅ `/swissarmyhammer-tools/src/mcp/tools/issues/merge/mod.rs:90` - Updated to pass `&issue.source_branch` directly
+
+#### Testing Results
+- ✅ All git-related tests pass (28 tests)
+- ✅ Core merge functionality verified
+- ✅ Backward compatibility maintained via `merge_issue_branch_simple`
+- ✅ Code formatted and linting completed
+
+### Success Criteria Met
+
+- ✅ `merge_issue_branch()` now requires source branch parameter  
+- ✅ Issue branches merge to their source branch instead of main
+- ✅ Proper validation and error handling for missing source branches
+- ✅ Merge conflicts handled correctly with source branch
+- ✅ All existing merge functionality preserved
+- ✅ Backwards compatibility maintained through `merge_issue_branch_simple`
+
+The core merge functionality now supports source-aware merging while maintaining backward compatibility. Issue branches will merge back to their originating source branch rather than always merging to main.
