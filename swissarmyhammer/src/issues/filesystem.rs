@@ -12,11 +12,6 @@ use tracing::debug;
 
 // IssueNumber type eliminated - we now use issue names (filename without .md) as the primary identifier
 
-/// Default source branch for backward compatibility
-fn default_source_branch() -> String {
-    "main".to_string()
-}
-
 /// Represents an issue in the tracking system
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Issue {
@@ -30,9 +25,6 @@ pub struct Issue {
     pub file_path: PathBuf,
     /// When the issue was created
     pub created_at: DateTime<Utc>,
-    /// The source branch this issue was created from (defaults to "main" for backward compatibility)
-    #[serde(default = "default_source_branch")]
-    pub source_branch: String,
 }
 
 /// Represents the current state of the issue system
@@ -56,13 +48,6 @@ pub trait IssueStorage: Send + Sync {
     /// Create a new issue - if name is empty, generates a ULID
     async fn create_issue(&self, name: String, content: String) -> Result<Issue>;
 
-    /// Create a new issue with explicit source branch
-    async fn create_issue_with_source_branch(
-        &self,
-        name: String,
-        content: String,
-        source_branch: String,
-    ) -> Result<Issue>;
 
     /// Update an existing issue's content by name
     async fn update_issue(&self, name: &str, content: String) -> Result<Issue>;
@@ -223,13 +208,6 @@ impl FileSystemIssueStorage {
         };
 
         // Extract metadata from YAML frontmatter with fallbacks
-        let source_branch = yaml_metadata
-            .as_ref()
-            .and_then(|yaml| yaml.get("source_branch"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(&default_source_branch())
-            .to_string();
-
         let frontmatter_completed = yaml_metadata
             .as_ref()
             .and_then(|yaml| yaml.get("completed"))
@@ -256,7 +234,6 @@ impl FileSystemIssueStorage {
             completed,
             file_path: path.to_path_buf(),
             created_at,
-            source_branch,
         })
     }
 
@@ -381,8 +358,8 @@ impl FileSystemIssueStorage {
 
         // Create content with preserved YAML frontmatter
         let content_with_frontmatter = format!(
-            "---\nsource_branch: \"{}\"\ncompleted: {}\n---\n{}",
-            issue.source_branch, issue.completed, content
+            "---\ncompleted: {}\n---\n{}",
+            issue.completed, content
         );
 
         // Atomic write using temp file and rename
@@ -622,17 +599,6 @@ impl IssueStorage for FileSystemIssueStorage {
     }
 
     async fn create_issue(&self, name: String, content: String) -> Result<Issue> {
-        // Delegate to create_issue_with_source_branch with default branch
-        self.create_issue_with_source_branch(name, content, default_source_branch())
-            .await
-    }
-
-    async fn create_issue_with_source_branch(
-        &self,
-        name: String,
-        content: String,
-        source_branch: String,
-    ) -> Result<Issue> {
         // Lock to ensure atomic issue creation (prevents race conditions)
         let _lock = self.creation_lock.lock().await;
 
@@ -647,10 +613,10 @@ impl IssueStorage for FileSystemIssueStorage {
         let filename = create_safe_filename(&issue_name);
         let file_path = self.state.issues_dir.join(format!("{filename}.md"));
 
-        // Create YAML frontmatter and write to file
+        // Create YAML frontmatter without source_branch
         let content_with_frontmatter = format!(
-            "---\nsource_branch: \"{}\"\ncompleted: false\n---\n{}",
-            source_branch, content
+            "---\ncompleted: false\n---\n{}",
+            content
         );
         fs::write(&file_path, &content_with_frontmatter).map_err(SwissArmyHammerError::Io)?;
 
@@ -662,7 +628,6 @@ impl IssueStorage for FileSystemIssueStorage {
             completed: false,
             file_path,
             created_at,
-            source_branch,
         })
     }
 
@@ -1421,7 +1386,6 @@ mod tests {
             completed: false,
             file_path: PathBuf::from("/tmp/issues/000123_test_issue.md"),
             created_at,
-            source_branch: "main".to_string(),
         };
 
         // Test serialization
@@ -3464,51 +3428,5 @@ mod tests {
         assert!(!final_content.contains("Stale duplicate"));
     }
 
-    #[test]
-    fn test_issue_serialization_backward_compatibility() {
-        // Test deserializing an issue without source_branch field (backward compatibility)
-        let json_without_source_branch = r#"{"name":"test_issue","content":"Test content","completed":false,"file_path":"/tmp/issues/test_issue.md","created_at":"2023-01-01T00:00:00Z"}"#;
-        let deserialized: Issue = serde_json::from_str(json_without_source_branch).unwrap();
 
-        assert_eq!(deserialized.source_branch, "main");
-        assert_eq!(deserialized.name, "test_issue");
-        assert_eq!(deserialized.content, "Test content");
-        assert_eq!(deserialized.completed, false);
-    }
-
-    #[tokio::test]
-    async fn test_create_issue_with_source_branch() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = FileSystemIssueStorage::new(temp_dir.path().join("issues")).unwrap();
-
-        // Test creating issue with custom source branch
-        let issue = storage
-            .create_issue_with_source_branch(
-                "test_issue".to_string(),
-                "Test content".to_string(),
-                "feature/awesome".to_string(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(issue.name, "test_issue");
-        assert_eq!(issue.source_branch, "feature/awesome");
-        assert!(!issue.completed);
-    }
-
-    #[tokio::test]
-    async fn test_create_issue_uses_default_source_branch() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = FileSystemIssueStorage::new(temp_dir.path().join("issues")).unwrap();
-
-        // Test that regular create_issue uses default source branch
-        let issue = storage
-            .create_issue("test_issue".to_string(), "Test content".to_string())
-            .await
-            .unwrap();
-
-        assert_eq!(issue.name, "test_issue");
-        assert_eq!(issue.source_branch, "main");
-        assert!(!issue.completed);
-    }
 }

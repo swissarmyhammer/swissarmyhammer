@@ -86,12 +86,13 @@ impl McpTool for MergeIssueTool {
 
         match git_ops.as_mut() {
             Some(ops) => {
-                // First merge the branch back to its source branch
-                match ops.merge_issue_branch(&issue_name, &issue.source_branch) {
+                // First merge the branch back using git merge-base to determine target
+                match ops.merge_issue_branch_auto(&issue_name) {
                     Ok(_) => {
+                        let target_branch = ops.find_merge_target_branch(&issue_name)
+                            .unwrap_or_else(|_| "main".to_string());
                         let mut success_message = format!(
-                            "Merged work branch for issue {issue_name} to {}",
-                            issue.source_branch
+                            "Merged work branch for issue {issue_name} to {target_branch} (determined by git merge-base)"
                         );
 
                         // Get commit information after successful merge
@@ -132,11 +133,10 @@ impl McpTool for MergeIssueTool {
                         Ok(create_success_response(success_message))
                     }
                     Err(e) => {
-                        // Enhanced error handling with source branch context
+                        // Enhanced error handling 
                         tracing::error!(
-                            "Merge failed for issue '{}' (source branch: '{}'): {}",
+                            "Merge failed for issue '{}': {}",
                             issue_name,
-                            issue.source_branch,
                             e
                         );
 
