@@ -49,15 +49,7 @@ For longer READMEs, include navigation
 - Screenshots or demos (if UI project)
 - Configuration options
 
-### 7. Contributing
-
-- How to contribute
-- Code of conduct
-- Development setup
-- Testing guidelines
-- Pull request process
-
-### 8. License
+### 7. License
 
 - License type and link
 - Copyright information
@@ -69,4 +61,3 @@ For longer READMEs, include navigation
 - Include code examples
 - Add visuals where helpful
 - Update regularly
-- Consider internationalization
