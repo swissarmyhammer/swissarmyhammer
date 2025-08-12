@@ -15,6 +15,26 @@ fn setup_test_environment() -> TempDir {
     let issues_dir = temp_dir.path().join("issues");
     std::fs::create_dir_all(&issues_dir).expect("Failed to create issues directory");
 
+    // Initialize git repository in temp directory to avoid branch conflicts
+    std::process::Command::new("git")
+        .current_dir(temp_dir.path())
+        .args(["init", "--initial-branch=main"])
+        .output()
+        .expect("Failed to init git repo");
+    
+    // Configure git for testing
+    std::process::Command::new("git")
+        .current_dir(temp_dir.path())
+        .args(["config", "user.email", "test@example.com"])
+        .output()
+        .expect("Failed to configure git email");
+    
+    std::process::Command::new("git")
+        .current_dir(temp_dir.path())
+        .args(["config", "user.name", "Test User"])
+        .output()
+        .expect("Failed to configure git name");
+
     // No longer change global current directory to avoid test isolation issues
     temp_dir
 }

@@ -32,7 +32,7 @@ impl CliToolContext {
         working_dir: &std::path::Path,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let issue_storage = Self::create_issue_storage(working_dir)?;
-        let git_ops = Self::create_git_operations();
+        let git_ops = Self::create_git_operations(working_dir);
         let memo_storage = Self::create_memo_storage(working_dir);
         let tool_handlers = Self::create_tool_handlers(memo_storage.clone());
         let rate_limiter = Self::create_rate_limiter();
@@ -64,8 +64,8 @@ impl CliToolContext {
     }
 
     /// Create git operations handler
-    fn create_git_operations() -> Arc<Mutex<Option<swissarmyhammer::git::GitOperations>>> {
-        Arc::new(Mutex::new(swissarmyhammer::git::GitOperations::new().ok()))
+    fn create_git_operations(working_dir: &std::path::Path) -> Arc<Mutex<Option<swissarmyhammer::git::GitOperations>>> {
+        Arc::new(Mutex::new(swissarmyhammer::git::GitOperations::with_work_dir(working_dir.to_path_buf()).ok()))
     }
 
     /// Create memo storage backend
