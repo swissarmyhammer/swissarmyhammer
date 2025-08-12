@@ -459,6 +459,7 @@ mod tests {
             completed: false,
             file_path: PathBuf::from("/test/active1.md"),
             created_at: Utc::now(),
+            source_branch: "main".to_string(),
         };
 
         let active_issue2 = Issue {
@@ -467,6 +468,7 @@ mod tests {
             completed: false,
             file_path: PathBuf::from("/test/active2.md"),
             created_at: Utc::now(),
+            source_branch: "main".to_string(),
         };
 
         let completed_issue = Issue {
@@ -475,6 +477,7 @@ mod tests {
             completed: true,
             file_path: PathBuf::from("/test/completed/completed1.md"),
             created_at: Utc::now(),
+            source_branch: "main".to_string(),
         };
 
         let issues = vec![

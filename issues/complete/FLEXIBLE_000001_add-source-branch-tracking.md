@@ -44,3 +44,31 @@ Add infrastructure to track the source branch when creating issue branches, enab
 - All existing tests pass
 
 This is the foundation for flexible base branch support - subsequent steps will use this source branch tracking.
+
+## Proposed Solution
+
+Based on the specification, I'll implement source branch tracking in the Issue model using the following approach:
+
+### 1. Issue Model Enhancement
+- Add `source_branch: String` field to the Issue struct 
+- Ensure backward compatibility by providing a default value of "main" for existing issues
+- Update Serde serialization to handle optional source branch field gracefully
+
+### 2. Storage Layer Updates  
+- Modify issue creation to accept and store the current branch as source branch
+- Update deserialization logic to handle existing issues without source branch field
+- Ensure consistent storage format across file-based issue storage
+
+### 3. Issue Creation Logic
+- Capture `git branch --show-current` output when creating new issues
+- Validate that the current branch is not an issue branch (doesn't start with "issue/")
+- Store the validated source branch in the issue metadata
+
+### 4. Implementation Steps
+1. Locate and examine the current Issue struct definition
+2. Add the `source_branch` field with proper Serde attributes for backward compatibility
+3. Update issue creation logic to capture and validate source branch
+4. Test backward compatibility with existing issues
+5. Verify that new issues properly store source branch information
+
+This foundation will enable the subsequent flexible base branch support features outlined in the specification.
