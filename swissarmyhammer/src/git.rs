@@ -127,6 +127,13 @@ impl GitOperations {
         Ok(branch_name)
     }
 
+    /// Create and switch to issue work branch (simple backward compatibility)
+    ///
+    /// This is an alias for create_work_branch that maintains API compatibility.
+    pub fn create_work_branch_simple(&self, issue_name: &str) -> Result<String> {
+        self.create_work_branch(issue_name)
+    }
+
     /// Create and switch to issue work branch with optional source branch
     ///
     /// This method enforces branching rules and supports flexible base branches:
@@ -609,7 +616,7 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create work branch
-        let (branch_name, source_branch) = git_ops.create_work_branch("test_issue", None).unwrap();
+        let (branch_name, source_branch) = git_ops.create_work_branch_with_source("test_issue", None).unwrap();
         assert_eq!(branch_name, "issue/test_issue");
         // Should use the current branch (main/master) as source
         assert!(source_branch == "main" || source_branch == "master");
@@ -738,7 +745,7 @@ mod tests {
 
         // Verify it's an error with correct message content
         let error_msg = error.to_string();
-        assert!(error_msg.contains("Cannot create issue branch from another issue branch"));
+        assert!(error_msg.contains("Cannot create new issue branch from another issue branch"));
     }
 
     #[test]
@@ -798,7 +805,7 @@ mod tests {
 
         // Verify it's an error with correct message content
         let error_msg = error.to_string();
-        assert!(error_msg.contains("Cannot create issue branch from another issue branch"));
+        assert!(error_msg.contains("Cannot switch to issue branch from another issue branch"));
     }
 
     #[test]
