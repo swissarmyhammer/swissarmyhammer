@@ -111,9 +111,9 @@ pub async fn work_on_issue<S: IssueStorage>(
     let current_branch = git_ops.current_branch()?;
     let created_new_branch = current_branch != branch_name;
 
-    // Create or switch to the work branch
+    // Create or switch to the work branch (branch from current HEAD)
     let (actual_branch_name, _source_branch) =
-        git_ops.create_work_branch_with_source(&issue.name, Some(&issue.source_branch))?;
+        git_ops.create_work_branch_with_source(&issue.name, None)?;
 
     Ok(IssueBranchResult {
         issue,
@@ -146,8 +146,8 @@ pub async fn merge_issue_branch<S: IssueStorage>(
 
     let branch_name = format!("issue/{}", issue.name);
 
-    // Merge the issue branch back to its source branch
-    git_ops.merge_issue_branch(&issue.name, &issue.source_branch)?;
+    // Merge the issue branch back using git merge-base to determine target
+    git_ops.merge_issue_branch_auto(&issue.name)?;
 
     // Optionally delete the branch
     let branch_deleted = if delete_branch {
@@ -460,7 +460,6 @@ mod tests {
             completed: false,
             file_path: PathBuf::from("/test/active1.md"),
             created_at: Utc::now(),
-            source_branch: "main".to_string(),
         };
 
         let active_issue2 = Issue {
@@ -469,7 +468,6 @@ mod tests {
             completed: false,
             file_path: PathBuf::from("/test/active2.md"),
             created_at: Utc::now(),
-            source_branch: "main".to_string(),
         };
 
         let completed_issue = Issue {
@@ -478,7 +476,6 @@ mod tests {
             completed: true,
             file_path: PathBuf::from("/test/completed/completed1.md"),
             created_at: Utc::now(),
-            source_branch: "main".to_string(),
         };
 
         let issues = vec![

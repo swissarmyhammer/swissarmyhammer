@@ -82,41 +82,16 @@ impl McpTool for CreateIssueTool {
         McpValidation::validate_not_empty(&request.content, "issue content")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate issue content"))?;
 
-        // Capture current git branch for source branch tracking
-        let source_branch = {
-            let git_ops_guard = context.git_ops.lock().await;
-            match git_ops_guard.as_ref() {
-                Some(git_ops) => {
-                    match git_ops.current_branch() {
-                        Ok(branch) => branch,
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to get current branch: {}. Using default 'main'",
-                                e
-                            );
-                            "main".to_string()
-                        }
-                    }
-                }
-                None => {
-                    tracing::warn!(
-                        "Git operations not available. Using default source branch 'main'"
-                    );
-                    "main".to_string()
-                }
-            }
-        };
 
         let issue_storage = context.issue_storage.write().await;
         match issue_storage
-            .create_issue_with_source_branch(validated_name, request.content, source_branch)
+            .create_issue(validated_name, request.content)
             .await
         {
             Ok(issue) => {
                 tracing::info!(
-                    "Created issue {} from branch {}",
-                    issue.name,
-                    issue.source_branch
+                    "Created issue {} from current branch",
+                    issue.name
                 );
                 Ok(create_issue_response(&issue))
             }

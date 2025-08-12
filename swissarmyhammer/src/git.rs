@@ -411,13 +411,134 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Determine the original branch point for an issue branch using git merge-base
+    ///
+    /// This method uses git's merge-base to find the common ancestor commit between
+    /// the issue branch and potential target branches, determining where the issue
+    /// branch was originally created from.
+    pub fn find_merge_target_branch(&self, issue_name: &str) -> Result<String> {
+        let branch_name = format!("issue/{issue_name}");
+        
+        // First check if the issue branch exists
+        if !self.branch_exists(&branch_name)? {
+            return Err(SwissArmyHammerError::Other(format!(
+                "Issue branch '{branch_name}' does not exist"
+            )));
+        }
+
+        // Get list of all local branches that could be candidates
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["branch", "--format=%(refname:short)"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::Other(
+                "Failed to list branches".to_string(),
+            ));
+        }
+
+        let branches = String::from_utf8_lossy(&output.stdout);
+        let candidate_branches: Vec<&str> = branches
+            .lines()
+            .filter(|branch| {
+                !branch.trim().is_empty() 
+                && *branch != branch_name 
+                && !self.is_issue_branch(branch)
+            })
+            .collect();
+
+        // Try to find merge-base with main/master first
+        let main_branch = self.main_branch()?;
+        if candidate_branches.contains(&main_branch.as_str()) {
+            let output = Command::new("git")
+                .current_dir(&self.work_dir)
+                .args(["merge-base", &branch_name, &main_branch])
+                .output()?;
+            
+            if output.status.success() {
+                return Ok(main_branch);
+            }
+        }
+
+        // Fall back to first valid candidate branch
+        for candidate in candidate_branches {
+            let output = Command::new("git")
+                .current_dir(&self.work_dir)
+                .args(["merge-base", &branch_name, candidate])
+                .output()?;
+            
+            if output.status.success() {
+                return Ok(candidate.to_string());
+            }
+        }
+
+        // If no merge-base found, default to main branch
+        Ok(main_branch)
+    }
+
+    /// Merge issue branch using git merge-base to determine target
+    ///
+    /// This method uses git's merge-base to automatically determine where
+    /// the issue branch should be merged back to, eliminating the need to
+    /// store source branch information.
+    pub fn merge_issue_branch_auto(&self, issue_name: &str) -> Result<()> {
+        let branch_name = format!("issue/{issue_name}");
+        let target_branch = self.find_merge_target_branch(issue_name)?;
+        
+        tracing::debug!(
+            "Merging issue branch '{}' back to target branch '{}' (determined by git merge-base)",
+            branch_name, target_branch
+        );
+
+        // Enhanced validation for issue branch targets
+        if self.is_issue_branch(&target_branch) {
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "merge",
+                &target_branch,
+                &format!("Cannot merge issue '{issue_name}' to issue branch '{target_branch}'. Issue branches cannot be merge targets")
+            ));
+        }
+
+        // Switch to target branch first
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["checkout", &target_branch])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "checkout",
+                &target_branch,
+                &format!("Failed to checkout target branch: {stderr}")
+            ));
+        }
+
+        // Merge the issue branch
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["merge", "--no-ff", &branch_name])
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "merge",
+                &branch_name,
+                &format!("Failed to merge to target branch '{}': {stderr}", target_branch),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Merge issue branch to main branch (backward compatibility)
     ///
-    /// This is a convenience method that calls merge_issue_branch with the main branch
-    /// for backward compatibility with existing code that doesn't specify a source branch.
+    /// This is a convenience method that calls merge_issue_branch_auto
+    /// for backward compatibility with existing code.
     pub fn merge_issue_branch_simple(&self, issue_name: &str) -> Result<()> {
-        let main_branch = self.main_branch()?;
-        self.merge_issue_branch(issue_name, &main_branch)
+        self.merge_issue_branch_auto(issue_name)
     }
 
     /// Delete a branch
