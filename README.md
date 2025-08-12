@@ -6,7 +6,7 @@
 
 **Program all the things, just by writing markdown. Really.**
 
-📚 **[Complete Documentation & Guides](https://wballard.github.io/swissarmyhammer)** 📚
+📚 **[Complete Documentation & Guides](https://swissarmyhammer.github.io/swissarmyhammer)** 📚
 
 🦀 **[Rust API Documentation](https://docs.rs/swissarmyhammer)** 🦀
 
