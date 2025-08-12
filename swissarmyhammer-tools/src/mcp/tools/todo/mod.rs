@@ -30,14 +30,14 @@ use crate::mcp::tool_registry::ToolRegistry;
 
 /// Todo item creation functionality
 pub mod create;
-/// Todo item display functionality 
-pub mod show;
 /// Todo item completion functionality
 pub mod mark_complete;
+/// Todo item display functionality
+pub mod show;
 
 pub use create::CreateTodoTool;
-pub use show::ShowTodoTool;
 pub use mark_complete::MarkCompleteTodoTool;
+pub use show::ShowTodoTool;
 
 /// Register all todo tools with the tool registry
 ///

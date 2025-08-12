@@ -62,12 +62,16 @@ impl McpTool for ShowTodoTool {
                 McpError::invalid_params(e.to_string(), None)
             })?;
 
-        tracing::debug!("Showing todo item '{}' from list: {}", request.item, request.todo_list);
+        tracing::debug!(
+            "Showing todo item '{}' from list: {}",
+            request.item,
+            request.todo_list
+        );
 
         // Validate todo list name and item identifier
         McpValidation::validate_not_empty(&request.todo_list, "todo list name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
-        
+
         McpValidation::validate_not_empty(&request.item, "item identifier")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate item identifier"))?;
 
@@ -76,10 +80,10 @@ impl McpTool for ShowTodoTool {
             .map_err(|e| McpErrorHandler::handle_error(e, "create todo storage"))?;
 
         // Get the requested todo item
-        match storage.get_todo_item(
-            &request.todo_list,
-            &request.item,
-        ).await {
+        match storage
+            .get_todo_item(&request.todo_list, &request.item)
+            .await
+        {
             Ok(Some(item)) => {
                 tracing::info!("Found todo item {} in list {}", item.id, request.todo_list);
                 Ok(BaseToolImpl::create_success_response(
@@ -100,7 +104,8 @@ impl McpTool for ShowTodoTool {
                             },
                             item.done
                         )
-                    }).to_string()
+                    })
+                    .to_string(),
                 ))
             }
             Ok(None) => {
@@ -113,8 +118,11 @@ impl McpTool for ShowTodoTool {
                     ))
                 } else {
                     Err(McpError::invalid_request(
-                        format!("Todo item '{}' not found in list '{}'", request.item, request.todo_list),
-                        None
+                        format!(
+                            "Todo item '{}' not found in list '{}'",
+                            request.item, request.todo_list
+                        ),
+                        None,
                     ))
                 }
             }

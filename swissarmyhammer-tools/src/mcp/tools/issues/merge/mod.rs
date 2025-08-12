@@ -89,7 +89,8 @@ impl McpTool for MergeIssueTool {
                 // First merge the branch back using git merge-base to determine target
                 match ops.merge_issue_branch_auto(&issue_name) {
                     Ok(_) => {
-                        let target_branch = ops.find_merge_target_branch(&issue_name)
+                        let target_branch = ops
+                            .find_merge_target_branch(&issue_name)
                             .unwrap_or_else(|_| "main".to_string());
                         let mut success_message = format!(
                             "Merged work branch for issue {issue_name} to {target_branch} (determined by git merge-base)"
@@ -133,12 +134,8 @@ impl McpTool for MergeIssueTool {
                         Ok(create_success_response(success_message))
                     }
                     Err(e) => {
-                        // Enhanced error handling 
-                        tracing::error!(
-                            "Merge failed for issue '{}': {}",
-                            issue_name,
-                            e
-                        );
+                        // Enhanced error handling
+                        tracing::error!("Merge failed for issue '{}': {}", issue_name, e);
 
                         // Check if this is a source branch related error that should trigger abort
                         let error_string = e.to_string();

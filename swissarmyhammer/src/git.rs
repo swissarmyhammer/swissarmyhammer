@@ -182,7 +182,9 @@ impl GitOperations {
                 None => {
                     // For resume scenario without explicit source, try to get the stored source branch
                     self.get_issue_source_branch(issue_name)
-                        .unwrap_or_else(|_| self.main_branch().unwrap_or_else(|_| "main".to_string()))
+                        .unwrap_or_else(|_| {
+                            self.main_branch().unwrap_or_else(|_| "main".to_string())
+                        })
                 }
             };
             return Ok((branch_name, resume_source_branch));
@@ -240,10 +242,10 @@ impl GitOperations {
         }
 
         self.create_and_checkout_branch(&branch_name)?;
-        
+
         // Store the source branch information for the newly created issue branch
         let _ = self.store_issue_source_branch(issue_name, &actual_source_branch);
-        
+
         Ok((branch_name, actual_source_branch))
     }
 
@@ -424,37 +426,38 @@ impl GitOperations {
     /// Store the source branch for an issue using git config
     pub fn store_issue_source_branch(&self, issue_name: &str, source_branch: &str) -> Result<()> {
         let config_key = format!("swissarmyhammer.issue.{}.source", issue_name);
-        
+
         let output = Command::new("git")
             .current_dir(&self.work_dir)
             .args(["config", &config_key, source_branch])
             .output()?;
-            
+
         if !output.status.success() {
             return Err(SwissArmyHammerError::Other(format!(
-                "Failed to store source branch for issue '{}'", issue_name
+                "Failed to store source branch for issue '{}'",
+                issue_name
             )));
         }
-        
+
         Ok(())
     }
-    
+
     /// Retrieve the stored source branch for an issue
     pub fn get_issue_source_branch(&self, issue_name: &str) -> Result<String> {
         let config_key = format!("swissarmyhammer.issue.{}.source", issue_name);
-        
+
         let output = Command::new("git")
             .current_dir(&self.work_dir)
             .args(["config", &config_key])
             .output()?;
-            
+
         if output.status.success() {
             let source_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !source_branch.is_empty() {
                 return Ok(source_branch);
             }
         }
-        
+
         // Fallback to old behavior if no stored source branch found
         self.find_merge_target_branch_fallback(issue_name)
     }
@@ -462,7 +465,7 @@ impl GitOperations {
     /// Fallback method for finding merge target (legacy behavior)
     fn find_merge_target_branch_fallback(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
-        
+
         // First check if the issue branch exists
         if !self.branch_exists(&branch_name)? {
             return Err(SwissArmyHammerError::Other(format!(
@@ -486,9 +489,7 @@ impl GitOperations {
         let candidate_branches: Vec<&str> = branches
             .lines()
             .filter(|branch| {
-                !branch.trim().is_empty() 
-                && *branch != branch_name 
-                && !self.is_issue_branch(branch)
+                !branch.trim().is_empty() && *branch != branch_name && !self.is_issue_branch(branch)
             })
             .collect();
 
@@ -496,25 +497,27 @@ impl GitOperations {
         // The branch with the most recent common ancestor should be the target
         let mut best_candidate = None;
         let mut best_merge_base_time = 0;
-        
+
         for candidate in &candidate_branches {
             let merge_base_output = Command::new("git")
                 .current_dir(&self.work_dir)
                 .args(["merge-base", &branch_name, candidate])
                 .output()?;
-            
+
             if !merge_base_output.status.success() {
                 continue;
             }
-            
-            let merge_base_commit = String::from_utf8_lossy(&merge_base_output.stdout).trim().to_string();
-            
+
+            let merge_base_commit = String::from_utf8_lossy(&merge_base_output.stdout)
+                .trim()
+                .to_string();
+
             // Get the timestamp of the merge-base commit
             let timestamp_output = Command::new("git")
                 .current_dir(&self.work_dir)
                 .args(["show", "-s", "--format=%ct", &merge_base_commit])
                 .output()?;
-                
+
             if let Ok(timestamp_str) = String::from_utf8(timestamp_output.stdout) {
                 if let Ok(timestamp) = timestamp_str.trim().parse::<u64>() {
                     if timestamp > best_merge_base_time {
@@ -551,10 +554,11 @@ impl GitOperations {
     pub fn merge_issue_branch_auto(&self, issue_name: &str) -> Result<()> {
         let branch_name = format!("issue/{issue_name}");
         let target_branch = self.find_merge_target_branch(issue_name)?;
-        
+
         tracing::debug!(
             "Merging issue branch '{}' back to target branch '{}' (determined by git merge-base)",
-            branch_name, target_branch
+            branch_name,
+            target_branch
         );
 
         // Enhanced validation for issue branch targets
@@ -577,7 +581,7 @@ impl GitOperations {
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "checkout",
                 &target_branch,
-                &format!("Failed to checkout target branch: {stderr}")
+                &format!("Failed to checkout target branch: {stderr}"),
             ));
         }
 
@@ -592,7 +596,10 @@ impl GitOperations {
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 &branch_name,
-                &format!("Failed to merge to target branch '{}': {stderr}", target_branch),
+                &format!(
+                    "Failed to merge to target branch '{}': {stderr}",
+                    target_branch
+                ),
             ));
         }
 

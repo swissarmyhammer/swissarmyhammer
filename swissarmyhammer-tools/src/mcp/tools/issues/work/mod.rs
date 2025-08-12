@@ -23,7 +23,7 @@ impl WorkIssueTool {
     }
 
     /// Creates an abort file to signal workflow termination
-    /// 
+    ///
     /// This method creates a `.swissarmyhammer/.abort` file with the provided reason,
     /// enabling file-based abort detection throughout the workflow system.
     fn create_abort_file(reason: &str) -> std::result::Result<(), std::io::Error> {
@@ -96,14 +96,17 @@ impl McpTool for WorkIssueTool {
                 "Cannot work on issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches to prevent circular dependencies. Switch to a non-issue branch (like main, develop, or feature branch) first.",
                 request.name.0, current_branch
             );
-            
+
             // Create abort file to signal workflow termination
             if let Err(abort_err) = Self::create_abort_file(&abort_reason) {
                 tracing::error!("Failed to create abort file: {}", abort_err);
             } else {
-                tracing::info!("Created abort file due to issue branching validation failure: {}", abort_reason);
+                tracing::info!(
+                    "Created abort file due to issue branching validation failure: {}",
+                    abort_reason
+                );
             }
-            
+
             return Err(McpError::invalid_params(abort_reason, None));
         }
 
@@ -120,9 +123,7 @@ impl McpTool for WorkIssueTool {
             let branch_name = issue.name.clone();
 
             match git_ops.as_mut() {
-                Some(ops) => match ops
-                    .create_work_branch_with_source(&branch_name, None)
-                {
+                Some(ops) => match ops.create_work_branch_with_source(&branch_name, None) {
                     Ok((branch_name, source_branch)) => Ok(create_success_response(format!(
                         "Switched to work branch: {branch_name} (created from {source_branch})"
                     ))),

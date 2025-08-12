@@ -145,7 +145,8 @@ pub use memoranda::{
 
 /// Todo list management types
 pub use todo::{
-    CreateTodoRequest, ShowTodoRequest, MarkCompleteTodoRequest, TodoId, TodoItem, TodoList, TodoStorage,
+    CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
+    TodoStorage,
 };
 
 /// Validation types and traits
@@ -214,7 +215,8 @@ pub mod prelude {
 
     // Todo types for convenient access
     pub use crate::todo::{
-        CreateTodoRequest, ShowTodoRequest, MarkCompleteTodoRequest, TodoId, TodoItem, TodoList, TodoStorage,
+        CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
+        TodoStorage,
     };
 
     // Semantic search types for convenient access

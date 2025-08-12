@@ -41,9 +41,9 @@
 /// environment variable. This means tests using TestHomeGuard will serialize access
 /// to HOME, which may impact parallel test execution performance.
 use crate::{Prompt, PromptLibrary};
-use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 // #[cfg(test)]
@@ -156,7 +156,6 @@ fn get_test_home_path() -> &'static PathBuf {
     })
 }
 
-
 /// Set up the test environment by configuring HOME to use the test directory
 ///
 /// **DEPRECATED**: This function serializes tests. Use `IsolatedTestHome::new()` instead.
@@ -194,7 +193,7 @@ pub fn get_test_swissarmyhammer_dir() -> PathBuf {
 /// Guard that sets up test environment and restores the original HOME on drop
 ///
 /// **DEPRECATED**: This approach serializes all tests. Use `create_isolated_test_home()` instead.
-/// 
+///
 /// This is useful for tests that need to ensure the HOME environment variable
 /// is restored after the test completes, preventing test pollution.
 pub struct TestHomeGuard {
@@ -203,7 +202,7 @@ pub struct TestHomeGuard {
 
 impl TestHomeGuard {
     /// Create a new test home guard (DEPRECATED)
-    /// 
+    ///
     /// **Warning**: This method serializes all tests and should not be used.
     /// Use `IsolatedTestHome::new()` instead for parallel-safe testing.
     pub fn new() -> Self {
@@ -231,7 +230,7 @@ impl Drop for TestHomeGuard {
 }
 
 /// Create a test home guard for scoped test environment setup
-/// 
+///
 /// **DEPRECATED**: Use `create_isolated_test_home()` instead for parallel-safe testing.
 ///
 /// # Example
@@ -269,13 +268,14 @@ pub fn create_test_home_guard() -> TestHomeGuard {
 pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let temp_dir = create_temp_dir();
     let home_path = temp_dir.path().to_path_buf();
-    
+
     // Create mock SwissArmyHammer directory structure
     let sah_dir = home_path.join(".swissarmyhammer");
     std::fs::create_dir_all(&sah_dir).expect("Failed to create .swissarmyhammer directory");
     std::fs::create_dir_all(sah_dir.join("prompts")).expect("Failed to create prompts directory");
-    std::fs::create_dir_all(sah_dir.join("workflows")).expect("Failed to create workflows directory");
-    
+    std::fs::create_dir_all(sah_dir.join("workflows"))
+        .expect("Failed to create workflows directory");
+
     (temp_dir, home_path)
 }
 
@@ -309,21 +309,21 @@ impl IsolatedTestHome {
     pub fn new() -> Self {
         let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home();
-        
+
         // Set HOME to the temporary directory
         std::env::set_var("HOME", &home_path);
-        
+
         Self {
             _temp_dir: temp_dir,
             original_home,
         }
     }
-    
+
     /// Get the path to the isolated home directory
     pub fn home_path(&self) -> PathBuf {
         self._temp_dir.path().to_path_buf()
     }
-    
+
     /// Get the path to the .swissarmyhammer directory in the isolated home
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
         self.home_path().join(".swissarmyhammer")
@@ -533,7 +533,7 @@ mod tests {
         let home = std::env::var("HOME").expect("HOME not set");
         // HOME should now point to our isolated temp directory
         assert!(PathBuf::from(&home).exists());
-        
+
         // Verify the mock SwissArmyHammer structure exists
         let swissarmyhammer_dir = PathBuf::from(&home).join(".swissarmyhammer");
         assert!(swissarmyhammer_dir.exists());

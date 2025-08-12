@@ -103,7 +103,13 @@ async fn test_complete_issue_workflow() {
     let issue_name = &issue.name;
 
     // Step 2: Check all complete (should be false)
-    let issues = env.issue_storage.read().await.list_issues_info().await.unwrap();
+    let issues = env
+        .issue_storage
+        .read()
+        .await
+        .list_issues_info()
+        .await
+        .unwrap();
     let active_issues: Vec<_> = issues.iter().filter(|i| !i.completed).collect();
     assert_eq!(active_issues.len(), 1);
     assert!(!active_issues[0].completed);
@@ -152,7 +158,13 @@ async fn test_complete_issue_workflow() {
     assert!(completed_issue_info.completed);
 
     // Step 6: Check all complete (should be true now)
-    let issues = env.issue_storage.read().await.list_issues_info().await.unwrap();
+    let issues = env
+        .issue_storage
+        .read()
+        .await
+        .list_issues_info()
+        .await
+        .unwrap();
     let active_issues: Vec<_> = issues.iter().filter(|i| !i.completed).collect();
     assert_eq!(active_issues.len(), 0);
 

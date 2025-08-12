@@ -82,7 +82,6 @@ impl McpTool for CreateIssueTool {
         McpValidation::validate_not_empty(&request.content, "issue content")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate issue content"))?;
 
-
         let issue_storage = context.issue_storage.write().await;
         match issue_storage
             .create_issue(validated_name, request.content)

@@ -71,7 +71,7 @@ impl McpTool for CreateTodoTool {
         // Validate todo list name and task
         McpValidation::validate_not_empty(&request.todo_list, "todo list name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
-        
+
         McpValidation::validate_not_empty(&request.task, "task description")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate task description"))?;
 
@@ -80,13 +80,16 @@ impl McpTool for CreateTodoTool {
             .map_err(|e| McpErrorHandler::handle_error(e, "create todo storage"))?;
 
         // Create the todo item
-        match storage.create_todo_item(
-            &request.todo_list,
-            request.task,
-            request.context,
-        ).await {
+        match storage
+            .create_todo_item(&request.todo_list, request.task, request.context)
+            .await
+        {
             Ok(item) => {
-                tracing::info!("Created todo item {} in list {}", item.id, request.todo_list);
+                tracing::info!(
+                    "Created todo item {} in list {}",
+                    item.id,
+                    request.todo_list
+                );
                 Ok(BaseToolImpl::create_success_response(
                     json!({
                         "message": format!("Created todo item in list '{}'", request.todo_list),
@@ -96,7 +99,8 @@ impl McpTool for CreateTodoTool {
                             "context": item.context,
                             "done": item.done
                         }
-                    }).to_string()
+                    })
+                    .to_string(),
                 ))
             }
             Err(e) => Err(McpErrorHandler::handle_error(e, "create todo item")),

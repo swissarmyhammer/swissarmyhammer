@@ -3,8 +3,8 @@
 //! This module provides filesystem-based storage for todo lists using YAML format.
 //! Todo lists are stored as `.todo.yaml` files in the `.swissarmyhammer/todo/` directory.
 
-use super::{TodoId, TodoItem, TodoList};
 use super::{get_todo_directory, validate_todo_list_name};
+use super::{TodoId, TodoItem, TodoList};
 use crate::error::{Result, SwissArmyHammerError};
 use std::fs;
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ impl TodoStorage {
         context: Option<String>,
     ) -> Result<TodoItem> {
         validate_todo_list_name(todo_list)?;
-        
+
         if task.trim().is_empty() {
             return Err(SwissArmyHammerError::Other(
                 "Task cannot be empty".to_string(),
@@ -43,7 +43,7 @@ impl TodoStorage {
         }
 
         let path = self.get_list_path(todo_list)?;
-        
+
         // Load existing list or create new one
         let mut list = if path.exists() {
             self.load_todo_list(&path).await?
@@ -68,9 +68,9 @@ impl TodoStorage {
         item_identifier: &str,
     ) -> Result<Option<TodoItem>> {
         validate_todo_list_name(todo_list)?;
-        
+
         let path = self.get_list_path(todo_list)?;
-        
+
         if !path.exists() {
             return Ok(None);
         }
@@ -86,15 +86,11 @@ impl TodoStorage {
     }
 
     /// Mark a todo item as complete
-    pub async fn mark_todo_complete(
-        &self,
-        todo_list: &str,
-        id: &TodoId,
-    ) -> Result<()> {
+    pub async fn mark_todo_complete(&self, todo_list: &str, id: &TodoId) -> Result<()> {
         validate_todo_list_name(todo_list)?;
-        
+
         let path = self.get_list_path(todo_list)?;
-        
+
         if !path.exists() {
             return Err(SwissArmyHammerError::Other(format!(
                 "Todo list '{}' not found",
@@ -103,7 +99,7 @@ impl TodoStorage {
         }
 
         let mut list = self.load_todo_list(&path).await?;
-        
+
         // Find and mark the item complete
         let item = list.find_item_mut(id).ok_or_else(|| {
             SwissArmyHammerError::Other(format!(
@@ -111,7 +107,7 @@ impl TodoStorage {
                 id, todo_list
             ))
         })?;
-        
+
         item.mark_complete();
 
         // Check if all items are complete
@@ -134,9 +130,9 @@ impl TodoStorage {
     /// Get all todo items from a list
     pub async fn get_todo_list(&self, todo_list: &str) -> Result<Option<TodoList>> {
         validate_todo_list_name(todo_list)?;
-        
+
         let path = self.get_list_path(todo_list)?;
-        
+
         if !path.exists() {
             return Ok(None);
         }
@@ -152,20 +148,14 @@ impl TodoStorage {
         }
 
         let entries = fs::read_dir(&self.base_dir).map_err(|e| {
-            SwissArmyHammerError::Other(format!(
-                "Failed to read todo directory: {}",
-                e
-            ))
+            SwissArmyHammerError::Other(format!("Failed to read todo directory: {}", e))
         })?;
 
         let mut lists = Vec::new();
-        
+
         for entry in entries {
             let entry = entry.map_err(|e| {
-                SwissArmyHammerError::Other(format!(
-                    "Failed to read todo directory entry: {}",
-                    e
-                ))
+                SwissArmyHammerError::Other(format!("Failed to read todo directory entry: {}", e))
             })?;
 
             if let Some(file_name) = entry.file_name().to_str() {
@@ -221,10 +211,7 @@ impl TodoStorage {
         }
 
         let content = serde_yaml::to_string(list).map_err(|e| {
-            SwissArmyHammerError::Other(format!(
-                "Failed to serialize todo list: {}",
-                e
-            ))
+            SwissArmyHammerError::Other(format!("Failed to serialize todo list: {}", e))
         })?;
 
         fs::write(path, content).map_err(|e| {
@@ -287,7 +274,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        
+
         assert_eq!(next.id, item1.id);
         assert_eq!(next.task, "Task 1");
     }
@@ -380,7 +367,7 @@ mod tests {
 
         let list1 = format!("test_list1_{}", ulid::Ulid::new());
         let list2 = format!("test_list2_{}", ulid::Ulid::new());
-        
+
         storage
             .create_todo_item(&list1, "Task 1".to_string(), None)
             .await
@@ -403,9 +390,7 @@ mod tests {
         let storage = TodoStorage::new_default().unwrap();
 
         // Empty todo list name
-        let result = storage
-            .create_todo_item("", "Task".to_string(), None)
-            .await;
+        let result = storage.create_todo_item("", "Task".to_string(), None).await;
         assert!(result.is_err());
 
         // Empty task

@@ -200,8 +200,16 @@ pub struct ProjectStatus {
 impl ProjectStatus {
     /// Create a new project status from a list of issue infos
     pub fn from_issue_infos(issue_infos: Vec<IssueInfo>) -> Self {
-        let completed_issues: Vec<Issue> = issue_infos.iter().filter(|i| i.completed).map(|i| i.issue.clone()).collect();
-        let active_issues: Vec<Issue> = issue_infos.iter().filter(|i| !i.completed).map(|i| i.issue.clone()).collect();
+        let completed_issues: Vec<Issue> = issue_infos
+            .iter()
+            .filter(|i| i.completed)
+            .map(|i| i.issue.clone())
+            .collect();
+        let active_issues: Vec<Issue> = issue_infos
+            .iter()
+            .filter(|i| !i.completed)
+            .map(|i| i.issue.clone())
+            .collect();
 
         let total_issues = issue_infos.len();
         let completed_count = completed_issues.len();

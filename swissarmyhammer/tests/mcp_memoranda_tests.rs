@@ -38,9 +38,7 @@ mod test_utils {
 
         // Optimize binary path resolution - prefer debug binary, fallback to release
         let binary_path = std::env::var("CARGO_BIN_EXE_sah")
-            .or_else(|_| {
-                std::env::var("CARGO_TARGET_DIR").map(|dir| format!("{dir}/debug/sah"))
-            })
+            .or_else(|_| std::env::var("CARGO_TARGET_DIR").map(|dir| format!("{dir}/debug/sah")))
             .unwrap_or_else(|_| "../target/debug/sah".to_string());
 
         // Set test mode environment to skip heavy dependencies if possible

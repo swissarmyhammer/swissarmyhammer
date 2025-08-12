@@ -14,7 +14,11 @@ static BINARY_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 fn get_sah_command() -> Command {
     let path = BINARY_PATH.get_or_init(|| {
-        Command::cargo_bin("sah").unwrap().get_program().to_owned().into()
+        Command::cargo_bin("sah")
+            .unwrap()
+            .get_program()
+            .to_owned()
+            .into()
     });
     Command::new(path)
 }

@@ -42,8 +42,8 @@
 //! ```
 
 use crate::common::generate_monotonic_ulid;
-use crate::error::{Result, SwissArmyHammerError};
 use crate::directory_utils;
+use crate::error::{Result, SwissArmyHammerError};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -233,15 +233,17 @@ pub struct MarkCompleteTodoRequest {
 /// Returns `.swissarmyhammer/todo/` in the current repo root if in a Git repository,
 /// otherwise in the current working directory.
 pub fn get_todo_directory() -> Result<PathBuf> {
-    let base_dir = directory_utils::find_repository_or_current_directory()
-        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to determine base directory: {}", e)))?;
-    
+    let base_dir = directory_utils::find_repository_or_current_directory().map_err(|e| {
+        SwissArmyHammerError::Other(format!("Failed to determine base directory: {}", e))
+    })?;
+
     let todo_dir = base_dir.join(".swissarmyhammer").join("todo");
-    
+
     // Ensure directory exists
-    fs::create_dir_all(&todo_dir)
-        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create todo directory: {}", e)))?;
-    
+    fs::create_dir_all(&todo_dir).map_err(|e| {
+        SwissArmyHammerError::Other(format!("Failed to create todo directory: {}", e))
+    })?;
+
     Ok(todo_dir)
 }
 
@@ -252,7 +254,7 @@ pub fn validate_todo_list_name(name: &str) -> Result<()> {
             "Todo list name cannot be empty".to_string(),
         ));
     }
-    
+
     // Check for invalid characters that would cause filesystem issues
     let invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'];
     for ch in invalid_chars {
@@ -262,7 +264,7 @@ pub fn validate_todo_list_name(name: &str) -> Result<()> {
             )));
         }
     }
-    
+
     Ok(())
 }
 
@@ -297,7 +299,7 @@ mod tests {
     #[test]
     fn test_todo_item_creation() {
         let item = TodoItem::new("Test task".to_string(), Some("Test context".to_string()));
-        
+
         assert_eq!(item.task, "Test task");
         assert_eq!(item.context, Some("Test context".to_string()));
         assert!(!item.done);
@@ -308,7 +310,7 @@ mod tests {
     fn test_todo_item_mark_complete() {
         let mut item = TodoItem::new("Test task".to_string(), None);
         assert!(!item.is_complete());
-        
+
         item.mark_complete();
         assert!(item.is_complete());
         assert!(item.done);
@@ -317,33 +319,33 @@ mod tests {
     #[test]
     fn test_todo_list_operations() {
         let mut list = TodoList::new();
-        
+
         let item = list.add_item("Task 1".to_string(), None);
         let item_id = item.id.clone();
-        
+
         list.add_item("Task 2".to_string(), Some("Context 2".to_string()));
-        
+
         assert_eq!(list.todo.len(), 2);
         assert_eq!(list.incomplete_count(), 2);
         assert_eq!(list.complete_count(), 0);
         assert!(!list.all_complete());
-        
+
         // Test finding item
         let found_item = list.find_item(&item_id).unwrap();
         assert_eq!(found_item.task, "Task 1");
-        
+
         // Test getting next incomplete
         let next = list.get_next_incomplete().unwrap();
         assert_eq!(next.task, "Task 1");
-        
+
         // Mark first item complete
         let item_mut = list.find_item_mut(&item_id).unwrap();
         item_mut.mark_complete();
-        
+
         assert_eq!(list.incomplete_count(), 1);
         assert_eq!(list.complete_count(), 1);
         assert!(!list.all_complete());
-        
+
         // Next should now be Task 2
         let next = list.get_next_incomplete().unwrap();
         assert_eq!(next.task, "Task 2");

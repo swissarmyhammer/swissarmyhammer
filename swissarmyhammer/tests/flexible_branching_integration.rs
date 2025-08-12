@@ -186,10 +186,7 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     let _created_issue = {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue_name.clone(),
-                issue_content,
-            )
+            .create_issue(issue_name.clone(), issue_content)
             .await
             .expect("Failed to create issue")
     };
@@ -280,10 +277,7 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue1_name.clone(),
-                issue1_content,
-            )
+            .create_issue(issue1_name.clone(), issue1_content)
             .await
             .expect("Failed to create first issue");
     }
@@ -295,10 +289,7 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue2_name.clone(),
-                issue2_content,
-            )
+            .create_issue(issue2_name.clone(), issue2_content)
             .await
             .expect("Failed to create second issue");
     }
@@ -352,10 +343,7 @@ async fn test_release_branch_issue_workflow() {
     {
         let issue_storage = env.issue_storage.write().await;
         issue_storage
-            .create_issue(
-                issue_name.clone(),
-                issue_content,
-            )
+            .create_issue(issue_name.clone(), issue_content)
             .await
             .expect("Failed to create hotfix issue");
     }
@@ -510,10 +498,7 @@ async fn test_error_handling_invalid_source_branch() {
     {
         let issue_storage = env.issue_storage.write().await;
         let _issue = issue_storage
-            .create_issue(
-                issue_name.clone(),
-                issue_content,
-            )
+            .create_issue(issue_name.clone(), issue_content)
             .await
             .expect("Issue storage should succeed");
     }
