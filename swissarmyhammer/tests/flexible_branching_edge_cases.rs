@@ -126,7 +126,7 @@ async fn test_source_branch_deleted_mid_workflow() {
     let issue_content = "# Temporary Feature Work\n\nWork based on temporary feature".to_string();
 
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
@@ -177,7 +177,7 @@ async fn test_source_branch_deleted_mid_workflow() {
 
     // Mark issue complete
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage.mark_complete(&issue_name).await.unwrap();
     }
 
@@ -193,7 +193,7 @@ async fn test_source_branch_deleted_mid_workflow() {
     }
 
     // Check if abort file was created
-    let abort_file_path = env.temp_dir.path().join(".swissarmyhammer/.abort");
+    let _abort_file_path = env.temp_dir.path().join(".swissarmyhammer/.abort");
     // Note: The abort file creation depends on the specific error handling in the git operations
     // This test verifies the error is properly handled
 }
@@ -211,7 +211,7 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     let issue_content = "# Conflicting Changes\n\nChanges that will conflict".to_string();
 
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
@@ -282,7 +282,7 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
 
     // Mark issue complete
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage.mark_complete(&issue_name).await.unwrap();
     }
 
@@ -300,7 +300,7 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     // Verify no partial merge state is left
     {
         let git_ops = env.git_ops.lock().await;
-        let git = git_ops.as_ref().unwrap();
+        let _git = git_ops.as_ref().unwrap();
         let status_output = Command::new("git")
             .current_dir(env.temp_dir.path())
             .args(["status", "--porcelain"])
@@ -325,7 +325,7 @@ async fn test_source_branch_validation_before_merge() {
 
     // Create issue and branch
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
@@ -438,7 +438,7 @@ async fn test_uncommitted_changes_during_merge() {
 
     // Create issue and branch
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
@@ -490,7 +490,7 @@ async fn test_uncommitted_changes_during_merge() {
 
     // Mark issue complete
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage.mark_complete(&issue_name).await.unwrap();
     }
 

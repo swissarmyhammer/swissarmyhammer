@@ -241,7 +241,7 @@ mod tests {
         let handles: Vec<_> = (0..5)
             .map(|i| {
                 std::thread::spawn(move || {
-                    let reason = format!("Concurrent abort reason {}", i);
+                    let reason = format!("Concurrent abort reason {i}");
                     AbortCreateTool::create_abort_file(&reason)
                 })
             })

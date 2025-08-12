@@ -2,7 +2,6 @@
 //!
 //! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
 
-use serde_json::json;
 use std::process::Command;
 use tempfile::TempDir;
 

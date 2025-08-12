@@ -21,7 +21,7 @@ use tempfile::TempDir;
 
 /// Test environment setup helper
 struct TestEnvironment {
-    temp_dir: TempDir,
+    _temp_dir: TempDir,
     original_dir: PathBuf,
 }
 
@@ -31,7 +31,7 @@ impl TestEnvironment {
         let original_dir = std::env::current_dir()?;
         std::env::set_current_dir(temp_dir.path())?;
         Ok(Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             original_dir,
         })
     }
