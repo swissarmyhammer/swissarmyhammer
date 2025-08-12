@@ -113,51 +113,96 @@ impl GitOperations {
         branch.starts_with("issue/")
     }
 
-    /// Create and switch to issue work branch
+    /// Create and switch to issue work branch with optional source branch
     ///
     /// This method enforces branching rules to prevent creating or switching to
     /// issue branches from other issue branches. It follows these rules:
     ///
     /// 1. If already on the target branch, return success (resume scenario)
-    /// 2. If switching to existing branch, must be on a non-issue branch first
-    /// 3. If creating new branch, must be on a non-issue branch
-    /// 4. Returns error if branching rules are violated
-    pub fn create_work_branch(&self, issue_name: &str) -> Result<String> {
+    /// 2. If switching to existing branch, must be from a non-issue branch
+    /// 3. If creating new branch, must be from a non-issue branch
+    /// 4. Source branch must exist and not be an issue branch
+    /// 5. Returns error if branching rules are violated
+    ///
+    /// # Arguments
+    ///
+    /// * `issue_name` - The name of the issue (becomes issue/{issue_name})
+    /// * `source_branch` - Optional source branch. If None, uses current branch
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (branch_name, source_branch) on success
+    pub fn create_work_branch(&self, issue_name: &str, source_branch: Option<&str>) -> Result<(String, String)> {
         let branch_name = format!("issue/{issue_name}");
         let current_branch = self.current_branch()?;
-        let main_branch = self.main_branch()?;
-
+        
         // Early return: If we're already on the target issue branch (resume scenario)
+        // For resume, we need to determine what the effective source branch would be
         if current_branch == branch_name {
-            return Ok(branch_name);
+            let effective_source_branch = match source_branch {
+                Some(branch) => {
+                    // Validate that the provided source branch exists
+                    if !self.branch_exists(branch)? {
+                        return Err(SwissArmyHammerError::Other(format!(
+                            "Source branch '{}' does not exist",
+                            branch
+                        )));
+                    }
+                    
+                    // Validate that the source branch is not an issue branch
+                    if self.is_issue_branch(branch) {
+                        return Err(SwissArmyHammerError::Other(format!(
+                            "Cannot use issue branch '{}' as source branch",
+                            branch
+                        )));
+                    }
+                    
+                    branch.to_string()
+                }
+                None => {
+                    // For resume scenario, we need to assume a reasonable source branch
+                    // since we can't determine it from the current state
+                    self.main_branch()?
+                }
+            };
+            return Ok((branch_name, effective_source_branch));
         }
+        
+        // Determine the source branch
+        let effective_source_branch = match source_branch {
+            Some(branch) => {
+                // Validate that the provided source branch exists
+                if !self.branch_exists(branch)? {
+                    return Err(SwissArmyHammerError::Other(format!(
+                        "Source branch '{}' does not exist",
+                        branch
+                    )));
+                }
+                
+                // Validate that the source branch is not an issue branch
+                if self.is_issue_branch(branch) {
+                    return Err(SwissArmyHammerError::Other(format!(
+                        "Cannot use issue branch '{}' as source branch",
+                        branch
+                    )));
+                }
+                
+                branch.to_string()
+            }
+            None => {
+                // Use current branch as source, but validate it's not an issue branch
+                if self.is_issue_branch(&current_branch) {
+                    return Err(SwissArmyHammerError::Other(
+                        "Cannot create issue branch from another issue branch. Please switch to a non-issue branch first or specify a valid source branch.".to_string()
+                    ));
+                }
+                current_branch.clone()
+            }
+        };
 
-        // Validate branching rules before proceeding
-        self.validate_branch_operation(&current_branch, &main_branch, &branch_name)?;
-
-        // Handle existing branch: switch to it from main
-        if self.branch_exists(&branch_name)? {
-            self.checkout_branch(&branch_name)?;
-            return Ok(branch_name);
-        }
-
-        // Handle new branch: create and switch from main
-        self.create_and_checkout_branch(&branch_name)?;
-        Ok(branch_name)
-    }
-
-    /// Validate that branch operations follow the required rules
-    ///
-    /// Ensures that issue branch creation/switching only happens from non-issue branches
-    fn validate_branch_operation(
-        &self,
-        current_branch: &str,
-        _main_branch: &str,
-        target_branch: &str,
-    ) -> Result<()> {
-        // If on an issue branch, prevent operations to other issue branches
-        if self.is_issue_branch(current_branch) {
-            if self.branch_exists(target_branch)? {
+        // Validate current branch for operations
+        if self.is_issue_branch(&current_branch) {
+            if self.branch_exists(&branch_name)? {
                 return Err(SwissArmyHammerError::Other(
                     "Cannot switch to issue branch from another issue branch. Please switch to a non-issue branch first.".to_string()
                 ));
@@ -167,7 +212,52 @@ impl GitOperations {
                 ));
             }
         }
-        Ok(())
+
+        // Handle existing branch: switch to it
+        if self.branch_exists(&branch_name)? {
+            self.checkout_branch(&branch_name)?;
+            return Ok((branch_name, effective_source_branch));
+        }
+
+        // For new branch creation, we need to be on the source branch
+        if current_branch != effective_source_branch {
+            self.checkout_branch(&effective_source_branch)?;
+        }
+
+        // Handle new branch: create and switch from the source branch
+        self.create_and_checkout_branch(&branch_name)?;
+        Ok((branch_name, effective_source_branch))
+    }
+
+    /// Create and switch to issue work branch (backward compatibility)
+    ///
+    /// This is a convenience method that preserves the original behavior:
+    /// - Must be on a non-issue branch
+    /// - Uses main/master as fallback when not on main/master
+    /// - Returns only the branch name for backward compatibility with existing code.
+    pub fn create_work_branch_simple(&self, issue_name: &str) -> Result<String> {
+        let current_branch = self.current_branch()?;
+        let branch_name = format!("issue/{issue_name}");
+
+        // Early return: If we're already on the target issue branch (resume scenario)
+        if current_branch == branch_name {
+            return Ok(branch_name);
+        }
+
+        // For backward compatibility, require being on a non-issue branch
+        if self.is_issue_branch(&current_branch) {
+            return Err(SwissArmyHammerError::Other(
+                "Cannot create issue branch from another issue branch. Must be on a non-issue branch.".to_string()
+            ));
+        }
+
+        // For backward compatibility, always try to use main branch as the source
+        // This maintains the original behavior where branches are created from main
+        let main_branch = self.main_branch()?; 
+        
+        // Use the new implementation with explicit main branch
+        let (branch_name, _source_branch) = self.create_work_branch(issue_name, Some(&main_branch))?;
+        Ok(branch_name)
     }
 
     /// Create and checkout a new branch
@@ -208,10 +298,41 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Merge issue branch to main branch
-    pub fn merge_issue_branch(&self, issue_name: &str) -> Result<()> {
+    /// Merge issue branch to specified source branch
+    ///
+    /// # Arguments
+    ///
+    /// * `issue_name` - The name of the issue
+    /// * `source_branch` - Optional target branch for merge. If None, uses main branch for backward compatibility
+    pub fn merge_issue_branch(&self, issue_name: &str, source_branch: Option<&str>) -> Result<()> {
         let branch_name = format!("issue/{issue_name}");
-        let main_branch = self.main_branch()?;
+        
+        // Determine the target branch for merge
+        let target_branch = match source_branch {
+            Some(branch) => {
+                // Validate that the provided source branch exists
+                if !self.branch_exists(branch)? {
+                    return Err(SwissArmyHammerError::Other(format!(
+                        "Source branch '{}' does not exist",
+                        branch
+                    )));
+                }
+                
+                // Validate that the source branch is not an issue branch
+                if self.is_issue_branch(branch) {
+                    return Err(SwissArmyHammerError::Other(format!(
+                        "Cannot merge to issue branch '{}'",
+                        branch
+                    )));
+                }
+                
+                branch.to_string()
+            }
+            None => {
+                // Fall back to main branch for backward compatibility
+                self.main_branch()?
+            }
+        };
 
         // Debug: List all branches before checking
         let list_output = Command::new("git")
@@ -227,15 +348,15 @@ impl GitOperations {
             tracing::debug!("Failed to list branches");
         }
 
-        // Ensure the branch exists
+        // Ensure the issue branch exists
         if !self.branch_exists(&branch_name)? {
             return Err(SwissArmyHammerError::Other(format!(
                 "Issue branch '{branch_name}' does not exist"
             )));
         }
 
-        // Switch to main branch
-        self.checkout_branch(&main_branch)?;
+        // Switch to target branch
+        self.checkout_branch(&target_branch)?;
 
         // Merge the issue branch
         let output = Command::new("git")
@@ -273,6 +394,14 @@ impl GitOperations {
         }
 
         Ok(())
+    }
+
+    /// Merge issue branch to main branch (backward compatibility)
+    ///
+    /// This is a convenience method that calls merge_issue_branch with source_branch = None
+    /// for backward compatibility with existing code.
+    pub fn merge_issue_branch_simple(&self, issue_name: &str) -> Result<()> {
+        self.merge_issue_branch(issue_name, None)
     }
 
     /// Delete a branch
@@ -513,8 +642,10 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create work branch
-        let branch_name = git_ops.create_work_branch("test_issue").unwrap();
+        let (branch_name, source_branch) = git_ops.create_work_branch("test_issue", None).unwrap();
         assert_eq!(branch_name, "issue/test_issue");
+        // Should use the current branch (main/master) as source
+        assert!(source_branch == "main" || source_branch == "master");
 
         // Verify we're on the new branch
         let current_branch = git_ops.current_branch().unwrap();
@@ -531,7 +662,7 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create work branch
-        git_ops.create_work_branch("test_issue").unwrap();
+        git_ops.create_work_branch_simple("test_issue").unwrap();
 
         // Switch back to main
         let main_branch = git_ops.main_branch().unwrap();
@@ -556,7 +687,7 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create work branch
-        git_ops.create_work_branch("test_issue").unwrap();
+        git_ops.create_work_branch_simple("test_issue").unwrap();
 
         // Make a change on the work branch
         fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
@@ -572,7 +703,7 @@ mod tests {
             .unwrap();
 
         // Merge the branch
-        git_ops.merge_issue_branch("test_issue").unwrap();
+        git_ops.merge_issue_branch_simple("test_issue").unwrap();
 
         // Verify we're on main branch
         let main_branch = git_ops.main_branch().unwrap();
@@ -590,7 +721,7 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Try to merge non-existent branch
-        let result = git_ops.merge_issue_branch("non_existent_issue");
+        let result = git_ops.merge_issue_branch_simple("non_existent_issue");
         assert!(result.is_err());
     }
 
@@ -631,16 +762,16 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create and switch to first issue branch
-        git_ops.create_work_branch("issue_001").unwrap();
+        git_ops.create_work_branch_simple("issue_001").unwrap();
 
         // Try to create another work branch while on an issue branch - should return error
-        let result = git_ops.create_work_branch("issue_002");
+        let result = git_ops.create_work_branch_simple("issue_002");
         assert!(result.is_err());
         let error = result.unwrap_err();
 
         // Verify it's an error with correct message content
         let error_msg = error.to_string();
-        assert!(error_msg.contains("Cannot create new issue branch from another issue branch"));
+        assert!(error_msg.contains("Cannot create issue branch from another issue branch"));
     }
 
     #[test]
@@ -654,7 +785,7 @@ mod tests {
         assert_eq!(current_branch, main_branch);
 
         // Create work branch from main - should succeed
-        let result = git_ops.create_work_branch("test_issue");
+        let result = git_ops.create_work_branch_simple("test_issue");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/test_issue");
     }
@@ -665,10 +796,10 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create work branch
-        git_ops.create_work_branch("test_issue").unwrap();
+        git_ops.create_work_branch_simple("test_issue").unwrap();
 
         // Try to create the same work branch again (resume scenario) - should succeed
-        let result = git_ops.create_work_branch("test_issue");
+        let result = git_ops.create_work_branch_simple("test_issue");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/test_issue");
 
@@ -683,22 +814,22 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create first issue branch from main
-        git_ops.create_work_branch("issue_001").unwrap();
+        git_ops.create_work_branch_simple("issue_001").unwrap();
 
         // Switch back to main and create second branch
         git_ops
             .checkout_branch(&git_ops.main_branch().unwrap())
             .unwrap();
-        git_ops.create_work_branch("issue_002").unwrap();
+        git_ops.create_work_branch_simple("issue_002").unwrap();
 
         // Now try to switch to first branch while on second branch - should return error
-        let result = git_ops.create_work_branch("issue_001");
+        let result = git_ops.create_work_branch_simple("issue_001");
         assert!(result.is_err());
         let error = result.unwrap_err();
 
         // Verify it's an error with correct message content
         let error_msg = error.to_string();
-        assert!(error_msg.contains("Cannot switch to issue branch from another issue branch"));
+        assert!(error_msg.contains("Cannot create issue branch from another issue branch"));
     }
 
     #[test]
@@ -759,7 +890,7 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Try to create work branch - should fail because no main/master branch exists
-        let result = git_ops.create_work_branch("test_issue");
+        let result = git_ops.create_work_branch_simple("test_issue");
         assert!(result.is_err());
 
         let error_msg = result.unwrap_err().to_string();
@@ -777,11 +908,11 @@ mod tests {
         assert_eq!(initial_branch, main_branch);
 
         // Create first issue branch successfully
-        git_ops.create_work_branch("issue_001").unwrap();
+        git_ops.create_work_branch_simple("issue_001").unwrap();
         assert_eq!(git_ops.current_branch().unwrap(), "issue/issue_001");
 
         // Try to create another branch while on issue branch (this should fail)
-        let result = git_ops.create_work_branch("issue_002");
+        let result = git_ops.create_work_branch_simple("issue_002");
         assert!(result.is_err());
 
         // Verify we're still on the original issue branch after the failure
@@ -795,7 +926,7 @@ mod tests {
         assert_eq!(git_ops.current_branch().unwrap(), main_branch);
 
         // Verify we can create new branches from main after the failed attempt
-        let result = git_ops.create_work_branch("issue_003");
+        let result = git_ops.create_work_branch_simple("issue_003");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/issue_003");
     }
@@ -814,12 +945,175 @@ mod tests {
             .unwrap();
 
         // Verify we can create issue branch from feature branch
-        let result = git_ops.create_work_branch("test_issue_from_feature");
+        let result = git_ops.create_work_branch_simple("test_issue_from_feature");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/test_issue_from_feature");
         
         // Verify we're on the new issue branch
         let current_branch = git_ops.current_branch().unwrap();
         assert_eq!(current_branch, "issue/test_issue_from_feature");
+    }
+
+    #[test]
+    fn test_create_work_branch_with_explicit_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create and switch to a feature branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/new-feature"])
+            .output()
+            .unwrap();
+
+        // Switch back to main
+        git_ops.checkout_branch("main").unwrap();
+
+        // Create issue branch with explicit source branch
+        let (branch_name, source_branch) = git_ops
+            .create_work_branch("test_issue", Some("feature/new-feature"))
+            .unwrap();
+        assert_eq!(branch_name, "issue/test_issue");
+        assert_eq!(source_branch, "feature/new-feature");
+
+        // Verify we're on the new issue branch
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, "issue/test_issue");
+    }
+
+    #[test]
+    fn test_create_work_branch_with_nonexistent_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Try to create work branch with non-existent source
+        let result = git_ops.create_work_branch("test_issue", Some("nonexistent-branch"));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Source branch 'nonexistent-branch' does not exist"));
+    }
+
+    #[test]
+    fn test_create_work_branch_with_issue_branch_as_source() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create first issue branch
+        git_ops.create_work_branch("issue_001", None).unwrap();
+
+        // Switch back to main
+        git_ops.checkout_branch("main").unwrap();
+
+        // Try to create work branch with issue branch as source - should fail
+        let result = git_ops.create_work_branch("test_issue", Some("issue/issue_001"));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Cannot use issue branch 'issue/issue_001' as source branch"));
+    }
+
+    #[test]
+    fn test_merge_issue_branch_with_explicit_source() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create feature branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/new-feature"])
+            .output()
+            .unwrap();
+
+        // Create issue branch from feature branch
+        git_ops
+            .create_work_branch("test_issue", Some("feature/new-feature"))
+            .unwrap();
+
+        // Make a change on the issue branch
+        fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "test.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add test file"])
+            .output()
+            .unwrap();
+
+        // Merge back to feature branch
+        git_ops
+            .merge_issue_branch("test_issue", Some("feature/new-feature"))
+            .unwrap();
+
+        // Verify we're on feature branch
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, "feature/new-feature");
+
+        // Verify the file exists (merge was successful)
+        assert!(temp_dir.path().join("test.txt").exists());
+    }
+
+    #[test]
+    fn test_merge_issue_branch_with_nonexistent_source() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create issue branch
+        git_ops.create_work_branch("test_issue", None).unwrap();
+
+        // Try to merge to non-existent branch
+        let result = git_ops.merge_issue_branch("test_issue", Some("nonexistent-branch"));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Source branch 'nonexistent-branch' does not exist"));
+    }
+
+    #[test]
+    fn test_merge_issue_branch_with_issue_branch_as_target() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create two issue branches
+        git_ops.create_work_branch("issue_001", None).unwrap();
+        git_ops.checkout_branch("main").unwrap();
+        git_ops.create_work_branch("issue_002", None).unwrap();
+
+        // Try to merge one issue branch to another - should fail
+        let result = git_ops.merge_issue_branch("issue_002", Some("issue/issue_001"));
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("Cannot merge to issue branch 'issue/issue_001'"));
+    }
+
+    #[test]
+    fn test_backward_compatibility_methods() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test create_work_branch_simple
+        let branch_name = git_ops.create_work_branch_simple("test_issue").unwrap();
+        assert_eq!(branch_name, "issue/test_issue");
+
+        // Make a change
+        fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "test.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add test file"])
+            .output()
+            .unwrap();
+
+        // Test merge_issue_branch_simple
+        git_ops.merge_issue_branch_simple("test_issue").unwrap();
+
+        // Should be on main branch
+        let main_branch = git_ops.main_branch().unwrap();
+        let current_branch = git_ops.current_branch().unwrap();
+        assert_eq!(current_branch, main_branch);
     }
 }

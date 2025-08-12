@@ -111,7 +111,7 @@ async fn test_complete_issue_workflow() {
     // Step 3: Start working on the issue (test git operations)
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
-        let branch_name = git.create_work_branch(issue.name.as_str()).unwrap();
+        let branch_name = git.create_work_branch_simple(issue.name.as_str()).unwrap();
 
         // Verify we're on the correct branch
         let current_branch = git.current_branch().unwrap();
@@ -152,7 +152,7 @@ async fn test_complete_issue_workflow() {
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
         // Merge the issue branch
-        git.merge_issue_branch(issue.name.as_str()).unwrap();
+        git.merge_issue_branch_simple(issue.name.as_str()).unwrap();
 
         // Delete the issue branch
         let branch_name = format!("issue/{}", issue.name.as_str());
@@ -266,7 +266,7 @@ async fn test_git_integration_edge_cases() {
     // Work on the issue
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
-        let _branch_name = git.create_work_branch(issue.name.as_str()).unwrap();
+        let _branch_name = git.create_work_branch_simple(issue.name.as_str()).unwrap();
     }
     drop(git_ops);
 
@@ -293,7 +293,7 @@ async fn test_git_integration_edge_cases() {
         assert!(has_changes);
 
         // The create_work_branch may succeed as it handles uncommitted changes
-        let result = git.create_work_branch(issue2.name.as_str());
+        let result = git.create_work_branch_simple(issue2.name.as_str());
 
         // We accept either success or failure here as it depends on git implementation
         let _ = result;
@@ -320,7 +320,7 @@ async fn test_git_integration_edge_cases() {
         git.checkout_branch(&main_branch).unwrap();
 
         // Now working on another issue should succeed
-        let result = git.create_work_branch(issue2.name.as_str());
+        let result = git.create_work_branch_simple(issue2.name.as_str());
         assert!(result.is_ok());
     }
 }

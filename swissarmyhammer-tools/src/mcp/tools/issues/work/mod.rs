@@ -64,9 +64,9 @@ impl McpTool for WorkIssueTool {
         let branch_name = issue.name.clone();
 
         match git_ops.as_mut() {
-            Some(ops) => match ops.create_work_branch(&branch_name) {
-                Ok(branch_name) => Ok(create_success_response(format!(
-                    "Switched to work branch: {branch_name}"
+            Some(ops) => match ops.create_work_branch(&branch_name, Some(&issue.source_branch)) {
+                Ok((branch_name, source_branch)) => Ok(create_success_response(format!(
+                    "Switched to work branch: {branch_name} (created from {source_branch})"
                 ))),
                 Err(e) => Err(McpErrorHandler::handle_error(e, "create work branch")),
             },

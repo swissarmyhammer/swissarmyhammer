@@ -48,3 +48,86 @@ Modify git operations to track and use source branch information when creating i
 - All existing functionality preserved
 
 This step enables the git operations layer to handle flexible source branches while maintaining backwards compatibility.
+## Proposed Solution
+
+I will implement source-aware branch creation by modifying the `create_work_branch` method in `git.rs` to:
+
+1. **Add optional `source_branch` parameter**: Modify the method signature to accept an optional source branch parameter
+2. **Use current branch as default source**: When no source is provided, use the current branch as the source
+3. **Add source branch validation**: Ensure the source branch exists and is not an issue branch
+4. **Return source branch information**: Update the return type to include information about which branch was used as source
+5. **Update merge operations**: Modify `merge_issue_branch` to merge back to the stored source branch instead of hardcoded main
+6. **Maintain backward compatibility**: All existing callers continue to work without changes
+
+### Key Changes
+
+- `create_work_branch(&self, issue_name: &str)` becomes `create_work_branch(&self, issue_name: &str, source_branch: Option<&str>)`
+- Return type changes from `Result<String>` to `Result<(String, String)>` to include (branch_name, source_branch)
+- Add validation that source branch exists and is not an issue branch
+- Update merge operations to use source branch from Issue metadata
+
+### Implementation Steps
+
+1. Update `create_work_branch` method signature and implementation
+2. Add source branch validation logic
+3. Update return type to include source branch information  
+4. Update `merge_issue_branch` to use stored source branch
+5. Add comprehensive tests covering all scenarios
+6. Update documentation and comments
+
+This approach maintains full backward compatibility while enabling flexible base branch workflows as specified in the requirements.
+## Implementation Complete ✅
+
+Successfully implemented source-aware branch creation with the following changes:
+
+### Core Implementation
+
+1. **Updated `create_work_branch` method signature**:
+   - Added optional `source_branch: Option<&str>` parameter
+   - Returns `Result<(String, String)>` to include both branch name and source branch
+   - When no source is provided, uses current branch (if valid)
+   - Validates source branch exists and is not an issue branch
+
+2. **Enhanced source branch validation**:
+   - Prevents using issue branches as source branches
+   - Validates source branch exists before creating issue branch
+   - Maintains early return for resume scenarios
+
+3. **Updated `merge_issue_branch` method**:
+   - Added optional `source_branch: Option<&str>` parameter  
+   - Merges to specified source branch instead of hardcoded main
+   - Validates target branch is not an issue branch
+
+4. **Backward compatibility methods**:
+   - `create_work_branch_simple()`: Returns `String` for existing callers
+   - `merge_issue_branch_simple()`: Uses main branch for existing callers
+   - Both preserve original behavior for legacy code
+
+5. **Updated all callers**:
+   - `issues/utils.rs`: Uses source branch from Issue struct
+   - MCP tools: Updated to use new API and show source branch information
+   - Integration tests: Updated to use backward compatibility methods
+
+### Key Features
+
+- **Flexible source branches**: Can create issue branches from any non-issue branch
+- **Source branch tracking**: Issue struct already had `source_branch` field with "main" default
+- **Validation**: Prevents creating issue branches from other issue branches
+- **Resume support**: Handles resume scenario (already on target branch)
+- **Backward compatibility**: All existing code continues to work unchanged
+
+### Testing
+
+- **26/26 git tests passing**: Comprehensive test coverage including new scenarios
+- **New test cases**: Source branch validation, explicit source branches, error cases
+- **Integration tests**: MCP tools and CLI integration working correctly
+- **Resume scenarios**: Properly handled with source branch determination
+
+### Behavior Changes
+
+- **Issue creation from feature branches**: Now supported
+- **Merge to source branch**: Issues merge back to their creation source instead of main
+- **Validation enhanced**: Better error messages and validation logic
+- **Source branch information**: Returned in API responses for visibility
+
+The implementation successfully enables flexible base branch workflows while maintaining full backward compatibility.

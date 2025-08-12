@@ -112,7 +112,7 @@ pub async fn work_on_issue<S: IssueStorage>(
     let created_new_branch = current_branch != branch_name;
 
     // Create or switch to the work branch
-    let actual_branch_name = git_ops.create_work_branch(&issue.name)?;
+    let (actual_branch_name, _source_branch) = git_ops.create_work_branch(&issue.name, Some(&issue.source_branch))?;
 
     Ok(IssueBranchResult {
         issue,
@@ -145,8 +145,8 @@ pub async fn merge_issue_branch<S: IssueStorage>(
 
     let branch_name = format!("issue/{}", issue.name);
 
-    // Merge the issue branch
-    git_ops.merge_issue_branch(&issue.name)?;
+    // Merge the issue branch back to its source branch
+    git_ops.merge_issue_branch(&issue.name, Some(&issue.source_branch))?;
 
     // Optionally delete the branch
     let branch_deleted = if delete_branch {

@@ -138,7 +138,7 @@ impl IssueShowTestEnvironment {
     async fn create_issue_branch(&self, issue_name: &str) -> String {
         let git_ops = self.git_ops.lock().await;
         if let Some(git) = git_ops.as_ref() {
-            git.create_work_branch(issue_name)
+            git.create_work_branch_simple(issue_name)
                 .expect("Failed to create issue branch")
         } else {
             panic!("Git operations not available")
