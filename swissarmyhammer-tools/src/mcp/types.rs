@@ -94,3 +94,32 @@ pub struct MergeIssueRequest {
 
 // Re-export IssueName for convenience
 pub use swissarmyhammer::issues::IssueName;
+
+/// Request to create a new todo item
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateTodoRequest {
+    /// Name of the todo list file
+    pub todo_list: String,
+    /// Brief description of the task
+    pub task: String,
+    /// Optional additional context or implementation notes
+    pub context: Option<String>,
+}
+
+/// Request to show a todo item
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ShowTodoRequest {
+    /// Name of the todo list file
+    pub todo_list: String,
+    /// Either a specific ULID or "next" to show the next incomplete item
+    pub item: String,
+}
+
+/// Request to mark a todo item as complete
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MarkCompleteTodoRequest {
+    /// Name of the todo list file
+    pub todo_list: String,
+    /// ULID of the todo item to mark as complete
+    pub id: String,
+}

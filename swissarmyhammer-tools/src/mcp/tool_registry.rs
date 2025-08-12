@@ -485,6 +485,12 @@ pub fn register_outline_tools(registry: &mut ToolRegistry) {
     outline::register_outline_tools(registry);
 }
 
+/// Register all todo-related tools with the registry
+pub fn register_todo_tools(registry: &mut ToolRegistry) {
+    use super::tools::todo;
+    todo::register_todo_tools(registry);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

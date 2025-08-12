@@ -55,6 +55,9 @@ swissarmyhammer-cli/.swissarmyhammer
 # SwissArmyHammer temporary files
 .swissarmyhammer/tmp/
 
+# SwissArmyHammer temporary todo files
+.swissarmyhammer/todo/
+
 
 doc/book
 

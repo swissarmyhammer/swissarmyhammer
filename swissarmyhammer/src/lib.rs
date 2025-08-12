@@ -78,6 +78,9 @@ pub mod issues;
 /// Memoranda management and storage system
 pub mod memoranda;
 
+/// Todo list management system for ephemeral task tracking
+pub mod todo;
+
 /// Git operations for issue management
 pub mod git;
 
@@ -138,6 +141,11 @@ pub use workflow::{
 pub use memoranda::{
     CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoId,
     SearchMemosRequest, SearchMemosResponse, UpdateMemoRequest,
+};
+
+/// Todo list management types
+pub use todo::{
+    CreateTodoRequest, ShowTodoRequest, MarkCompleteTodoRequest, TodoId, TodoItem, TodoList, TodoStorage,
 };
 
 /// Validation types and traits
@@ -202,6 +210,11 @@ pub mod prelude {
     pub use crate::memoranda::{
         CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoId,
         SearchMemosRequest, SearchMemosResponse, UpdateMemoRequest,
+    };
+
+    // Todo types for convenient access
+    pub use crate::todo::{
+        CreateTodoRequest, ShowTodoRequest, MarkCompleteTodoRequest, TodoId, TodoItem, TodoList, TodoStorage,
     };
 
     // Semantic search types for convenient access

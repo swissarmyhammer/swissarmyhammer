@@ -4,6 +4,7 @@
 //! code duplication across the codebase.
 
 use crate::security::MAX_DIRECTORY_DEPTH;
+use std::env;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -118,6 +119,47 @@ pub fn walk_files_with_extensions<'a>(
             None
         })
     })
+}
+
+/// Find the repository root or return the current directory
+///
+/// This function walks up the directory tree looking for a `.git` directory
+/// to identify a Git repository. If found, returns the repository root.
+/// If no Git repository is found, returns the current directory.
+///
+/// # Returns
+///
+/// * `Result<PathBuf, std::io::Error>` - The repository root path or current directory
+///
+/// # Errors
+///
+/// Returns an error if the current directory cannot be determined.
+pub fn find_repository_or_current_directory() -> Result<PathBuf, std::io::Error> {
+    let current_dir = env::current_dir()?;
+    let mut path = current_dir.as_path();
+    let mut depth = 0;
+
+    // Walk up looking for .git directory
+    loop {
+        if depth >= MAX_DIRECTORY_DEPTH {
+            break;
+        }
+
+        if path.join(".git").exists() {
+            return Ok(path.to_path_buf());
+        }
+
+        match path.parent() {
+            Some(parent) => {
+                path = parent;
+                depth += 1;
+            }
+            None => break,
+        }
+    }
+
+    // No git repository found, return current directory
+    Ok(current_dir)
 }
 
 #[cfg(test)]
