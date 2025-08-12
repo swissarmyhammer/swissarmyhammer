@@ -12,7 +12,7 @@
 //! 2. **Work Management**: `work` tool creates branches for active development
 //! 3. **Updates**: `update` tool modifies issue content and tracking information
 //! 4. **Completion**: `mark_complete` tool moves issues to `./issues/complete/`
-//! 5. **Integration**: `merge` tool integrates completed work back to main branch
+//! 5. **Integration**: `merge` tool integrates completed work back to source branch
 //!
 //! ## Tool Implementation Pattern
 //!
@@ -63,7 +63,7 @@
 //! - **all_complete**: Check if all pending issues are completed
 //! - **update**: Modify existing issue content and metadata
 //! - **work**: Switch to or create a work branch for an issue
-//! - **merge**: Merge completed issue work back to main branch
+//! - **merge**: Merge completed issue work back to source branch
 
 pub mod all_complete;
 pub mod create;

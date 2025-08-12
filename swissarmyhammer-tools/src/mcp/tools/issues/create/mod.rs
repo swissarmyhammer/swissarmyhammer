@@ -92,7 +92,7 @@ impl McpTool for CreateIssueTool {
                             // Validate that we're not creating an issue from another issue branch
                             if branch.starts_with("issue/") {
                                 return Err(McpError::invalid_params(
-                                    format!("Cannot create issue from issue branch '{}'", branch),
+                                    format!("Cannot create issue from issue branch '{branch}'"),
                                     None,
                                 ));
                             }

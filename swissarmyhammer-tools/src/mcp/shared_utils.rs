@@ -129,18 +129,18 @@ impl McpErrorHandler {
                 details,
             } => {
                 // Enhanced error handling for branch operations with recovery suggestions
-                let error_message = format!("Git {} operation failed for branch '{}': {}", git_op, branch, details);
+                let error_message = format!("Git {git_op} operation failed for branch '{branch}': {details}");
                 
                 // Add context-specific recovery suggestions
                 let recovery_message = match git_op.as_str() {
                     "merge" if details.contains("does not exist") => {
-                        format!("{}\n\nRecovery: The source branch may have been deleted. Check with your team to determine the correct target branch for merging.", error_message)
+                        format!("{error_message}\n\nRecovery: The source branch may have been deleted. Check with your team to determine the correct target branch for merging.")
                     },
                     "merge" if details.contains("CONFLICT") || details.contains("Manual resolution required") => {
-                        format!("{}\n\nRecovery: Merge conflicts require manual resolution. Use 'git status' to see conflicted files and resolve them manually.", error_message)
+                        format!("{error_message}\n\nRecovery: Merge conflicts require manual resolution. Use 'git status' to see conflicted files and resolve them manually.")
                     },
                     "create" if details.contains("Issue branches cannot be used as source") => {
-                        format!("{}\n\nRecovery: Switch to a non-issue branch (main, develop, or feature branch) before creating a new issue branch.", error_message)
+                        format!("{error_message}\n\nRecovery: Switch to a non-issue branch (main, develop, or feature branch) before creating a new issue branch.")
                     },
                     _ => error_message
                 };
