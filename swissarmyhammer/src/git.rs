@@ -613,9 +613,7 @@ impl GitOperations {
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 &branch_name,
-                &format!(
-                    "Failed to merge to target branch '{target_branch}': {stderr}"
-                ),
+                &format!("Failed to merge to target branch '{target_branch}': {stderr}"),
             ));
         }
 
