@@ -64,8 +64,12 @@ impl CliToolContext {
     }
 
     /// Create git operations handler
-    fn create_git_operations(working_dir: &std::path::Path) -> Arc<Mutex<Option<swissarmyhammer::git::GitOperations>>> {
-        Arc::new(Mutex::new(swissarmyhammer::git::GitOperations::with_work_dir(working_dir.to_path_buf()).ok()))
+    fn create_git_operations(
+        working_dir: &std::path::Path,
+    ) -> Arc<Mutex<Option<swissarmyhammer::git::GitOperations>>> {
+        Arc::new(Mutex::new(
+            swissarmyhammer::git::GitOperations::with_work_dir(working_dir.to_path_buf()).ok(),
+        ))
     }
 
     /// Create memo storage backend

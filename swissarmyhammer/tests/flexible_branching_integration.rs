@@ -69,8 +69,11 @@ impl FlexibleBranchingTestEnvironment {
             .unwrap();
 
         // Create initial commit on main branch
-        std::fs::write(path.join("README.md"), "# Test Project\n\nMain branch content")
-            .expect("Failed to write README.md");
+        std::fs::write(
+            path.join("README.md"),
+            "# Test Project\n\nMain branch content",
+        )
+        .expect("Failed to write README.md");
         Command::new("git")
             .current_dir(path)
             .args(["add", "README.md"])
@@ -140,8 +143,7 @@ impl FlexibleBranchingTestEnvironment {
             .output()
             .unwrap();
 
-        std::fs::write(path.join("version.txt"), "v1.0")
-            .expect("Failed to write version.txt");
+        std::fs::write(path.join("version.txt"), "v1.0").expect("Failed to write version.txt");
         Command::new("git")
             .current_dir(path)
             .args(["add", "version.txt"])
@@ -176,7 +178,9 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
 
     // Create issue from feature branch using issue storage
     let issue_name = "auth-tests".to_string();
-    let issue_content = "# Authentication Tests\n\nImplement comprehensive tests for the authentication module".to_string();
+    let issue_content =
+        "# Authentication Tests\n\nImplement comprehensive tests for the authentication module"
+            .to_string();
 
     // Create the issue with source branch tracking
     let created_issue = {
@@ -185,7 +189,7 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 issue_content,
-                "feature/user-authentication".to_string()
+                "feature/user-authentication".to_string(),
             )
             .await
             .expect("Failed to create issue")
@@ -206,8 +210,11 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     }
 
     // Make changes on issue branch
-    std::fs::write(env.temp_dir.path().join("auth_tests.rs"), "// Comprehensive authentication tests")
-        .expect("Failed to write auth_tests.rs");
+    std::fs::write(
+        env.temp_dir.path().join("auth_tests.rs"),
+        "// Comprehensive authentication tests",
+    )
+    .expect("Failed to write auth_tests.rs");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -277,7 +284,7 @@ async fn test_multiple_issues_from_same_source_branch() {
             .create_issue_with_source_branch(
                 issue1_name.clone(),
                 issue1_content,
-                "develop".to_string()
+                "develop".to_string(),
             )
             .await
             .expect("Failed to create first issue");
@@ -293,7 +300,7 @@ async fn test_multiple_issues_from_same_source_branch() {
             .create_issue_with_source_branch(
                 issue2_name.clone(),
                 issue2_content,
-                "develop".to_string()
+                "develop".to_string(),
             )
             .await
             .expect("Failed to create second issue");
@@ -303,7 +310,7 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        
+
         let (branch1, source1) = git
             .create_work_branch_with_source(&issue1_name, Some("develop"))
             .unwrap();
@@ -351,7 +358,7 @@ async fn test_release_branch_issue_workflow() {
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 issue_content,
-                "release/v1.0".to_string()
+                "release/v1.0".to_string(),
             )
             .await
             .expect("Failed to create hotfix issue");
@@ -370,8 +377,11 @@ async fn test_release_branch_issue_workflow() {
     }
 
     // Make hotfix changes
-    std::fs::write(env.temp_dir.path().join("security_fix.patch"), "// Security vulnerability fix")
-        .expect("Failed to write security fix");
+    std::fs::write(
+        env.temp_dir.path().join("security_fix.patch"),
+        "// Security vulnerability fix",
+    )
+    .expect("Failed to write security fix");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -393,8 +403,7 @@ async fn test_release_branch_issue_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.merge_issue_branch(&issue_name, "release/v1.0")
-            .unwrap();
+        git.merge_issue_branch(&issue_name, "release/v1.0").unwrap();
     }
 
     // Verify final state on release branch
@@ -450,16 +459,17 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        let branch_name = git
-            .create_work_branch_simple(&issue_name)
-            .unwrap();
+        let branch_name = git.create_work_branch_simple(&issue_name).unwrap();
 
         assert_eq!(branch_name, "issue/traditional-issue");
     }
 
     // Make changes and merge using simple method
-    std::fs::write(env.temp_dir.path().join("traditional.txt"), "Traditional workflow content")
-        .expect("Failed to write traditional file");
+    std::fs::write(
+        env.temp_dir.path().join("traditional.txt"),
+        "Traditional workflow content",
+    )
+    .expect("Failed to write traditional file");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -506,7 +516,7 @@ async fn test_error_handling_invalid_source_branch() {
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 issue_content,
-                "non-existent-branch".to_string()
+                "non-existent-branch".to_string(),
             )
             .await
             .expect("Issue storage should succeed");

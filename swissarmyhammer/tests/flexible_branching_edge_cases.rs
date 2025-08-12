@@ -95,8 +95,9 @@ impl EdgeCaseTestEnvironment {
         let test_file = format!("{}.txt", branch_name.replace('/', "_"));
         std::fs::write(
             self.temp_dir.path().join(&test_file),
-            format!("Content for {}", branch_name)
-        ).expect("Failed to write test file");
+            format!("Content for {}", branch_name),
+        )
+        .expect("Failed to write test file");
 
         Command::new("git")
             .current_dir(self.temp_dir.path())
@@ -125,12 +126,12 @@ async fn test_source_branch_deleted_mid_workflow() {
     let issue_content = "# Temporary Feature Work\n\nWork based on temporary feature".to_string();
 
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 issue_content,
-                "feature/temporary".to_string()
+                "feature/temporary".to_string(),
             )
             .await
             .expect("Failed to create issue");
@@ -149,8 +150,11 @@ async fn test_source_branch_deleted_mid_workflow() {
     }
 
     // Make some changes on the issue branch
-    std::fs::write(env.temp_dir.path().join("work_file.txt"), "Work in progress")
-        .expect("Failed to write work file");
+    std::fs::write(
+        env.temp_dir.path().join("work_file.txt"),
+        "Work in progress",
+    )
+    .expect("Failed to write work file");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -173,7 +177,7 @@ async fn test_source_branch_deleted_mid_workflow() {
 
     // Mark issue complete
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage.mark_complete(&issue_name).await.unwrap();
     }
 
@@ -189,13 +193,13 @@ async fn test_source_branch_deleted_mid_workflow() {
     }
 
     // Check if abort file was created
-    let abort_file_path = env.temp_dir.path().join(".swissarmyhammer/.abort");
+    let _abort_file_path = env.temp_dir.path().join(".swissarmyhammer/.abort");
     // Note: The abort file creation depends on the specific error handling in the git operations
     // This test verifies the error is properly handled
 }
 
 /// Test merge conflicts with source branch that has diverged
-#[tokio::test] 
+#[tokio::test]
 async fn test_merge_conflicts_with_diverged_source_branch() {
     let env = EdgeCaseTestEnvironment::new().await;
 
@@ -207,12 +211,12 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     let issue_content = "# Conflicting Changes\n\nChanges that will conflict".to_string();
 
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 issue_content,
-                "feature/conflicting".to_string()
+                "feature/conflicting".to_string(),
             )
             .await
             .expect("Failed to create issue");
@@ -227,8 +231,11 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     }
 
     // Make changes on issue branch to conflict_file.txt
-    std::fs::write(env.temp_dir.path().join("conflict_file.txt"), "Issue branch version")
-        .expect("Failed to write conflict file");
+    std::fs::write(
+        env.temp_dir.path().join("conflict_file.txt"),
+        "Issue branch version",
+    )
+    .expect("Failed to write conflict file");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -248,8 +255,11 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
         git.checkout_branch("feature/conflicting").unwrap();
     }
 
-    std::fs::write(env.temp_dir.path().join("conflict_file.txt"), "Feature branch version")
-        .expect("Failed to write conflicting content");
+    std::fs::write(
+        env.temp_dir.path().join("conflict_file.txt"),
+        "Feature branch version",
+    )
+    .expect("Failed to write conflicting content");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -266,12 +276,13 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch(&format!("issue/{}", issue_name)).unwrap();
+        git.checkout_branch(&format!("issue/{}", issue_name))
+            .unwrap();
     }
 
     // Mark issue complete
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage.mark_complete(&issue_name).await.unwrap();
     }
 
@@ -289,13 +300,13 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     // Verify no partial merge state is left
     {
         let git_ops = env.git_ops.lock().await;
-        let git = git_ops.as_ref().unwrap();
+        let _git = git_ops.as_ref().unwrap();
         let status_output = Command::new("git")
             .current_dir(env.temp_dir.path())
             .args(["status", "--porcelain"])
             .output()
             .unwrap();
-        
+
         let status_str = String::from_utf8_lossy(&status_output.stdout);
         // Should not have unmerged files (UU status)
         assert!(!status_str.contains("UU"));
@@ -314,12 +325,12 @@ async fn test_source_branch_validation_before_merge() {
 
     // Create issue and branch
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 "# Validation Test".to_string(),
-                "feature/valid".to_string()
+                "feature/valid".to_string(),
             )
             .await
             .expect("Failed to create issue");
@@ -333,8 +344,11 @@ async fn test_source_branch_validation_before_merge() {
     }
 
     // Make a simple change and commit
-    std::fs::write(env.temp_dir.path().join("validation.txt"), "validation content")
-        .expect("Failed to write validation file");
+    std::fs::write(
+        env.temp_dir.path().join("validation.txt"),
+        "validation content",
+    )
+    .expect("Failed to write validation file");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -360,15 +374,14 @@ async fn test_source_branch_validation_before_merge() {
     let refs_dir = env.temp_dir.path().join(".git/refs/heads");
     if refs_dir.exists() {
         let feature_ref = refs_dir.join("feature/invalid-ref");
-        std::fs::write(feature_ref, "invalid-commit-hash\n")
-            .expect("Failed to write invalid ref");
+        std::fs::write(feature_ref, "invalid-commit-hash\n").expect("Failed to write invalid ref");
     }
 
     // Try to validate with invalid reference - should detect the issue
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        
+
         // Test validation with the corrupted reference
         // Note: validate_source_branch_state is private, so we test indirectly through merge
         // The important thing is that operations don't panic or create inconsistent state
@@ -425,12 +438,12 @@ async fn test_uncommitted_changes_during_merge() {
 
     // Create issue and branch
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage
             .create_issue_with_source_branch(
                 issue_name.clone(),
                 "# Dirty Work".to_string(),
-                "feature/dirty".to_string()
+                "feature/dirty".to_string(),
             )
             .await
             .expect("Failed to create issue");
@@ -444,8 +457,11 @@ async fn test_uncommitted_changes_during_merge() {
     }
 
     // Make and commit changes on issue branch
-    std::fs::write(env.temp_dir.path().join("committed_work.txt"), "committed content")
-        .expect("Failed to write committed file");
+    std::fs::write(
+        env.temp_dir.path().join("committed_work.txt"),
+        "committed content",
+    )
+    .expect("Failed to write committed file");
 
     Command::new("git")
         .current_dir(env.temp_dir.path())
@@ -459,8 +475,11 @@ async fn test_uncommitted_changes_during_merge() {
         .unwrap();
 
     // Make uncommitted changes (dirty working directory)
-    std::fs::write(env.temp_dir.path().join("uncommitted_work.txt"), "uncommitted content")
-        .expect("Failed to write uncommitted file");
+    std::fs::write(
+        env.temp_dir.path().join("uncommitted_work.txt"),
+        "uncommitted content",
+    )
+    .expect("Failed to write uncommitted file");
 
     // Check that we have uncommitted changes
     {
@@ -471,7 +490,7 @@ async fn test_uncommitted_changes_during_merge() {
 
     // Mark issue complete
     {
-        let mut issue_storage = env.issue_storage.write().await;
+        let issue_storage = env.issue_storage.write().await;
         issue_storage.mark_complete(&issue_name).await.unwrap();
     }
 
@@ -480,12 +499,12 @@ async fn test_uncommitted_changes_during_merge() {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
         let result = git.merge_issue_branch(&issue_name, "feature/dirty");
-        
+
         // The implementation should either:
-        // 1. Succeed and handle the uncommitted changes appropriately, or  
+        // 1. Succeed and handle the uncommitted changes appropriately, or
         // 2. Fail with a clear error message about uncommitted changes
         // This test verifies the behavior is consistent and doesn't leave corrupt state
-        
+
         match result {
             Ok(_) => {
                 // If merge succeeded, verify the state is consistent
@@ -513,14 +532,14 @@ async fn test_branch_name_validation() {
 
     // Test various invalid branch names
     let invalid_names = vec![
-        "issue/with space",  // spaces
-        "issue/with..dots",  // double dots
-        "issue/with~tilde", // tildes
-        "issue/with^caret", // carets
-        "issue/with:colon", // colons
+        "issue/with space",     // spaces
+        "issue/with..dots",     // double dots
+        "issue/with~tilde",     // tildes
+        "issue/with^caret",     // carets
+        "issue/with:colon",     // colons
         "issue/with[brackets]", // brackets
-        "", // empty name
-        "issue/", // just prefix
+        "",                     // empty name
+        "issue/",               // just prefix
     ];
 
     for invalid_name in invalid_names {
@@ -528,12 +547,12 @@ async fn test_branch_name_validation() {
         let result = git.validate_branch_creation(invalid_name, None);
         // Some of these might be caught by git itself rather than our validation
         // The key is that they don't create inconsistent state
-        
+
         if let Err(e) = result {
             let error_msg = e.to_string();
             assert!(!error_msg.is_empty());
         }
-        
+
         // Verify no branch was created with invalid name
         if !invalid_name.is_empty() {
             let branch_name = format!("issue/{}", invalid_name);
@@ -563,27 +582,30 @@ async fn test_performance_with_many_branches() {
     let env = EdgeCaseTestEnvironment::new().await;
 
     // Create many feature branches
-    for i in 0..10 {  // Reduced number for CI performance
-        env.create_test_branch(&format!("feature/branch-{}", i)).await;
+    for i in 0..10 {
+        // Reduced number for CI performance
+        env.create_test_branch(&format!("feature/branch-{}", i))
+            .await;
     }
 
     let git_ops = env.git_ops.lock().await;
     let git = git_ops.as_ref().unwrap();
 
     // Create issue branches from various sources
-    for i in 0..5 {  // Test subset for performance
+    for i in 0..5 {
+        // Test subset for performance
         let issue_name = format!("perf-test-{}", i);
         let source_branch = format!("feature/branch-{}", i);
-        
+
         git.checkout_branch(&source_branch).unwrap();
-        
+
         let start_time = std::time::Instant::now();
         let result = git.create_work_branch_with_source(&issue_name, None);
         let duration = start_time.elapsed();
-        
+
         assert!(result.is_ok());
         assert!(duration.as_millis() < 5000); // Should complete within 5 seconds
-        
+
         let (branch_name, detected_source) = result.unwrap();
         assert_eq!(branch_name, format!("issue/{}", issue_name));
         assert_eq!(detected_source, source_branch);
