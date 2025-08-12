@@ -147,7 +147,7 @@ pub async fn merge_issue_branch<S: IssueStorage>(
     let branch_name = format!("issue/{}", issue.name);
 
     // Merge the issue branch back to its source branch
-    git_ops.merge_issue_branch(&issue.name, Some(&issue.source_branch))?;
+    git_ops.merge_issue_branch(&issue.name, &issue.source_branch)?;
 
     // Optionally delete the branch
     let branch_deleted = if delete_branch {
