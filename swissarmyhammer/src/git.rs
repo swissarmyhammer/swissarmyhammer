@@ -169,14 +169,12 @@ impl GitOperations {
                     // Validate the provided source branch exists and is not an issue branch
                     if !self.branch_exists(source)? {
                         return Err(SwissArmyHammerError::Other(format!(
-                            "Source branch '{}' does not exist",
-                            source
+                            "Source branch '{source}' does not exist"
                         )));
                     }
                     if self.is_issue_branch(source) {
                         return Err(SwissArmyHammerError::Other(format!(
-                            "Cannot use issue branch '{}' as source branch",
-                            source
+                            "Cannot use issue branch '{source}' as source branch"
                         )));
                     }
                     source.to_string()
@@ -213,14 +211,12 @@ impl GitOperations {
                 // Validate the provided source branch exists and is not an issue branch
                 if !self.branch_exists(source)? {
                     return Err(SwissArmyHammerError::Other(format!(
-                        "Source branch '{}' does not exist",
-                        source
+                        "Source branch '{source}' does not exist"
                     )));
                 }
                 if self.is_issue_branch(source) {
                     return Err(SwissArmyHammerError::Other(format!(
-                        "Cannot use issue branch '{}' as source branch",
-                        source
+                        "Cannot use issue branch '{source}' as source branch"
                     )));
                 }
                 source.to_string()
@@ -296,21 +292,19 @@ impl GitOperations {
         // Enhanced source branch validation with detailed error context
         if !self.branch_exists(source_branch)? {
             let error_message = format!(
-                "Cannot merge issue '{}': source branch '{}' does not exist. It may have been deleted after the issue branch was created.",
-                issue_name, source_branch
+                "Cannot merge issue '{issue_name}': source branch '{source_branch}' does not exist. It may have been deleted after the issue branch was created."
             );
             tracing::error!("{}", error_message);
             
             // Create abort file for deleted source branch scenario
             self.create_abort_file(&format!(
-                "Source branch '{}' deleted before merge of issue '{}'. Manual intervention required to resolve the merge target.",
-                source_branch, issue_name
+                "Source branch '{source_branch}' deleted before merge of issue '{issue_name}'. Manual intervention required to resolve the merge target."
             ))?;
             
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 source_branch,
-                &format!("Source branch does not exist (may have been deleted after issue '{}' was created)", issue_name)
+                &format!("Source branch does not exist (may have been deleted after issue '{issue_name}' was created)")
             ));
         }
 
@@ -319,7 +313,7 @@ impl GitOperations {
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 source_branch,
-                &format!("Cannot merge issue '{}' to issue branch '{}'. Issue branches cannot be merge targets", issue_name, source_branch)
+                &format!("Cannot merge issue '{issue_name}' to issue branch '{source_branch}'. Issue branches cannot be merge targets")
             ));
         }
 
@@ -350,7 +344,7 @@ impl GitOperations {
         }
 
         // Switch to target branch
-        self.checkout_branch(&target_branch)?;
+        self.checkout_branch(target_branch)?;
 
         // Merge the issue branch
         let output = Command::new("git")
@@ -371,42 +365,38 @@ impl GitOperations {
             // Enhanced merge conflict handling with abort tool integration
             if stderr.contains("CONFLICT") || stdout.contains("CONFLICT") {
                 let conflict_message = format!(
-                    "Merge conflicts detected while merging issue '{}' from '{}' to '{}'. Conflicts cannot be resolved automatically.",
-                    issue_name, branch_name, target_branch
+                    "Merge conflicts detected while merging issue '{issue_name}' from '{branch_name}' to '{target_branch}'. Conflicts cannot be resolved automatically."
                 );
                 tracing::error!("{}", conflict_message);
                 
                 // Create abort file for merge conflict scenario
                 self.create_abort_file(&format!(
-                    "Merge conflicts in issue '{}': '{}' -> '{}'. Manual conflict resolution required:\n{}",
-                    issue_name, branch_name, target_branch, stderr
+                    "Merge conflicts in issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Manual conflict resolution required:\n{stderr}"
                 ))?;
                 
                 return Err(SwissArmyHammerError::git_branch_operation_failed(
                     "merge",
                     &branch_name,
-                    &format!("Merge conflicts with source branch '{}'. Manual resolution required", target_branch)
+                    &format!("Merge conflicts with source branch '{target_branch}'. Manual resolution required")
                 ));
             }
 
             // Enhanced handling for automatic merge failures
             if stderr.contains("Automatic merge failed") {
                 let failure_message = format!(
-                    "Automatic merge failed for issue '{}': '{}' -> '{}'. Source branch may have diverged significantly.",
-                    issue_name, branch_name, target_branch
+                    "Automatic merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Source branch may have diverged significantly."
                 );
                 tracing::error!("{}", failure_message);
                 
                 // Create abort file for automatic merge failure
                 self.create_abort_file(&format!(
-                    "Automatic merge failed for issue '{}': '{}' -> '{}'. Source branch divergence requires manual intervention:\n{}",
-                    issue_name, branch_name, target_branch, stderr
+                    "Automatic merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Source branch divergence requires manual intervention:\n{stderr}"
                 ))?;
                 
                 return Err(SwissArmyHammerError::git_branch_operation_failed(
                     "merge",
                     &branch_name,
-                    &format!("Automatic merge failed with source branch '{}'. Manual intervention required", target_branch)
+                    &format!("Automatic merge failed with source branch '{target_branch}'. Manual intervention required")
                 ));
             }
 
@@ -414,7 +404,7 @@ impl GitOperations {
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 &branch_name,
-                &format!("Failed to merge to source branch '{}': {}", target_branch, stderr)
+                &format!("Failed to merge to source branch '{target_branch}': {stderr}")
             ));
         }
 
@@ -512,7 +502,7 @@ impl GitOperations {
         // Check if source branch is accessible by verifying its commit
         let output = Command::new("git")
             .current_dir(&self.work_dir)
-            .args(["rev-parse", &format!("{}", source_branch)])
+            .args(["rev-parse", source_branch])
             .output()?;
 
         if !output.status.success() {
@@ -521,7 +511,7 @@ impl GitOperations {
                 return Err(SwissArmyHammerError::git_branch_operation_failed(
                     "validate",
                     source_branch,
-                    &format!("Source branch for issue '{}' is in corrupted or invalid state", issue_name)
+                    &format!("Source branch for issue '{issue_name}' is in corrupted or invalid state")
                 ));
             }
         }
@@ -533,7 +523,7 @@ impl GitOperations {
                 "merge-base", 
                 "--is-ancestor", 
                 source_branch, 
-                &format!("issue/{}", issue_name)
+                &format!("issue/{issue_name}")
             ])
             .output()?;
 
@@ -562,13 +552,13 @@ impl GitOperations {
         let sah_dir = Path::new(".swissarmyhammer");
         if !sah_dir.exists() {
             fs::create_dir_all(sah_dir)
-                .map_err(|e| SwissArmyHammerError::Io(e))?;
+                .map_err(SwissArmyHammerError::Io)?;
         }
 
         // Create abort file with reason
         let abort_file_path = sah_dir.join(".abort");
         fs::write(&abort_file_path, reason)
-            .map_err(|e| SwissArmyHammerError::Io(e))?;
+            .map_err(SwissArmyHammerError::Io)?;
 
         tracing::info!("Created abort file: {}", abort_file_path.display());
         Ok(())
@@ -587,7 +577,7 @@ impl GitOperations {
                 return Err(SwissArmyHammerError::git_branch_operation_failed(
                     "create",
                     source,
-                    &format!("Cannot create issue '{}' from issue branch '{}'. Issue branches cannot be used as source branches", issue_name, source)
+                    &format!("Cannot create issue '{issue_name}' from issue branch '{source}'. Issue branches cannot be used as source branches")
                 ));
             }
             
@@ -595,7 +585,7 @@ impl GitOperations {
                 return Err(SwissArmyHammerError::git_branch_operation_failed(
                     "create",
                     source,
-                    &format!("Source branch '{}' for issue '{}' does not exist", source, issue_name)
+                    &format!("Source branch '{source}' for issue '{issue_name}' does not exist")
                 ));
             }
         } else {
@@ -604,7 +594,7 @@ impl GitOperations {
                 return Err(SwissArmyHammerError::git_branch_operation_failed(
                     "create",
                     &current_branch,
-                    &format!("Cannot create issue '{}' from issue branch '{}'. Switch to a non-issue branch first", issue_name, current_branch)
+                    &format!("Cannot create issue '{issue_name}' from issue branch '{current_branch}'. Switch to a non-issue branch first")
                 ));
             }
         }
