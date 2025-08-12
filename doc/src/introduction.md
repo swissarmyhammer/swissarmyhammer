@@ -1,174 +1,117 @@
-# SwissArmyHammer
+# Introduction
 
-**The MCP server for managing prompts as markdown files**
+SwissArmyHammer is a comprehensive AI prompt and workflow management system that transforms how you work with AI assistants by managing prompts and workflows as simple markdown files.
 
-SwissArmyHammer solves the problem of AI prompt management by providing a comprehensive solution that treats prompts as first-class citizens in your development workflow. Unlike scattered prompt files or hard-coded templates, SwissArmyHammer offers a structured, versioned, and collaborative approach to prompt engineering.
+## What is SwissArmyHammer?
 
-## The Problem
+SwissArmyHammer provides three integrated components:
 
-As AI becomes central to development workflows, developers and teams face growing challenges with prompt management:
+- **Command Line Application** - A powerful CLI that uses Claude Code as a sub-agent for executing prompts and workflows
+- **MCP Server** - Seamless integration with Claude Code via the Model Context Protocol, providing a rich suite of tools
+- **Rust Library** - A flexible library for building prompt-based applications with comprehensive APIs
 
-**The Prompt Chaos Problem:**
-- **Scattered Everywhere**: Prompts live in scattered text files, notes apps, chat histories, and code comments - impossible to find when you need them
-- **No Version Control**: Critical prompt changes disappear without trace, making it impossible to understand what worked and why
-- **Copy-Paste Proliferation**: The same prompt gets duplicated and slightly tweaked across projects, creating maintenance nightmares
-- **Team Isolation**: Valuable prompts remain locked in individual workflows, preventing knowledge sharing and collaboration
-- **Format Anarchy**: Every project reinvents prompt organization, making it hard to move between teams or onboard new members
+## Why SwissArmyHammer?
 
-**The Cost of Disorganization:**
-Without proper prompt management, teams waste hours recreating existing prompts, struggle to maintain consistency across projects, and lose valuable prompt engineering knowledge when team members leave.
+### File-Based Management
+Store prompts and workflows as markdown files with YAML front matter - no databases, no complex configuration. Everything is version-controlled and easily shared.
 
-## The Solution
+### Live Reloading
+Changes to prompt files are automatically detected and reloaded, enabling rapid development and testing.
 
-SwissArmyHammer transforms prompt chaos into organized, collaborative workflow with a comprehensive management system:
+### Liquid Templates
+Use powerful Liquid templating with variables, conditionals, loops, and custom filters to create dynamic prompts and workflows.
 
-**🗂️ Unified Prompt Organization**: Replace scattered prompt files with a structured, hierarchical system. Store prompts as markdown files with YAML metadata, organizing them from global built-ins to project-specific customizations.
+### MCP Integration
+Works seamlessly with Claude Code through the Model Context Protocol, providing a comprehensive tool suite for AI-powered development.
 
-**📝 Git-Native Workflow**: Because prompts are plain markdown files, they integrate seamlessly with your existing Git workflow. Track changes, collaborate through pull requests, and maintain a complete history of your prompt evolution.
+### Organized Hierarchy
+Built-in, user, and local prompt directories with clear precedence rules:
+1. **Builtin** - Pre-installed prompts embedded in the binary
+2. **User** - Personal prompts in `~/.swissarmyhammer/`
+3. **Local** - Project-specific prompts in `./.swissarmyhammer/`
 
-**🔧 Powerful Template Engine**: Stop copy-pasting similar prompts. Use Liquid templating with custom filters to create dynamic, reusable prompts that adapt to different contexts and requirements.
+### Developer Experience
+Rich CLI with diagnostics, validation, shell completions, and comprehensive error reporting.
 
-**🤖 Claude Code Integration**: Access your entire prompt library directly in Claude Code through native MCP protocol support. No more switching between tools or hunting for that perfect prompt.
+## Core Features
 
-**⚡ Developer-First Tooling**: Rich CLI with instant search, validation, testing, and diagnostics ensures your prompts are always discoverable, reliable, and maintainable.
+- **📁 File-based Management** - Markdown files with YAML front matter
+- **🔄 Live Reloading** - Automatic change detection and reloading
+- **🎨 Liquid Templates** - Variables, conditionals, loops, and custom filters
+- **⚡ MCP Integration** - Seamless Claude Code integration
+- **🗂️ Organized Hierarchy** - Built-in, user, and local directories
+- **🛠️ Developer Tools** - Rich CLI with diagnostics and validation
+- **📚 Rust Library** - Comprehensive API for building applications
+- **🔍 Built-in Prompts** - 20+ ready-to-use prompts
+- **🔧 Workflow Engine** - State-based execution with Mermaid diagrams
+- **📝 Issue Management** - Git-integrated issue tracking
+- **💾 Memoranda System** - Note-taking with full-text search
+- **🔍 Semantic Search** - Vector-based search with TreeSitter parsing
 
-## How SwissArmyHammer Works
+## Quick Overview
 
-SwissArmyHammer transforms your prompt workflow through:
-
-- **📁 File-based prompt management** - Store prompts as markdown files with YAML front matter
-- **🔄 Live reloading** - Changes to prompt files are automatically detected and reloaded
-- **🎯 Template variables** - Use `{{variable}}` syntax for dynamic prompt customization
-- **⚡ MCP integration** - Works seamlessly with Claude Code and other MCP clients
-- **🗂️ Organized hierarchy** - Support for built-in, user, and local prompt directories
-- **🛠️ Developer-friendly** - Rich CLI with diagnostics and shell completions
-
-## Quick Start
-
-### Installation
-```bash
-cargo install --git https://github.com/wballard/swissarmyhammer.git swissarmyhammer-cli
-```
-
-### Basic Usage
-1. **Create a prompt directory**: `mkdir ~/.swissarmyhammer/prompts`
-2. **Configure Claude Code**: Add SwissArmyHammer to your MCP configuration
-3. **Create your first prompt**: Use the simple markdown + YAML format
-4. **Start using prompts**: Available immediately in Claude Code
-
-### Key Benefits
-
-- **🔧 Zero Configuration**: Works out of the box with sensible defaults
-- **📱 Cross-Platform**: Runs on macOS, Linux, and Windows
-- **🔄 Real-Time Updates**: File changes are automatically detected and reloaded
-- **🎯 Type Safe**: Rust implementation provides reliability and performance
-- **🌐 Community Driven**: Open source with active development and contributions
-
-### 📝 Simple Prompt Format
-Create prompts using familiar markdown with YAML front matter:
+### Prompts
 ```markdown
 ---
 title: Code Review Helper
-description: Helps review code for best practices and potential issues
+description: Assists with code review tasks
 arguments:
-  - name: code
-    description: The code to review
-    required: true
   - name: language
     description: Programming language
-    required: false
-    default: "auto-detect"
+    required: true
+  - name: file
+    description: File to review
+    required: true
 ---
 
-# Code Review
-
-Please review the following {{language}} code:
-
-```
-{{code}}
-```
+Please review this {{language}} code in {{file}}:
 
 Focus on:
-- Code quality and readability
-- Potential bugs or security issues
+- Code quality and style
+- Potential bugs or issues
 - Performance considerations
-- Best practices adherence
+- Best practices
 ```
 
-### 🎯 Template Variables
-Use template variables to make prompts dynamic and reusable:
-- `{{variable}}` - Required variables
-- `{{variable:default}}` - Optional variables with defaults
-- Support for strings, numbers, booleans, and JSON objects
+### Workflows
+```markdown
+---
+name: code-review-workflow
+description: Complete code review process
+initial_state: analyze
+---
 
-### 🔧 Built-in Diagnostics
-The `doctor` command helps troubleshoot setup issues:
+## States
+
+### analyze
+Review the code and identify issues.
+
+**Next**: report
+
+### report
+Generate a comprehensive review report.
+
+**Next**: complete
+```
+
+### Usage
 ```bash
-swissarmyhammer doctor
-```
+# Install and configure
+sah doctor
 
-## Who Should Use SwissArmyHammer?
+# Use prompts
+sah prompt test code-review --var language=rust --var file=main.rs
 
-### Development Teams
-- **Standardize prompts** across projects and team members
-- **Version control** prompt changes with Git integration
-- **Code review** prompt modifications like any other code
-- **Share libraries** of tested, proven prompts
+# Execute workflows
+sah flow run code-review-workflow
 
-### Individual Developers
-- **Organize personal prompts** in a structured hierarchy
-- **Reuse prompts** across different projects and contexts
-- **Build expertise** through curated prompt collections
-- **Integrate seamlessly** with existing development workflows
-
-### Content Creators & Researchers
-- **Manage specialized prompts** for specific domains
-- **Create template libraries** for common content types
-- **Collaborate effectively** on prompt development
-- **Maintain quality** through validation and testing
-
-### Students & Educators
-- **Learn prompt engineering** through structured examples
-- **Build knowledge bases** of educational prompts
-- **Share resources** with classmates and colleagues
-- **Track progress** through versioned prompt evolution
-
-## Architecture
-
-SwissArmyHammer follows a simple but powerful architecture:
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Claude Code   │◄──►│ SwissArmyHammer  │◄──►│ Prompt Files    │
-│   (MCP Client)  │    │   (MCP Server)   │    │ (.md files)     │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                              │
-                              ▼
-                       ┌──────────────────┐
-                       │  File Watcher    │
-                       │ (Auto-reload)    │
-                       └──────────────────┘
+# MCP integration (automatically available in Claude Code)
+claude mcp add sah sah serve
 ```
 
 ## Next Steps
 
-1. **[Install SwissArmyHammer](./installation.md)** - Get up and running quickly
-
-## Why Choose SwissArmyHammer?
-
-**Proven Architecture**: Built on well-tested technologies like Rust, Liquid templating, and the MCP protocol.
-
-**Active Development**: Regular updates, bug fixes, and new features based on community feedback.
-
-**Comprehensive Documentation**: Detailed guides, examples, and API reference to get you productive quickly.
-
-**Open Source**: MIT licensed with a welcoming community for contributions and feedback.
-
-## Join the Community
-
-- **[GitHub Repository](https://github.com/wballard/swissarmyhammer)** - Source code, issues, and discussions
-- **[Issue Tracker](https://github.com/wballard/swissarmyhammer/issues)** - Report bugs and request features
-
-## License
-
-SwissArmyHammer is open source software licensed under the MIT License.
+- [Installation](installation.md) - Get SwissArmyHammer installed
+- [Quick Start](quick-start.md) - Your first prompt in 5 minutes
+- [Configuration](configuration.md) - Customize your setup
+- [Architecture Overview](architecture.md) - Understand the system design
