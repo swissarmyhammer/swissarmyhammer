@@ -134,22 +134,26 @@ impl McpTool for MergeIssueTool {
                     Err(e) => {
                         // Enhanced error handling with source branch context
                         tracing::error!(
-                            "Merge failed for issue '{}' (source branch: '{}'): {}", 
-                            issue_name, issue.source_branch, e
+                            "Merge failed for issue '{}' (source branch: '{}'): {}",
+                            issue_name,
+                            issue.source_branch,
+                            e
                         );
-                        
+
                         // Check if this is a source branch related error that should trigger abort
                         let error_string = e.to_string();
-                        if error_string.contains("does not exist") || 
-                           error_string.contains("deleted") ||
-                           error_string.contains("CONFLICT") ||
-                           error_string.contains("Automatic merge failed") {
+                        if error_string.contains("does not exist")
+                            || error_string.contains("deleted")
+                            || error_string.contains("CONFLICT")
+                            || error_string.contains("Automatic merge failed")
+                        {
                             tracing::info!(
-                                "Detected irrecoverable merge error for issue '{}': {}", 
-                                issue_name, error_string
+                                "Detected irrecoverable merge error for issue '{}': {}",
+                                issue_name,
+                                error_string
                             );
                         }
-                        
+
                         Err(McpErrorHandler::handle_error(e, "merge issue branch"))
                     }
                 }

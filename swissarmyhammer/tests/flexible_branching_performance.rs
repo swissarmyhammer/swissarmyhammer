@@ -88,7 +88,7 @@ impl PerformanceTestEnvironment {
     async fn create_many_branches(&self, count: usize) {
         for i in 0..count {
             let branch_name = format!("feature/branch-{:04}", i);
-            
+
             Command::new("git")
                 .current_dir(self.temp_dir.path())
                 .args(["checkout", "-b", &branch_name])
@@ -150,7 +150,7 @@ impl PerformanceTestEnvironment {
 #[tokio::test]
 async fn test_performance_branch_creation_with_many_branches() {
     let env = PerformanceTestEnvironment::new().await;
-    
+
     // Create many branches (simulating a large repository)
     let branch_count = 50; // Reduced for CI performance
     env.create_many_branches(branch_count).await;
@@ -162,7 +162,8 @@ async fn test_performance_branch_creation_with_many_branches() {
     let mut total_creation_time = Duration::new(0, 0);
     let mut successful_creations = 0;
 
-    for i in 0..10 {  // Test a subset for performance
+    for i in 0..10 {
+        // Test a subset for performance
         let source_branch = format!("feature/branch-{:04}", i * 5);
         let issue_name = format!("perf-test-{}", i);
 
@@ -182,21 +183,32 @@ async fn test_performance_branch_creation_with_many_branches() {
             assert_eq!(detected_source, source_branch);
 
             // Each creation should be reasonably fast
-            assert!(duration.as_millis() < 5000, 
-                "Branch creation took too long: {}ms", duration.as_millis());
+            assert!(
+                duration.as_millis() < 5000,
+                "Branch creation took too long: {}ms",
+                duration.as_millis()
+            );
         }
     }
 
     // Average creation time should be acceptable
     if successful_creations > 0 {
         let avg_time = total_creation_time / successful_creations as u32;
-        assert!(avg_time.as_millis() < 2000, 
-            "Average branch creation time too high: {}ms", avg_time.as_millis());
+        assert!(
+            avg_time.as_millis() < 2000,
+            "Average branch creation time too high: {}ms",
+            avg_time.as_millis()
+        );
     }
 
-    println!("Created {} branches in average {}ms each", 
-        successful_creations, 
-        if successful_creations > 0 { total_creation_time.as_millis() / successful_creations as u128 } else { 0 }
+    println!(
+        "Created {} branches in average {}ms each",
+        successful_creations,
+        if successful_creations > 0 {
+            total_creation_time.as_millis() / successful_creations as u128
+        } else {
+            0
+        }
     );
 }
 
@@ -204,7 +216,7 @@ async fn test_performance_branch_creation_with_many_branches() {
 #[tokio::test]
 async fn test_performance_branch_existence_checking() {
     let env = PerformanceTestEnvironment::new().await;
-    
+
     let branch_count = 30; // Reduced for CI
     env.create_many_branches(branch_count).await;
 
@@ -220,8 +232,11 @@ async fn test_performance_branch_existence_checking() {
     });
 
     // All branch checks should complete quickly
-    assert!(duration.as_millis() < 3000, 
-        "Branch existence checking took too long: {}ms", duration.as_millis());
+    assert!(
+        duration.as_millis() < 3000,
+        "Branch existence checking took too long: {}ms",
+        duration.as_millis()
+    );
 
     // Test checking non-existent branches
     let (_, duration) = PerformanceTestEnvironment::measure_time(|| {
@@ -231,15 +246,18 @@ async fn test_performance_branch_existence_checking() {
         }
     });
 
-    assert!(duration.as_millis() < 1000, 
-        "Non-existent branch checking took too long: {}ms", duration.as_millis());
+    assert!(
+        duration.as_millis() < 1000,
+        "Non-existent branch checking took too long: {}ms",
+        duration.as_millis()
+    );
 }
 
 /// Test performance of merge operations
 #[tokio::test]
 async fn test_performance_merge_operations() {
     let env = PerformanceTestEnvironment::new().await;
-    
+
     // Create fewer branches for merge testing
     let branch_count = 5;
     env.create_many_branches(branch_count).await;
@@ -256,7 +274,9 @@ async fn test_performance_merge_operations() {
 
         // Create issue branch
         git.checkout_branch(&source_branch).unwrap();
-        let (_, _) = git.create_work_branch_with_source(&issue_name, None).unwrap();
+        let (_, _) = git
+            .create_work_branch_with_source(&issue_name, None)
+            .unwrap();
 
         // Make a small change on issue branch
         let change_file = format!("change_{}.txt", i);
@@ -285,8 +305,11 @@ async fn test_performance_merge_operations() {
             successful_merges += 1;
 
             // Each merge should be reasonably fast
-            assert!(duration.as_millis() < 10000, 
-                "Merge took too long: {}ms", duration.as_millis());
+            assert!(
+                duration.as_millis() < 10000,
+                "Merge took too long: {}ms",
+                duration.as_millis()
+            );
 
             // Verify merge was successful
             let current_branch = git.current_branch().unwrap();
@@ -297,13 +320,21 @@ async fn test_performance_merge_operations() {
 
     if successful_merges > 0 {
         let avg_merge_time = total_merge_time / successful_merges as u32;
-        assert!(avg_merge_time.as_millis() < 5000, 
-            "Average merge time too high: {}ms", avg_merge_time.as_millis());
+        assert!(
+            avg_merge_time.as_millis() < 5000,
+            "Average merge time too high: {}ms",
+            avg_merge_time.as_millis()
+        );
     }
 
-    println!("Completed {} merges in average {}ms each", 
+    println!(
+        "Completed {} merges in average {}ms each",
         successful_merges,
-        if successful_merges > 0 { total_merge_time.as_millis() / successful_merges as u128 } else { 0 }
+        if successful_merges > 0 {
+            total_merge_time.as_millis() / successful_merges as u128
+        } else {
+            0
+        }
     );
 }
 
@@ -350,7 +381,7 @@ async fn test_git_flow_compatibility() {
     // Test creating issues from each Git Flow branch type
     for (branch_name, _) in &branches {
         git.checkout_branch(branch_name).unwrap();
-        
+
         let issue_name = format!("issue-from-{}", branch_name.replace('/', "-"));
         let (issue_branch, source_branch) = git
             .create_work_branch_with_source(&issue_name, None)
@@ -378,7 +409,7 @@ async fn test_git_flow_compatibility() {
 
         // Merge back to original branch
         git.merge_issue_branch(&issue_name, branch_name).unwrap();
-        
+
         // Verify we're back on the original branch
         let current_branch = git.current_branch().unwrap();
         assert_eq!(current_branch, *branch_name);
@@ -418,8 +449,9 @@ async fn test_github_flow_compatibility() {
         let feature_file = format!("{}.rs", feature_branch.replace('/', "_"));
         std::fs::write(
             env.temp_dir.path().join(&feature_file),
-            format!("// Implementation for {}", feature_branch)
-        ).expect("Failed to write feature file");
+            format!("// Implementation for {}", feature_branch),
+        )
+        .expect("Failed to write feature file");
 
         Command::new("git")
             .current_dir(env.temp_dir.path())
@@ -446,8 +478,9 @@ async fn test_github_flow_compatibility() {
         let test_file = format!("test_{}.rs", feature_branch.replace('/', "_"));
         std::fs::write(
             env.temp_dir.path().join(&test_file),
-            format!("// Tests for {}", feature_branch)
-        ).expect("Failed to write test file");
+            format!("// Tests for {}", feature_branch),
+        )
+        .expect("Failed to write test file");
 
         Command::new("git")
             .current_dir(env.temp_dir.path())
@@ -473,8 +506,13 @@ async fn test_github_flow_compatibility() {
         git.checkout_branch("main").unwrap();
         Command::new("git")
             .current_dir(env.temp_dir.path())
-            .args(["merge", "--no-ff", feature_branch, "-m", 
-                   &format!("Merge {}", feature_branch)])
+            .args([
+                "merge",
+                "--no-ff",
+                feature_branch,
+                "-m",
+                &format!("Merge {}", feature_branch),
+            ])
             .output()
             .unwrap();
 
@@ -491,11 +529,17 @@ async fn test_github_flow_compatibility() {
     for feature_branch in &feature_branches {
         let feature_file = format!("{}.rs", feature_branch.replace('/', "_"));
         let test_file = format!("test_{}.rs", feature_branch.replace('/', "_"));
-        
-        assert!(env.temp_dir.path().join(&feature_file).exists(),
-            "Feature file missing for {}", feature_branch);
-        assert!(env.temp_dir.path().join(&test_file).exists(),
-            "Test file missing for {}", feature_branch);
+
+        assert!(
+            env.temp_dir.path().join(&feature_file).exists(),
+            "Feature file missing for {}",
+            feature_branch
+        );
+        assert!(
+            env.temp_dir.path().join(&test_file).exists(),
+            "Test file missing for {}",
+            feature_branch
+        );
     }
 }
 
@@ -514,9 +558,12 @@ async fn test_concurrent_issue_operations() {
             .unwrap();
 
         std::fs::write(
-            env.temp_dir.path().join(&format!("{}.txt", branch.replace('/', "_"))),
-            format!("Content for {}", branch)
-        ).expect("Failed to write branch content");
+            env.temp_dir
+                .path()
+                .join(&format!("{}.txt", branch.replace('/', "_"))),
+            format!("Content for {}", branch),
+        )
+        .expect("Failed to write branch content");
 
         Command::new("git")
             .current_dir(env.temp_dir.path())
@@ -537,9 +584,9 @@ async fn test_concurrent_issue_operations() {
 
     for (i, &source_branch) in source_branches.iter().enumerate() {
         let issue_name = format!("concurrent-issue-{}", i);
-        
+
         git.checkout_branch(source_branch).unwrap();
-        
+
         // Create issue branch
         let (issue_branch, detected_source) = git
             .create_work_branch_with_source(&issue_name, None)
@@ -575,13 +622,17 @@ async fn test_concurrent_issue_operations() {
     // Test rapid merge operations
     for (i, &source_branch) in source_branches.iter().enumerate() {
         let issue_name = format!("concurrent-issue-{}", i);
-        
+
         let (_, duration) = PerformanceTestEnvironment::measure_time(|| {
             git.merge_issue_branch(&issue_name, source_branch)
         });
 
-        assert!(duration.as_millis() < 5000, 
-            "Concurrent merge {} took too long: {}ms", i, duration.as_millis());
+        assert!(
+            duration.as_millis() < 5000,
+            "Concurrent merge {} took too long: {}ms",
+            i,
+            duration.as_millis()
+        );
 
         // Verify merge success
         let current_branch = git.current_branch().unwrap();
@@ -625,13 +676,17 @@ async fn test_memory_usage_stability() {
 
             Command::new("git")
                 .current_dir(env.temp_dir.path())
-                .args(["commit", "-m", &format!("Memory test {}-{}", cycle, branch_num)])
+                .args([
+                    "commit",
+                    "-m",
+                    &format!("Memory test {}-{}", cycle, branch_num),
+                ])
                 .output()
                 .unwrap();
 
             // Merge and clean up
             git.merge_issue_branch(&issue_name, &source_branch).unwrap();
-            
+
             // Clean up issue branch
             let issue_branch = format!("issue/{}", issue_name);
             git.delete_branch(&issue_branch).unwrap();

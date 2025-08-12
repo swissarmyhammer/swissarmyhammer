@@ -21,14 +21,14 @@ fn setup_test_environment() -> TempDir {
         .args(["init", "--initial-branch=main"])
         .output()
         .expect("Failed to init git repo");
-    
+
     // Configure git for testing
     std::process::Command::new("git")
         .current_dir(temp_dir.path())
         .args(["config", "user.email", "test@example.com"])
         .output()
         .expect("Failed to configure git email");
-    
+
     std::process::Command::new("git")
         .current_dir(temp_dir.path())
         .args(["config", "user.name", "Test User"])

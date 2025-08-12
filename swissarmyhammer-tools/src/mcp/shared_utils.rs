@@ -129,24 +129,28 @@ impl McpErrorHandler {
                 details,
             } => {
                 // Enhanced error handling for branch operations with recovery suggestions
-                let error_message = format!("Git {git_op} operation failed for branch '{branch}': {details}");
-                
+                let error_message =
+                    format!("Git {git_op} operation failed for branch '{branch}': {details}");
+
                 // Add context-specific recovery suggestions
                 let recovery_message = match git_op.as_str() {
                     "merge" if details.contains("does not exist") => {
                         format!("{error_message}\n\nRecovery: The source branch may have been deleted. Check with your team to determine the correct target branch for merging.")
-                    },
-                    "merge" if details.contains("CONFLICT") || details.contains("Manual resolution required") => {
+                    }
+                    "merge"
+                        if details.contains("CONFLICT")
+                            || details.contains("Manual resolution required") =>
+                    {
                         format!("{error_message}\n\nRecovery: Merge conflicts require manual resolution. Use 'git status' to see conflicted files and resolve them manually.")
-                    },
+                    }
                     "create" if details.contains("Issue branches cannot be used as source") => {
                         format!("{error_message}\n\nRecovery: Switch to a non-issue branch (main, develop, or feature branch) before creating a new issue branch.")
-                    },
-                    _ => error_message
+                    }
+                    _ => error_message,
                 };
-                
+
                 McpError::invalid_params(recovery_message, None)
-            },
+            }
             // System errors
             SwissArmyHammerError::Io(err) => {
                 McpError::internal_error(format!("IO error: {err}"), None)
