@@ -2015,4 +2015,284 @@ mod tests {
             panic!("Expected Plan command");
         }
     }
+
+    #[test]
+    fn test_cli_plan_command_basic() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "specification/plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "specification/plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_relative_path() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "./plans/feature.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "./plans/feature.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_missing_parameter() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan"]);
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn test_cli_plan_command_help() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "--help"]);
+        assert!(result.is_err()); // Help exits with error but that's expected
+
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_global_flags() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--verbose", "plan", "test-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "test-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_debug_flag() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--debug", "plan", "debug-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.debug);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "debug-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_quiet_flag() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--quiet", "plan", "quiet-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.quiet);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "quiet-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_file_with_spaces() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "plan with spaces.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan with spaces.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_complex_path() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "plan",
+            "./specifications/features/advanced-feature-plan.md",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(
+                plan_filename,
+                "./specifications/features/advanced-feature-plan.md"
+            );
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_combined_flags() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "--verbose",
+            "--debug",
+            "plan",
+            "combined-flags-plan.md",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        assert!(cli.debug);
+        assert!(!cli.quiet);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "combined-flags-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_flags_before_subcommand() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "--verbose",
+            "plan",
+            "order-test-plan.md",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "order-test-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_long_path() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer", 
+            "plan", 
+            "/very/long/path/to/some/deeply/nested/directory/structure/with/many/levels/plan-file.md"
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "/very/long/path/to/some/deeply/nested/directory/structure/with/many/levels/plan-file.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_special_characters() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "plan",
+            "plan-with_special$chars@and#symbols.md",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan-with_special$chars@and#symbols.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_unicode_filename() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "计划-文件-测试.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "计划-文件-测试.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_home_path() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "~/documents/plans/home-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "~/documents/plans/home-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_current_directory() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "./plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "./plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_parent_directory() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "../parent-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "../parent-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_no_extension() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "plan-without-extension"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan-without-extension");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_different_extension() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "plan.txt"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan.txt");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
 }

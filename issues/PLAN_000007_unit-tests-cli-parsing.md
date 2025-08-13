@@ -229,6 +229,63 @@ cargo test --package swissarmyhammer-cli cli -- --nocapture
 - Must follow patterns established in existing tests
 - Should integrate with existing test framework
 
+## Proposed Solution
+
+I have implemented comprehensive unit tests for the Plan command CLI parsing following the existing test patterns in `swissarmyhammer-cli/src/cli.rs`. The solution includes:
+
+### Test Categories Implemented
+
+#### 1. Basic Functionality Tests
+- `test_cli_plan_command_basic()` - Simple plan command with filename
+- Basic parameter extraction and command enum matching
+
+#### 2. Path Format Tests  
+- `test_cli_plan_command_relative_path()` - Relative paths with `./`
+- `test_cli_plan_command_complex_path()` - Complex directory structures
+- `test_cli_plan_command_long_path()` - Very long file paths
+- `test_cli_plan_command_home_path()` - Home directory paths with `~`
+- `test_cli_plan_command_current_directory()` - Current directory `./` paths
+- `test_cli_plan_command_parent_directory()` - Parent directory `../` paths
+
+#### 3. File Name Variations
+- `test_cli_plan_command_file_with_spaces()` - Files with spaces in names
+- `test_cli_plan_command_special_characters()` - Special characters in filenames
+- `test_cli_plan_command_unicode_filename()` - Unicode filenames
+- `test_cli_plan_command_no_extension()` - Files without extensions
+- `test_cli_plan_command_different_extension()` - Files with non-md extensions
+
+#### 4. Integration Tests with Global Flags
+- `test_cli_plan_command_with_global_flags()` - Plan command with `--verbose`
+- `test_cli_plan_command_with_debug_flag()` - Plan command with `--debug`
+- `test_cli_plan_command_with_quiet_flag()` - Plan command with `--quiet`
+- `test_cli_plan_command_with_combined_flags()` - Multiple flags combined
+- `test_cli_plan_command_flags_before_subcommand()` - Flag ordering tests
+
+#### 5. Error Handling Tests
+- `test_cli_plan_command_missing_parameter()` - Missing filename parameter
+- `test_cli_plan_command_help()` - Help text display
+
+### Implementation Details
+
+All tests follow the exact same patterns as existing CLI tests:
+- Use `Cli::try_parse_from_args()` for parsing
+- Check for success/failure with `assert!(result.is_ok())` or `assert!(result.is_err())`
+- Extract command using pattern matching: `if let Some(Commands::Plan { plan_filename }) = cli.command`
+- Verify parameters with `assert_eq!(plan_filename, expected_value)`
+- Use consistent test naming: `test_cli_plan_command_*`
+- Follow the same assertion patterns and error handling approaches
+
+### Test Results
+
+✅ All 19 plan command tests pass successfully
+✅ All existing CLI tests continue to pass (66 total CLI tests)
+✅ Comprehensive coverage of parameter handling scenarios
+✅ Edge cases covered including unicode, special characters, and path variations
+✅ Error scenarios properly tested
+✅ Integration with global flags verified
+
+The tests are deterministic and don't rely on external files, using only string literals for file paths as expected by the CLI parser.
+
 ## Notes
 
 - Follow the exact patterns used by existing tests in the file
@@ -237,3 +294,16 @@ cargo test --package swissarmyhammer-cli cli -- --nocapture
 - Include edge cases that might not be obvious
 - Ensure tests are deterministic and don't rely on external files
 - The test examples should match the help text documentation
+
+## Implementation Complete ✅
+
+All acceptance criteria have been met:
+- [x] All basic plan command parsing tests pass
+- [x] Parameter extraction tests work correctly
+- [x] Path format tests cover all scenarios
+- [x] Global flag integration tests pass
+- [x] Error handling tests work as expected
+- [x] Help text tests function correctly
+- [x] Edge cases are covered
+- [x] Tests follow existing code patterns exactly
+- [x] All tests pass consistently
