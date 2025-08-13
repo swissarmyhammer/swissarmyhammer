@@ -166,6 +166,10 @@ async fn main() {
             tracing::info!("Running config command");
             run_config(subcommand).await
         }
+        Some(Commands::Plan { plan_filename }) => {
+            tracing::info!("Running plan command for file: {}", plan_filename);
+            run_plan(plan_filename).await
+        }
         None => {
             // This case is handled early above for performance
             unreachable!()
@@ -364,4 +368,10 @@ async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
             EXIT_WARNING
         }
     }
+}
+
+async fn run_plan(plan_filename: String) -> i32 {
+    println!("Plan command called with file: {}", plan_filename);
+    println!("Plan functionality will be implemented in a future step.");
+    EXIT_SUCCESS
 }

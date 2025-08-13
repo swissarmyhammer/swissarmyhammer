@@ -360,6 +360,28 @@ Examples:
         #[command(subcommand)]
         subcommand: ConfigCommands,
     },
+    /// Plan a specific specification file
+    #[command(long_about = "
+Execute planning workflow for a specific specification file.
+Takes a path to a markdown specification file and generates implementation steps.
+
+Basic usage:
+  swissarmyhammer plan <plan_filename>    # Plan specific file
+
+The planning workflow will:
+- Read the specified plan file
+- Generate step-by-step implementation issues
+- Create numbered issue files in ./issues directory
+
+Examples:
+  swissarmyhammer plan ./specification/new-feature.md
+  swissarmyhammer plan /path/to/custom-plan.md
+  swissarmyhammer plan plans/database-migration.md
+")]
+    Plan {
+        /// Path to the plan file to process
+        plan_filename: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1964,6 +1986,32 @@ mod tests {
             }
         } else {
             panic!("Expected Search command");
+        }
+    }
+
+    #[test]
+    fn test_plan_command() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "./specification/test.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "./specification/test.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_plan_command_absolute_path() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "/path/to/plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "/path/to/plan.md");
+        } else {
+            panic!("Expected Plan command");
         }
     }
 }
