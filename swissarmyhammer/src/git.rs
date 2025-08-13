@@ -77,7 +77,11 @@ impl GitOperations {
         Ok(branch)
     }
 
-    /// Get the main branch name (main or master)
+    /// Get the main branch name (main or master) for backward compatibility testing.
+    /// 
+    /// Note: This method is primarily used by tests to verify backward compatibility
+    /// with traditional main/master branch workflows. The issue management system
+    /// no longer defaults to main branches for merge operations.
     pub fn main_branch(&self) -> Result<String> {
         // Try 'main' first
         if self.branch_exists("main")? {
@@ -365,10 +369,6 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Retrieve the source branch for an issue using git merge-base analysis
-    pub fn get_issue_source_branch(&self, issue_name: &str) -> Result<String> {
-        self.find_merge_target_branch_using_merge_base(issue_name)
-    }
 
     /// Find merge target branch using git merge-base analysis (primary method)
     fn find_merge_target_branch_using_merge_base(&self, issue_name: &str) -> Result<String> {
@@ -401,12 +401,23 @@ impl GitOperations {
             })
             .collect();
 
-        // Find the best merge target by analyzing merge-base depth
-        // The branch with the most recent common ancestor should be the target
+        // Find the best merge target using a multi-criteria approach:
+        // 1. Try fork-point detection first
+        // 2. Fall back to branch tip distance analysis
+        // 3. Use timestamp as final tie-breaker
         let mut best_candidate = None;
-        let mut best_merge_base_time = 0;
+        let mut best_score = u64::MAX;
 
         for candidate in &candidate_branches {
+            // Try to find fork point first - this is the most accurate method
+            let fork_point_output = Command::new("git")
+                .current_dir(&self.work_dir)
+                .args(["merge-base", "--fork-point", candidate, &branch_name])
+                .output()?;
+
+            let has_fork_point = fork_point_output.status.success();
+
+            // Get regular merge-base for fallback
             let merge_base_output = Command::new("git")
                 .current_dir(&self.work_dir)
                 .args(["merge-base", &branch_name, candidate])
@@ -420,19 +431,46 @@ impl GitOperations {
                 .trim()
                 .to_string();
 
-            // Get the timestamp of the merge-base commit
+            // Calculate distance from candidate tip to issue branch base
+            let distance_output = Command::new("git")
+                .current_dir(&self.work_dir)
+                .args(["rev-list", "--count", &format!("{}..{}", &merge_base_commit, candidate)])
+                .output()?;
+
+            let branch_distance = if distance_output.status.success() {
+                String::from_utf8_lossy(&distance_output.stdout)
+                    .trim()
+                    .parse::<u32>()
+                    .unwrap_or(u32::MAX)
+            } else {
+                u32::MAX
+            };
+
+            // Get timestamp for tie-breaking
             let timestamp_output = Command::new("git")
                 .current_dir(&self.work_dir)
                 .args(["show", "-s", "--format=%ct", &merge_base_commit])
                 .output()?;
 
-            if let Ok(timestamp_str) = String::from_utf8(timestamp_output.stdout) {
-                if let Ok(timestamp) = timestamp_str.trim().parse::<u64>() {
-                    if timestamp > best_merge_base_time {
-                        best_merge_base_time = timestamp;
-                        best_candidate = Some(candidate.to_string());
-                    }
-                }
+            let timestamp = if let Ok(timestamp_str) = String::from_utf8(timestamp_output.stdout) {
+                timestamp_str.trim().parse::<u64>().unwrap_or(0)
+            } else {
+                0
+            };
+
+            // Calculate composite score (lower is better)
+            // Fork-point gets priority, then distance, then timestamp (inverted for recency)
+            let score = if has_fork_point {
+                // Fork point found - give this high priority
+                (branch_distance as u64) + (u64::MAX - timestamp)
+            } else {
+                // No fork point - penalize and use distance + timestamp
+                (branch_distance as u64) + 1_000_000 + (u64::MAX - timestamp)
+            };
+
+            if score < best_score {
+                best_score = score;
+                best_candidate = Some(candidate.to_string());
             }
         }
 
@@ -440,9 +478,11 @@ impl GitOperations {
             return Ok(candidate);
         }
 
-        // If no merge-base found with any branch, default to main branch
-        let main_branch = self.main_branch()?;
-        Ok(main_branch)
+        // If no merge-base found with any branch, we cannot determine a target
+        Err(SwissArmyHammerError::git_operation_failed(
+            "determine merge target",
+            "no merge-base found with any existing branch"
+        ))
     }
 
 
@@ -545,7 +585,7 @@ impl GitOperations {
         Ok(target_branch)
     }
 
-    /// Merge issue branch to main branch (backward compatibility)
+    /// Merge issue branch to source branch (backward compatibility)
     ///
     /// This is a convenience method that calls merge_issue_branch_auto
     /// for backward compatibility with existing code.
@@ -1608,11 +1648,14 @@ mod tests {
         git_ops.checkout_branch("main").unwrap();
         git_ops.delete_branch("feature/test").unwrap();
 
-        // Auto merge should work by falling back to main branch (git merge-base behavior)
+        // Auto merge should succeed using git merge-base to find main as the target
+        // Even though the immediate source branch (feature/test) was deleted,
+        // git merge-base correctly identifies main as the appropriate merge target
         let result = git_ops.merge_issue_branch_auto("test_issue");
         assert!(result.is_ok());
         let target_branch = result.unwrap();
-        assert_eq!(target_branch, "main"); // Should fall back to main
+        // Should merge to main since that's the best merge-base available
+        assert_eq!(target_branch, "main");
     }
 
     #[test]

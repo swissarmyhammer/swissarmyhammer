@@ -463,14 +463,13 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     }
 
     // Verify we're back on the correct target branch with changes
-    // Note: Due to git merge-base analysis, this actually returns to 'develop' 
-    // since develop was branched from main after the initial commit, making it
-    // the most recent common ancestor with the issue branch
+    // With improved fork-point detection, this correctly returns to 'main'
+    // since the issue was created from and should merge back to main
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
         let current_branch = git.current_branch().unwrap();
-        assert_eq!(current_branch, "develop");
+        assert_eq!(current_branch, "main");
     }
 
     assert!(env.temp_dir.path().join("traditional.txt").exists());

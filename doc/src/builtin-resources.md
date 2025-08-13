@@ -161,7 +161,7 @@ sah prompt test issue/complete --var issue_id="PROJ-123" --var resolution="fixed
 #### `issue/merge`
 Issue merge and integration procedures.
 ```bash
-sah prompt test issue/merge --var branch="feature/auth" --var target="main"
+sah prompt test issue/merge --var branch="feature/auth" --var target="develop"
 ```
 
 #### `issue/on_worktree`

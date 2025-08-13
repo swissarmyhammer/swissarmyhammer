@@ -259,7 +259,7 @@ commit_template = "{{action}}: {{issue_name}}\n\n{{description}}"
 sign_commits = false
 
 # Default branch name for new repositories
-default_branch = "main"
+default_branch = "main"  # Note: Issue operations use git merge-base, not this setting
 
 [security]
 # Allowed shell commands for workflow actions

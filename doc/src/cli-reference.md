@@ -330,7 +330,7 @@ sah issue work <ISSUE_NAME> [OPTIONS]
 
 **Options:**
 - `--create-branch` - Force branch creation even if exists
-- `--base <BRANCH>` - Base branch for new branch (default: main)
+- `--base <BRANCH>` - Base branch for new branch (default: current)
 
 ### `sah issue complete`
 
@@ -341,7 +341,7 @@ sah issue complete <ISSUE_NAME> [OPTIONS]
 ```
 
 **Options:**
-- `--merge` - Merge branch back to main
+- `--merge` - Merge branch back to source branch
 - `--delete-branch` - Delete the issue branch after completion
 - `--message <MSG>` - Completion commit message
 
@@ -361,7 +361,7 @@ sah issue update <ISSUE_NAME> [OPTIONS]
 
 ### `sah issue merge`
 
-Merge issue branch back to main.
+Merge issue branch back to source branch using git merge-base.
 
 ```bash
 sah issue merge <ISSUE_NAME> [OPTIONS]

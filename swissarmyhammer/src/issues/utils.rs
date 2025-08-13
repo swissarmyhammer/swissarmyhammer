@@ -121,11 +121,11 @@ pub async fn work_on_issue<S: IssueStorage>(
     })
 }
 
-/// Merge a completed issue branch back to main
+/// Merge a completed issue branch back to its source branch
 ///
 /// This function encapsulates the business logic for merging issue branches:
 /// - Validates the issue exists and is completed
-/// - Merges the issue branch to main
+/// - Uses git merge-base to determine the appropriate target branch
 /// - Optionally deletes the branch after merge
 pub async fn merge_issue_branch<S: IssueStorage>(
     issue_name: &str,

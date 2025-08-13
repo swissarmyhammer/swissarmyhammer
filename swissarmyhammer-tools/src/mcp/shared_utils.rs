@@ -144,7 +144,7 @@ impl McpErrorHandler {
                         format!("{error_message}\n\nRecovery: Merge conflicts require manual resolution. Use 'git status' to see conflicted files and resolve them manually.")
                     }
                     "create" if details.contains("Issue branches cannot be used as source") => {
-                        format!("{error_message}\n\nRecovery: Switch to a non-issue branch (main, develop, or feature branch) before creating a new issue branch.")
+                        format!("{error_message}\n\nRecovery: Switch to a non-issue branch (such as a feature, develop, or base branch) before creating a new issue branch.")
                     }
                     _ => error_message,
                 };

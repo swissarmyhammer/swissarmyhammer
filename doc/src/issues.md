@@ -8,7 +8,7 @@ The issue management system allows you to:
 - Create and track work items as Markdown files
 - Automatically generate unique issue identifiers
 - Create feature branches for issue work
-- Merge completed issues back to main branch
+- Merge completed issues back to their source branch
 - Track issue lifecycle and status
 - Search and organize issues efficiently
 
@@ -142,7 +142,7 @@ This moves the issue file to `./issues/complete/`.
 
 ### Merging Issue Work
 
-Merge completed issue work back to main branch:
+Merge completed issue work back to source branch:
 ```bash
 sah issue merge FEATURE_001_user-auth
 ```

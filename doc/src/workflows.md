@@ -692,7 +692,7 @@ The workflow will:
 1. Create a new issue: `FEATURE_001_add-user-authentication`
 2. Switch to a git branch: `issue/FEATURE_001_add-user-authentication`
 3. Mark the issue as completed when done
-4. Merge the branch back to main
+4. Merge the branch back to the source branch
 
 #### Step 5: Customize for Your Needs
 
