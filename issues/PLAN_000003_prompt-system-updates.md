@@ -104,6 +104,24 @@ Update the guideline about issue references:
 - Requires workflow updates from PLAN_000002
 - Must integrate with existing prompt execution system
 
+## Proposed Solution
+
+I will implement this issue by systematically updating the `builtin/prompts/plan.md` file to:
+
+1. **Update YAML Front Matter**: Add arguments section with plan_filename parameter
+2. **Modify Goal Section**: Update description to reference specific file processing
+3. **Refactor Process Section**: Replace directory scanning logic with parameter-based file processing
+4. **Update Reference Instructions**: Change guideline to use liquid template parameter
+5. **Remove Hardcoded Paths**: Eliminate all `./specification` directory references
+6. **Validate Template Syntax**: Ensure all liquid template syntax is correct
+
+The key changes will be:
+- Add `arguments` section to YAML front matter defining plan_filename parameter
+- Use `{{ plan_filename }}` liquid template syntax throughout
+- Replace directory scanning steps with specific file analysis
+- Update issue creation instructions to reference the parameter
+- Maintain all existing planning logic and quality standards
+
 ## Notes
 
 - Use liquid template syntax: `{{ plan_filename }}`
