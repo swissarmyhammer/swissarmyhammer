@@ -166,6 +166,11 @@ async fn main() {
             tracing::info!("Running config command");
             run_config(subcommand).await
         }
+        Some(Commands::Plan { plan_filename }) => {
+            tracing::info!("Running plan command with file: {}", plan_filename);
+            eprintln!("Plan command is not yet implemented. File: {plan_filename}");
+            EXIT_ERROR
+        }
         None => {
             // This case is handled early above for performance
             unreachable!()
