@@ -173,15 +173,14 @@ async fn test_performance_branch_creation_with_many_branches() {
 
         // Measure branch creation time
         let (result, duration) = PerformanceTestEnvironment::measure_time(|| {
-            git.create_work_branch_with_source(&issue_name, None)
+            git.create_work_branch(&issue_name)
         });
 
-        if let Ok((branch_name, detected_source)) = result {
+        if let Ok(branch_name) = result {
             total_creation_time += duration;
             successful_creations += 1;
 
             assert_eq!(branch_name, format!("issue/{issue_name}"));
-            assert_eq!(detected_source, source_branch);
 
             // Each creation should be reasonably fast
             assert!(
@@ -275,9 +274,7 @@ async fn test_performance_merge_operations() {
 
         // Create issue branch
         git.checkout_branch(&source_branch).unwrap();
-        let (_, _) = git
-            .create_work_branch_with_source(&issue_name, None)
-            .unwrap();
+        let _ = git.create_work_branch(&issue_name).unwrap();
 
         // Make a small change on issue branch
         let change_file = format!("change_{i}.txt");
@@ -384,12 +381,9 @@ async fn test_git_flow_compatibility() {
         git.checkout_branch(branch_name).unwrap();
 
         let issue_name = format!("issue-from-{}", branch_name.replace('/', "-"));
-        let (issue_branch, source_branch) = git
-            .create_work_branch_with_source(&issue_name, None)
-            .unwrap();
+        let issue_branch = git.create_work_branch(&issue_name).unwrap();
 
         assert_eq!(issue_branch, format!("issue/{issue_name}"));
-        assert_eq!(source_branch, *branch_name);
 
         // Make a small change and test merge back
         let change_file = format!("change_{}.txt", branch_name.replace('/', "_"));
@@ -468,12 +462,9 @@ async fn test_github_flow_compatibility() {
 
         // Create issue branch for additional work on the feature
         let issue_name = format!("tests-for-{}", feature_branch.replace("feature/", ""));
-        let (issue_branch, source_branch) = git
-            .create_work_branch_with_source(&issue_name, None)
-            .unwrap();
+        let issue_branch = git.create_work_branch(&issue_name).unwrap();
 
         assert_eq!(issue_branch, format!("issue/{issue_name}"));
-        assert_eq!(source_branch, *feature_branch);
 
         // Add tests
         let test_file = format!("test_{}.rs", feature_branch.replace('/', "_"));
@@ -587,12 +578,9 @@ async fn test_concurrent_issue_operations() {
         git.checkout_branch(source_branch).unwrap();
 
         // Create issue branch
-        let (issue_branch, detected_source) = git
-            .create_work_branch_with_source(&issue_name, None)
-            .unwrap();
+        let issue_branch = git.create_work_branch(&issue_name).unwrap();
 
         assert_eq!(issue_branch, format!("issue/{issue_name}"));
-        assert_eq!(detected_source, source_branch);
 
         // Make a quick change
         let change_file = format!("concurrent_{i}.txt");
@@ -658,9 +646,7 @@ async fn test_memory_usage_stability() {
 
             // Create issue branch
             git.checkout_branch(&source_branch).unwrap();
-            let (_, _) = git
-                .create_work_branch_with_source(&issue_name, None)
-                .unwrap();
+            let _ = git.create_work_branch(&issue_name).unwrap();
 
             // Make change and merge immediately
             let change_file = format!("memory_{cycle}_{branch_num}.txt");
