@@ -10,8 +10,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde::Deserialize;
-use std::fs;
-use std::path::Path;
+use swissarmyhammer::common::create_abort_file_current_dir;
 
 /// Request structure for creating an abort file
 #[derive(Debug, Deserialize)]
@@ -28,23 +27,6 @@ impl AbortCreateTool {
     /// Creates a new instance of the AbortCreateTool
     pub fn new() -> Self {
         Self
-    }
-
-    /// Ensures the .swissarmyhammer directory exists
-    fn ensure_sah_directory() -> std::result::Result<(), std::io::Error> {
-        let sah_dir = Path::new(".swissarmyhammer");
-        if !sah_dir.exists() {
-            fs::create_dir_all(sah_dir)?;
-        }
-        Ok(())
-    }
-
-    /// Creates the abort file with the given reason
-    fn create_abort_file(reason: &str) -> std::result::Result<(), std::io::Error> {
-        Self::ensure_sah_directory()?;
-        let abort_file_path = Path::new(".swissarmyhammer/.abort");
-        fs::write(abort_file_path, reason)?;
-        Ok(())
     }
 }
 
@@ -93,8 +75,8 @@ impl McpTool for AbortCreateTool {
         McpValidation::validate_not_empty(&request.reason, "abort reason")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate abort reason"))?;
 
-        // Create the abort file
-        match Self::create_abort_file(&request.reason) {
+        // Create the abort file using shared utility
+        match create_abort_file_current_dir(&request.reason) {
             Ok(()) => {
                 tracing::info!("Created abort file with reason: {}", request.reason);
                 Ok(BaseToolImpl::create_success_response(format!(
@@ -104,10 +86,7 @@ impl McpTool for AbortCreateTool {
             }
             Err(e) => {
                 tracing::error!("Failed to create abort file: {}", e);
-                Err(McpErrorHandler::handle_error(
-                    swissarmyhammer::SwissArmyHammerError::Io(e),
-                    "create abort file",
-                ))
+                Err(McpErrorHandler::handle_error(e, "create abort file"))
             }
         }
     }
@@ -118,6 +97,7 @@ mod tests {
     use super::*;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
     use serial_test::serial;
+    use swissarmyhammer::common::create_abort_file;
     use tempfile::TempDir;
 
     #[test]
@@ -180,7 +160,7 @@ mod tests {
         std::env::set_current_dir(temp_path).unwrap();
 
         let reason = "Test abort reason";
-        let result = AbortCreateTool::create_abort_file(reason);
+        let result = create_abort_file(temp_path, reason);
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
@@ -196,21 +176,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_ensure_sah_directory() {
+    fn test_creates_sah_directory() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
-
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
 
         // Directory shouldn't exist initially
         let sah_dir = temp_path.join(".swissarmyhammer");
         assert!(!sah_dir.exists());
 
-        // Should create directory
-        let result = AbortCreateTool::ensure_sah_directory();
-
-        std::env::set_current_dir(original_dir).unwrap();
+        // Should create directory when creating abort file
+        let result = create_abort_file(temp_path, "test");
 
         assert!(result.is_ok());
         assert!(sah_dir.exists());
@@ -238,11 +213,13 @@ mod tests {
         std::env::set_current_dir(temp_path).unwrap();
 
         // Create multiple threads trying to create abort file simultaneously
+        let temp_path = temp_path.to_path_buf();
         let handles: Vec<_> = (0..5)
             .map(|i| {
+                let path = temp_path.clone();
                 std::thread::spawn(move || {
                     let reason = format!("Concurrent abort reason {i}");
-                    AbortCreateTool::create_abort_file(&reason)
+                    create_abort_file(&path, &reason)
                 })
             })
             .collect();
@@ -273,7 +250,7 @@ mod tests {
 
         // Create first abort file
         let first_reason = "First abort reason";
-        let result1 = AbortCreateTool::create_abort_file(first_reason);
+        let result1 = create_abort_file(temp_path, first_reason);
         assert!(result1.is_ok());
 
         let abort_file = temp_path.join(".swissarmyhammer/.abort");
@@ -284,7 +261,7 @@ mod tests {
 
         // Create second abort file (should overwrite)
         let second_reason = "Second abort reason";
-        let result2 = AbortCreateTool::create_abort_file(second_reason);
+        let result2 = create_abort_file(temp_path, second_reason);
         assert!(result2.is_ok());
 
         let content2 = std::fs::read_to_string(&abort_file).unwrap();
@@ -362,7 +339,7 @@ mod tests {
         std::env::set_current_dir(temp_path).unwrap();
 
         let unicode_reason = "Abort with émojis 🚫 and ñoñ-ASCII characters 中文";
-        let result = AbortCreateTool::create_abort_file(unicode_reason);
+        let result = create_abort_file(temp_path, unicode_reason);
 
         std::env::set_current_dir(original_dir).unwrap();
 
@@ -390,7 +367,7 @@ mod tests {
         assert!(sah_dir.exists());
 
         let reason = "Test with existing directory";
-        let result = AbortCreateTool::create_abort_file(reason);
+        let result = create_abort_file(temp_path, reason);
 
         std::env::set_current_dir(original_dir).unwrap();
 
@@ -405,24 +382,24 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_ensure_sah_directory_idempotent() {
+    fn test_abort_file_operations_idempotent() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         let sah_dir = temp_path.join(".swissarmyhammer");
 
-        // Call ensure_sah_directory multiple times
-        let result1 = AbortCreateTool::ensure_sah_directory();
+        // Multiple calls to create_abort_file should work
+        let result1 = create_abort_file(temp_path, "first reason");
         assert!(result1.is_ok());
         assert!(sah_dir.exists());
 
-        let result2 = AbortCreateTool::ensure_sah_directory();
+        let result2 = create_abort_file(temp_path, "second reason");
         assert!(result2.is_ok());
         assert!(sah_dir.exists());
 
-        std::env::set_current_dir(original_dir).unwrap();
+        // The second reason should overwrite the first
+        let abort_file = sah_dir.join(".abort");
+        let content = std::fs::read_to_string(&abort_file).unwrap();
+        assert_eq!(content, "second reason");
     }
 }
