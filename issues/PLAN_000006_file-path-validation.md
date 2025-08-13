@@ -169,3 +169,79 @@ Commands::Plan { plan_filename } => {
 - Consider using `thiserror` or existing error handling approach
 - Provide consistent error message formatting
 - Consider logging validation attempts for debugging
+
+## Proposed Solution
+
+After researching the existing codebase, I implemented a comprehensive file path validation solution that leverages the existing error handling infrastructure and follows established patterns.
+
+### Implementation Details
+
+1. **Created `validate_plan_file()` function** in `swissarmyhammer-cli/src/main.rs:404-444`
+   - Validates file existence using `Path::exists()`
+   - Ensures the path points to a file (not a directory) using `Path::is_file()`
+   - Checks readability by attempting to open the file with `File::open()`
+   - Returns a validated `PathBuf` on success or a `CliError` with helpful suggestions
+
+2. **Error Handling Strategy**
+   - Reused existing `CliError` type from `swissarmyhammer-cli/src/error.rs`
+   - All validation errors use `EXIT_ERROR` exit code for consistency
+   - Each error message includes the problematic path and an actionable "Suggestion:" field
+
+3. **Path Handling Features**
+   - Works with both absolute paths (`/full/path/to/plan.md`) and relative paths (`./specification/plan.md`)
+   - Handles paths with spaces and special characters
+   - Uses `to_string_lossy()` for Unicode-safe path conversion
+
+4. **Integration with Command Handler**
+   - Updated `run_plan()` function to call validation before workflow execution
+   - Uses validated path for template variable assignment
+   - Maintains backward compatibility with existing workflow system
+
+5. **Comprehensive Error Messages**
+   - File not found: "Plan file not found: {path}\nSuggestion: Check the file path and ensure the file exists"
+   - Directory instead of file: "Path is not a file: {path}\nSuggestion: Path must point to a markdown file, not a directory"  
+   - Permission denied: "Permission denied accessing file: {path}\nError: {error}\nSuggestion: Check file permissions and ensure you can read the file"
+
+### Testing Coverage
+
+Added 11 comprehensive unit tests in `swissarmyhammer-cli/src/main.rs:533-763` covering:
+
+- ✅ Valid file validation (absolute and relative paths)
+- ✅ Non-existent file error handling
+- ✅ Directory vs file detection
+- ✅ Empty filename handling
+- ✅ Various file extensions support
+- ✅ Paths with spaces and special characters
+- ✅ Empty and large files
+- ✅ Error message formatting verification
+
+### Testing Results
+
+```bash
+# Valid absolute path - works correctly
+./target/debug/sah plan /tmp/test_plan.md
+# ✅ Validation passes, workflow starts
+
+# Non-existent file - shows helpful error
+./target/debug/sah plan /tmp/nonexistent.md
+# ❌ "Plan file not found: /tmp/nonexistent.md\nSuggestion: Check the file path and ensure the file exists"
+
+# Directory instead of file - shows clear error  
+./target/debug/sah plan /tmp/directory/
+# ❌ "Path is not a file: /tmp/directory/\nSuggestion: Path must point to a markdown file, not a directory"
+
+# Relative path - works correctly
+./target/debug/sah plan ./specification/plan.md  
+# ✅ Validation passes, workflow starts
+```
+
+### Implementation Benefits
+
+1. **Improved User Experience**: Clear, actionable error messages help users understand and fix path issues
+2. **Robust Validation**: Comprehensive checks prevent runtime errors and provide early feedback
+3. **Consistent Error Handling**: Leverages existing `CliError` infrastructure for uniform error reporting
+4. **Path Format Flexibility**: Supports both absolute and relative paths seamlessly
+5. **Extensive Test Coverage**: 11 unit tests ensure reliability across various scenarios
+6. **Backward Compatibility**: No breaking changes to existing functionality
+
+The solution fully addresses all requirements from the issue specification and provides a solid foundation for reliable file path validation in the plan command.
