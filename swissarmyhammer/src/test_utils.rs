@@ -304,6 +304,13 @@ pub struct IsolatedTestHome {
 }
 
 #[cfg(test)]
+impl Default for IsolatedTestHome {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {

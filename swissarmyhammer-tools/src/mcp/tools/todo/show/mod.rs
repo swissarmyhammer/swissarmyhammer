@@ -99,7 +99,7 @@ impl McpTool for ShowTodoTool {
                             item.id.as_str(),
                             item.task,
                             match &item.context {
-                                Some(ctx) => format!("\"{}\"", ctx),
+                                Some(ctx) => format!("\"{ctx}\""),
                                 None => "null".to_string(),
                             },
                             item.done

@@ -172,9 +172,8 @@ async fn test_performance_branch_creation_with_many_branches() {
         git.checkout_branch(&source_branch).unwrap();
 
         // Measure branch creation time
-        let (result, duration) = PerformanceTestEnvironment::measure_time(|| {
-            git.create_work_branch(&issue_name)
-        });
+        let (result, duration) =
+            PerformanceTestEnvironment::measure_time(|| git.create_work_branch(&issue_name));
 
         if let Ok(branch_name) = result {
             total_creation_time += duration;

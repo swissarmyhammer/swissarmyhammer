@@ -90,9 +90,7 @@ transitions:
         // Should NOT contain abort-related error messages
         assert!(
             !stderr.contains("abort") && !stderr.contains("Abort"),
-            "Normal workflow should not fail due to abort: stderr={}, stdout={}",
-            stderr,
-            stdout
+            "Normal workflow should not fail due to abort: stderr={stderr}, stdout={stdout}"
         );
 
         // If it fails, it should be for legitimate reasons (missing MCP server, etc.)
@@ -126,9 +124,7 @@ fn test_prompt_commands_still_work() -> Result<()> {
             // Should not contain abort-related errors
             assert!(
                 !stderr.contains("abort") && !stderr.contains("Abort"),
-                "Command {:?} should not fail due to abort: {}",
-                command_args,
-                stderr
+                "Command {command_args:?} should not fail due to abort: {stderr}"
             );
         }
     }
@@ -207,8 +203,7 @@ transitions:
     // Should contain validation/workflow errors, not abort errors
     assert!(
         !stderr.contains("abort") && !stderr.contains("Abort"),
-        "Invalid workflow should fail with validation error, not abort: {}",
-        stderr
+        "Invalid workflow should fail with validation error, not abort: {stderr}"
     );
 
     // Should contain some indication of the real problem
@@ -219,8 +214,7 @@ transitions:
             || stderr.contains("Invalid")
             || stderr.contains("state")
             || stderr.contains("workflow"),
-        "Should contain meaningful error message: {}",
-        stderr
+        "Should contain meaningful error message: {stderr}"
     );
 
     ensure_no_abort_file();
@@ -243,8 +237,8 @@ fn test_existing_abort_prompt_compatibility() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    println!("Abort prompt test - stderr: {}", stderr);
-    println!("Abort prompt test - stdout: {}", stdout);
+    println!("Abort prompt test - stderr: {stderr}");
+    println!("Abort prompt test - stdout: {stdout}");
 
     // The behavior should be deterministic and not crash
     ensure_no_abort_file();
@@ -283,9 +277,7 @@ fn test_exit_codes_remain_consistent() -> Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !stderr.contains("abort") && !stderr.contains("Abort"),
-            "{} should not mention abort: {}",
-            description,
-            stderr
+            "{description} should not mention abort: {stderr}"
         );
     }
 
@@ -378,8 +370,7 @@ transitions:
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             !stderr.contains("abort") && !stderr.contains("Abort"),
-            "Sub-workflow test should not fail due to abort: {}",
-            stderr
+            "Sub-workflow test should not fail due to abort: {stderr}"
         );
     }
 
@@ -432,9 +423,7 @@ transitions:
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 !stderr.contains("abort") && !stderr.contains("Abort"),
-                "Sequential execution {} should not fail due to abort: {}",
-                i,
-                stderr
+                "Sequential execution {i} should not fail due to abort: {stderr}"
             );
         }
 
@@ -442,8 +431,7 @@ transitions:
         let abort_path = Path::new(".swissarmyhammer/.abort");
         assert!(
             !abort_path.exists(),
-            "Normal workflow execution {} should not create abort file",
-            i
+            "Normal workflow execution {i} should not create abort file"
         );
     }
 
@@ -473,8 +461,7 @@ fn test_error_messages_format_unchanged() -> Result<()> {
     // Should not mention abort
     assert!(
         !stderr.contains("abort") && !stderr.contains("Abort"),
-        "File not found error should not mention abort: {}",
-        stderr
+        "File not found error should not mention abort: {stderr}"
     );
 
     // Should contain meaningful error about missing file
@@ -483,8 +470,7 @@ fn test_error_messages_format_unchanged() -> Result<()> {
             || stderr.contains("File")
             || stderr.contains("not found")
             || stderr.contains("No such file"),
-        "Should contain file-related error message: {}",
-        stderr
+        "Should contain file-related error message: {stderr}"
     );
 
     ensure_no_abort_file();
@@ -535,13 +521,11 @@ transitions: []
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     assert!(
                         !stderr.contains("abort") && !stderr.contains("Abort"),
-                        "Concurrent execution {} should not fail due to abort: {}",
-                        i,
-                        stderr
+                        "Concurrent execution {i} should not fail due to abort: {stderr}"
                     );
                 }
             }
-            Err(e) => panic!("Concurrent execution failed: {}", e),
+            Err(e) => panic!("Concurrent execution failed: {e}"),
         }
     }
 

@@ -366,7 +366,7 @@ impl FileSystemIssueStorage {
         // Atomic write using temp file and rename - write pure markdown content
         let temp_path = current_path.with_extension("tmp");
         std::fs::write(&temp_path, &content).map_err(SwissArmyHammerError::Io)?;
-        std::fs::rename(&temp_path, &current_path).map_err(SwissArmyHammerError::Io)?;
+        std::fs::rename(&temp_path, current_path).map_err(SwissArmyHammerError::Io)?;
 
         debug!(
             "Successfully updated issue {} at path {}",

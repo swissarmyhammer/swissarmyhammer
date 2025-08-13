@@ -463,7 +463,7 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     }
 
     // Verify we're back on the correct target branch with changes
-    // Note: Due to git merge-base analysis, this actually returns to 'develop' 
+    // Note: Due to git merge-base analysis, this actually returns to 'develop'
     // since develop was branched from main after the initial commit, making it
     // the most recent common ancestor with the issue branch
     {

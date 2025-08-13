@@ -93,8 +93,7 @@ impl TodoStorage {
 
         if !path.exists() {
             return Err(SwissArmyHammerError::Other(format!(
-                "Todo list '{}' not found",
-                todo_list
+                "Todo list '{todo_list}' not found"
             )));
         }
 
@@ -103,8 +102,7 @@ impl TodoStorage {
         // Find and mark the item complete
         let item = list.find_item_mut(id).ok_or_else(|| {
             SwissArmyHammerError::Other(format!(
-                "Todo item with ID '{}' not found in list '{}'",
-                id, todo_list
+                "Todo item with ID '{id}' not found in list '{todo_list}'"
             ))
         })?;
 
@@ -115,8 +113,7 @@ impl TodoStorage {
             // Delete the file if all tasks are complete
             fs::remove_file(&path).map_err(|e| {
                 SwissArmyHammerError::Other(format!(
-                    "Failed to delete completed todo list '{}': {}",
-                    todo_list, e
+                    "Failed to delete completed todo list '{todo_list}': {e}"
                 ))
             })?;
         } else {
@@ -148,14 +145,14 @@ impl TodoStorage {
         }
 
         let entries = fs::read_dir(&self.base_dir).map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to read todo directory: {}", e))
+            SwissArmyHammerError::Other(format!("Failed to read todo directory: {e}"))
         })?;
 
         let mut lists = Vec::new();
 
         for entry in entries {
             let entry = entry.map_err(|e| {
-                SwissArmyHammerError::Other(format!("Failed to read todo directory entry: {}", e))
+                SwissArmyHammerError::Other(format!("Failed to read todo directory entry: {e}"))
             })?;
 
             if let Some(file_name) = entry.file_name().to_str() {
@@ -173,7 +170,7 @@ impl TodoStorage {
     /// Get the path for a todo list file
     fn get_list_path(&self, todo_list: &str) -> Result<PathBuf> {
         validate_todo_list_name(todo_list)?;
-        Ok(self.base_dir.join(format!("{}.todo.yaml", todo_list)))
+        Ok(self.base_dir.join(format!("{todo_list}.todo.yaml")))
     }
 
     /// Load a todo list from a YAML file
@@ -211,7 +208,7 @@ impl TodoStorage {
         }
 
         let content = serde_yaml::to_string(list).map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to serialize todo list: {}", e))
+            SwissArmyHammerError::Other(format!("Failed to serialize todo list: {e}"))
         })?;
 
         fs::write(path, content).map_err(|e| {
