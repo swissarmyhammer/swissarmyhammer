@@ -394,7 +394,7 @@ fn log_error_and_exit(message: &str, error: impl std::fmt::Display) -> i32 {
 }
 
 /// Validate a plan file path for existence, type, and readability
-/// 
+///
 /// This function provides comprehensive validation of plan file paths including:
 /// - File existence checking
 /// - Directory vs file validation
@@ -404,9 +404,9 @@ fn log_error_and_exit(message: &str, error: impl std::fmt::Display) -> i32 {
 fn validate_plan_file(plan_filename: &str) -> Result<std::path::PathBuf, crate::error::CliError> {
     use crate::error::CliError;
     use crate::exit_codes::EXIT_ERROR;
-    
+
     let path = std::path::Path::new(plan_filename);
-    
+
     // Check if path exists
     if !path.exists() {
         return Err(CliError::new(
@@ -416,7 +416,7 @@ fn validate_plan_file(plan_filename: &str) -> Result<std::path::PathBuf, crate::
             EXIT_ERROR,
         ));
     }
-    
+
     // Check if it's a file (not directory)
     if !path.is_file() {
         return Err(CliError::new(
@@ -426,7 +426,7 @@ fn validate_plan_file(plan_filename: &str) -> Result<std::path::PathBuf, crate::
             EXIT_ERROR,
         ));
     }
-    
+
     // Check readability by attempting to open the file
     match std::fs::File::open(path) {
         Ok(_) => Ok(path.to_path_buf()),
@@ -551,7 +551,8 @@ mod tests {
         fn create_file(&self, filename: &str, content: &str) -> std::path::PathBuf {
             let file_path = self.temp_path.join(filename);
             let mut file = File::create(&file_path).expect("Failed to create test file");
-            file.write_all(content.as_bytes()).expect("Failed to write test file");
+            file.write_all(content.as_bytes())
+                .expect("Failed to write test file");
             file_path
         }
 
@@ -570,10 +571,10 @@ mod tests {
     fn test_validate_plan_file_valid_file() {
         let env = TestEnvironment::new();
         let file_path = env.create_file("valid_plan.md", "# Test Plan\n\nThis is a test plan.");
-        
+
         let result = validate_plan_file(&file_path.to_string_lossy());
         assert!(result.is_ok());
-        
+
         let validated_path = result.unwrap();
         assert_eq!(validated_path, file_path);
     }
@@ -582,44 +583,48 @@ mod tests {
     fn test_validate_plan_file_nonexistent_file() {
         let env = TestEnvironment::new();
         let nonexistent_path = env.get_path("nonexistent.md");
-        
+
         let result = validate_plan_file(&nonexistent_path.to_string_lossy());
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert_eq!(error.exit_code, EXIT_ERROR);
         assert!(error.message.contains("Plan file not found"));
-        assert!(error.message.contains("Check the file path and ensure the file exists"));
+        assert!(error
+            .message
+            .contains("Check the file path and ensure the file exists"));
     }
 
     #[test]
     fn test_validate_plan_file_directory_instead_of_file() {
         let env = TestEnvironment::new();
         let dir_path = env.create_directory("test_directory");
-        
+
         let result = validate_plan_file(&dir_path.to_string_lossy());
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert_eq!(error.exit_code, EXIT_ERROR);
         assert!(error.message.contains("Path is not a file"));
-        assert!(error.message.contains("Path must point to a markdown file, not a directory"));
+        assert!(error
+            .message
+            .contains("Path must point to a markdown file, not a directory"));
     }
 
     #[test]
     fn test_validate_plan_file_relative_path() {
         let env = TestEnvironment::new();
         let _file_path = env.create_file("relative_plan.md", "# Relative Plan");
-        
+
         // Change to the temp directory to test relative paths
         let original_dir = std::env::current_dir().expect("Failed to get current directory");
         std::env::set_current_dir(&env.temp_path).expect("Failed to change directory");
-        
+
         let result = validate_plan_file("relative_plan.md");
-        
+
         // Restore original directory
         std::env::set_current_dir(original_dir).expect("Failed to restore directory");
-        
+
         assert!(result.is_ok());
         let validated_path = result.unwrap();
         assert!(validated_path.ends_with("relative_plan.md"));
@@ -629,10 +634,10 @@ mod tests {
     fn test_validate_plan_file_absolute_path() {
         let env = TestEnvironment::new();
         let file_path = env.create_file("absolute_plan.md", "# Absolute Plan");
-        
+
         let result = validate_plan_file(&file_path.to_string_lossy());
         assert!(result.is_ok());
-        
+
         let validated_path = result.unwrap();
         assert_eq!(validated_path, file_path);
         assert!(validated_path.is_absolute());
@@ -642,7 +647,7 @@ mod tests {
     fn test_validate_plan_file_empty_filename() {
         let result = validate_plan_file("");
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert_eq!(error.exit_code, EXIT_ERROR);
         assert!(error.message.contains("Plan file not found"));
@@ -651,14 +656,14 @@ mod tests {
     #[test]
     fn test_validate_plan_file_various_extensions() {
         let env = TestEnvironment::new();
-        
+
         // Test various file extensions - all should work as we don't enforce .md
         let extensions = vec!["plan.md", "spec.txt", "document.rst", "file"];
-        
+
         for ext in extensions {
-            let file_path = env.create_file(ext, &format!("Content for {}", ext));
+            let file_path = env.create_file(ext, &format!("Content for {ext}"));
             let result = validate_plan_file(&file_path.to_string_lossy());
-            assert!(result.is_ok(), "Failed for extension: {}", ext);
+            assert!(result.is_ok(), "Failed for extension: {ext}");
         }
     }
 
@@ -666,10 +671,10 @@ mod tests {
     fn test_validate_plan_file_with_spaces_in_path() {
         let env = TestEnvironment::new();
         let file_path = env.create_file("plan with spaces.md", "# Plan with spaces");
-        
+
         let result = validate_plan_file(&file_path.to_string_lossy());
         assert!(result.is_ok());
-        
+
         let validated_path = result.unwrap();
         assert_eq!(validated_path, file_path);
     }
@@ -679,10 +684,10 @@ mod tests {
         let env = TestEnvironment::new();
         // Test with various special characters that are valid in filenames
         let file_path = env.create_file("plan-file_v2.1.md", "# Special chars plan");
-        
+
         let result = validate_plan_file(&file_path.to_string_lossy());
         assert!(result.is_ok());
-        
+
         let validated_path = result.unwrap();
         assert_eq!(validated_path, file_path);
     }
@@ -691,10 +696,10 @@ mod tests {
     fn test_validate_plan_file_empty_file() {
         let env = TestEnvironment::new();
         let file_path = env.create_file("empty_plan.md", "");
-        
+
         let result = validate_plan_file(&file_path.to_string_lossy());
         assert!(result.is_ok(), "Empty files should be valid");
-        
+
         let validated_path = result.unwrap();
         assert_eq!(validated_path, file_path);
     }
@@ -704,10 +709,10 @@ mod tests {
         let env = TestEnvironment::new();
         let large_content = "x".repeat(10000); // 10KB file
         let file_path = env.create_file("large_plan.md", &large_content);
-        
+
         let result = validate_plan_file(&file_path.to_string_lossy());
         assert!(result.is_ok(), "Large files should be valid");
-        
+
         let validated_path = result.unwrap();
         assert_eq!(validated_path, file_path);
     }
@@ -721,13 +726,13 @@ mod tests {
     fn test_error_message_format() {
         let env = TestEnvironment::new();
         let nonexistent_path = env.get_path("missing.md");
-        
+
         let result = validate_plan_file(&nonexistent_path.to_string_lossy());
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         let message = &error.message;
-        
+
         // Check that error message contains expected components
         assert!(message.contains("Plan file not found"));
         assert!(message.contains(&nonexistent_path.to_string_lossy().to_string()));
@@ -737,14 +742,14 @@ mod tests {
     #[test]
     fn test_cli_error_properties() {
         use crate::error::CliError;
-        
+
         let error = CliError::new("Test error message", EXIT_ERROR);
         assert_eq!(error.message, "Test error message");
         assert_eq!(error.exit_code, EXIT_ERROR);
         assert!(error.source.is_none());
-        
+
         // Test Display trait
-        assert_eq!(format!("{}", error), "Test error message");
+        assert_eq!(format!("{error}"), "Test error message");
     }
 
     #[test]
