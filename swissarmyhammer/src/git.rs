@@ -78,7 +78,7 @@ impl GitOperations {
     }
 
     /// Get the main branch name (main or master) for backward compatibility testing.
-    /// 
+    ///
     /// Note: This method is primarily used by tests to verify backward compatibility
     /// with traditional main/master branch workflows. The issue management system
     /// no longer defaults to main branches for merge operations.
@@ -175,7 +175,6 @@ impl GitOperations {
     pub fn create_work_branch_simple(&self, issue_name: &str) -> Result<String> {
         self.create_work_branch(issue_name)
     }
-
 
     /// Create and checkout a new branch
     fn create_and_checkout_branch(&self, branch_name: &str) -> Result<()> {
@@ -369,7 +368,6 @@ impl GitOperations {
         Ok(())
     }
 
-
     /// Find merge target branch using git merge-base analysis (primary method)
     fn find_merge_target_branch_using_merge_base(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
@@ -434,7 +432,11 @@ impl GitOperations {
             // Calculate distance from candidate tip to issue branch base
             let distance_output = Command::new("git")
                 .current_dir(&self.work_dir)
-                .args(["rev-list", "--count", &format!("{}..{}", &merge_base_commit, candidate)])
+                .args([
+                    "rev-list",
+                    "--count",
+                    &format!("{}..{}", &merge_base_commit, candidate),
+                ])
                 .output()?;
 
             let branch_distance = if distance_output.status.success() {
@@ -481,18 +483,16 @@ impl GitOperations {
         // If no merge-base found with any branch, we cannot determine a target
         Err(SwissArmyHammerError::git_operation_failed(
             "determine merge target",
-            "no merge-base found with any existing branch"
+            "no merge-base found with any existing branch",
         ))
     }
-
-
 
     /// Merge issue branch using git merge-base to determine target
     ///
     /// This method uses git's merge-base to automatically determine where
     /// the issue branch should be merged back to, eliminating the need to
     /// store source branch information.
-    /// 
+    ///
     /// Returns the target branch that was merged to.
     pub fn merge_issue_branch_auto(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
@@ -536,7 +536,7 @@ impl GitOperations {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
+
             // Enhanced merge conflict handling with abort tool integration
             if stderr.contains("CONFLICT") {
                 let conflict_message = format!(
@@ -574,7 +574,7 @@ impl GitOperations {
                     &format!("Automatic merge failed with source branch '{target_branch}'. Manual intervention required")
                 ));
             }
-            
+
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 &branch_name,
@@ -1575,8 +1575,7 @@ mod tests {
         let result = git_ops.create_work_branch("second_issue");
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg
-            .contains("Switch to a non-issue branch first"));
+        assert!(error_msg.contains("Switch to a non-issue branch first"));
     }
 
     #[test]

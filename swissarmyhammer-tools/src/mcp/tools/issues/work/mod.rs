@@ -20,7 +20,6 @@ impl WorkIssueTool {
     pub fn new() -> Self {
         Self
     }
-
 }
 
 #[async_trait]

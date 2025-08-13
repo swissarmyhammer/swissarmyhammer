@@ -1991,11 +1991,8 @@ mod tests {
 
     #[test]
     fn test_plan_command() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "plan",
-            "./specification/new-feature.md",
-        ]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "./specification/new-feature.md"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -2008,11 +2005,8 @@ mod tests {
 
     #[test]
     fn test_plan_command_with_relative_path() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "plan",
-            "plans/database-migration.md",
-        ]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "plans/database-migration.md"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -2025,11 +2019,8 @@ mod tests {
 
     #[test]
     fn test_plan_command_with_absolute_path() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "plan",
-            "/path/to/custom-plan.md",
-        ]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "/path/to/custom-plan.md"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
