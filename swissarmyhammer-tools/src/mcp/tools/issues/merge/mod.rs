@@ -25,7 +25,6 @@ impl MergeIssueTool {
     fn format_issue_branch_name(issue_name: &str) -> String {
         format!("issue/{issue_name}")
     }
-
 }
 
 #[async_trait]
@@ -82,7 +81,7 @@ impl McpTool for MergeIssueTool {
                             if let Err(e) = create_abort_file_current_dir(&abort_reason) {
                                 tracing::error!("Failed to create abort file: {}", e);
                                 return Err(McpError::internal_error(
-                                    format!("Invalid branch for merge and failed to create abort file: {}", e),
+                                    format!("Invalid branch for merge and failed to create abort file: {e}"),
                                     None,
                                 ));
                             }
@@ -91,7 +90,7 @@ impl McpTool for MergeIssueTool {
                         }
                     }
                     Err(e) => {
-                        let error_msg = format!("Failed to get current branch: {}", e);
+                        let error_msg = format!("Failed to get current branch: {e}");
                         tracing::error!("{}", error_msg);
                         return Err(McpErrorHandler::handle_error(
                             e,

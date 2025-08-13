@@ -371,7 +371,7 @@ async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
 }
 
 async fn run_plan(plan_filename: String) -> i32 {
-    println!("Plan command called with file: {}", plan_filename);
+    println!("Plan command called with file: {plan_filename}");
     println!("Plan functionality will be implemented in a future step.");
     EXIT_SUCCESS
 }

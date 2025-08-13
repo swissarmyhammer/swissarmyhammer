@@ -1661,7 +1661,7 @@ async fn test_abort_file_detection_during_multiple_state_transitions() {
     // The first execution might fail due to MCP issues, so let's be flexible
     if result.is_err() {
         // If it fails, it might be due to missing MCP server
-        println!("First transition failed (likely MCP): {:?}", result);
+        println!("First transition failed (likely MCP): {result:?}");
     }
 
     // Now create abort file in the middle of execution
@@ -1839,9 +1839,7 @@ async fn test_abort_file_performance_impact() {
     let max_acceptable_overhead = duration_without_abort * 10;
     assert!(
         duration_with_abort < max_acceptable_overhead,
-        "Abort checking overhead too high: {:?} vs {:?}",
-        duration_with_abort,
-        duration_without_abort
+        "Abort checking overhead too high: {duration_with_abort:?} vs {duration_without_abort:?}"
     );
 }
 

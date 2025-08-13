@@ -1344,6 +1344,26 @@ async fn execute_workflow_test_mode(
     Ok(coverage)
 }
 
+/// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
+fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
+    use std::fs;
+
+    // Create local .swissarmyhammer/workflow-runs directory
+    let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
+    fs::create_dir_all(&local_dir).map_err(|e| {
+        SwissArmyHammerError::Other(format!(
+            "Failed to create .swissarmyhammer/workflow-runs directory: {e}"
+        ))
+    })?;
+
+    let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
+        .map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
+        })?;
+
+    Ok(Box::new(run_storage))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1751,24 +1771,4 @@ mod tests {
         );
         assert_eq!(vars_map.get("name").unwrap(), &serde_json::json!("Alice"));
     }
-}
-
-/// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
-fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
-    use std::fs;
-
-    // Create local .swissarmyhammer/workflow-runs directory
-    let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
-    fs::create_dir_all(&local_dir).map_err(|e| {
-        SwissArmyHammerError::Other(format!(
-            "Failed to create .swissarmyhammer/workflow-runs directory: {e}"
-        ))
-    })?;
-
-    let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
-        .map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
-        })?;
-
-    Ok(Box::new(run_storage))
 }

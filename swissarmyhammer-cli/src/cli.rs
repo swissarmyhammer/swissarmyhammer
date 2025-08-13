@@ -1991,7 +1991,8 @@ mod tests {
 
     #[test]
     fn test_plan_command() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "./specification/test.md"]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "./specification/test.md"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
