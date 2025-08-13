@@ -373,13 +373,13 @@ async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
 async fn run_plan(plan_filename: String) -> i32 {
     use std::collections::HashMap;
     use swissarmyhammer::workflow::{WorkflowExecutor, WorkflowName, WorkflowStorage};
-    
+
     // Validate that the plan file exists
     if !std::path::Path::new(&plan_filename).exists() {
         eprintln!("Error: Plan file '{plan_filename}' does not exist");
         return EXIT_ERROR;
     }
-    
+
     // Create workflow storage
     let workflow_storage = match tokio::task::spawn_blocking(WorkflowStorage::file_system).await {
         Ok(Ok(storage)) => storage,
@@ -417,12 +417,16 @@ async fn run_plan(plan_filename: String) -> i32 {
 
     // Set the plan_filename parameter as a template variable
     let mut set_variables = HashMap::new();
-    set_variables.insert("plan_filename".to_string(), serde_json::Value::String(plan_filename));
-    
+    set_variables.insert(
+        "plan_filename".to_string(),
+        serde_json::Value::String(plan_filename),
+    );
+
     // Store set variables in context for liquid template rendering
     run.context.insert(
         "_template_vars".to_string(),
-        serde_json::to_value(set_variables).unwrap_or(serde_json::Value::Object(Default::default())),
+        serde_json::to_value(set_variables)
+            .unwrap_or(serde_json::Value::Object(Default::default())),
     );
 
     // Execute the workflow step by step until completion
@@ -433,7 +437,10 @@ async fn run_plan(plan_filename: String) -> i32 {
                 // Continue to next state
             }
             Err(e) => {
-                eprintln!("Error: Workflow execution failed at state '{}': {}", run.current_state, e);
+                eprintln!(
+                    "Error: Workflow execution failed at state '{}': {}",
+                    run.current_state, e
+                );
                 return EXIT_ERROR;
             }
         }
@@ -454,7 +461,10 @@ async fn run_plan(plan_filename: String) -> i32 {
             EXIT_ERROR
         }
         _ => {
-            eprintln!("Error: Workflow ended in unexpected state: {:?}", run.status);
+            eprintln!(
+                "Error: Workflow ended in unexpected state: {:?}",
+                run.status
+            );
             EXIT_ERROR
         }
     }
