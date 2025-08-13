@@ -133,16 +133,13 @@ async fn test_source_branch_deleted_mid_workflow() {
             .expect("Failed to create issue");
     }
 
-    // Create issue branch
+    // Create issue branch from current branch (feature/temporary)
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        let (branch_name, source_branch) = git
-            .create_work_branch_with_source(&issue_name, Some("feature/temporary"))
-            .unwrap();
+        let branch_name = git.create_work_branch(&issue_name).unwrap();
 
         assert_eq!(branch_name, "issue/temp-feature-work");
-        assert_eq!(source_branch, "feature/temporary");
     }
 
     // Make some changes on the issue branch
@@ -214,12 +211,11 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
             .expect("Failed to create issue");
     }
 
-    // Create issue branch and make changes
+    // Create issue branch and make changes (should be on feature/conflicting)
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.create_work_branch_with_source(&issue_name, Some("feature/conflicting"))
-            .unwrap();
+        git.create_work_branch(&issue_name).unwrap();
     }
 
     // Make changes on issue branch to conflict_file.txt
@@ -327,8 +323,7 @@ async fn test_source_branch_validation_before_merge() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.create_work_branch_with_source(&issue_name, Some("feature/valid"))
-            .unwrap();
+        git.create_work_branch(&issue_name).unwrap();
     }
 
     // Make a simple change and commit
@@ -436,8 +431,7 @@ async fn test_uncommitted_changes_during_merge() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.create_work_branch_with_source(&issue_name, Some("feature/dirty"))
-            .unwrap();
+        git.create_work_branch(&issue_name).unwrap();
     }
 
     // Make and commit changes on issue branch
@@ -584,15 +578,14 @@ async fn test_performance_with_many_branches() {
         git.checkout_branch(&source_branch).unwrap();
 
         let start_time = std::time::Instant::now();
-        let result = git.create_work_branch_with_source(&issue_name, None);
+        let result = git.create_work_branch(&issue_name);
         let duration = start_time.elapsed();
 
         assert!(result.is_ok());
         assert!(duration.as_millis() < 5000); // Should complete within 5 seconds
 
-        let (branch_name, detected_source) = result.unwrap();
+        let branch_name = result.unwrap();
         assert_eq!(branch_name, format!("issue/{}", issue_name));
-        assert_eq!(detected_source, source_branch);
     }
 
     // Test branch existence checking performance
