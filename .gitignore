@@ -63,3 +63,7 @@ doc/book
 
 # Claude Code configuration
 .claude/
+
+# MCP and semantic database files
+mcp.log
+semantic.db
