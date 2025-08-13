@@ -370,13 +370,34 @@ async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
     }
 }
 
+/// Configuration constants for the plan command  
+struct PlanConfig {
+    workflow_name: &'static str,
+    filename_var: &'static str,
+    template_vars_key: &'static str,
+}
+
+impl Default for PlanConfig {
+    fn default() -> Self {
+        Self {
+            workflow_name: "plan",
+            filename_var: "plan_filename",
+            template_vars_key: "_template_vars",
+        }
+    }
+}
+
+/// Helper function to handle common error patterns
+fn log_error_and_exit(message: &str, error: impl std::fmt::Display) -> i32 {
+    tracing::error!("{}: {}", message, error);
+    EXIT_ERROR
+}
+
 async fn run_plan(plan_filename: String) -> i32 {
     use std::collections::HashMap;
     use swissarmyhammer::workflow::{WorkflowExecutor, WorkflowName, WorkflowStorage};
 
-    const PLAN_WORKFLOW_NAME: &str = "plan";
-    const PLAN_FILENAME_VAR: &str = "plan_filename";
-    const TEMPLATE_VARS_KEY: &str = "_template_vars";
+    let config = PlanConfig::default();
 
     // Validate that the plan file exists
     if !std::path::Path::new(&plan_filename).exists() {
@@ -385,50 +406,40 @@ async fn run_plan(plan_filename: String) -> i32 {
     }
 
     // Create workflow storage
-    let workflow_storage = match tokio::task::spawn_blocking(WorkflowStorage::file_system).await {
-        Ok(Ok(storage)) => storage,
-        Ok(Err(e)) => {
-            tracing::error!("Failed to create workflow storage: {}", e);
-            return EXIT_ERROR;
-        }
-        Err(e) => {
-            tracing::error!("Failed to initialize workflow storage: {}", e);
-            return EXIT_ERROR;
-        }
+    let workflow_storage = match WorkflowStorage::file_system() {
+        Ok(storage) => storage,
+        Err(e) => return log_error_and_exit("Failed to create workflow storage", e),
     };
 
-    // Load the "plan" workflow
-    let workflow_name = WorkflowName::new(PLAN_WORKFLOW_NAME);
+    // Load the workflow
+    let workflow_name = WorkflowName::new(config.workflow_name);
     let workflow = match workflow_storage.get_workflow(&workflow_name) {
         Ok(workflow) => workflow,
         Err(e) => {
-            tracing::error!("Failed to load '{}' workflow: {}", PLAN_WORKFLOW_NAME, e);
-            return EXIT_ERROR;
+            return log_error_and_exit(
+                &format!("Failed to load '{}' workflow", config.workflow_name),
+                e,
+            )
         }
     };
 
-    // Create executor
+    // Create executor and start workflow
     let mut executor = WorkflowExecutor::new();
-
-    // Start workflow
     let mut run = match executor.start_workflow(workflow.clone()) {
         Ok(run) => run,
-        Err(e) => {
-            tracing::error!("Failed to start workflow: {}", e);
-            return EXIT_ERROR;
-        }
+        Err(e) => return log_error_and_exit("Failed to start workflow", e),
     };
 
     // Set the plan_filename parameter as a template variable
     let mut template_variables = HashMap::new();
     template_variables.insert(
-        PLAN_FILENAME_VAR.to_string(),
+        config.filename_var.to_string(),
         serde_json::Value::String(plan_filename),
     );
 
     // Store template variables in context for liquid template rendering
     run.context.insert(
-        TEMPLATE_VARS_KEY.to_string(),
+        config.template_vars_key.to_string(),
         serde_json::to_value(template_variables)
             .unwrap_or(serde_json::Value::Object(Default::default())),
     );
@@ -436,18 +447,11 @@ async fn run_plan(plan_filename: String) -> i32 {
     // Execute the workflow step by step until completion
     use swissarmyhammer::workflow::WorkflowRunStatus;
     while run.status == WorkflowRunStatus::Running {
-        match executor.execute_state(&mut run).await {
-            Ok(_) => {
-                // Continue to next state
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Workflow execution failed at state '{}': {}",
-                    run.current_state,
-                    e
-                );
-                return EXIT_ERROR;
-            }
+        if let Err(e) = executor.execute_state(&mut run).await {
+            return log_error_and_exit(
+                &format!("Workflow execution failed at state '{}'", run.current_state),
+                e,
+            );
         }
     }
 

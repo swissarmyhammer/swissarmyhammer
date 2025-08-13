@@ -1779,8 +1779,10 @@ mod tests {
         assert!(abort_content.contains("detailed_issue"));
         assert!(abort_content.contains("Manual intervention required"));
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        // Restore original directory if it still exists
+        if original_dir.exists() {
+            std::env::set_current_dir(original_dir).unwrap();
+        }
     }
 
     #[test]
