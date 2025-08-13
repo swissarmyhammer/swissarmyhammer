@@ -9,8 +9,7 @@ use crate::mcp::types::MergeIssueRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
-use std::fs;
-use std::path::Path;
+use swissarmyhammer::common::create_abort_file_current_dir;
 
 /// Tool for merging an issue work branch
 #[derive(Default)]
@@ -27,16 +26,6 @@ impl MergeIssueTool {
         format!("issue/{issue_name}")
     }
 
-    /// Create abort file with the given reason
-    fn create_abort_file(reason: &str) -> std::result::Result<(), std::io::Error> {
-        let sah_dir = Path::new(".swissarmyhammer");
-        if !sah_dir.exists() {
-            fs::create_dir_all(sah_dir)?;
-        }
-        let abort_file_path = sah_dir.join(".abort");
-        fs::write(abort_file_path, reason)?;
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -90,7 +79,7 @@ impl McpTool for MergeIssueTool {
                             tracing::warn!("Invalid branch for merge operation: {}", abort_reason);
 
                             // Create abort file to signal workflow termination
-                            if let Err(e) = Self::create_abort_file(&abort_reason) {
+                            if let Err(e) = create_abort_file_current_dir(&abort_reason) {
                                 tracing::error!("Failed to create abort file: {}", e);
                                 return Err(McpError::internal_error(
                                     format!("Invalid branch for merge and failed to create abort file: {}", e),
