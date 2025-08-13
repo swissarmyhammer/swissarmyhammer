@@ -9,8 +9,7 @@ use crate::mcp::types::WorkIssueRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
-use std::fs;
-use std::path::Path;
+use swissarmyhammer::common::create_abort_file_current_dir;
 
 /// Tool for switching to work on an issue
 #[derive(Default)]
@@ -22,24 +21,6 @@ impl WorkIssueTool {
         Self
     }
 
-    /// Creates an abort file to signal workflow termination
-    ///
-    /// This method creates a `.swissarmyhammer/.abort` file with the provided reason,
-    /// enabling file-based abort detection throughout the workflow system.
-    fn create_abort_file(reason: &str) -> std::result::Result<(), std::io::Error> {
-        // Ensure .swissarmyhammer directory exists
-        let sah_dir = Path::new(".swissarmyhammer");
-        if !sah_dir.exists() {
-            fs::create_dir_all(sah_dir)?;
-        }
-
-        // Create abort file with reason
-        let abort_file_path = sah_dir.join(".abort");
-        fs::write(&abort_file_path, reason)?;
-
-        tracing::info!("Created abort file: {}", abort_file_path.display());
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -98,7 +79,7 @@ impl McpTool for WorkIssueTool {
             );
 
             // Create abort file to signal workflow termination
-            if let Err(abort_err) = Self::create_abort_file(&abort_reason) {
+            if let Err(abort_err) = create_abort_file_current_dir(&abort_reason) {
                 tracing::error!("Failed to create abort file: {}", abort_err);
             } else {
                 tracing::info!(
@@ -161,7 +142,7 @@ mod tests {
         std::env::set_current_dir(temp_path).unwrap();
 
         let reason = "Test abort reason for issue branching";
-        let result = WorkIssueTool::create_abort_file(reason);
+        let result = create_abort_file_current_dir(reason);
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();

@@ -24,7 +24,14 @@ pub mod rate_limiter;
 /// Monotonic ULID generator utility
 pub mod ulid_generator;
 
+/// Abort file utilities for consistent abort handling
+pub mod abort_utils;
+
 // Re-export commonly used items
+pub use abort_utils::{
+    abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
+    remove_abort_file,
+};
 pub use env_loader::{load_env_optional, load_env_parsed, load_env_string, EnvLoader};
 pub use error_context::{io_error_with_context, io_error_with_message, other_error, IoResultExt};
 pub use file_types::{

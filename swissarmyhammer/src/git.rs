@@ -4,6 +4,7 @@
 //! including creating work branches, switching branches, and merging
 //! completed work back to the source branch.
 
+use crate::common::create_abort_file;
 use crate::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -304,7 +305,7 @@ impl GitOperations {
             tracing::error!("{}", error_message);
 
             // Create abort file for deleted source branch scenario
-            self.create_abort_file(&format!(
+            create_abort_file(&self.work_dir, &format!(
                 "Source branch '{source_branch}' deleted before merge of issue '{issue_name}'. Manual intervention required to resolve the merge target."
             ))?;
 
@@ -377,7 +378,7 @@ impl GitOperations {
                 tracing::error!("{}", conflict_message);
 
                 // Create abort file for merge conflict scenario
-                self.create_abort_file(&format!(
+                create_abort_file(&self.work_dir, &format!(
                     "Merge conflicts in issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Manual conflict resolution required:\n{stderr}"
                 ))?;
 
@@ -396,7 +397,7 @@ impl GitOperations {
                 tracing::error!("{}", failure_message);
 
                 // Create abort file for automatic merge failure
-                self.create_abort_file(&format!(
+                create_abort_file(&self.work_dir, &format!(
                     "Automatic merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Source branch divergence requires manual intervention:\n{stderr}"
                 ))?;
 
@@ -749,27 +750,6 @@ impl GitOperations {
             }
         }
 
-        Ok(())
-    }
-
-    /// Create abort file for irrecoverable git operation scenarios
-    ///
-    /// Creates a `.swissarmyhammer/.abort` file with the provided reason,
-    /// enabling file-based abort detection throughout the system.
-    fn create_abort_file(&self, reason: &str) -> Result<()> {
-        use std::fs;
-
-        // Ensure .swissarmyhammer directory exists in the work directory
-        let sah_dir = self.work_dir.join(".swissarmyhammer");
-        if !sah_dir.exists() {
-            fs::create_dir_all(&sah_dir).map_err(SwissArmyHammerError::Io)?;
-        }
-
-        // Create abort file with reason
-        let abort_file_path = sah_dir.join(".abort");
-        fs::write(&abort_file_path, reason).map_err(SwissArmyHammerError::Io)?;
-
-        tracing::info!("Created abort file: {}", abort_file_path.display());
         Ok(())
     }
 
