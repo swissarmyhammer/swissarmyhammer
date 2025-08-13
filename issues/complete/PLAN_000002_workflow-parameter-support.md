@@ -114,3 +114,22 @@ This workflow creates a step-by-step plan from a specific specification file.
 - Follow existing workflow documentation patterns
 - Maintain backward compatibility with workflow engine
 - The parameter will be passed from the CLI handler
+
+## Proposed Solution
+
+After examining the existing workflow patterns and the current plan.md file, I will:
+
+1. **Update workflow structure**: Based on the greeting workflow pattern, I'll modify the plan.md to support parameters through liquid template syntax rather than a formal Parameters section (since no other workflows use that pattern)
+
+2. **Follow established patterns**: The greeting workflow shows that parameters are passed via `--set` flags and used with `{{ variable }}` syntax directly in actions
+
+3. **Implement liquid template usage**: 
+   - Update start action: `log "Making the plan for {{ plan_filename }}"`
+   - Update plan action: `execute prompt "plan" with plan_filename="{{ plan_filename }}"`
+   - Keep the done action unchanged as it doesn't need the parameter
+
+4. **Maintain existing structure**: Keep the same state flow but enhance the actions to use the parameter
+
+5. **Update description**: Modify the description to reflect that this workflow processes specific plan files rather than working generically
+
+The implementation will follow the same pattern as the greeting workflow, using liquid templates in action strings that get rendered when the workflow runs with the `--set plan_filename=<file>` parameter.

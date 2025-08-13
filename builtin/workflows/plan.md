@@ -17,10 +17,10 @@ stateDiagram-v2
 
 ## Actions
 
-- start: log "Making the plan"
-- plan: execute prompt "plan"
+- start: log "Making the plan for {{ plan_filename }}"
+- plan: execute prompt "plan" with plan_filename="{{ plan_filename }}"
 - done: log "Plan ready, look in ./issues"
 
 ## Description
 
-This workflow works on tests until they all pass.
+This workflow creates a step-by-step plan from a specific specification file.
