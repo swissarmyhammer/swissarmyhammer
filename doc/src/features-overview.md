@@ -291,7 +291,7 @@ Complete MCP tool suite for seamless AI development:
 
 ```bash
 # Configure Claude Code
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 ```
 
 **Available Tools**:

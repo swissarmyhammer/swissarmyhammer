@@ -38,7 +38,7 @@ SwissArmyHammer provides a unified, file-based approach with three integrated co
 Install and get started:
 ```bash
 cargo install --git https://github.com/wballard/sahdoc swissarmyhammer-cli
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 ```
 
 ## 🎯 Key Features
@@ -154,7 +154,7 @@ See [installation guide](https://wballard.github.io/sahdoc/installation.html) fo
 Add to your Claude Code [MCP configuration](https://docs.anthropic.com/en/docs/claude-code/mcp)
 
 ```bash
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 ```
 
 ### Create Your First Prompt

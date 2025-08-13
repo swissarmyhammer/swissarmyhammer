@@ -418,7 +418,7 @@ cp ~/.swissarmyhammer/prompts/team-review.md .swissarmyhammer/prompts/code.md
 Built-in prompts are automatically available in Claude Code:
 ```bash
 # Configure MCP
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 
 # Use in Claude Code
 /code language="typescript" context="React component"

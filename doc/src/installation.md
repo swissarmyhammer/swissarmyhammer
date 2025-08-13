@@ -32,7 +32,7 @@ Configure SwissArmyHammer as an MCP server for Claude Code:
 
 ```bash
 # Add SwissArmyHammer as an MCP server
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 
 # Verify the connection
 claude mcp list

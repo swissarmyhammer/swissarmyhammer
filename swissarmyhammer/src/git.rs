@@ -78,7 +78,7 @@ impl GitOperations {
     }
 
     /// Get the main branch name (main or master) for backward compatibility testing.
-    /// 
+    ///
     /// Note: This method is primarily used by tests to verify backward compatibility
     /// with traditional main/master branch workflows. The issue management system
     /// no longer defaults to main branches for merge operations.
@@ -175,7 +175,6 @@ impl GitOperations {
     pub fn create_work_branch_simple(&self, issue_name: &str) -> Result<String> {
         self.create_work_branch(issue_name)
     }
-
 
     /// Create and checkout a new branch
     fn create_and_checkout_branch(&self, branch_name: &str) -> Result<()> {
@@ -369,9 +368,8 @@ impl GitOperations {
         Ok(())
     }
 
-
-    /// Find merge target branch using git merge-base analysis (primary method)
-    fn find_merge_target_branch_using_merge_base(&self, issue_name: &str) -> Result<String> {
+    /// Find merge target branch using git reflog analysis (simple and reliable)
+    fn find_merge_target_branch_using_reflog(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
 
         // First check if the issue branch exists
@@ -381,125 +379,70 @@ impl GitOperations {
             )));
         }
 
-        // Get list of all local branches that could be candidates
+        // Use git reflog to find the last checkout operation to this issue branch
         let output = Command::new("git")
             .current_dir(&self.work_dir)
-            .args(["branch", "--format=%(refname:short)"])
+            .args(["reflog", "--date=local"])
             .output()?;
 
         if !output.status.success() {
-            return Err(SwissArmyHammerError::Other(
-                "Failed to list branches".to_string(),
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "reflog",
+                "failed to read git reflog",
             ));
         }
 
-        let branches = String::from_utf8_lossy(&output.stdout);
-        let candidate_branches: Vec<&str> = branches
-            .lines()
-            .filter(|branch| {
-                !branch.trim().is_empty() && *branch != branch_name && !self.is_issue_branch(branch)
-            })
-            .collect();
+        let reflog_output = String::from_utf8_lossy(&output.stdout);
 
-        // Find the best merge target using a multi-criteria approach:
-        // 1. Try fork-point detection first
-        // 2. Fall back to branch tip distance analysis
-        // 3. Use timestamp as final tie-breaker
-        let mut best_candidate = None;
-        let mut best_score = u64::MAX;
+        // Find the first reflog entry that shows "checkout: moving from X to <our_branch>"
+        for line in reflog_output.lines() {
+            if let Some(checkout_part) = line.split("checkout: moving from ").nth(1) {
+                if let Some((from_branch, to_branch)) = checkout_part.split_once(" to ") {
+                    // If we moved TO our issue branch, the FROM branch is our target
+                    if to_branch.trim() == branch_name {
+                        let source_branch = from_branch.trim().to_string();
 
-        for candidate in &candidate_branches {
-            // Try to find fork point first - this is the most accurate method
-            let fork_point_output = Command::new("git")
-                .current_dir(&self.work_dir)
-                .args(["merge-base", "--fork-point", candidate, &branch_name])
-                .output()?;
-
-            let has_fork_point = fork_point_output.status.success();
-
-            // Get regular merge-base for fallback
-            let merge_base_output = Command::new("git")
-                .current_dir(&self.work_dir)
-                .args(["merge-base", &branch_name, candidate])
-                .output()?;
-
-            if !merge_base_output.status.success() {
-                continue;
-            }
-
-            let merge_base_commit = String::from_utf8_lossy(&merge_base_output.stdout)
-                .trim()
-                .to_string();
-
-            // Calculate distance from candidate tip to issue branch base
-            let distance_output = Command::new("git")
-                .current_dir(&self.work_dir)
-                .args(["rev-list", "--count", &format!("{}..{}", &merge_base_commit, candidate)])
-                .output()?;
-
-            let branch_distance = if distance_output.status.success() {
-                String::from_utf8_lossy(&distance_output.stdout)
-                    .trim()
-                    .parse::<u32>()
-                    .unwrap_or(u32::MAX)
-            } else {
-                u32::MAX
-            };
-
-            // Get timestamp for tie-breaking
-            let timestamp_output = Command::new("git")
-                .current_dir(&self.work_dir)
-                .args(["show", "-s", "--format=%ct", &merge_base_commit])
-                .output()?;
-
-            let timestamp = if let Ok(timestamp_str) = String::from_utf8(timestamp_output.stdout) {
-                timestamp_str.trim().parse::<u64>().unwrap_or(0)
-            } else {
-                0
-            };
-
-            // Calculate composite score (lower is better)
-            // Fork-point gets priority, then distance, then timestamp (inverted for recency)
-            let score = if has_fork_point {
-                // Fork point found - give this high priority
-                (branch_distance as u64) + (u64::MAX - timestamp)
-            } else {
-                // No fork point - penalize and use distance + timestamp
-                (branch_distance as u64) + 1_000_000 + (u64::MAX - timestamp)
-            };
-
-            if score < best_score {
-                best_score = score;
-                best_candidate = Some(candidate.to_string());
+                        // Verify the source branch still exists and is not an issue branch
+                        if self.branch_exists(&source_branch)?
+                            && !self.is_issue_branch(&source_branch)
+                        {
+                            tracing::debug!(
+                                "Found merge target '{}' for issue '{}' via reflog",
+                                source_branch,
+                                issue_name
+                            );
+                            return Ok(source_branch);
+                        }
+                    }
+                }
             }
         }
 
-        if let Some(candidate) = best_candidate {
-            return Ok(candidate);
-        }
+        // If no reflog entry found, create abort file and return error
+        create_abort_file(&self.work_dir, &format!(
+            "Cannot determine merge target for issue '{}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally",
+            issue_name
+        ))?;
 
-        // If no merge-base found with any branch, we cannot determine a target
         Err(SwissArmyHammerError::git_operation_failed(
             "determine merge target",
-            "no merge-base found with any existing branch"
+            &format!("no reflog entry found for issue branch '{}'", branch_name)
         ))
     }
-
-
 
     /// Merge issue branch using git merge-base to determine target
     ///
     /// This method uses git's merge-base to automatically determine where
     /// the issue branch should be merged back to, eliminating the need to
     /// store source branch information.
-    /// 
+    ///
     /// Returns the target branch that was merged to.
     pub fn merge_issue_branch_auto(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
-        let target_branch = self.find_merge_target_branch_using_merge_base(issue_name)?;
+        let target_branch = self.find_merge_target_branch_using_reflog(issue_name)?;
 
         tracing::debug!(
-            "Merging issue branch '{}' back to target branch '{}' (determined by git merge-base)",
+            "Merging issue branch '{}' back to target branch '{}' (determined by git reflog)",
             branch_name,
             target_branch
         );
@@ -521,6 +464,12 @@ impl GitOperations {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Create abort file for checkout failure
+            create_abort_file(&self.work_dir, &format!(
+                "Failed to checkout target branch '{target_branch}' for issue '{issue_name}'. Git checkout operation failed:\n{stderr}"
+            ))?;
+
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "checkout",
                 &target_branch,
@@ -536,45 +485,12 @@ impl GitOperations {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            
-            // Enhanced merge conflict handling with abort tool integration
-            if stderr.contains("CONFLICT") {
-                let conflict_message = format!(
-                    "Merge conflicts detected while merging issue '{issue_name}' from '{branch_name}' to '{target_branch}'. Conflicts cannot be resolved automatically."
-                );
-                tracing::error!("{}", conflict_message);
 
-                // Create abort file for merge conflict scenario
-                create_abort_file(&self.work_dir, &format!(
-                    "Merge conflicts in issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Manual conflict resolution required:\n{stderr}"
-                ))?;
+            // Any git merge failure is fatal - create abort file and return error
+            create_abort_file(&self.work_dir, &format!(
+                "Git merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Git merge output:\n{stderr}"
+            ))?;
 
-                return Err(SwissArmyHammerError::git_branch_operation_failed(
-                    "merge",
-                    &branch_name,
-                    &format!("Merge conflicts with source branch '{target_branch}'. Manual resolution required")
-                ));
-            }
-
-            // Enhanced handling for automatic merge failures
-            if stderr.contains("Automatic merge failed") {
-                let failure_message = format!(
-                    "Automatic merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Source branch may have diverged significantly."
-                );
-                tracing::error!("{}", failure_message);
-
-                // Create abort file for automatic merge failure
-                create_abort_file(&self.work_dir, &format!(
-                    "Automatic merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}'. Source branch divergence requires manual intervention:\n{stderr}"
-                ))?;
-
-                return Err(SwissArmyHammerError::git_branch_operation_failed(
-                    "merge",
-                    &branch_name,
-                    &format!("Automatic merge failed with source branch '{target_branch}'. Manual intervention required")
-                ));
-            }
-            
             return Err(SwissArmyHammerError::git_branch_operation_failed(
                 "merge",
                 &branch_name,
@@ -1575,8 +1491,7 @@ mod tests {
         let result = git_ops.create_work_branch("second_issue");
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg
-            .contains("Switch to a non-issue branch first"));
+        assert!(error_msg.contains("Switch to a non-issue branch first"));
     }
 
     #[test]
@@ -1648,14 +1563,18 @@ mod tests {
         git_ops.checkout_branch("main").unwrap();
         git_ops.delete_branch("feature/test").unwrap();
 
-        // Auto merge should succeed using git merge-base to find main as the target
-        // Even though the immediate source branch (feature/test) was deleted,
-        // git merge-base correctly identifies main as the appropriate merge target
+        // Auto merge should fail because the source branch (feature/test) was deleted
+        // and reflog-based detection cannot find a valid target branch
+        // This is the correct behavior - we shouldn't guess at merge targets
         let result = git_ops.merge_issue_branch_auto("test_issue");
-        assert!(result.is_ok());
-        let target_branch = result.unwrap();
-        // Should merge to main since that's the best merge-base available
-        assert_eq!(target_branch, "main");
+        assert!(result.is_err());
+        
+        // Verify abort file was created with appropriate message
+        let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+        let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+        assert!(abort_content.contains("Cannot determine merge target"));
+        assert!(abort_content.contains("test_issue"));
     }
 
     #[test]

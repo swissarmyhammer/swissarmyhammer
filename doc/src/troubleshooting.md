@@ -144,7 +144,7 @@ claude mcp status sah
 
 # Reconfigure MCP
 claude mcp remove sah
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 
 # Check logs
 tail -f ~/.config/claude-code/logs/mcp.log

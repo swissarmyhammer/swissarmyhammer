@@ -9,4 +9,4 @@ We want to know if we are fully finished with all issues.
 
 ## Rules
 
-Use the issue_all_complete to determine if all issues are complete.
+Use the the issue_all_complete tool to determine if all issues are complete. Do not use a cli command.

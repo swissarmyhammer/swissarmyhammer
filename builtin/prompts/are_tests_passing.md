@@ -14,4 +14,5 @@ If you run tests, and they all pass, respond only with YES.
 
 ### Rust
 
-- Run tests with `cargo nextest run`
+- Run tests with `cargo nextest run --fail-fast`
+  -- do not try to pass this --timeout

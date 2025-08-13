@@ -72,7 +72,7 @@ Add SwissArmyHammer as an MCP server for Claude Code:
 
 ```bash
 # Add the MCP server
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 
 # Verify it's working
 claude mcp list

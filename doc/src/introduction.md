@@ -112,7 +112,7 @@ sah prompt test code-review --var language=rust
 sah flow run feature-development
 
 # Configure Claude Code integration
-claude mcp add sah sah serve
+claude mcp add --scope user sah sah serve
 ```
 
 ## Next Steps

@@ -25,7 +25,6 @@ impl MergeIssueTool {
     fn format_issue_branch_name(issue_name: &str) -> String {
         format!("issue/{issue_name}")
     }
-
 }
 
 #[async_trait]
