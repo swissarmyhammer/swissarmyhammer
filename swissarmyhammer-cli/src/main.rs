@@ -374,9 +374,13 @@ async fn run_plan(plan_filename: String) -> i32 {
     use std::collections::HashMap;
     use swissarmyhammer::workflow::{WorkflowExecutor, WorkflowName, WorkflowStorage};
 
+    const PLAN_WORKFLOW_NAME: &str = "plan";
+    const PLAN_FILENAME_VAR: &str = "plan_filename";
+    const TEMPLATE_VARS_KEY: &str = "_template_vars";
+
     // Validate that the plan file exists
     if !std::path::Path::new(&plan_filename).exists() {
-        eprintln!("Error: Plan file '{plan_filename}' does not exist");
+        tracing::error!("Plan file '{}' does not exist", plan_filename);
         return EXIT_ERROR;
     }
 
@@ -384,21 +388,21 @@ async fn run_plan(plan_filename: String) -> i32 {
     let workflow_storage = match tokio::task::spawn_blocking(WorkflowStorage::file_system).await {
         Ok(Ok(storage)) => storage,
         Ok(Err(e)) => {
-            eprintln!("Error: Failed to create workflow storage: {e}");
+            tracing::error!("Failed to create workflow storage: {}", e);
             return EXIT_ERROR;
         }
         Err(e) => {
-            eprintln!("Error: Failed to initialize workflow storage: {e}");
+            tracing::error!("Failed to initialize workflow storage: {}", e);
             return EXIT_ERROR;
         }
     };
 
     // Load the "plan" workflow
-    let workflow_name = WorkflowName::new("plan");
+    let workflow_name = WorkflowName::new(PLAN_WORKFLOW_NAME);
     let workflow = match workflow_storage.get_workflow(&workflow_name) {
         Ok(workflow) => workflow,
         Err(e) => {
-            eprintln!("Error: Failed to load 'plan' workflow: {e}");
+            tracing::error!("Failed to load '{}' workflow: {}", PLAN_WORKFLOW_NAME, e);
             return EXIT_ERROR;
         }
     };
@@ -410,22 +414,22 @@ async fn run_plan(plan_filename: String) -> i32 {
     let mut run = match executor.start_workflow(workflow.clone()) {
         Ok(run) => run,
         Err(e) => {
-            eprintln!("Error: Failed to start workflow: {e}");
+            tracing::error!("Failed to start workflow: {}", e);
             return EXIT_ERROR;
         }
     };
 
     // Set the plan_filename parameter as a template variable
-    let mut set_variables = HashMap::new();
-    set_variables.insert(
-        "plan_filename".to_string(),
+    let mut template_variables = HashMap::new();
+    template_variables.insert(
+        PLAN_FILENAME_VAR.to_string(),
         serde_json::Value::String(plan_filename),
     );
 
-    // Store set variables in context for liquid template rendering
+    // Store template variables in context for liquid template rendering
     run.context.insert(
-        "_template_vars".to_string(),
-        serde_json::to_value(set_variables)
+        TEMPLATE_VARS_KEY.to_string(),
+        serde_json::to_value(template_variables)
             .unwrap_or(serde_json::Value::Object(Default::default())),
     );
 
@@ -437,9 +441,10 @@ async fn run_plan(plan_filename: String) -> i32 {
                 // Continue to next state
             }
             Err(e) => {
-                eprintln!(
-                    "Error: Workflow execution failed at state '{}': {}",
-                    run.current_state, e
+                tracing::error!(
+                    "Workflow execution failed at state '{}': {}",
+                    run.current_state,
+                    e
                 );
                 return EXIT_ERROR;
             }
@@ -453,18 +458,15 @@ async fn run_plan(plan_filename: String) -> i32 {
             EXIT_SUCCESS
         }
         WorkflowRunStatus::Failed => {
-            eprintln!("Error: Workflow failed");
+            tracing::error!("Workflow failed");
             EXIT_ERROR
         }
         WorkflowRunStatus::Cancelled => {
-            eprintln!("Warning: Workflow was cancelled");
+            tracing::error!("Workflow was cancelled");
             EXIT_ERROR
         }
         _ => {
-            eprintln!(
-                "Error: Workflow ended in unexpected state: {:?}",
-                run.status
-            );
+            tracing::error!("Workflow ended in unexpected state: {:?}", run.status);
             EXIT_ERROR
         }
     }
