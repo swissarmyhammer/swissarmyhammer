@@ -17,8 +17,8 @@ stateDiagram-v2
 
 ## Actions
 
-- start: Log "Making the plan for {{ plan_filename }}"
-- plan: execute prompt "plan" with plan_filename="{{plan_filename}}"
+- start: log "Making the plan for {{ plan_filename }}"
+- plan: execute prompt "plan" with plan_filename="{{ plan_filename }}"
 - done: log "Plan ready, look in ./issues"
 
 ## Description
