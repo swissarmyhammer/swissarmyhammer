@@ -1,0 +1,66 @@
+# Serial Tests
+
+This document lists all tests that use `#[serial_test::serial]` to prevent race conditions and ensure isolation.
+
+## Config Tests
+- **`swissarmyhammer/src/config.rs`**:
+  - `test_config_with_env_vars` - Tests environment variable configuration
+
+## SAH Config Tests  
+- **`swissarmyhammer/src/sah_config/loader.rs`**:
+  - `test_environment_variable_substitution` - Tests environment variable substitution in config
+
+## Memoranda Storage Tests
+- **`swissarmyhammer/src/memoranda/storage.rs`**:
+  - `test_directory_creation` - Tests directory creation to avoid conflicts
+  - `test_readonly_directory_error_handling` - Tests permission error handling
+
+## ~~Search Embedding Tests~~ (CONVERTED TO PARALLEL)
+- **`swissarmyhammer/src/search/embedding.rs`**: ✅ **All embedding tests converted to use `IsolatedTestHome` and run in parallel**
+  - ~~`test_embedding_engine_creation`~~ - Now uses `IsolatedTestHome` 
+  - ~~`test_embedding_engine_with_model_id`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_embedding_engine_invalid_config`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_embed_text`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_embed_text_empty`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_embed_chunk`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_embed_batch`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_semantic_consistency`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_model_info`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_prepare_chunk_text`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_clean_text`~~ - Now uses `IsolatedTestHome`
+  - ~~`test_clean_text_truncation`~~ - Now uses `IsolatedTestHome`
+
+## CLI Validation Tests
+- **`swissarmyhammer-cli/src/validate.rs`**:
+  - `test_validate_command_loads_same_workflows_as_flow_list` - Tests consistency between validate and flow list
+  - `test_validate_all_workflows_integration` - Integration test for workflow validation
+
+## Workflow Sub-workflow State Pollution Tests
+- **`swissarmyhammer/src/workflow/actions_tests/sub_workflow_state_pollution_tests.rs`**:
+  - `test_nested_workflow_state_name_pollution` - Tests state name pollution in nested workflows
+  - `test_nested_workflow_correct_action_execution` - Tests correct action execution in nested workflows
+  - `test_deeply_nested_workflows_state_isolation` - Tests state isolation in deeply nested workflows
+
+## Notes
+
+- These tests are marked with `#[serial_test::serial]` to prevent race conditions
+- Most of these tests manipulate global state (environment variables, file system, model loading)
+- Serial tests should be used sparingly and only when absolutely necessary for test correctness
+
+## Recent Improvements
+
+### ✅ Workflow Executor Abort Tests (CONVERTED TO PARALLEL)
+- **`swissarmyhammer/src/workflow/executor/tests.rs`**: All abort-related tests now use `IsolatedTestEnvironment` (combines HOME isolation + current working directory isolation) instead of `#[serial_test::serial]`
+- This prevents abort file pollution between tests while allowing parallel execution
+
+### ✅ Search Embedding Tests (CONVERTED TO PARALLEL)  
+- **`swissarmyhammer/src/search/embedding.rs`**: All embedding tests converted to use `IsolatedTestHome` and run in parallel
+- These tests use mock embedding engines and don't need serialization
+- **Performance improvement**: 13 tests now run in parallel (~0.57s) vs serial execution
+
+## Summary
+
+**Before**: 25+ serial tests requiring sequential execution  
+**After**: 13 embedding tests + 8 workflow executor abort tests = **21 tests converted to parallel execution**
+
+This significantly improves test suite performance while maintaining test isolation and reliability.

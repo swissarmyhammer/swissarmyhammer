@@ -489,18 +489,19 @@ impl EmbeddingEngine {
 mod tests {
     use super::*;
     use crate::search::{ChunkType, ContentHash, Language};
+    use crate::test_utils::IsolatedTestHome;
     use std::path::PathBuf;
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embedding_engine_creation() {
+        let _guard = IsolatedTestHome::new();
         let engine = EmbeddingEngine::new_for_testing().await;
         assert!(engine.is_ok());
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embedding_engine_with_model_id() {
+        let _guard = IsolatedTestHome::new();
         let config = EmbeddingConfig {
             model_id: "custom-model".to_string(),
             embedding_model: EmbeddingModel::NomicEmbedTextV15, // Not used for mock
@@ -521,8 +522,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embedding_engine_invalid_config() {
+        let _guard = IsolatedTestHome::new();
         let config = EmbeddingConfig {
             model_id: "".to_string(),
             ..Default::default()
@@ -533,8 +534,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embed_text() {
+        let _guard = IsolatedTestHome::new();
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
         let embedding = engine.embed_text("fn main() {}").await;
 
@@ -548,8 +549,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embed_text_empty() {
+        let _guard = IsolatedTestHome::new();
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
         let embedding = engine.embed_text("").await;
 
@@ -557,8 +558,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embed_chunk() {
+        let _guard = IsolatedTestHome::new();
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -582,8 +583,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_embed_batch() {
+        let _guard = IsolatedTestHome::new();
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
         let texts = vec!["fn main() {}", "println!(\"hello\");"];
         let embeddings = engine.embed_batch(&texts).await;
@@ -596,8 +597,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_semantic_consistency() {
+        let _guard = IsolatedTestHome::new();
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
         // Test that similar texts produce similar embeddings
@@ -621,8 +622,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_model_info() {
+        let _guard = IsolatedTestHome::new();
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -634,8 +635,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_prepare_chunk_text() {
+        let _guard = IsolatedTestHome::new();
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -657,8 +658,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_clean_text() {
+        let _guard = IsolatedTestHome::new();
         // Use mock engine for testing to avoid network dependencies
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
@@ -675,8 +676,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
     async fn test_clean_text_truncation() {
+        let _guard = IsolatedTestHome::new();
         // Create a mock config with limited text length for testing
         let config = EmbeddingConfig {
             model_id: "mock-test-model".to_string(),
