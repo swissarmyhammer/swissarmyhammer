@@ -13,6 +13,7 @@ description: Code up the code review
 {% render "todo", todo_file: "./CODE_REVIEW.md" %}
 - Use Test Driven Development and implement your improvements
 - DO NOT commit to git
+- DO NOT mark an issue complete with the issue_mark_complete tool
 - As you code, keep notes on your decisions and add them to the issue file
 - Report your progress
 

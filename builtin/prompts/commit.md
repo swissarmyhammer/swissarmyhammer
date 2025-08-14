@@ -22,4 +22,5 @@ The goal is to commit your code to git on the current branch.
 - Look for files that were added and not yet staged, these need to be part of the commit unless they are one of your scratch files
 - Commit your code with a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/#summary)
   - If there is an issue file moved to `./issues/complete/<issue_name>.md` in the commit, make sure to note `Closes <issue_name>` in the message
+- DO NOT mark an issue complete with the issue_mark_complete tool
 - Report your progress

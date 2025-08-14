@@ -15,3 +15,7 @@
     - use https://github.com/cline/cline/blob/main/src/core/tools/webFetchTool.ts for inspiration and description
     - use https://github.com/swissarmyhammer/markdowndown for the actual fetch and render
     - direct page read
+  - WebSearch
+    - use SearXNG search API https://docs.searxng.org/dev/search_api.html
+    - https://searx.space/#help-html-grade -- public metasearch for SearXNG hosting to find A+, A+ instances to query with the API
+    - use https://github.com/swissarmyhammer/markdowndown for the actual fetch and render

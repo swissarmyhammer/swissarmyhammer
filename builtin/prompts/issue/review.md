@@ -24,6 +24,8 @@ DO NOT code now, the goal is just to create `./CODE_REVIEW.md` todo items.
   - Append any improvement ideas to do to ./CODE_REVIEW.md
   - Run a language appropriate lint
     - Append any lint warnings or errors to do to ./CODE_REVIEW.md
+- DO NOT commit to git
+- DO NOT mark an issue complete with the issue_mark_complete tool
 - Report your progress
 
 {% render "review_format" %}

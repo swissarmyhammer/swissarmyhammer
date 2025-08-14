@@ -413,6 +413,8 @@ impl PromptAction {
         &self,
         context: &mut HashMap<String, Value>,
     ) -> ActionResult<Value> {
+        tracing::info!("Executing prompt '{}'", self.prompt_name);
+        
         // First, render the prompt using swissarmyhammer
         let rendered_prompt = self.render_prompt_with_swissarmyhammer(context).await?;
 

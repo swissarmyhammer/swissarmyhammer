@@ -34,6 +34,8 @@ The goal is to have:
 - look at modified files on your current branch and figure out if you are resuming interrupted work
 - write all errors and warnings to a markdown scratchpad file `./TEST_FAILURES.md`, this is your todo list
 - if there is an existing `./TEST_FAILURES.md`, just append to it -- more work to do!
+- DO NOT commit to git
+- DO NOT mark the issue complete with the issue_mark_complete tool
 {% render "todo", todo_file: "./TEST_FAILURES.md" %}
 
 ## Reporting
