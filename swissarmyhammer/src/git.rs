@@ -155,7 +155,11 @@ impl GitOperations {
 
         // Handle existing branch: switch to it
         if self.branch_exists(&branch_name)? {
-            tracing::info!("Switching to existing issue branch '{}' from '{}'", branch_name, current_branch);
+            tracing::info!(
+                "Switching to existing issue branch '{}' from '{}'",
+                branch_name,
+                current_branch
+            );
             self.checkout_branch(&branch_name)?;
             // Store the source branch information for existing branches too
             let _ = self.store_issue_source_branch(issue_name, &current_branch);
@@ -163,7 +167,11 @@ impl GitOperations {
         }
 
         // Handle new branch: create and switch
-        tracing::info!("Creating new issue branch '{}' from '{}'", branch_name, current_branch);
+        tracing::info!(
+            "Creating new issue branch '{}' from '{}'",
+            branch_name,
+            current_branch
+        );
         self.create_and_checkout_branch(&branch_name)?;
 
         // Store the source branch information for the newly created issue branch
@@ -429,7 +437,7 @@ impl GitOperations {
 
         Err(SwissArmyHammerError::git_operation_failed(
             "determine merge target",
-            &format!("no reflog entry found for issue branch '{}'", branch_name)
+            &format!("no reflog entry found for issue branch '{}'", branch_name),
         ))
     }
 
@@ -1571,7 +1579,7 @@ mod tests {
         // This is the correct behavior - we shouldn't guess at merge targets
         let result = git_ops.merge_issue_branch_auto("test_issue");
         assert!(result.is_err());
-        
+
         // Verify abort file was created with appropriate message
         let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
         assert!(abort_file.exists());

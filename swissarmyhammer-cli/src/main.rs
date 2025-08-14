@@ -351,8 +351,8 @@ fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<Str
 }
 
 async fn run_plan(plan_filename: String) -> i32 {
-    use flow;
     use cli::FlowSubcommand;
+    use flow;
 
     // Create a FlowSubcommand::Run with the plan_filename variable
     let subcommand = FlowSubcommand::Run {

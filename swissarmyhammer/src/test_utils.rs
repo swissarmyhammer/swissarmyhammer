@@ -352,7 +352,7 @@ impl IsolatedTestEnvironment {
         let home_guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new()?;
         std::env::set_current_dir(temp_dir.path())?;
-        
+
         Ok(Self {
             _home_guard: home_guard,
             _temp_dir: temp_dir,

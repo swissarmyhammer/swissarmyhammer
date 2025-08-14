@@ -291,7 +291,6 @@ pub async fn get_project_status<S: IssueStorage>(storage: &S) -> Result<ProjectS
     Ok(ProjectStatus::from_issue_infos(all_issue_infos))
 }
 
-
 /// Format issue status for display
 pub fn format_issue_status(completed: bool) -> String {
     if completed {
