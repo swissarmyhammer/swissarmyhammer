@@ -133,6 +133,7 @@ impl GitOperations {
 
         // Early return: If we're already on the target issue branch (resume scenario)
         if current_branch == branch_name {
+            tracing::info!("Already on target issue branch: {}", branch_name);
             return Ok(branch_name);
         }
 
@@ -154,6 +155,7 @@ impl GitOperations {
 
         // Handle existing branch: switch to it
         if self.branch_exists(&branch_name)? {
+            tracing::info!("Switching to existing issue branch '{}' from '{}'", branch_name, current_branch);
             self.checkout_branch(&branch_name)?;
             // Store the source branch information for existing branches too
             let _ = self.store_issue_source_branch(issue_name, &current_branch);
@@ -161,6 +163,7 @@ impl GitOperations {
         }
 
         // Handle new branch: create and switch
+        tracing::info!("Creating new issue branch '{}' from '{}'", branch_name, current_branch);
         self.create_and_checkout_branch(&branch_name)?;
 
         // Store the source branch information for the newly created issue branch

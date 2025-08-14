@@ -90,19 +90,36 @@ impl McpTool for MergeIssueTool {
                         }
                     }
                     Err(e) => {
-                        let error_msg = format!("Failed to get current branch: {}", e);
+                        let error_msg = format!("Failed to get current branch for merge validation: {}", e);
                         tracing::error!("{}", error_msg);
-                        return Err(McpErrorHandler::handle_error(
-                            e,
-                            "get current branch for merge validation",
-                        ));
+                        
+                        // Create abort file to signal workflow termination
+                        if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                            tracing::error!("Failed to create abort file: {}", abort_err);
+                            return Err(McpError::internal_error(
+                                format!("Failed to get current branch and failed to create abort file: {}", abort_err),
+                                None,
+                            ));
+                        }
+
+                        return Err(McpError::invalid_params(error_msg, None));
                     }
                 }
             }
             None => {
-                return Ok(create_error_response(
-                    "Git operations not available for branch validation".to_string(),
-                ));
+                let error_msg = "Git operations not available for branch validation".to_string();
+                tracing::error!("{}", error_msg);
+                
+                // Create abort file to signal workflow termination
+                if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                    tracing::error!("Failed to create abort file: {}", abort_err);
+                    return Err(McpError::internal_error(
+                        format!("Git operations unavailable and failed to create abort file: {}", abort_err),
+                        None,
+                    ));
+                }
+
+                return Err(McpError::invalid_params(error_msg, None));
             }
         }
         drop(git_ops); // Release the lock before proceeding
@@ -111,15 +128,38 @@ impl McpTool for MergeIssueTool {
         let issue_storage = context.issue_storage.read().await;
         let issue_info = match issue_storage.get_issue_info(request.name.as_str()).await {
             Ok(issue_info) => issue_info,
-            Err(e) => return Err(McpErrorHandler::handle_error(e, "get issue for merge")),
+            Err(e) => {
+                let error_msg = format!("Failed to get issue '{}' for merge: {}", request.name, e);
+                tracing::error!("{}", error_msg);
+                
+                // Create abort file to signal workflow termination
+                if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                    tracing::error!("Failed to create abort file: {}", abort_err);
+                    return Err(McpError::internal_error(
+                        format!("Issue lookup failed and failed to create abort file: {}", abort_err),
+                        None,
+                    ));
+                }
+
+                return Err(McpError::invalid_params(error_msg, None));
+            },
         };
 
         // Validate that the issue is completed before allowing merge
         if !issue_info.completed {
-            return Ok(create_error_response(format!(
-                "Issue '{}' must be completed before merging",
-                request.name
-            )));
+            let error_msg = format!("Issue '{}' must be completed before merging", request.name);
+            tracing::error!("{}", error_msg);
+            
+            // Create abort file to signal workflow termination
+            if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                tracing::error!("Failed to create abort file: {}", abort_err);
+                return Err(McpError::internal_error(
+                    format!("Issue not completed and failed to create abort file: {}", abort_err),
+                    None,
+                ));
+            }
+
+            return Err(McpError::invalid_params(error_msg, None));
         }
 
         // Note: Removed working directory check to allow merge operations when issue completion
@@ -154,7 +194,21 @@ impl McpTool for MergeIssueTool {
                                     format!("\n\nMerge commit: {info}")
                                 }
                             }
-                            Err(_) => String::new(),
+                            Err(e) => {
+                                let error_msg = format!("Failed to get commit info after merge of issue '{}': {}", issue_name, e);
+                                tracing::error!("{}", error_msg);
+                                
+                                // Create abort file to signal workflow termination
+                                if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                                    tracing::error!("Failed to create abort file: {}", abort_err);
+                                    return Err(McpError::internal_error(
+                                        format!("Commit info retrieval failed and failed to create abort file: {}", abort_err),
+                                        None,
+                                    ));
+                                }
+
+                                return Err(McpError::invalid_params(error_msg, None));
+                            },
                         };
 
                         // If delete_branch is true, delete the branch after successful merge
@@ -176,14 +230,37 @@ impl McpTool for MergeIssueTool {
                         Ok(create_success_response(success_message))
                     }
                     Err(e) => {
-                        tracing::error!("Merge failed for issue '{}': {}", issue_name, e);
-                        Err(McpErrorHandler::handle_error(e, "merge issue branch"))
+                        let error_msg = format!("Merge failed for issue '{}': {}", issue_name, e);
+                        tracing::error!("{}", error_msg);
+                        
+                        // Create abort file to signal workflow termination
+                        if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                            tracing::error!("Failed to create abort file: {}", abort_err);
+                            return Err(McpError::internal_error(
+                                format!("Merge failed and failed to create abort file: {}", abort_err),
+                                None,
+                            ));
+                        }
+
+                        Err(McpError::invalid_params(error_msg, None))
                     }
                 }
             }
-            None => Ok(create_error_response(
-                "Git operations not available".to_string(),
-            )),
+            None => {
+                let error_msg = "Git operations not available for merge".to_string();
+                tracing::error!("{}", error_msg);
+                
+                // Create abort file to signal workflow termination
+                if let Err(abort_err) = create_abort_file_current_dir(&error_msg) {
+                    tracing::error!("Failed to create abort file: {}", abort_err);
+                    return Err(McpError::internal_error(
+                        format!("Git operations unavailable for merge and failed to create abort file: {}", abort_err),
+                        None,
+                    ));
+                }
+
+                Err(McpError::invalid_params(error_msg, None))
+            }
         }
     }
 }

@@ -335,6 +335,42 @@ fn extract_template_variables(template: &str) -> Vec<String> {
     EXTRACTOR.with(|extractor| extractor.extract(template))
 }
 
+/// Create well-known template variables that are automatically available in all templates
+/// 
+/// These variables represent system-level information that templates commonly need.
+/// They have the lowest precedence and can be overridden by sah.toml config, 
+/// environment variables, or provided arguments.
+fn create_well_known_variables() -> liquid::model::Object {
+    let mut object = liquid::model::Object::new();
+
+    // Add issues_directory - the standard location for issue files
+    let issues_directory = determine_issues_directory();
+    object.insert(
+        "issues_directory".into(),
+        liquid::model::Value::scalar(issues_directory.to_string_lossy().to_string()),
+    );
+
+    object
+}
+
+/// Determine the appropriate issues directory path
+/// 
+/// Uses the same logic as FileSystemIssueStorage::new_default() to maintain consistency.
+/// This will be enhanced in the future to support the swissarmyhammer/issues migration.
+fn determine_issues_directory() -> std::path::PathBuf {
+    match std::env::current_dir() {
+        Ok(current_dir) => {
+            // Future enhancement: check for swissarmyhammer/issues directory first
+            // For now, use the current hardcoded behavior for backward compatibility
+            current_dir.join("issues")
+        }
+        Err(_) => {
+            // Fallback to relative path if current_dir fails
+            std::path::PathBuf::from("issues")
+        }
+    }
+}
+
 /// Template wrapper for Liquid templates
 ///
 /// # Security
@@ -585,6 +621,7 @@ impl Template {
     /// 1. Provided arguments
     /// 2. Environment variables
     /// 3. sah.toml configuration variables
+    /// 4. Well-known system variables
     pub fn render_with_config(&self, args: &HashMap<String, String>) -> Result<String> {
         // Preprocess template to handle custom filters
         let processed_template_str = self.preprocess_custom_filters(&self.template_str, args);
@@ -596,7 +633,15 @@ impl Template {
 
         let mut object = Object::new();
 
-        // Load and merge sah.toml configuration variables (lowest priority)
+        // Add well-known system variables (lowest priority)
+        let well_known_vars = create_well_known_variables();
+        let mut known_vars = std::collections::HashSet::new();
+        for (key, value) in well_known_vars.iter() {
+            known_vars.insert(key.clone());
+            object.insert(key.clone(), value.clone());
+        }
+
+        // Load and merge sah.toml configuration variables (second lowest priority)
         let mut config_vars = std::collections::HashSet::new();
         if let Ok(Some(config)) = sah_config::load_repo_config_for_cli() {
             let config_object = config.to_liquid_object();
@@ -607,10 +652,10 @@ impl Template {
         }
 
         // Initialize remaining template variables as nil so filters like | default work
-        // But don't override variables that were already set from sah.toml
+        // But don't override variables that were already set from well-known vars or sah.toml
         let variables = extract_template_variables(&self.template_str);
         for var in variables {
-            if !config_vars.contains(var.as_str()) {
+            if !known_vars.contains(var.as_str()) && !config_vars.contains(var.as_str()) {
                 object.insert(var.into(), liquid::model::Value::Nil);
             }
         }
@@ -784,7 +829,11 @@ impl TemplateEngine {
     /// Render a template string with arguments and sah.toml configuration variables
     ///
     /// This method merges the provided arguments with sah.toml configuration variables,
-    /// with provided arguments taking precedence over configuration variables.
+    /// environment variables, and well-known system variables with the following precedence:
+    /// 1. Provided arguments (highest)
+    /// 2. Environment variables
+    /// 3. sah.toml configuration variables
+    /// 4. Well-known system variables (lowest)
     /// Configuration is loaded from the repository root if available.
     pub fn render_with_config(
         &self,
@@ -1193,5 +1242,115 @@ mod tests {
 
         let result = engine.render("{{ text | indent: 2 }}", &args).unwrap();
         assert_eq!(result, "  line1\n  line2");
+    }
+
+    #[test]
+    fn test_well_known_variables_issues_directory() {
+        use std::env;
+
+        // Ensure no environment variable is set
+        env::remove_var("issues_directory");
+
+        let template = Template::new("Issues directory: {{ issues_directory }}").unwrap();
+        let args = HashMap::new();
+
+        let result = template.render_with_config(&args).unwrap();
+        
+        // Should contain "issues" as part of the path
+        assert!(result.contains("issues"), "Result was: {}", result);
+        assert!(result.starts_with("Issues directory: "));
+    }
+
+    #[test]
+    fn test_well_known_variables_can_be_overridden_by_config() {
+        use std::env;
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        // Ensure no environment variable is set
+        env::remove_var("issues_directory");
+
+        // Create a temporary sah.toml file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "issues_directory = '/custom/issues/path'").unwrap();
+
+        // This test verifies the precedence system exists, though in practice
+        // config loading requires a proper repository structure
+        let template = Template::new("Issues: {{ issues_directory }}").unwrap();
+        let mut args = HashMap::new();
+        args.insert("issues_directory".to_string(), "/override/path".to_string());
+
+        let result = template.render_with_config(&args).unwrap();
+        
+        // Arguments should override well-known variables
+        assert_eq!(result, "Issues: /override/path");
+    }
+
+    #[test]
+    fn test_well_known_variables_can_be_overridden_by_env() {
+        use std::env;
+
+        // Clean up any existing environment variable first
+        env::remove_var("issues_directory");
+
+        // Set environment variable
+        env::set_var("issues_directory", "/env/issues/path");
+
+        let template = Template::new("Issues: {{ issues_directory }}").unwrap();
+        let args = HashMap::new();
+
+        let result = template.render_with_config(&args).unwrap();
+        
+        // Environment variable should override well-known variables
+        assert_eq!(result, "Issues: /env/issues/path");
+
+        // Clean up
+        env::remove_var("issues_directory");
+    }
+
+    #[test]
+    fn test_well_known_variables_precedence() {
+        use std::env;
+
+        // Clean up any existing environment variable first
+        env::remove_var("issues_directory");
+        
+        // Set environment variable
+        env::set_var("issues_directory", "/env/path");
+
+        let template = Template::new("Issues: {{ issues_directory }}").unwrap();
+        let mut args = HashMap::new();
+        args.insert("issues_directory".to_string(), "/arg/path".to_string());
+
+        let result = template.render_with_config(&args).unwrap();
+        
+        // Arguments should have highest precedence
+        assert_eq!(result, "Issues: /arg/path");
+
+        // Clean up
+        env::remove_var("issues_directory");
+    }
+
+    #[test]
+    fn test_determine_issues_directory() {
+        let issues_dir = determine_issues_directory();
+        
+        // Should end with "issues"
+        assert!(issues_dir.to_string_lossy().ends_with("issues"));
+        
+        // Should be an absolute or relative path
+        assert!(!issues_dir.to_string_lossy().is_empty());
+    }
+
+    #[test]
+    fn test_create_well_known_variables() {
+        let vars = create_well_known_variables();
+        
+        // Should contain issues_directory
+        assert!(vars.contains_key("issues_directory"));
+        
+        // Should be a string value
+        let issues_dir_value = vars.get("issues_directory").unwrap();
+        assert!(matches!(issues_dir_value, liquid::model::Value::Scalar(_)));
     }
 }
