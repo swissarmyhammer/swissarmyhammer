@@ -353,6 +353,27 @@ fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<Str
 async fn run_plan(plan_filename: String) -> i32 {
     use cli::FlowSubcommand;
     use flow;
+    use std::path::Path;
+
+    // Validate file exists and is readable
+    if !Path::new(&plan_filename).exists() {
+        tracing::error!("Plan file not found: {}", plan_filename);
+        return EXIT_ERROR;
+    }
+
+    if !Path::new(&plan_filename).is_file() {
+        tracing::error!("Plan file path is not a file: {}", plan_filename);
+        return EXIT_ERROR;
+    }
+
+    // Check if file is readable by attempting to read metadata
+    match std::fs::metadata(&plan_filename) {
+        Ok(_) => {} // File is accessible
+        Err(e) => {
+            tracing::error!("Cannot access plan file '{}': {}", plan_filename, e);
+            return EXIT_ERROR;
+        }
+    }
 
     // Create a FlowSubcommand::Run with the plan_filename variable
     let subcommand = FlowSubcommand::Run {
