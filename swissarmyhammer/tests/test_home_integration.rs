@@ -1,22 +1,38 @@
 /// Integration test for test home directory setup
-use swissarmyhammer::test_utils::{create_test_home_guard, get_test_swissarmyhammer_dir};
+use swissarmyhammer::test_utils::IsolatedTestHome;
 
 #[test]
 fn test_home_directory_override_works() {
     let original_home = std::env::var("HOME").ok();
 
     {
-        let _guard = create_test_home_guard();
+        let guard = IsolatedTestHome::new();
 
         let home = std::env::var("HOME").expect("HOME not set");
-        assert!(home.contains("test-home"));
+        assert!(home.contains("tmp") || home.contains("temp")); // Should be in a temp directory
 
-        let swissarmyhammer_dir = get_test_swissarmyhammer_dir();
+        let swissarmyhammer_dir = guard.swissarmyhammer_dir();
         assert!(swissarmyhammer_dir.exists());
         assert!(swissarmyhammer_dir.join("prompts").exists());
         assert!(swissarmyhammer_dir.join("workflows").exists());
 
-        // Check that test prompts exist
+        // Create test files to verify the structure works
+        std::fs::write(
+            swissarmyhammer_dir.join("prompts").join("test-prompt.md"),
+            "# Test Prompt\nThis is a test prompt."
+        ).expect("Failed to create test prompt");
+
+        std::fs::write(
+            swissarmyhammer_dir.join("prompts").join("another-test.md.liquid"),
+            "# Another Test\nContent: {{ variable }}"
+        ).expect("Failed to create another test prompt");
+
+        std::fs::write(
+            swissarmyhammer_dir.join("workflows").join("test-workflow.yaml"),
+            "name: test\nsteps: []"
+        ).expect("Failed to create test workflow");
+
+        // Check that test files exist
         let test_prompt = swissarmyhammer_dir.join("prompts").join("test-prompt.md");
         assert!(test_prompt.exists());
 
@@ -25,7 +41,6 @@ fn test_home_directory_override_works() {
             .join("another-test.md.liquid");
         assert!(another_test.exists());
 
-        // Check that test workflow exists
         let test_workflow = swissarmyhammer_dir
             .join("workflows")
             .join("test-workflow.yaml");
@@ -41,12 +56,23 @@ fn test_home_directory_override_works() {
 fn test_prompt_loading_with_test_home() {
     use swissarmyhammer::prompts::PromptLoader;
 
-    let _guard = create_test_home_guard();
+    let guard = IsolatedTestHome::new();
+
+    // Create test prompt files
+    let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
+    std::fs::write(
+        prompts_dir.join("test-prompt.md"),
+        "# Test Prompt\nThis is a test prompt."
+    ).expect("Failed to create test prompt");
+
+    std::fs::write(
+        prompts_dir.join("another-test.md.liquid"),
+        "# Another Test\nContent: {{ variable }}"
+    ).expect("Failed to create another test prompt");
 
     let loader = PromptLoader::new();
-    let test_dir = get_test_swissarmyhammer_dir().join("prompts");
     let prompts = loader
-        .load_directory(&test_dir)
+        .load_directory(&prompts_dir)
         .expect("Failed to load prompts");
 
     // We should have loaded our test prompts
@@ -61,13 +87,25 @@ fn test_prompt_loading_with_test_home() {
 fn test_prompt_resolver_with_test_home() {
     use swissarmyhammer::{PromptLibrary, PromptResolver};
 
-    let _guard = create_test_home_guard();
+    let guard = IsolatedTestHome::new();
+
+    // Create test prompt files
+    let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
+    std::fs::write(
+        prompts_dir.join("test-prompt.md"),
+        "# Test Prompt\nThis is a test prompt."
+    ).expect("Failed to create test prompt");
+
+    std::fs::write(
+        prompts_dir.join("another-test.md.liquid"),
+        "# Another Test\nContent: {{ variable }}"
+    ).expect("Failed to create another test prompt");
 
     // Verify HOME is set correctly
     let home = std::env::var("HOME").expect("HOME not set");
     println!("HOME is set to: {home}");
 
-    let test_prompts_dir = get_test_swissarmyhammer_dir().join("prompts");
+    let test_prompts_dir = guard.swissarmyhammer_dir().join("prompts");
     println!("Test prompts dir: {test_prompts_dir:?}");
     println!("Test prompts dir exists: {}", test_prompts_dir.exists());
 

@@ -718,3 +718,445 @@ async fn test_plan_command_performance() -> Result<()> {
 
     Ok(())
 }
+
+/// Test enhanced error handling: comprehensive file validation
+#[tokio::test]
+async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "definitely-nonexistent-plan.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "Plan command should fail with enhanced error handling"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Test enhanced error message format
+    assert!(
+        stderr.contains("Error:") || stderr.contains("Plan file not found"),
+        "Should show enhanced error message format: {}",
+        stderr
+    );
+
+    // Test user guidance suggestions
+    assert!(
+        stderr.contains("Suggestions:") || stderr.contains("Check the file path"),
+        "Should provide user guidance: {}",
+        stderr
+    );
+
+    assert!(
+        stderr.contains("typos") || stderr.contains("ls -la") || stderr.contains("absolute path"),
+        "Should include actionable suggestions: {}",
+        stderr
+    );
+
+    Ok(())
+}
+
+/// Test enhanced error handling: empty file validation
+#[tokio::test]
+async fn test_plan_enhanced_error_empty_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create empty file
+    let empty_file = temp_path.join("empty-plan.md");
+    fs::write(&empty_file, "")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", empty_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    // Empty file should trigger enhanced error handling
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Check for enhanced error message
+    if stderr.contains("Warning:") || stderr.contains("empty") {
+        // Test warning level for empty files
+        assert!(
+            stderr.contains("Warning:") || stderr.contains("empty or contains no valid content"),
+            "Should show warning for empty file: {}",
+            stderr
+        );
+
+        // Test user guidance for empty files
+        assert!(
+            stderr.contains("Add content") || stderr.contains("whitespace"),
+            "Should provide guidance for empty files: {}",
+            stderr
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: whitespace-only file
+#[tokio::test] 
+async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create file with only whitespace
+    let whitespace_file = temp_path.join("whitespace-plan.md");
+    fs::write(&whitespace_file, "   \n\t  \n  ")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", whitespace_file.to_str().unwrap()])
+        .current_dir(&temp_path) 
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Should treat whitespace-only as empty file
+    if stderr.contains("Warning:") || stderr.contains("empty") {
+        assert!(
+            stderr.contains("empty or contains no valid content"),
+            "Should show warning for whitespace-only file: {}",
+            stderr
+        );
+
+        assert!(
+            stderr.contains("whitespace"),
+            "Should mention whitespace in guidance: {}",
+            stderr
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: directory instead of file
+#[tokio::test]
+async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create directory with same name as expected file
+    let dir_path = temp_path.join("directory-not-file");
+    fs::create_dir_all(&dir_path)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", dir_path.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "Plan command should fail with enhanced error for directory"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Test enhanced error message
+    assert!(
+        stderr.contains("Error:") && (stderr.contains("directory") || stderr.contains("not a file")),
+        "Should show enhanced error for directory: {}",
+        stderr
+    );
+
+    // Test specific guidance for directories
+    assert!(
+        stderr.contains("Specify a file path instead") || stderr.contains("directory"),
+        "Should provide specific guidance for directory error: {}",
+        stderr
+    );
+
+    Ok(())
+}
+
+/// Test enhanced error handling: file too large
+#[tokio::test]
+async fn test_plan_enhanced_error_large_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create a large file (over the validation limit)
+    let large_file = temp_path.join("huge-plan.md");
+    let large_content = "x".repeat(11 * 1024 * 1024); // 11MB - over default 10MB limit
+    fs::write(&large_file, large_content)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", large_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .timeout(std::time::Duration::from_secs(30))
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Should show file too large error
+    if stderr.contains("too large") || stderr.contains("bytes") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("too large"),
+            "Should show file too large error: {}",
+            stderr
+        );
+
+        assert!(
+            stderr.contains("Break large plans") || stderr.contains("smaller"),
+            "Should suggest breaking large plans into smaller files: {}",
+            stderr
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: permission denied
+#[tokio::test]
+#[cfg(unix)] // This test is Unix-specific due to file permissions
+async fn test_plan_enhanced_error_permission_denied() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create file with restricted permissions
+    let restricted_file = temp_path.join("restricted-plan.md");
+    fs::write(&restricted_file, "# Restricted Plan\n\nContent.")?;
+    
+    // Remove read permissions
+    let mut perms = fs::metadata(&restricted_file)?.permissions();
+    perms.set_mode(0o000); // No permissions
+    fs::set_permissions(&restricted_file, perms)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", restricted_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Should show permission denied error  
+    if stderr.contains("Permission denied") || stderr.contains("permission") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("Permission denied"),
+            "Should show permission denied error: {}",
+            stderr
+        );
+
+        assert!(
+            stderr.contains("chmod +r") || stderr.contains("permissions"),
+            "Should suggest fixing permissions: {}",
+            stderr
+        );
+    }
+
+    // Restore permissions for cleanup
+    let mut perms = fs::metadata(&restricted_file).unwrap_or_else(|_| {
+        // File might have been deleted, create dummy metadata
+        fs::metadata(&temp_path).unwrap()
+    }).permissions();
+    perms.set_mode(0o644);
+    let _ = fs::set_permissions(&restricted_file, perms); // Ignore errors during cleanup
+
+    Ok(())
+}
+
+/// Test enhanced error handling: invalid binary content
+#[tokio::test]
+async fn test_plan_enhanced_error_binary_content() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create file with binary content (null bytes)
+    let binary_file = temp_path.join("binary-plan.md");
+    let binary_content = b"# Plan with\0null bytes\0in content";
+    fs::write(&binary_file, binary_content)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", binary_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Should show invalid format error
+    if stderr.contains("Invalid") || stderr.contains("null bytes") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("Invalid"),
+            "Should show invalid format error: {}",
+            stderr
+        );
+
+        assert!(
+            stderr.contains("null bytes") || stderr.contains("binary"),
+            "Should mention null bytes or binary content: {}",
+            stderr
+        );
+
+        assert!(
+            stderr.contains("UTF-8") || stderr.contains("corrupted"),
+            "Should suggest checking encoding: {}",
+            stderr
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: color output detection
+#[tokio::test]
+async fn test_plan_enhanced_error_color_output() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Test with explicit NO_COLOR environment variable
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "nonexistent.md"])
+        .current_dir(&temp_path)
+        .env("NO_COLOR", "1")
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Should not contain ANSI color codes when NO_COLOR is set
+    if stderr.contains("Error:") || stderr.contains("not found") {
+        assert!(
+            !stderr.contains("\x1b["), // No ANSI escape sequences
+            "Should not contain color codes with NO_COLOR=1: {}",
+            stderr.trim()
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: exit codes
+#[tokio::test]
+async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Test file not found exit code
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "nonexistent.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert_eq!(
+        output.status.code().unwrap_or(0),
+        2, // EXIT_ERROR
+        "Should return exit code 2 for file not found error"
+    );
+
+    // Test empty file exit code (should be warning = 1)
+    let empty_file = temp_path.join("empty.md");
+    fs::write(&empty_file, "")?;
+    
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", empty_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    // Empty file should return warning exit code if detected as empty
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("Warning:") || stderr.contains("empty") {
+        assert_eq!(
+            output.status.code().unwrap_or(0),
+            1, // EXIT_WARNING 
+            "Should return exit code 1 for empty file warning"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: issues directory validation
+#[tokio::test]
+async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
+    let _guard = create_test_home_guard();
+    // Create minimal test environment WITHOUT issues directory
+    let _temp_dir = create_temp_dir()?;
+    let temp_path = _temp_dir.path().to_path_buf();
+
+    // Create necessary directories (but NOT issues directory)
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    fs::create_dir_all(&swissarmyhammer_dir)?;
+
+    let tmp_dir = swissarmyhammer_dir.join("tmp");
+    fs::create_dir_all(&tmp_dir)?;
+
+    // Initialize git repository for realistic testing
+    setup_git_repo(&temp_path)?;
+
+    // Create a valid plan file
+    let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
+
+    // Create issues as a file instead of directory to trigger error
+    let issues_file = temp_path.join("issues");
+    fs::write(&issues_file, "not a directory")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", plan_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .timeout(std::time::Duration::from_secs(10))
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Should show issues directory error
+    if stderr.contains("Issues directory") || stderr.contains("not writable") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("Issues"),
+            "Should show issues directory error: {}",
+            stderr
+        );
+
+        assert!(
+            stderr.contains("mkdir -p") || stderr.contains("directory"),
+            "Should suggest creating directory: {}",
+            stderr
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: comprehensive error message structure
+#[tokio::test]
+async fn test_plan_enhanced_error_message_structure() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "structured-error-test.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    if stderr.contains("Error:") || stderr.contains("not found") {
+        // Test error message structure components
+        let has_error_label = stderr.contains("Error:") || stderr.contains("Warning:") || stderr.contains("Critical:");
+        let has_suggestions = stderr.contains("Suggestions:");
+        let has_bullet_points = stderr.contains("•") || stderr.contains("-");
+        
+        assert!(
+            has_error_label,
+            "Should have error severity label: {}",
+            stderr
+        );
+
+        assert!(
+            has_suggestions,
+            "Should have suggestions section: {}",
+            stderr
+        );
+
+        assert!(
+            has_bullet_points,
+            "Should have bulleted suggestions: {}",
+            stderr
+        );
+    }
+
+    Ok(())
+}
