@@ -75,20 +75,14 @@ impl McpTool for AbortCreateTool {
         McpValidation::validate_not_empty(&request.reason, "abort reason")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate abort reason"))?;
 
-        // Create the abort file using shared utility
-        match create_abort_file_current_dir(&request.reason) {
-            Ok(()) => {
-                tracing::info!("Created abort file with reason: {}", request.reason);
-                Ok(BaseToolImpl::create_success_response(format!(
-                    "Abort file created with reason: {}",
-                    request.reason
-                )))
-            }
-            Err(e) => {
-                tracing::error!("Failed to create abort file: {}", e);
-                Err(McpErrorHandler::handle_error(e, "create abort file"))
-            }
-        }
+        // Create the abort file using shared utility (will panic if it fails)
+        create_abort_file_current_dir(&request.reason);
+        
+        tracing::info!("Created abort file with reason: {}", request.reason);
+        Ok(BaseToolImpl::create_success_response(format!(
+            "Abort file created with reason: {}",
+            request.reason
+        )))
     }
 }
 

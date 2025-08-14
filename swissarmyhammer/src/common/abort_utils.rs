@@ -50,17 +50,19 @@ pub fn create_abort_file<P: AsRef<Path>>(work_dir: P, reason: &str) -> Result<()
 /// Create an abort file in the current working directory
 ///
 /// This is a convenience function that calls `create_abort_file` with the current
-/// working directory.
+/// working directory. This function will panic if it cannot create the abort file,
+/// as failure to create an abort file in an error condition is a catastrophic system failure.
 ///
 /// # Arguments
 /// * `reason` - The reason for the abort, which will be written to the file
 ///
-/// # Returns
-/// * `Ok(())` if the abort file was created successfully
-/// * `Err(SwissArmyHammerError)` if there was an error creating the directory or file
-pub fn create_abort_file_current_dir(reason: &str) -> Result<()> {
-    let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
+/// # Panics
+/// * Panics if unable to get current working directory or create the abort file
+pub fn create_abort_file_current_dir(reason: &str) {
+    let current_dir = std::env::current_dir()
+        .expect("Failed to get current working directory for abort file creation");
     create_abort_file(&current_dir, reason)
+        .expect("Failed to create abort file - this is a catastrophic system failure");
 }
 
 /// Check if an abort file exists in the specified directory

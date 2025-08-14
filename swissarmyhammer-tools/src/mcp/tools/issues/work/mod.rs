@@ -78,14 +78,7 @@ impl McpTool for WorkIssueTool {
             );
 
             // Create abort file to signal workflow termination
-            if let Err(abort_err) = create_abort_file_current_dir(&abort_reason) {
-                tracing::error!("Failed to create abort file: {}", abort_err);
-            } else {
-                tracing::info!(
-                    "Created abort file due to issue branching validation failure: {}",
-                    abort_reason
-                );
-            }
+            create_abort_file_current_dir(&abort_reason);
 
             return Err(McpError::invalid_params(abort_reason, None));
         }
@@ -141,12 +134,10 @@ mod tests {
         std::env::set_current_dir(temp_path).unwrap();
 
         let reason = "Test abort reason for issue branching";
-        let result = create_abort_file_current_dir(reason);
+        create_abort_file_current_dir(reason);
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();
-
-        assert!(result.is_ok());
 
         let abort_file = temp_path.join(".swissarmyhammer/.abort");
         assert!(abort_file.exists());
