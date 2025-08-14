@@ -304,3 +304,90 @@ swissarmyhammer plan --help
 - Consider this a feature addition, not a replacement
 - Test thoroughly with real-world usage scenarios
 - Monitor for any performance regressions
+
+## Proposed Solution
+
+Based on analysis of the current implementation, I will implement backward compatibility by making the `plan_filename` parameter optional in both the workflow and prompt, with fallback to the legacy behavior of scanning the `./specification` directory.
+
+### Implementation Steps
+
+1. **Update Plan Prompt** (`/Users/wballard/github/sah-plan/builtin/prompts/plan.md`):
+   - Change `plan_filename` argument from `required: true` to `required: false`
+   - Add conditional logic to handle both parameterized and legacy usage
+   - When no parameter provided, scan `./specification` directory
+
+2. **Update Plan Workflow** (`/Users/wballard/github/sah-plan/builtin/workflows/plan.md`):
+   - Make `plan_filename` parameter optional
+   - Update workflow actions to handle both modes
+   - Preserve existing functionality for parameterized calls
+
+3. **Maintain CLI Compatibility**:
+   - The new `plan` command (with parameter) continues to work
+   - The existing `flow run plan` command (without parameters) works with legacy behavior
+   - No breaking changes to public APIs
+
+### Current State Analysis
+
+- **Current CLI**: `swissarmyhammer plan <plan_filename>` - works with parameter
+- **Current Workflow**: requires `plan_filename` parameter - breaks `flow run plan` 
+- **Current Prompt**: requires `plan_filename` argument - breaks legacy usage
+
+### Changes Required
+
+1. **Workflow Changes**: Make parameter optional with conditional logic
+2. **Prompt Changes**: Make argument optional with conditional processing
+3. **No CLI Changes**: CLI already supports both approaches correctly
+
+The solution maintains full backward compatibility while enabling the new parameterized functionality.
+## Implementation Report
+
+Successfully implemented backward compatibility for the plan command and workflow system. All requirements have been met and tested.
+
+### Changes Made
+
+1. **Updated Plan Workflow** (`builtin/workflows/plan.md`):
+   - Made `plan_filename` parameter optional in documentation 
+   - Added conditional liquid template logic in actions
+   - `start` action: `log "Making the plan{% if plan_filename %} for {{ plan_filename }}{% endif %}"`
+   - `plan` action: `execute prompt "plan"{% if plan_filename %} with plan_filename="{{ plan_filename }}"{% endif %}`
+   - Updated description to explain both usage modes
+
+2. **Updated Plan Prompt** (`builtin/prompts/plan.md`):
+   - Changed `plan_filename` argument from `required: true` to `required: false`
+   - Added conditional processing logic for both parameterized and legacy modes
+   - When `plan_filename` provided: processes specific file
+   - When no parameter: scans `./specification` directory (legacy behavior)
+   - Updated guidelines and process sections with conditional logic
+
+3. **Added Comprehensive Tests**:
+   - `test_plan_workflow_legacy_compatibility()`: Verifies workflow works without parameters
+   - `test_plan_workflow_with_parameters()`: Verifies new parameterized functionality
+   - Both tests pass successfully
+
+### Compatibility Verification
+
+✅ **Legacy Usage Works**: `flow run plan` (without parameters) - scans ./specification directory
+✅ **Parameterized Usage Works**: `flow run plan --var plan_filename="file.md"` - processes specific file  
+✅ **New CLI Command Works**: `plan ./specification/file.md` - uses parameterized approach
+✅ **No Breaking Changes**: All existing APIs and commands continue to work exactly as before
+✅ **Validation Passes**: All workflows and prompts validate successfully
+✅ **Tests Pass**: All flow tests pass including new backward compatibility tests
+
+### Behaviors Maintained
+
+| Usage Pattern | Behavior | Status |
+|---------------|----------|---------|
+| `flow run plan` | Scans ./specification directory (legacy) | ✅ Working |
+| `flow run plan --var plan_filename="file.md"` | Processes specific file | ✅ Working |
+| `plan ./specification/file.md` | Processes specific file via workflow | ✅ Working |
+| All other commands | Unchanged functionality | ✅ Working |
+
+### Implementation Quality
+
+- **No Code Duplication**: Reused existing workflow and prompt infrastructure
+- **Clean Conditional Logic**: Used Liquid templating for conditional behavior
+- **Comprehensive Testing**: Added specific tests for both usage patterns
+- **Documentation Updated**: Clear descriptions of both modes
+- **Zero Breaking Changes**: Full backward compatibility maintained
+
+The implementation successfully ensures that existing workflows continue to work while enabling the new parameterized functionality, meeting all requirements specified in the issue.
