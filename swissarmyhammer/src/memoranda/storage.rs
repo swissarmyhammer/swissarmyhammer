@@ -1418,6 +1418,7 @@ impl MemoStorage for MarkdownMemoStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::IsolatedTestHome;
     use tempfile::TempDir;
 
     fn create_test_storage() -> (FileSystemMemoStorage, TempDir) {
@@ -2129,9 +2130,9 @@ mod tests {
         }
     }
 
-    #[serial_test::serial] // Run this test in isolation to avoid directory conflicts
     #[tokio::test]
     async fn test_directory_creation() {
+        let _guard = IsolatedTestHome::new();
         // Add timeout to prevent hanging
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -2353,9 +2354,9 @@ mod tests {
 
     // ===== ADDITIONAL EDGE CASE TESTS =====
 
-    #[serial_test::serial] // Run in isolation to avoid permission conflicts
     #[tokio::test]
     async fn test_readonly_directory_error_handling() {
+        let _guard = IsolatedTestHome::new();
         // Add timeout to prevent hanging
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),

@@ -10,10 +10,10 @@ This document lists all tests that use `#[serial_test::serial]` to prevent race 
 - **`swissarmyhammer/src/sah_config/loader.rs`**:
   - `test_environment_variable_substitution` - Tests environment variable substitution in config
 
-## Memoranda Storage Tests
-- **`swissarmyhammer/src/memoranda/storage.rs`**:
-  - `test_directory_creation` - Tests directory creation to avoid conflicts
-  - `test_readonly_directory_error_handling` - Tests permission error handling
+## ~~Memoranda Storage Tests~~ (CONVERTED TO PARALLEL)
+- **`swissarmyhammer/src/memoranda/storage.rs`**: ✅ **All storage tests converted to use `IsolatedTestHome` and run in parallel**
+  - ~~`test_directory_creation`~~ - Now uses `IsolatedTestHome` for directory isolation
+  - ~~`test_readonly_directory_error_handling`~~ - Now uses `IsolatedTestHome` for permission test isolation
 
 ## ~~Search Embedding Tests~~ (CONVERTED TO PARALLEL)
 - **`swissarmyhammer/src/search/embedding.rs`**: ✅ **All embedding tests converted to use `IsolatedTestHome` and run in parallel**
@@ -58,9 +58,14 @@ This document lists all tests that use `#[serial_test::serial]` to prevent race 
 - These tests use mock embedding engines and don't need serialization
 - **Performance improvement**: 13 tests now run in parallel (~0.57s) vs serial execution
 
+### ✅ Memoranda Storage Tests (CONVERTED TO PARALLEL)
+- **`swissarmyhammer/src/memoranda/storage.rs`**: 2 storage tests converted to use `IsolatedTestHome` and run in parallel
+- These tests create temporary directories and modify file permissions, now safely isolated
+- **Performance improvement**: 48 total storage tests run in parallel (~1.2s)
+
 ## Summary
 
 **Before**: 25+ serial tests requiring sequential execution  
-**After**: 13 embedding tests + 8 workflow executor abort tests = **21 tests converted to parallel execution**
+**After**: 13 embedding tests + 8 workflow executor abort tests + 2 storage tests = **23 tests converted to parallel execution**
 
 This significantly improves test suite performance while maintaining test isolation and reliability.
