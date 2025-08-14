@@ -56,15 +56,7 @@ async fn main() {
     };
 
     // Helper function to create EnvFilter since it doesn't implement Clone
-    let create_filter = || {
-        if cli.debug {
-            // When --debug is used, all crates including ORT get debug level
-            EnvFilter::new(format!("{log_level}"))
-        } else {
-            // Otherwise, set ORT to WARN and everything else to the requested level
-            EnvFilter::new(format!("ort=warn,{log_level}"))
-        }
-    };
+    let create_filter = || EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}"));
 
     if is_mcp_mode {
         // In MCP mode, write logs to .swissarmyhammer/log for debugging
