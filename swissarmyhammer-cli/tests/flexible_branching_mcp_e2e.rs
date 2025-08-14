@@ -376,8 +376,7 @@ fn test_mcp_issue_work_prevents_issue_from_issue_branch() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("Cannot work") || stderr.contains("issue branch"),
-        "Error should mention issue branch restriction: {}",
-        stderr
+        "Error should mention issue branch restriction: {stderr}"
     );
 
     // Should still be on first issue branch

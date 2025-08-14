@@ -802,7 +802,7 @@ pub mod tests {
             assert!(error.contains("Permission denied"));
             assert!(suggestion.contains("permissions"));
         } else {
-            panic!("Expected PermissionDenied error, got {:?}", result);
+            panic!("Expected PermissionDenied error, got {result:?}");
         }
     }
 
@@ -877,10 +877,7 @@ pub mod tests {
             assert!(error.contains("Invalid UTF-8"));
             assert!(suggestion.contains("corrupted"));
         } else {
-            panic!(
-                "Expected PermissionDenied error for invalid data, got {:?}",
-                result
-            );
+            panic!("Expected PermissionDenied error for invalid data, got {result:?}");
         }
     }
 
