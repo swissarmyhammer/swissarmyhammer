@@ -3,6 +3,7 @@
 //! This module tests that nested workflows with the same state names
 //! don't interfere with each other during execution.
 
+use crate::test_utils::IsolatedTestHome;
 use crate::workflow::actions::{clear_test_storage, set_test_storage};
 use crate::workflow::storage::{
     MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowStorageBackend,
@@ -28,9 +29,9 @@ fn setup_test_storage_with_workflows(workflows: &[(&str, &str)]) -> Arc<Workflow
     ))
 }
 
-#[serial_test::serial]
 #[tokio::test]
 async fn test_nested_workflow_state_name_pollution() {
+    let _guard = IsolatedTestHome::new();
     // This test verifies that when a parent workflow calls a sub-workflow,
     // and both workflows have states with the same names (1, 2, 3),
     // the sub-workflow's state transitions don't interfere with the parent's state management.
@@ -138,9 +139,9 @@ stateDiagram-v2
     clear_test_storage();
 }
 
-#[serial_test::serial]
 #[tokio::test]
 async fn test_nested_workflow_correct_action_execution() {
+    let _guard = IsolatedTestHome::new();
     // Create a more complex test where both workflows have conflicting state names
     // and we verify that each workflow executes its own actions
     let parent_workflow_content = r#"---
@@ -241,9 +242,9 @@ stateDiagram-v2
     clear_test_storage();
 }
 
-#[serial_test::serial]
 #[tokio::test]
 async fn test_deeply_nested_workflows_state_isolation() {
+    let _guard = IsolatedTestHome::new();
     // Test with 3 levels of nesting to ensure state isolation works at depth
     let workflow_a_content = r#"---
 name: workflow-level-a

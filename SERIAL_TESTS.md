@@ -35,11 +35,11 @@ This document lists all tests that use `#[serial_test::serial]` to prevent race 
   - `test_validate_command_loads_same_workflows_as_flow_list` - Tests consistency between validate and flow list
   - `test_validate_all_workflows_integration` - Integration test for workflow validation
 
-## Workflow Sub-workflow State Pollution Tests
-- **`swissarmyhammer/src/workflow/actions_tests/sub_workflow_state_pollution_tests.rs`**:
-  - `test_nested_workflow_state_name_pollution` - Tests state name pollution in nested workflows
-  - `test_nested_workflow_correct_action_execution` - Tests correct action execution in nested workflows
-  - `test_deeply_nested_workflows_state_isolation` - Tests state isolation in deeply nested workflows
+## ~~Workflow Sub-workflow State Pollution Tests~~ (CONVERTED TO PARALLEL)
+- **`swissarmyhammer/src/workflow/actions_tests/sub_workflow_state_pollution_tests.rs`**: ✅ **All workflow state pollution tests converted to use `IsolatedTestHome` and run in parallel**
+  - ~~`test_nested_workflow_state_name_pollution`~~ - Now uses `IsolatedTestHome` for state isolation
+  - ~~`test_nested_workflow_correct_action_execution`~~ - Now uses `IsolatedTestHome` for execution isolation  
+  - ~~`test_deeply_nested_workflows_state_isolation`~~ - Now uses `IsolatedTestHome` for nested state isolation
 
 ## Notes
 
@@ -63,9 +63,14 @@ This document lists all tests that use `#[serial_test::serial]` to prevent race 
 - These tests create temporary directories and modify file permissions, now safely isolated
 - **Performance improvement**: 48 total storage tests run in parallel (~1.2s)
 
+### ✅ Workflow Sub-workflow State Pollution Tests (CONVERTED TO PARALLEL)
+- **`swissarmyhammer/src/workflow/actions_tests/sub_workflow_state_pollution_tests.rs`**: 3 workflow state tests converted to use `IsolatedTestHome` and run in parallel  
+- These tests use global `TEST_STORAGE_REGISTRY` but each properly cleans up after itself
+- **Performance improvement**: 3 tests now run in parallel (~0.35s) vs serial execution
+
 ## Summary
 
 **Before**: 25+ serial tests requiring sequential execution  
-**After**: 13 embedding tests + 8 workflow executor abort tests + 2 storage tests = **23 tests converted to parallel execution**
+**After**: 13 embedding tests + 8 workflow executor abort tests + 2 storage tests + 3 workflow state tests = **26 tests converted to parallel execution**
 
 This significantly improves test suite performance while maintaining test isolation and reliability.
