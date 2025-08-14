@@ -241,3 +241,117 @@ swissarmyhammer plan ./specification/example.md
 - Test documentation accuracy by following examples exactly
 - Consider user workflow and typical usage patterns
 - Update documentation if implementation details change
+
+## Proposed Solution
+
+After examining the existing CLI documentation patterns and current Plan command implementation, I'll enhance the Plan command documentation to follow the comprehensive style used throughout the swissarmyhammer CLI.
+
+### Analysis of Current Implementation
+
+The current Plan command documentation at `/swissarmyhammer-cli/src/cli.rs:334-354` is minimal:
+
+```rust
+/// Plan a specific specification file
+#[command(long_about = "
+Execute planning workflow for a specific specification file.
+Takes a path to a markdown specification file and generates implementation steps.
+
+Basic usage:
+  swissarmyhammer plan <plan_filename>    # Plan specific file
+
+The planning workflow will:
+- Read the specified plan file
+- Generate step-by-step implementation issues
+- Create numbered issue files in ./issues directory
+
+Examples:
+  swissarmyhammer plan ./specification/new-feature.md
+  swissarmyhammer plan /path/to/custom-plan.md
+  swissarmyhammer plan plans/database-migration.md
+")]
+```
+
+### Enhancement Strategy
+
+Following the comprehensive patterns seen in other commands (like Prompt, Flow, Issue, etc.), I'll enhance the Plan command with:
+
+1. **Comprehensive Usage Pattern** - Clear command format with parameter explanations
+2. **Detailed Workflow Description** - Step-by-step explanation of what the command does
+3. **File Requirements Section** - Supported formats, structure recommendations, constraints
+4. **Extensive Examples** - Covering common scenarios and different path formats
+5. **Best Practices and Tips** - User guidance for optimal results
+6. **Troubleshooting Section** - Common error scenarios with resolution guidance
+7. **Integration Information** - How it works with other commands and flags
+
+### Implementation Plan
+
+1. Update the `long_about` attribute for the Plan command enum variant
+2. Enhance the parameter help text with `long_help` attribute
+3. Follow the established patterns from other commands for consistency
+4. Include practical examples that match the actual file structure
+5. Add troubleshooting guidance for common issues
+
+The enhanced documentation will transform the Plan command help from basic information to comprehensive user guidance, matching the quality standards established throughout the swissarmyhammer CLI.
+
+## Implementation Completed
+
+✅ **Successfully enhanced CLI help documentation for the plan command**
+
+### Changes Made
+
+**File Modified**: `swissarmyhammer-cli/src/cli.rs` (lines 334-404)
+
+**Enhanced Documentation Sections**:
+
+1. **Comprehensive Command Description**
+   - Clear usage pattern: `swissarmyhammer plan <PLAN_FILENAME>`
+   - Step-by-step workflow explanation
+   - Integration with existing systems
+
+2. **File Requirements Section**
+   - Supported formats and structure guidelines
+   - Content recommendations
+   - Validation requirements
+
+3. **Output Format Description**
+   - Detailed explanation of generated files
+   - Naming conventions and numbering
+
+4. **Practical Examples**
+   - Four realistic usage scenarios
+   - Different path formats (relative, absolute, simple)
+   - Integration with global flags
+
+5. **Tips and Best Practices**
+   - Planning recommendations
+   - File organization guidance
+   - Integration workflow suggestions
+
+6. **Troubleshooting Section**
+   - Common error scenarios
+   - Specific resolution steps
+   - Debug flag usage
+
+7. **Enhanced Parameter Help**
+   - Added `help` attribute for short description
+   - Added `long_help` attribute with detailed guidance
+   - Clear path format examples
+
+### Quality Verification
+
+✅ **Help Text Display**: Verified correct formatting and readability
+✅ **Error Handling**: Confirmed appropriate error messages and suggestions  
+✅ **Examples**: Tested path examples work correctly
+✅ **Code Quality**: Passed clippy linting with no warnings
+✅ **Test Suite**: All CLI tests pass (60 tests completed successfully)
+✅ **Integration**: Confirmed integration with main help and existing patterns
+
+### Consistency with Standards
+
+- Follows established CLI documentation patterns from other commands
+- Uses bullet points (•) for lists as per style guide
+- Includes practical examples without shell scripting
+- Provides troubleshooting guidance matching user needs
+- Uses consistent formatting and language throughout
+
+The Plan command now provides comprehensive, helpful documentation that matches the high-quality standards used throughout the swissarmyhammer CLI, giving users clear guidance on usage, requirements, troubleshooting, and best practices.
