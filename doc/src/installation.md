@@ -13,7 +13,7 @@ Install SwissArmyHammer and configure it for use with Claude Code.
 Currently the only supported installation method:
 
 ```bash
-cargo install --git https://github.com/wballard/sahdoc swissarmyhammer-cli
+cargo install --git https://github.com/swissarmyhammer/sahdoc swissarmyhammer-cli
 ```
 
 ## Verify Installation

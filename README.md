@@ -6,14 +6,14 @@
 
 **Program all the things, just by writing markdown. Really.**
 
-📚 **[Complete Documentation & Guides](https://wballard.github.io/sahdoc)** 📚
+📚 **[Complete Documentation & Guides](https://swissarmyhammer.github.io/swissarmyhammer)** 📚
 
-[![CI](https://github.com/wballard/sahdoc/workflows/CI/badge.svg)](https://github.com/wballard/sahdoc/actions)
+[![CI](https://github.com/swissarmyhammer/swissarmyhammer/workflows/CI/badge.svg)](https://github.com/swissarmyhammer/swissarmyhammer/actions)
 [![License](https://img.shields.io/badge/License-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://github.com/anthropics/model-context-protocol)
 
-[📖 Documentation](https://wballard.github.io/sahdoc)
+[📖 Documentation](https://swissarmyhammer.github.io/swissarmyhammer)
 
 </div>
 
@@ -37,7 +37,7 @@ SwissArmyHammer provides a unified, file-based approach with three integrated co
 
 Install and get started:
 ```bash
-cargo install --git https://github.com/wballard/sahdoc swissarmyhammer-cli
+cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
 claude mcp add --scope user sah sah serve
 ```
 
@@ -144,10 +144,10 @@ sah validate
 ### Install
 
 ```bash
-cargo install --git https://github.com/wballard/sahdoc swissarmyhammer-cli
+cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
 ```
 
-See [installation guide](https://wballard.github.io/sahdoc/installation.html) for detailed instructions.
+See [installation guide](https://swissarmyhammer.github.io/swissarmyhammer/installation.html) for detailed instructions.
 
 ### Configure Claude Code
 
@@ -206,10 +206,3 @@ SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
 All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The abort tool provides robust workflow control, replacing legacy string-based detection with a reliable file-based approach.
 
 
----
-
-<div align="center">
-
-**[⭐ Star this repo](https://github.com/wballard/sahdoc/stargazers)** if you find SwissArmyHammer useful!
-
-</div>
