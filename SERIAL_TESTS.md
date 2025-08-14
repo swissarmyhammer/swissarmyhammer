@@ -30,10 +30,10 @@ This document lists all tests that use `#[serial_test::serial]` to prevent race 
   - ~~`test_clean_text`~~ - Now uses `IsolatedTestHome`
   - ~~`test_clean_text_truncation`~~ - Now uses `IsolatedTestHome`
 
-## CLI Validation Tests
-- **`swissarmyhammer-cli/src/validate.rs`**:
-  - `test_validate_command_loads_same_workflows_as_flow_list` - Tests consistency between validate and flow list
-  - `test_validate_all_workflows_integration` - Integration test for workflow validation
+## ~~CLI Validation Tests~~ (CONVERTED TO PARALLEL)
+- **`swissarmyhammer-cli/src/validate.rs`**: ✅ **All CLI validation tests converted to use `CliTestEnvironment` and run in parallel**
+  - ~~`test_validate_command_loads_same_workflows_as_flow_list`~~ - Now uses `CliTestEnvironment` for HOME + CWD isolation
+  - ~~`test_validate_all_workflows_integration`~~ - Now uses `CliTestEnvironment` for integration test isolation
 
 ## ~~Workflow Sub-workflow State Pollution Tests~~ (CONVERTED TO PARALLEL)
 - **`swissarmyhammer/src/workflow/actions_tests/sub_workflow_state_pollution_tests.rs`**: ✅ **All workflow state pollution tests converted to use `IsolatedTestHome` and run in parallel**
@@ -68,9 +68,15 @@ This document lists all tests that use `#[serial_test::serial]` to prevent race 
 - These tests use global `TEST_STORAGE_REGISTRY` but each properly cleans up after itself
 - **Performance improvement**: 3 tests now run in parallel (~0.35s) vs serial execution
 
+### ✅ CLI Validation Tests (CONVERTED TO PARALLEL)
+- **`swissarmyhammer-cli/src/validate.rs`**: 2 CLI validation tests converted to use `CliTestEnvironment` and run in parallel
+- Created custom `CliTestEnvironment` RAII helper for CLI crate (isolates HOME + current working directory)
+- These tests manipulate current working directory but now safely isolated
+- **Performance improvement**: All 83 CLI tests run in parallel (~12.7s)
+
 ## Summary
 
 **Before**: 25+ serial tests requiring sequential execution  
-**After**: 13 embedding tests + 8 workflow executor abort tests + 2 storage tests + 3 workflow state tests = **26 tests converted to parallel execution**
+**After**: 13 embedding tests + 8 workflow executor abort tests + 2 storage tests + 3 workflow state tests + 2 CLI validation tests = **28 tests converted to parallel execution**
 
 This significantly improves test suite performance while maintaining test isolation and reliability.

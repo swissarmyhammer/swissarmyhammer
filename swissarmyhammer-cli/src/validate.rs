@@ -778,6 +778,46 @@ pub fn run_validate_command_with_dirs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    
+    /// RAII helper for CLI tests that isolates HOME directory and current working directory
+    struct CliTestEnvironment {
+        _temp_home: TempDir,
+        original_home: Option<String>,
+        original_cwd: PathBuf,
+    }
+    
+    impl CliTestEnvironment {
+        fn new() -> std::io::Result<Self> {
+            let original_cwd = std::env::current_dir()?;
+            let original_home = std::env::var("HOME").ok();
+            
+            // Create temporary HOME directory
+            let temp_home = TempDir::new()?;
+            std::env::set_var("HOME", temp_home.path());
+            
+            Ok(Self {
+                _temp_home: temp_home,
+                original_home,
+                original_cwd,
+            })
+        }
+    }
+    
+    impl Drop for CliTestEnvironment {
+        fn drop(&mut self) {
+            // Restore original HOME
+            match &self.original_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+            
+            // Restore original current directory
+            let _ = std::env::set_current_dir(&self.original_cwd);
+        }
+    }
+    
     // Note: Many tests have been temporarily disabled after simplifying the validate command
     // to always validate all prompts. These tests need to be rewritten to work with the new
     // simplified validation approach.
@@ -1273,8 +1313,8 @@ stateDiagram-v2
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_validate_command_loads_same_workflows_as_flow_list() {
+        let _guard = CliTestEnvironment::new().expect("Failed to create test environment");
         // This test ensures consistency between validate and flow list commands
         // Both should load workflows from the same standard locations
 
@@ -1619,8 +1659,8 @@ stateDiagram-v2
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_validate_all_workflows_integration() {
+        let _guard = CliTestEnvironment::new().expect("Failed to create test environment");
         let mut validator = Validator::new(false);
         let temp_dir = tempfile::TempDir::new().unwrap();
 
