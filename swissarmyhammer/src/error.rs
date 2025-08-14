@@ -118,6 +118,44 @@ pub enum SwissArmyHammerError {
     #[error("Workflow executor error: {0}")]
     ExecutorError(#[from] crate::workflow::ExecutorError),
 
+    /// File not found
+    #[error("File not found: {path}\nSuggestion: {suggestion}")]
+    FileNotFound {
+        /// The file path that was not found
+        path: String,
+        /// Suggestion for fixing the issue
+        suggestion: String,
+    },
+
+    /// Path is not a file (e.g., directory)
+    #[error("Path is not a file: {path}\nSuggestion: {suggestion}")]
+    NotAFile {
+        /// The path that is not a file
+        path: String,
+        /// Suggestion for fixing the issue
+        suggestion: String,
+    },
+
+    /// Permission denied when accessing file
+    #[error("Permission denied accessing file: {path}\nError: {error}\nSuggestion: {suggestion}")]
+    PermissionDenied {
+        /// The file path that could not be accessed
+        path: String,
+        /// The underlying error message
+        error: String,
+        /// Suggestion for fixing the issue
+        suggestion: String,
+    },
+
+    /// Invalid file path format
+    #[error("Invalid file path: {path}\nSuggestion: {suggestion}")]
+    InvalidFilePath {
+        /// The invalid file path
+        path: String,
+        /// Suggestion for fixing the issue
+        suggestion: String,
+    },
+
     /// Other errors
     #[error("{0}")]
     Other(String),
@@ -544,6 +582,39 @@ impl SwissArmyHammerError {
         SwissArmyHammerError::Other(format!(
             "Directory operation '{operation}' failed on '{path}': {details}"
         ))
+    }
+
+    /// Create a file not found error with suggestion
+    pub fn file_not_found(path: &str, suggestion: &str) -> Self {
+        SwissArmyHammerError::FileNotFound {
+            path: path.to_string(),
+            suggestion: suggestion.to_string(),
+        }
+    }
+
+    /// Create a not a file error (for directories) with suggestion
+    pub fn not_a_file(path: &str, suggestion: &str) -> Self {
+        SwissArmyHammerError::NotAFile {
+            path: path.to_string(),
+            suggestion: suggestion.to_string(),
+        }
+    }
+
+    /// Create a permission denied error with suggestion
+    pub fn permission_denied(path: &str, error: &str, suggestion: &str) -> Self {
+        SwissArmyHammerError::PermissionDenied {
+            path: path.to_string(),
+            error: error.to_string(),
+            suggestion: suggestion.to_string(),
+        }
+    }
+
+    /// Create an invalid file path error with suggestion
+    pub fn invalid_file_path(path: &str, suggestion: &str) -> Self {
+        SwissArmyHammerError::InvalidFilePath {
+            path: path.to_string(),
+            suggestion: suggestion.to_string(),
+        }
     }
 
     /// Create a memo not found error

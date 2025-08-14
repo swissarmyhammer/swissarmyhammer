@@ -169,3 +169,111 @@ Commands::Plan { plan_filename } => {
 - Consider using `thiserror` or existing error handling approach
 - Provide consistent error message formatting
 - Consider logging validation attempts for debugging
+## Proposed Solution
+
+After analyzing the existing codebase, I will implement comprehensive file path validation by:
+
+### 1. Creating Specific Error Types
+Following the existing `SwissArmyHammerError` pattern, add new variants for file validation:
+- `FileNotFound` with path and helpful suggestion
+- `NotAFile` for directories mistakenly provided  
+- `PermissionDenied` for unreadable files
+- `InvalidFilePath` for malformed paths
+
+### 2. Implementing Validation Function
+Create `validate_plan_file()` function that:
+- Handles both relative and absolute paths using `std::path::Path`
+- Validates file existence, type (not directory), and readability
+- Returns structured errors with actionable suggestions
+- Uses `ErrorContext` trait for consistent error chaining
+
+### 3. Integration Approach
+Replace the current inline validation in `run_plan()` with:
+- Call to centralized validation function
+- Proper error propagation using `?` operator
+- Consistent error logging with `tracing`
+- Maintains existing exit code behavior
+
+### 4. Error Message Design
+Each error will include:
+- Clear description of what went wrong
+- The problematic file path
+- Actionable suggestion for fixing the issue
+- Context about what was expected
+
+This approach follows existing codebase patterns in `/swissarmyhammer/src/error.rs` and maintains consistency with other command handlers.
+## Implementation Complete
+
+### What Was Implemented
+
+1. **Enhanced Error Types** - Added four new error variants to `SwissArmyHammerError`:
+   - `FileNotFound` - For non-existent files
+   - `NotAFile` - For directories provided instead of files  
+   - `PermissionDenied` - For unreadable files
+   - `InvalidFilePath` - For empty or malformed paths
+
+2. **Comprehensive Validation Function** - Added `validate_file_path()` to `FileSystemUtils`:
+   - Handles relative and absolute paths
+   - Validates file existence, type, and readability
+   - Returns canonicalized paths when possible
+   - Provides detailed error messages with actionable suggestions
+
+3. **Enhanced Command Handler** - Updated `run_plan()` in CLI:
+   - Replaced inline validation with centralized function call
+   - Uses proper error propagation with `?` operator
+   - Maintains consistent exit code behavior
+   - Uses validated path for workflow execution
+
+4. **Comprehensive Test Coverage** - Added 7 unit tests covering:
+   - Valid file validation success
+   - Empty/whitespace path handling
+   - File not found scenarios
+   - Directory vs file detection
+   - Permission denied simulation
+   - Invalid data handling
+   - Relative and absolute path support
+
+### Testing Results
+
+All error scenarios tested successfully:
+- ✅ Non-existent file: "File not found: nonexistent_file.md"
+- ✅ Directory instead of file: "Path is not a file: test_directory" 
+- ✅ Empty path: "Invalid file path: [empty]"
+- ✅ Valid file: Passes validation and continues to workflow execution
+
+### Code Quality
+
+- ✅ All tests pass (7/7)
+- ✅ Clippy linting passes with no warnings
+- ✅ Follows existing codebase patterns and conventions
+- ✅ Proper error chaining and context preservation
+
+### Error Message Examples
+
+1. **File Not Found**:
+   ```
+   File not found: nonexistent_file.md
+   Suggestion: Check the file path and ensure the file exists
+   ```
+
+2. **Directory Instead of File**:
+   ```
+   Path is not a file: test_directory
+   Suggestion: Path points to a directory, not a file. Specify a file path instead
+   ```
+
+3. **Empty Path**:
+   ```
+   Invalid file path: 
+   Suggestion: File path cannot be empty
+   ```
+
+### Integration
+
+The implementation integrates seamlessly with existing infrastructure:
+- Uses existing `SwissArmyHammerError` enum pattern
+- Leverages `FileSystemUtils` abstraction for testability
+- Follows CLI error handling conventions
+- Maintains backwards compatibility
+
+All acceptance criteria from the original issue have been met.
