@@ -431,13 +431,12 @@ impl GitOperations {
 
         // If no reflog entry found, create abort file and return error
         create_abort_file(&self.work_dir, &format!(
-            "Cannot determine merge target for issue '{}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally",
-            issue_name
+            "Cannot determine merge target for issue '{issue_name}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally"
         ))?;
 
         Err(SwissArmyHammerError::git_operation_failed(
             "determine merge target",
-            &format!("no reflog entry found for issue branch '{}'", branch_name),
+            &format!("no reflog entry found for issue branch '{branch_name}'"),
         ))
     }
 

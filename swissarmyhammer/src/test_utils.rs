@@ -300,6 +300,12 @@ pub struct IsolatedTestHome {
     original_home: Option<String>,
 }
 
+impl Default for IsolatedTestHome {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
