@@ -8,8 +8,8 @@
 //!
 //! - **Markdown-based Storage**: Issues are stored as markdown files with automatic numbering
 //! - **Git Integration**: Automatic branch creation and management for issue workflows
-//! - **Performance Monitoring**: Built-in metrics collection and caching for large projects
-//! - **Flexible Storage**: Multiple storage backends with caching and instrumentation
+//! - **Performance Monitoring**: Built-in metrics collection for performance analysis
+//! - **Batch Operations**: Efficient batch creation, retrieval, and updates for large projects
 //!
 //! ## Basic Usage
 //!
@@ -216,8 +216,6 @@ impl AsRef<str> for IssueName {
 
 /// Filesystem-based issue storage implementation
 pub mod filesystem;
-/// Storage wrapper that collects performance metrics for all operations
-pub mod instrumented_storage;
 /// Performance metrics collection and analysis
 pub mod metrics;
 /// Shared utilities for issue management
@@ -232,9 +230,6 @@ pub use filesystem::{
 
 // Export metrics types
 pub use metrics::{MetricsSnapshot, Operation, PerformanceMetrics};
-
-// Export instrumented storage types
-pub use instrumented_storage::InstrumentedIssueStorage;
 
 // Export utilities
 pub use utils::{

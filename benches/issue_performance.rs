@@ -5,7 +5,7 @@ use tokio::runtime::Runtime;
 use tokio::time::Duration;
 
 use swissarmyhammer::issues::{
-    FileSystemIssueStorage, InstrumentedIssueStorage, IssueStorage, Operation, PerformanceMetrics,
+    FileSystemIssueStorage, IssueStorage, Operation, PerformanceMetrics,
 };
 
 fn setup_fs_storage() -> (FileSystemIssueStorage, TempDir) {
@@ -153,26 +153,24 @@ fn benchmark_metrics_collection(c: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_instrumented_storage(c: &mut Criterion) {
-    let mut group = c.benchmark_group("instrumented_storage");
+fn benchmark_filesystem_storage(c: &mut Criterion) {
+    let mut group = c.benchmark_group("filesystem_storage");
     let rt = Runtime::new().unwrap();
 
     let operation_counts = vec![10, 50, 100];
 
     for count in operation_counts {
         group.bench_with_input(
-            BenchmarkId::new("instrumented_operations", count),
+            BenchmarkId::new("filesystem_operations", count),
             &count,
             |b, &count| {
                 b.iter(|| {
                     rt.block_on(async {
-                        let (fs_storage, _temp) = setup_fs_storage();
-                        let instrumented_storage =
-                            InstrumentedIssueStorage::new(Box::new(fs_storage));
+                        let (storage, _temp) = setup_fs_storage();
 
                         // Create issues
                         for i in 1..=count {
-                            let _issue = instrumented_storage
+                            let _issue = storage
                                 .create_issue(format!("test_{i}"), format!("Content {i}"))
                                 .await
                                 .unwrap();
@@ -181,23 +179,20 @@ fn benchmark_instrumented_storage(c: &mut Criterion) {
                         // Read issues
                         for i in 1..=count {
                             let issue_name = format!("test_{i}");
-                            let _issue = instrumented_storage.get_issue(&issue_name).await.unwrap();
+                            let _issue = storage.get_issue(&issue_name).await.unwrap();
                         }
 
                         // Update issues
                         for i in 1..=count {
                             let issue_name = format!("test_{i}");
-                            let _issue = instrumented_storage
+                            let _issue = storage
                                 .update_issue(&issue_name, format!("Updated content {i}"))
                                 .await
                                 .unwrap();
                         }
 
                         // List issues
-                        let _issues = instrumented_storage.list_issues().await.unwrap();
-
-                        // Get metrics
-                        let _snapshot = instrumented_storage.get_metrics_snapshot();
+                        let _issues = storage.list_issues().await.unwrap();
                     });
                 });
             },
@@ -302,7 +297,7 @@ criterion_group!(
     issue_performance_benches,
     benchmark_batch_operations,
     benchmark_metrics_collection,
-    benchmark_instrumented_storage,
+    benchmark_filesystem_storage,
     benchmark_concurrent_operations
 );
 
