@@ -83,9 +83,10 @@ impl McpTool for MergeIssueTool {
                         }
                     }
                     Err(e) => {
-                        let error_msg = format!("Failed to get current branch for merge validation: {}", e);
+                        let error_msg =
+                            format!("Failed to get current branch for merge validation: {}", e);
                         tracing::error!("{}", error_msg);
-                        
+
                         // Create abort file to signal workflow termination
                         create_abort_file_current_dir(&error_msg);
 
@@ -96,7 +97,7 @@ impl McpTool for MergeIssueTool {
             None => {
                 let error_msg = "Git operations not available for branch validation".to_string();
                 tracing::error!("{}", error_msg);
-                
+
                 // Create abort file to signal workflow termination
                 create_abort_file_current_dir(&error_msg);
 
@@ -112,19 +113,19 @@ impl McpTool for MergeIssueTool {
             Err(e) => {
                 let error_msg = format!("Failed to get issue '{}' for merge: {}", request.name, e);
                 tracing::error!("{}", error_msg);
-                
+
                 // Create abort file to signal workflow termination
                 create_abort_file_current_dir(&error_msg);
 
                 return Err(McpError::invalid_params(error_msg, None));
-            },
+            }
         };
 
         // Validate that the issue is completed before allowing merge
         if !issue_info.completed {
             let error_msg = format!("Issue '{}' must be completed before merging", request.name);
             tracing::error!("{}", error_msg);
-            
+
             // Create abort file to signal workflow termination
             create_abort_file_current_dir(&error_msg);
 
@@ -143,6 +144,9 @@ impl McpTool for MergeIssueTool {
                 // Merge the branch back using git merge-base to determine target
                 match ops.merge_issue_branch_auto(&issue_name) {
                     Ok(target_branch) => {
+                        let source_branch = Self::format_issue_branch_name(&issue_name);
+                        tracing::info!("Successfully merged issue branch '{}' to target branch '{}'", source_branch, target_branch);
+                        
                         let mut success_message = format!(
                             "Merged work branch for issue {issue_name} to {target_branch} (determined by git merge-base)"
                         );
@@ -164,14 +168,17 @@ impl McpTool for MergeIssueTool {
                                 }
                             }
                             Err(e) => {
-                                let error_msg = format!("Failed to get commit info after merge of issue '{}': {}", issue_name, e);
+                                let error_msg = format!(
+                                    "Failed to get commit info after merge of issue '{}': {}",
+                                    issue_name, e
+                                );
                                 tracing::error!("{}", error_msg);
-                                
+
                                 // Create abort file to signal workflow termination
                                 create_abort_file_current_dir(&error_msg);
 
                                 return Err(McpError::invalid_params(error_msg, None));
-                            },
+                            }
                         };
 
                         // If delete_branch is true, delete the branch after successful merge
@@ -193,9 +200,9 @@ impl McpTool for MergeIssueTool {
                         Ok(create_success_response(success_message))
                     }
                     Err(e) => {
-                        let error_msg = format!("Merge failed for issue '{}': {}", issue_name, e);
+                        let error_msg = format!("Merge failed for issue '{issue_name}': {e}");
                         tracing::error!("{}", error_msg);
-                        
+
                         // Create abort file to signal workflow termination
                         create_abort_file_current_dir(&error_msg);
 
@@ -206,7 +213,7 @@ impl McpTool for MergeIssueTool {
             None => {
                 let error_msg = "Git operations not available for merge".to_string();
                 tracing::error!("{}", error_msg);
-                
+
                 // Create abort file to signal workflow termination
                 create_abort_file_current_dir(&error_msg);
 
