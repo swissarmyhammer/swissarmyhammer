@@ -63,7 +63,7 @@ impl TestEnvironment {
     fn create_test_workflow(&self, name: &str) -> Result<String> {
         let workflow_content = format!(
             r#"---
-name: {}
+name: {name}
 description: Test workflow for abort integration testing  
 initial_state: start
 states:
@@ -73,7 +73,7 @@ states:
     is_final: false
     actions:
       - type: log
-        message: "Workflow {} started"
+        message: "Workflow {name} started"
   processing:
     name: Processing State  
     description: Processing state with delay
@@ -89,7 +89,7 @@ states:
     is_final: true  
     actions:
       - type: log
-        message: "Workflow {} completed"
+        message: "Workflow {name} completed"
 transitions:
   - from: start
     to: processing
@@ -99,14 +99,13 @@ transitions:
     to: end  
     condition:
       type: always
-"#,
-            name, name, name
+"#
         );
 
         // Create .swissarmyhammer/workflows directory
         fs::create_dir_all(".swissarmyhammer/workflows")?;
         let filename = format!("{}.md", name.replace(" ", "_").to_lowercase());
-        let filepath = format!(".swissarmyhammer/workflows/{}", filename);
+        let filepath = format!(".swissarmyhammer/workflows/{filename}");
         fs::write(&filepath, workflow_content)?;
         Ok(filename.trim_end_matches(".md").to_string())
     }
@@ -142,13 +141,12 @@ fn test_abort_performance_impact_baseline() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    println!("Baseline execution time: {:?}", baseline_duration);
+    println!("Baseline execution time: {baseline_duration:?}");
 
     // Performance should be reasonable (under 5 seconds for simple workflow)
     assert!(
         baseline_duration < Duration::from_secs(5),
-        "Baseline performance should be under 5 seconds, got: {:?}",
-        baseline_duration
+        "Baseline performance should be under 5 seconds, got: {baseline_duration:?}"
     );
 
     Ok(())
@@ -178,13 +176,12 @@ fn test_abort_performance_with_checking_overhead() -> Result<()> {
         "Workflow should fail when abort file present"
     );
 
-    println!("Abort detection time: {:?}", abort_duration);
+    println!("Abort detection time: {abort_duration:?}");
 
     // Abort should be detected quickly (under 2 seconds)
     assert!(
         abort_duration < Duration::from_secs(2),
-        "Abort should be detected quickly, got: {:?}",
-        abort_duration
+        "Abort should be detected quickly, got: {abort_duration:?}"
     );
 
     Ok(())
@@ -197,7 +194,7 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
 
     // Create multiple workflow files
     let workflow_files: Vec<String> = (0..3)
-        .map(|i| env.create_test_workflow(&format!("Concurrent Workflow {}", i)))
+        .map(|i| env.create_test_workflow(&format!("Concurrent Workflow {i}")))
         .collect::<Result<Vec<_>>>()?;
 
     let barrier = Arc::new(Barrier::new(workflow_files.len() + 1));

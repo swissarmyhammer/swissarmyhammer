@@ -95,7 +95,7 @@ impl EdgeCaseTestEnvironment {
         let test_file = format!("{}.txt", branch_name.replace('/', "_"));
         std::fs::write(
             self.temp_dir.path().join(&test_file),
-            format!("Content for {}", branch_name),
+            format!("Content for {branch_name}"),
         )
         .expect("Failed to write test file");
 
@@ -107,7 +107,7 @@ impl EdgeCaseTestEnvironment {
 
         Command::new("git")
             .current_dir(self.temp_dir.path())
-            .args(["commit", "-m", &format!("Add content for {}", branch_name)])
+            .args(["commit", "-m", &format!("Add content for {branch_name}")])
             .output()
             .unwrap();
     }
@@ -264,8 +264,7 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch(&format!("issue/{}", issue_name))
-            .unwrap();
+        git.checkout_branch(&format!("issue/{issue_name}")).unwrap();
     }
 
     // Mark issue complete
@@ -533,7 +532,7 @@ async fn test_branch_name_validation() {
 
         // Verify no branch was created with invalid name
         if !invalid_name.is_empty() {
-            let branch_name = format!("issue/{}", invalid_name);
+            let branch_name = format!("issue/{invalid_name}");
             // This might fail due to git's own validation, which is fine
             let _ = git.branch_exists(&branch_name);
         }
@@ -562,8 +561,7 @@ async fn test_performance_with_many_branches() {
     // Create many feature branches
     for i in 0..10 {
         // Reduced number for CI performance
-        env.create_test_branch(&format!("feature/branch-{}", i))
-            .await;
+        env.create_test_branch(&format!("feature/branch-{i}")).await;
     }
 
     let git_ops = env.git_ops.lock().await;
@@ -572,8 +570,8 @@ async fn test_performance_with_many_branches() {
     // Create issue branches from various sources
     for i in 0..5 {
         // Test subset for performance
-        let issue_name = format!("perf-test-{}", i);
-        let source_branch = format!("feature/branch-{}", i);
+        let issue_name = format!("perf-test-{i}");
+        let source_branch = format!("feature/branch-{i}");
 
         git.checkout_branch(&source_branch).unwrap();
 
@@ -585,13 +583,13 @@ async fn test_performance_with_many_branches() {
         assert!(duration.as_millis() < 5000); // Should complete within 5 seconds
 
         let branch_name = result.unwrap();
-        assert_eq!(branch_name, format!("issue/{}", issue_name));
+        assert_eq!(branch_name, format!("issue/{issue_name}"));
     }
 
     // Test branch existence checking performance
     let start_time = std::time::Instant::now();
     for i in 0..10 {
-        let branch_name = format!("feature/branch-{}", i);
+        let branch_name = format!("feature/branch-{i}");
         assert!(git.branch_exists(&branch_name).unwrap());
     }
     let duration = start_time.elapsed();

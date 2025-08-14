@@ -1257,7 +1257,7 @@ mod tests {
         let result = template.render_with_config(&args).unwrap();
 
         // Should contain "issues" as part of the path
-        assert!(result.contains("issues"), "Result was: {}", result);
+        assert!(result.contains("issues"), "Result was: {result}");
         assert!(result.starts_with("Issues directory: "));
     }
 

@@ -353,6 +353,12 @@ pub struct IsolatedTestEnvironment {
 
 #[cfg(test)]
 impl IsolatedTestEnvironment {
+    /// Creates a new isolated test environment with temporary HOME and current working directory.
+    ///
+    /// This creates:
+    /// - A temporary home directory with mock .swissarmyhammer structure
+    /// - A temporary current working directory
+    /// - Automatic restoration of original directories on drop
     pub fn new() -> std::io::Result<Self> {
         let original_cwd = std::env::current_dir()?;
         let home_guard = IsolatedTestHome::new();
