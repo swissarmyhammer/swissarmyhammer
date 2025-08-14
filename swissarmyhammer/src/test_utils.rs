@@ -49,7 +49,6 @@ use std::sync::OnceLock;
 // #[cfg(test)]
 // use swissarmyhammer_tools::mcp::{ToolHandlers, ToolContext};
 
-#[cfg(test)]
 use tempfile::TempDir;
 
 /// Helper struct to ensure process cleanup in tests
@@ -264,7 +263,6 @@ pub fn create_test_home_guard() -> TestHomeGuard {
 ///     // temp_dir is automatically cleaned up when dropped
 /// }
 /// ```
-#[cfg(test)]
 pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
     let temp_dir = create_temp_dir();
     let home_path = temp_dir.path().to_path_buf();
@@ -297,13 +295,11 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
 ///     // Original HOME is restored when _guard is dropped
 /// }
 /// ```
-#[cfg(test)]
 pub struct IsolatedTestHome {
     _temp_dir: TempDir,
     original_home: Option<String>,
 }
 
-#[cfg(test)]
 impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
@@ -330,7 +326,6 @@ impl IsolatedTestHome {
     }
 }
 
-#[cfg(test)]
 impl Drop for IsolatedTestHome {
     fn drop(&mut self) {
         // Restore original HOME environment variable
@@ -341,11 +336,53 @@ impl Drop for IsolatedTestHome {
     }
 }
 
+/// RAII helper that isolates both HOME directory and current working directory for tests
+/// This prevents abort file pollution between tests by ensuring each test runs in its own environment
+#[cfg(test)]
+pub struct IsolatedTestEnvironment {
+    _home_guard: IsolatedTestHome,
+    _temp_dir: TempDir,
+    original_cwd: PathBuf,
+}
+
+#[cfg(test)]
+impl IsolatedTestEnvironment {
+    pub fn new() -> std::io::Result<Self> {
+        let original_cwd = std::env::current_dir()?;
+        let home_guard = IsolatedTestHome::new();
+        let temp_dir = TempDir::new()?;
+        std::env::set_current_dir(temp_dir.path())?;
+        
+        Ok(Self {
+            _home_guard: home_guard,
+            _temp_dir: temp_dir,
+            original_cwd,
+        })
+    }
+
+    /// Get the path to the isolated home directory
+    pub fn home_path(&self) -> PathBuf {
+        self._home_guard.home_path()
+    }
+
+    /// Get the path to the .swissarmyhammer directory in the isolated home
+    pub fn swissarmyhammer_dir(&self) -> PathBuf {
+        self._home_guard.swissarmyhammer_dir()
+    }
+}
+
+#[cfg(test)]
+impl Drop for IsolatedTestEnvironment {
+    fn drop(&mut self) {
+        // Restore original working directory
+        let _ = std::env::set_current_dir(&self.original_cwd);
+    }
+}
+
 /// Create a temporary directory for testing
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
 /// better error handling and consistent behavior across tests.
-#[cfg(test)]
 pub fn create_temp_dir() -> TempDir {
     TempDir::new().expect("Failed to create temporary directory for test")
 }

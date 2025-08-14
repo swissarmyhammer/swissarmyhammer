@@ -33,7 +33,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             model_id: "nomic-embed-text-v1.5".to_string(), // Modern, high-quality embedding model
-            embedding_model: EmbeddingModel::NomicEmbedTextV15,
+            embedding_model: EmbeddingModel::NomicEmbedTextV15Q,
             batch_size: 32, // Reasonable batch size for neural models
             max_text_length: 8000,
             batch_delay_ms: 10, // Small delay for neural processing
@@ -131,7 +131,8 @@ impl EmbeddingEngine {
 
         // Initialize fastembed model
         let init_options = InitOptions::new(config.embedding_model.clone())
-            .with_show_download_progress(config.show_download_progress);
+            .with_show_download_progress(config.show_download_progress)
+            .with_cache_dir("/tmp/.cache/fastembed".into());
 
         let mut model = TextEmbedding::try_new(init_options).map_err(|e| {
             SemanticError::Embedding(format!("Failed to initialize fastembed model: {e}"))

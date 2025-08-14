@@ -15,6 +15,7 @@ The goal is to have:
 ## Rules
 
 - Always run tests using a command line tool appropriate for the project
+  - start with a 5 minute timeout
 - YOU MUST debug the code to make all tests pass, only change tests as a last resort
 - If individual tests are identified as slow
   - check if any tests are hanging and correct them
