@@ -140,8 +140,6 @@ pub trait IssueStorage: Send + Sync {
     /// Update an existing issue's content by IssueName
     async fn update_issue_by_name(&self, name: &IssueName, content: String) -> Result<Issue>;
 
-    /// Mark an issue as complete by IssueName
-    async fn mark_complete_by_name(&self, name: &IssueName) -> Result<Issue>;
 
     /// Get multiple issues by their IssueName objects
     async fn get_issues_batch_by_name(&self, names: Vec<&IssueName>) -> Result<Vec<Issue>>;
@@ -152,8 +150,6 @@ pub trait IssueStorage: Send + Sync {
         updates: Vec<(&IssueName, String)>,
     ) -> Result<Vec<Issue>>;
 
-    /// Mark multiple issues as complete by IssueName
-    async fn mark_complete_batch_by_name(&self, names: Vec<&IssueName>) -> Result<Vec<Issue>>;
 }
 
 /// File system implementation of issue storage
@@ -717,7 +713,14 @@ impl IssueStorage for FileSystemIssueStorage {
     async fn mark_complete(&self, name: &str) -> Result<Issue> {
         // Find the issue by name, with deterministic behavior for duplicates
         let issue = self.get_issue_for_mark_complete(name).await?;
-        self.move_issue_with_issue(issue, true).await
+        
+        // Move the issue to completed directory
+        let completed_issue = self.move_issue_with_issue(issue, true).await?;
+        
+        // Verify we actually moved it successfully
+        self.validate_completion_successful(&completed_issue.name)?;
+        
+        Ok(completed_issue)
     }
 
     async fn create_issues_batch(&self, issues: Vec<(String, String)>) -> Result<Vec<Issue>> {
@@ -807,9 +810,6 @@ impl IssueStorage for FileSystemIssueStorage {
         self.update_issue(name.as_str(), content).await
     }
 
-    async fn mark_complete_by_name(&self, name: &IssueName) -> Result<Issue> {
-        self.mark_complete(name.as_str()).await
-    }
 
     async fn get_issues_batch_by_name(&self, names: Vec<&IssueName>) -> Result<Vec<Issue>> {
         let str_names: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
@@ -827,11 +827,30 @@ impl IssueStorage for FileSystemIssueStorage {
         self.update_issues_batch(str_updates).await
     }
 
-    async fn mark_complete_batch_by_name(&self, names: Vec<&IssueName>) -> Result<Vec<Issue>> {
-        let str_names: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
-        self.mark_complete_batch(str_names).await
+}
+
+impl FileSystemIssueStorage {
+    /// Verify that the issue was actually moved to the completed directory
+    fn validate_completion_successful(&self, issue_name: &str) -> Result<()> {
+        let completed_file = self.state.completed_dir.join(format!("{}.md", issue_name));
+        
+        if !completed_file.exists() {
+            let work_dir = std::env::current_dir().map_err(crate::SwissArmyHammerError::Io)?;
+            crate::common::create_abort_file(
+                &work_dir,
+                &format!("Issue '{}' was not successfully moved to completed directory", issue_name)
+            )?;
+            
+            return Err(crate::SwissArmyHammerError::Storage(format!(
+                "Issue '{}' completion failed - file not found in completed directory",
+                issue_name
+            )));
+        }
+        
+        Ok(())
     }
 }
+
 
 /// Format issue name as 6-digit string with leading zeros
 pub fn format_issue_number(number: u32) -> String {

@@ -291,10 +291,6 @@ pub async fn get_project_status<S: IssueStorage>(storage: &S) -> Result<ProjectS
     Ok(ProjectStatus::from_issue_infos(all_issue_infos))
 }
 
-/// Get the next issue to work on
-pub async fn get_next_issue<S: IssueStorage>(storage: &S) -> Result<Option<Issue>> {
-    storage.get_next_issue().await
-}
 
 /// Format issue status for display
 pub fn format_issue_status(completed: bool) -> String {

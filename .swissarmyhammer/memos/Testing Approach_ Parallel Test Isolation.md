@@ -9,25 +9,26 @@ The current test setup uses a shared HOME environment variable modification thro
 
 ## **RECOMMENDED PATTERN: Use IsolatedTestHome RAII Guard**
 
-**ALWAYS use `IsolatedTestHome::new()` for tests that need HOME directory setup:**
+**ALWAYS use `IsolatedTestEnvironment::new()` for workflow tests to isolate current working and home**
 
 ```rust
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 #[test]
 fn test_something() {
-    let _guard = IsolatedTestHome::new();
-    // HOME now points to an isolated temporary directory
+    let _guard = IsolatedTestEnvironment::new();
+    // HOME/PWD now points to an isolated temporary directory
     // with mock .swissarmyhammer structure
-    // Original HOME is restored when _guard is dropped
+    // Original HOME/PWD is restored when _guard is dropped
     // Tests can run in parallel safely
 }
 ```
 
-The `IsolatedTestHome` RAII guard pattern:
+The `IsolatedTestEnvironment` RAII guard pattern:
 - Creates a temporary directory with mock `.swissarmyhammer` structure
 - Sets HOME to point to it  
 - Restores original HOME on drop
+- Repeats this for a temporary PWD
 - Allows parallel test execution
 - Provides complete test isolation
 - Has methods like `.home_path()` and `.swissarmyhammer_dir()` for accessing paths
@@ -39,11 +40,3 @@ The `IsolatedTestHome` RAII guard pattern:
 - Faster test execution
 - More reliable CI/CD
 - Clean RAII pattern with automatic cleanup
-
-## Migration
-Replace all uses of:
-- `TestHomeGuard` -> `IsolatedTestHome`
-- `create_test_home_guard()` -> `IsolatedTestHome::new()`
-- `setup_test_home()` -> `IsolatedTestHome::new()`
-
-This fixes nextest hanging issues and enables proper parallel test execution.

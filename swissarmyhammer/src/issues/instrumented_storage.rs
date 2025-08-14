@@ -217,14 +217,6 @@ impl IssueStorage for InstrumentedIssueStorage {
         result
     }
 
-    async fn mark_complete_by_name(&self, name: &IssueName) -> Result<Issue> {
-        let start = Instant::now();
-        let result = self.storage.mark_complete_by_name(name).await;
-        let duration = start.elapsed();
-
-        self.metrics.record_operation(Operation::Update, duration);
-        result
-    }
 
     async fn get_issues_batch_by_name(&self, names: Vec<&IssueName>) -> Result<Vec<Issue>> {
         let start = Instant::now();
@@ -247,14 +239,6 @@ impl IssueStorage for InstrumentedIssueStorage {
         result
     }
 
-    async fn mark_complete_batch_by_name(&self, names: Vec<&IssueName>) -> Result<Vec<Issue>> {
-        let start = Instant::now();
-        let result = self.storage.mark_complete_batch_by_name(names).await;
-        let duration = start.elapsed();
-
-        self.metrics.record_operation(Operation::Update, duration);
-        result
-    }
 }
 
 #[cfg(test)]
