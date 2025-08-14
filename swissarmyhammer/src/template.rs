@@ -834,7 +834,7 @@ impl TemplateEngine {
     /// 2. Environment variables
     /// 3. sah.toml configuration variables
     /// 4. Well-known system variables (lowest)
-    /// Configuration is loaded from the repository root if available.
+    ///    Configuration is loaded from the repository root if available.
     pub fn render_with_config(
         &self,
         template_str: &str,

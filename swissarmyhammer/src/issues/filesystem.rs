@@ -360,7 +360,7 @@ impl FileSystemIssueStorage {
         // Atomic write using temp file and rename - write pure markdown content
         let temp_path = current_path.with_extension("tmp");
         std::fs::write(&temp_path, &content).map_err(SwissArmyHammerError::Io)?;
-        std::fs::rename(&temp_path, &current_path).map_err(SwissArmyHammerError::Io)?;
+        std::fs::rename(&temp_path, current_path).map_err(SwissArmyHammerError::Io)?;
 
         debug!(
             "Successfully updated issue {} at path {}",
@@ -828,21 +828,17 @@ impl IssueStorage for FileSystemIssueStorage {
 impl FileSystemIssueStorage {
     /// Verify that the issue was actually moved to the completed directory
     fn validate_completion_successful(&self, issue_name: &str) -> Result<()> {
-        let completed_file = self.state.completed_dir.join(format!("{}.md", issue_name));
+        let completed_file = self.state.completed_dir.join(format!("{issue_name}.md"));
 
         if !completed_file.exists() {
             let work_dir = std::env::current_dir().map_err(crate::SwissArmyHammerError::Io)?;
             crate::common::create_abort_file(
                 &work_dir,
-                &format!(
-                    "Issue '{}' was not successfully moved to completed directory",
-                    issue_name
-                ),
+                &format!("Issue '{issue_name}' was not successfully moved to completed directory"),
             )?;
 
             return Err(crate::SwissArmyHammerError::Storage(format!(
-                "Issue '{}' completion failed - file not found in completed directory",
-                issue_name
+                "Issue '{issue_name}' completion failed - file not found in completed directory"
             )));
         }
 
