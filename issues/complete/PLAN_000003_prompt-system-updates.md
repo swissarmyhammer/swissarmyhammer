@@ -111,3 +111,86 @@ Update the guideline about issue references:
 - Focus on single file processing instead of directory scanning
 - Maintain all existing planning guidelines and quality standards
 - The argument will be passed from the workflow execution
+
+## Proposed Solution
+
+After analyzing the current `builtin/prompts/plan.md` file, I will implement the following changes:
+
+### 1. YAML Front Matter Updates
+- Add `arguments` section with `plan_filename` parameter
+- Update description to reflect single file processing instead of directory scanning
+
+### 2. Process Section Overhaul
+- Remove hardcoded `./specification` directory references
+- Replace directory scanning logic with single file parameter usage  
+- Update draft plan file creation to use parameter-based naming
+- Modify git workflow to focus on single file changes rather than directory comparisons
+
+### 3. Liquid Template Implementation
+- Use `{{ plan_filename }}` throughout the prompt
+- Replace line 28's hardcoded reference with parameter usage
+- Ensure proper liquid syntax for file parameter
+
+### 4. Specific Changes Required
+
+**Lines to modify:**
+- Line 3: Update description  
+- Line 28: Replace hardcoded path with `{{ plan_filename }}`
+- Line 33: Remove directory scanning, focus on single file
+- Line 36: Remove git directory comparison
+- Lines 44-45: Update example to use parameter
+
+**Key implementation details:**
+- Use liquid template syntax: `{{ plan_filename }}`
+- Maintain all existing planning quality and structure
+- Remove all references to directory scanning
+- Focus processing on the specific file parameter
+- Update issue creation to use file-based prefixes
+
+This approach transforms the prompt from a directory-based scanner to a focused single-file processor while maintaining all existing planning capabilities and quality standards.
+
+## Implementation Notes
+
+Successfully implemented all required changes to `builtin/prompts/plan.md`:
+
+### ✅ Changes Completed
+
+1. **YAML Front Matter Updated**: 
+   - Added `arguments` section with `plan_filename` parameter
+   - Updated description to reflect single file processing
+   - Parameter marked as required with proper description
+
+2. **Liquid Template Parameter Usage**:
+   - Line 32: Updated reference instruction to use `{{ plan_filename }}`
+   - Line 37: Updated Process section to use `{{ plan_filename }}`
+   - Line 47: Updated example to reference `FOO.md` instead of just `FOO`
+
+3. **Process Section Overhaul**:
+   - Removed hardcoded `./specification` directory references
+   - Removed git directory comparison logic (line 36 in original)
+   - Focused on single file analysis instead of directory scanning
+   - Maintained all existing planning quality guidelines
+
+4. **File Naming Convention Updates**:
+   - Updated example in line 47 to use `.md` extension for clarity
+   - Maintained numbered prefix pattern for issue ordering
+
+### ✅ Acceptance Criteria Met
+
+- [x] Prompt accepts `plan_filename` argument
+- [x] Argument is properly documented in YAML front matter  
+- [x] All hardcoded directory references removed
+- [x] Process focuses on specific file instead of directory scanning
+- [x] Reference instructions updated to use parameter
+- [x] Liquid template syntax is correct throughout
+- [x] Maintains all existing planning quality and structure
+
+### Implementation Quality
+
+- Used proper liquid template syntax: `{{ plan_filename }}`
+- Removed all references to `./specification` directory
+- Maintained existing planning guidelines and quality standards
+- Preserved workflow integration patterns
+- Updated examples to be more specific and clear
+
+The prompt is now ready for integration with workflow parameter support from PLAN_000002.
