@@ -368,7 +368,7 @@ async fn run_plan(plan_filename: String) -> i32 {
 
     // Check if file is readable by attempting to read metadata
     match std::fs::metadata(&plan_filename) {
-        Ok(_) => {}, // File is accessible
+        Ok(_) => {} // File is accessible
         Err(e) => {
             tracing::error!("Cannot access plan file '{}': {}", plan_filename, e);
             return EXIT_ERROR;
