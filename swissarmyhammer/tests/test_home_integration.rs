@@ -19,18 +19,25 @@ fn test_home_directory_override_works() {
         // Create test files to verify the structure works
         std::fs::write(
             swissarmyhammer_dir.join("prompts").join("test-prompt.md"),
-            "# Test Prompt\nThis is a test prompt."
-        ).expect("Failed to create test prompt");
+            "# Test Prompt\nThis is a test prompt.",
+        )
+        .expect("Failed to create test prompt");
 
         std::fs::write(
-            swissarmyhammer_dir.join("prompts").join("another-test.md.liquid"),
-            "# Another Test\nContent: {{ variable }}"
-        ).expect("Failed to create another test prompt");
+            swissarmyhammer_dir
+                .join("prompts")
+                .join("another-test.md.liquid"),
+            "# Another Test\nContent: {{ variable }}",
+        )
+        .expect("Failed to create another test prompt");
 
         std::fs::write(
-            swissarmyhammer_dir.join("workflows").join("test-workflow.yaml"),
-            "name: test\nsteps: []"
-        ).expect("Failed to create test workflow");
+            swissarmyhammer_dir
+                .join("workflows")
+                .join("test-workflow.yaml"),
+            "name: test\nsteps: []",
+        )
+        .expect("Failed to create test workflow");
 
         // Check that test files exist
         let test_prompt = swissarmyhammer_dir.join("prompts").join("test-prompt.md");
@@ -62,13 +69,15 @@ fn test_prompt_loading_with_test_home() {
     let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
     std::fs::write(
         prompts_dir.join("test-prompt.md"),
-        "# Test Prompt\nThis is a test prompt."
-    ).expect("Failed to create test prompt");
+        "# Test Prompt\nThis is a test prompt.",
+    )
+    .expect("Failed to create test prompt");
 
     std::fs::write(
         prompts_dir.join("another-test.md.liquid"),
-        "# Another Test\nContent: {{ variable }}"
-    ).expect("Failed to create another test prompt");
+        "# Another Test\nContent: {{ variable }}",
+    )
+    .expect("Failed to create another test prompt");
 
     let loader = PromptLoader::new();
     let prompts = loader
@@ -93,13 +102,15 @@ fn test_prompt_resolver_with_test_home() {
     let prompts_dir = guard.swissarmyhammer_dir().join("prompts");
     std::fs::write(
         prompts_dir.join("test-prompt.md"),
-        "# Test Prompt\nThis is a test prompt."
-    ).expect("Failed to create test prompt");
+        "# Test Prompt\nThis is a test prompt.",
+    )
+    .expect("Failed to create test prompt");
 
     std::fs::write(
         prompts_dir.join("another-test.md.liquid"),
-        "# Another Test\nContent: {{ variable }}"
-    ).expect("Failed to create another test prompt");
+        "# Another Test\nContent: {{ variable }}",
+    )
+    .expect("Failed to create another test prompt");
 
     // Verify HOME is set correctly
     let home = std::env::var("HOME").expect("HOME not set");

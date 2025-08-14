@@ -483,7 +483,7 @@ pub enum PlanCommandError {
         /// The underlying IO error
         source: std::io::Error,
     },
-    
+
     /// Permission denied accessing plan file
     #[error("Permission denied accessing plan file: {path}")]
     PermissionDenied {
@@ -493,7 +493,7 @@ pub enum PlanCommandError {
         /// The underlying IO error
         source: std::io::Error,
     },
-    
+
     /// Invalid plan file format
     #[error("Invalid plan file format: {path}\nReason: {reason}")]
     InvalidFileFormat {
@@ -502,7 +502,7 @@ pub enum PlanCommandError {
         /// The reason why the file format is invalid
         reason: String,
     },
-    
+
     /// Workflow execution failed for plan
     #[error("Workflow execution failed for plan: {plan_filename}")]
     WorkflowExecutionFailed {
@@ -512,7 +512,7 @@ pub enum PlanCommandError {
         /// The underlying workflow error
         source: WorkflowError,
     },
-    
+
     /// Issue creation failed during planning
     #[error("Issue creation failed during planning")]
     IssueCreationFailed {
@@ -522,14 +522,14 @@ pub enum PlanCommandError {
         /// The underlying error that caused issue creation to fail
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    
+
     /// Plan file is empty or contains no valid content
     #[error("Plan file is empty or contains no valid content: {path}")]
     EmptyPlanFile {
         /// The path of the empty plan file
         path: String,
     },
-    
+
     /// Plan file too large to process
     #[error("Plan file too large to process: {path} ({size} bytes)")]
     FileTooLarge {
@@ -538,7 +538,7 @@ pub enum PlanCommandError {
         /// The size of the file in bytes
         size: u64,
     },
-    
+
     /// Issues directory is not writable
     #[error("Issues directory is not writable")]
     IssuesDirectoryNotWritable {
@@ -574,18 +574,19 @@ impl PlanCommandError {
                     • Ensure the file exists: ls -la '{}'\n\
                     • Try using an absolute path: swissarmyhammer plan /full/path/to/{}\n\
                     • Create the file if it doesn't exist",
-                    path, path, path.split('/').last().unwrap_or(path)
+                    path,
+                    path,
+                    path.split('/').next_back().unwrap_or(path)
                 )
             }
             PlanCommandError::PermissionDenied { path, .. } => {
                 format!(
-                    "Permission denied when trying to read '{}'.\n\
+                    "Permission denied when trying to read '{path}'.\n\
                     \n\
                     Suggestions:\n\
-                    • Check file permissions: ls -la '{}'\n\
-                    • Ensure you have read access: chmod +r '{}'\n\
-                    • Try running with appropriate permissions",
-                    path, path, path
+                    • Check file permissions: ls -la '{path}'\n\
+                    • Ensure you have read access: chmod +r '{path}'\n\
+                    • Try running with appropriate permissions"
                 )
             }
             PlanCommandError::InvalidFileFormat { path, reason } => {
@@ -603,76 +604,70 @@ impl PlanCommandError {
                     • Check for proper UTF-8 encoding\n\
                     • Verify the file isn't corrupted"
                 };
-                
+
                 format!(
-                    "The plan file '{}' has an invalid format.\n\
-                    Reason: {}\n\
+                    "The plan file '{path}' has an invalid format.\n\
+                    Reason: {reason}\n\
                     \n\
                     Suggestions:\n\
-                    {}",
-                    path, reason, suggestions
+                    {suggestions}"
                 )
             }
             PlanCommandError::WorkflowExecutionFailed { plan_filename, .. } => {
                 format!(
-                    "Failed to execute planning workflow for '{}'.\n\
+                    "Failed to execute planning workflow for '{plan_filename}'.\n\
                     \n\
                     Suggestions:\n\
                     • Check that the plan file contains valid content\n\
                     • Ensure the issues directory is writable\n\
                     • Try running with --debug for more details\n\
-                    • Check system resources and permissions",
-                    plan_filename
+                    • Check system resources and permissions"
                 )
             }
             PlanCommandError::EmptyPlanFile { path } => {
                 format!(
-                    "The plan file '{}' is empty or contains no valid content.\n\
+                    "The plan file '{path}' is empty or contains no valid content.\n\
                     \n\
                     Suggestions:\n\
                     • Add content to the plan file\n\
                     • Ensure the file isn't just whitespace\n\
-                    • Check that the file saved properly",
-                    path
+                    • Check that the file saved properly"
                 )
             }
             PlanCommandError::FileTooLarge { path, size } => {
                 format!(
-                    "The plan file '{}' is too large ({} bytes).\n\
+                    "The plan file '{path}' is too large ({size} bytes).\n\
                     \n\
                     Suggestions:\n\
                     • Break large plans into smaller, focused files\n\
                     • Remove unnecessary content from the plan\n\
-                    • Consider splitting into multiple planning sessions",
-                    path, size
+                    • Consider splitting into multiple planning sessions"
                 )
             }
             PlanCommandError::IssuesDirectoryNotWritable { path, .. } => {
                 format!(
-                    "Cannot write to issues directory: '{}'.\n\
+                    "Cannot write to issues directory: '{path}'.\n\
                     \n\
                     Suggestions:\n\
-                    • Check directory permissions: ls -la '{}'\n\
-                    • Ensure you have write access: chmod +w '{}'\n\
-                    • Create the directory if it doesn't exist: mkdir -p '{}'",
-                    path, path, path, path
+                    • Check directory permissions: ls -la '{path}'\n\
+                    • Ensure you have write access: chmod +w '{path}'\n\
+                    • Create the directory if it doesn't exist: mkdir -p '{path}'"
                 )
             }
             PlanCommandError::IssueCreationFailed { plan_filename, .. } => {
                 format!(
-                    "Failed to create issue files for plan '{}'.\n\
+                    "Failed to create issue files for plan '{plan_filename}'.\n\
                     \n\
                     Suggestions:\n\
                     • Ensure the issues directory exists and is writable\n\
                     • Check available disk space\n\
                     • Verify no conflicting files exist\n\
-                    • Try running with --debug for more details",
-                    plan_filename
+                    • Try running with --debug for more details"
                 )
             }
         }
     }
-    
+
     /// Get the error severity level
     pub fn severity(&self) -> ErrorSeverity {
         match self {
@@ -702,12 +697,12 @@ impl PlanCommandError {
                 ErrorSeverity::Critical => "Critical:",
             }
         };
-        
+
         let guidance = self.user_guidance();
-        
-        format!("{} {}\n\n{}", error_prefix, self, guidance)
+
+        format!("{error_prefix} {self}\n\n{guidance}")
     }
-    
+
     /// Log error with appropriate level
     pub fn log_error(&self) {
         match self.severity() {
@@ -715,7 +710,7 @@ impl PlanCommandError {
             ErrorSeverity::Error => tracing::error!("{}", self),
             ErrorSeverity::Critical => tracing::error!("CRITICAL: {}", self),
         }
-        
+
         // Log source chain for debugging
         let mut source = self.source();
         while let Some(err) = source {

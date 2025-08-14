@@ -353,8 +353,10 @@ fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<Str
 async fn run_plan(plan_filename: String) -> i32 {
     use cli::FlowSubcommand;
     use flow;
-    use swissarmyhammer::plan_utils::{validate_plan_file_comprehensive, validate_issues_directory};
-    use swissarmyhammer::error::{PlanCommandError, ErrorSeverity};
+    use swissarmyhammer::error::{ErrorSeverity, PlanCommandError};
+    use swissarmyhammer::plan_utils::{
+        validate_issues_directory, validate_plan_file_comprehensive,
+    };
 
     // Comprehensive plan file validation
     let validated_file = match validate_plan_file_comprehensive(&plan_filename, None) {
@@ -363,10 +365,10 @@ async fn run_plan(plan_filename: String) -> i32 {
             // Display user-friendly error with color support
             let use_color = cli::Cli::should_use_color();
             eprintln!("{}", e.display_to_user(use_color));
-            
+
             // Log the error for debugging
             e.log_error();
-            
+
             // Return appropriate exit code based on severity
             return match e.severity() {
                 ErrorSeverity::Warning => EXIT_WARNING,
@@ -385,10 +387,10 @@ async fn run_plan(plan_filename: String) -> i32 {
             // Display user-friendly error
             let use_color = cli::Cli::should_use_color();
             eprintln!("{}", e.display_to_user(use_color));
-            
+
             // Log the error for debugging
             e.log_error();
-            
+
             return EXIT_ERROR;
         }
     }
@@ -405,7 +407,10 @@ async fn run_plan(plan_filename: String) -> i32 {
         quiet: false,
     };
 
-    tracing::info!("Executing plan workflow for file: {}", validated_file.path.display());
+    tracing::info!(
+        "Executing plan workflow for file: {}",
+        validated_file.path.display()
+    );
     tracing::debug!("Plan file size: {} bytes", validated_file.size);
 
     match flow::run_flow_command(subcommand).await {
@@ -426,14 +431,14 @@ async fn run_plan(plan_filename: String) -> i32 {
                         reason: abort_reason.clone(),
                     },
                 };
-                
+
                 let use_color = cli::Cli::should_use_color();
                 eprintln!("{}", plan_error.display_to_user(use_color));
                 plan_error.log_error();
-                
+
                 return EXIT_ERROR;
             }
-            
+
             // For other workflow errors, also wrap them
             let plan_error = PlanCommandError::WorkflowExecutionFailed {
                 plan_filename: plan_filename.clone(),
@@ -441,11 +446,11 @@ async fn run_plan(plan_filename: String) -> i32 {
                     reason: e.to_string(),
                 },
             };
-            
+
             let use_color = cli::Cli::should_use_color();
             eprintln!("{}", plan_error.display_to_user(use_color));
             plan_error.log_error();
-            
+
             EXIT_ERROR
         }
     }
