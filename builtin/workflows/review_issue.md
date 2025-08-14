@@ -12,7 +12,8 @@ stateDiagram-v2
     [*] --> start
     start --> review
     review --> correct
-    correct --> commit
+    correct --> test
+    test --> commit
     commit --> [*]
 ```
 
@@ -21,6 +22,7 @@ stateDiagram-v2
 - start: log "Reviewing an issue"
 - review: execute prompt "issue/review"
 - correct: execute prompt "issue/code_review"
+- test: run workflow "tdd"
 - commit: execute prompt "commit"
 
 ## Description

@@ -25,6 +25,7 @@ You job is to resolve an issue by coding a solution.
 - Check the existing code, determine if this issue has already been done in the code
 - Use Test Driven Development and implement your proposed solution on the issue feature branch
 - DO NOT commit to git
+- As you code, keep notes on your decisions and add them to the issue file
 - Report your progress
 
 {% render "review_format" %}

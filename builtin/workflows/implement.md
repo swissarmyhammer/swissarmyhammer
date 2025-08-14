@@ -13,7 +13,6 @@ stateDiagram-v2
     start --> are_issues_complete
     are_issues_complete --> loop
     loop --> done: result.matches("(?i)YES")
-    loop --> work: result.matches("(?i)NO")
     loop --> work: default
     work --> are_issues_complete
     done --> [*]
@@ -21,7 +20,7 @@ stateDiagram-v2
 
 ## Actions
 
-- start: log "Resolving issues"
+- start: log "Implementing issues"
 - are_issues_complete: execute prompt "are_issues_complete"
 - work: run workflow "do_issue"
 - done: log "Complete"

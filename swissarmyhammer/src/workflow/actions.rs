@@ -465,13 +465,11 @@ impl PromptAction {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        if !quiet {
-            tracing::info!(
-                "Executing prompt '{}' with Claude at: {}",
-                self.prompt_name,
-                claude_path.display()
-            );
-        }
+        tracing::debug!(
+            "Executing prompt '{}' with Claude at: {}",
+            self.prompt_name,
+            claude_path.display()
+        );
 
         // Spawn the Claude process
         let mut child = cmd.spawn().map_err(|e| {
@@ -1722,7 +1720,7 @@ impl Action for SubWorkflowAction {
         new_stack.push(Value::String(self.workflow_name.clone()));
 
         // Execute the sub-workflow in-process
-        tracing::info!("Executing sub-workflow '{}' in-process", self.workflow_name);
+        tracing::debug!("Executing sub-workflow '{}' in-process", self.workflow_name);
         tracing::debug!("Current context before sub-workflow: {:?}", context);
 
         // Create storage and load the workflow

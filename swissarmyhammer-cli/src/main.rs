@@ -115,23 +115,23 @@ async fn main() {
 
     let exit_code = match cli.command {
         Some(Commands::Serve) => {
-            tracing::info!("Starting MCP server");
+            tracing::debug!("Starting MCP server");
             run_server().await
         }
         Some(Commands::Doctor) => {
-            tracing::info!("Running diagnostics");
+            tracing::debug!("Running diagnostics");
             run_doctor()
         }
         Some(Commands::Prompt { subcommand }) => {
-            tracing::info!("Running prompt command");
+            tracing::debug!("Running prompt command");
             run_prompt(subcommand).await
         }
         Some(Commands::Completion { shell }) => {
-            tracing::info!("Generating completion for {:?}", shell);
+            tracing::debug!("Generating completion for {:?}", shell);
             run_completions(shell)
         }
         Some(Commands::Flow { subcommand }) => {
-            tracing::info!("Running flow command");
+            tracing::debug!("Running flow command");
             run_flow(subcommand).await
         }
         Some(Commands::Validate {

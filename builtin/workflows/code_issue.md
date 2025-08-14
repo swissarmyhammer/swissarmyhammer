@@ -20,7 +20,7 @@ stateDiagram-v2
 
 - start: log "Coding an issue"
 - issue: execute prompt "issue/code"
-- test: log "Would run TDD workflow"
+- test: run workflow "tdd"
 - commit: execute prompt "commit"
 
 ## Description

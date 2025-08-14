@@ -17,7 +17,7 @@ stateDiagram-v2
 
 ## Actions
 
-- start: log "Making the plan"
+- start: log "Making a plan"
 - plan: execute prompt "plan"
 - done: log "Plan ready, look in ./issues"
 

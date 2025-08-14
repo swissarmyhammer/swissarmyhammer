@@ -16,7 +16,6 @@ The goal is to have:
 
 - Always run tests using a command line tool appropriate for the project
 - YOU MUST debug the code to make all tests pass, only change tests as a last resort
-- Always have an extended timeout running tests of 10 minutes for the first try
 - If individual tests are identified as slow
   - check if any tests are hanging and correct them
   - speed the tests up so they are no longer slow

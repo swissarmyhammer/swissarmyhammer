@@ -408,7 +408,7 @@ impl WorkflowExecutor {
             }
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Transitioning from {} to {} for workflow {}",
             run.current_state,
             next_state,

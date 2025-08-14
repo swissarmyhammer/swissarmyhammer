@@ -175,13 +175,13 @@ impl McpServer {
         resolver.load_all_prompts(&mut library)?;
 
         let total = library.list()?.len();
-        tracing::info!("Loaded {} prompts total", total);
+        tracing::debug!("Loaded {} prompts total", total);
 
         // Initialize workflows - workflows are loaded automatically by FileSystemWorkflowStorage
         // so we just need to check how many are available
         let workflow_storage = self.workflow_storage.read().await;
         let workflow_count = workflow_storage.list_workflows()?.len();
-        tracing::info!("Loaded {} workflows total", workflow_count);
+        tracing::debug!("Loaded {} workflows total", workflow_count);
 
         Ok(())
     }

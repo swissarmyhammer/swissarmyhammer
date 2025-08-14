@@ -170,12 +170,6 @@ Issue workflow for worktree-based development.
 sah prompt test issue/on_worktree --var worktree="feature-branch"
 ```
 
-#### `issue/review_for_placeholders`
-Review issues for placeholder content.
-```bash
-sah prompt test issue/review_for_placeholders --var component="user interface"
-```
-
 ### Workflow Management
 
 #### `todo`
