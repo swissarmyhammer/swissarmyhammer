@@ -780,23 +780,23 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
-    
+
     /// RAII helper for CLI tests that isolates HOME directory and current working directory
     struct CliTestEnvironment {
         _temp_home: TempDir,
         original_home: Option<String>,
         original_cwd: PathBuf,
     }
-    
+
     impl CliTestEnvironment {
         fn new() -> std::io::Result<Self> {
             let original_cwd = std::env::current_dir()?;
             let original_home = std::env::var("HOME").ok();
-            
+
             // Create temporary HOME directory
             let temp_home = TempDir::new()?;
             std::env::set_var("HOME", temp_home.path());
-            
+
             Ok(Self {
                 _temp_home: temp_home,
                 original_home,
@@ -804,7 +804,7 @@ mod tests {
             })
         }
     }
-    
+
     impl Drop for CliTestEnvironment {
         fn drop(&mut self) {
             // Restore original HOME
@@ -812,12 +812,12 @@ mod tests {
                 Some(home) => std::env::set_var("HOME", home),
                 None => std::env::remove_var("HOME"),
             }
-            
+
             // Restore original current directory
             let _ = std::env::set_current_dir(&self.original_cwd);
         }
     }
-    
+
     // Note: Many tests have been temporarily disabled after simplifying the validate command
     // to always validate all prompts. These tests need to be rewritten to work with the new
     // simplified validation approach.

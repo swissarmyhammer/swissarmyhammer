@@ -154,6 +154,10 @@ async fn main() {
             tracing::info!("Running search command");
             run_search(subcommand).await
         }
+        Some(Commands::Plan { plan_filename }) => {
+            tracing::info!("Running plan command");
+            run_plan(plan_filename).await
+        }
         Some(Commands::Config { subcommand }) => {
             tracing::info!("Running config command");
             run_config(subcommand).await
@@ -342,6 +346,39 @@ fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<Str
         Err(e) => {
             tracing::error!("Validate error: {}", e);
             EXIT_ERROR
+        }
+    }
+}
+
+async fn run_plan(plan_filename: String) -> i32 {
+    use cli::FlowSubcommand;
+    use flow;
+
+    // Create a FlowSubcommand::Run with the plan_filename variable
+    let subcommand = FlowSubcommand::Run {
+        workflow: "plan".to_string(),
+        vars: vec![format!("plan_filename={}", plan_filename)],
+        set: Vec::new(),
+        interactive: false,
+        dry_run: false,
+        test: false,
+        timeout: None,
+        quiet: false,
+    };
+
+    match flow::run_flow_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            // Check if this is an abort error (file-based detection)
+            if let SwissArmyHammerError::ExecutorError(
+                swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
+            ) = &e
+            {
+                tracing::error!("Plan workflow aborted: {}", abort_reason);
+                return EXIT_ERROR;
+            }
+            tracing::error!("Plan error: {}", e);
+            EXIT_WARNING
         }
     }
 }

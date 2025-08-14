@@ -145,8 +145,12 @@ impl McpTool for MergeIssueTool {
                 match ops.merge_issue_branch_auto(&issue_name) {
                     Ok(target_branch) => {
                         let source_branch = Self::format_issue_branch_name(&issue_name);
-                        tracing::info!("Successfully merged issue branch '{}' to target branch '{}'", source_branch, target_branch);
-                        
+                        tracing::info!(
+                            "Successfully merged issue branch '{}' to target branch '{}'",
+                            source_branch,
+                            target_branch
+                        );
+
                         let mut success_message = format!(
                             "Merged work branch for issue {issue_name} to {target_branch} (determined by git merge-base)"
                         );
