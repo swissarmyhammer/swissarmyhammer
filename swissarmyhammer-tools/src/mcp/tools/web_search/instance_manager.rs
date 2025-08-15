@@ -314,18 +314,22 @@ impl InstanceManager {
     }
 
     /// Gets hardcoded fallback instances when discovery fails
+    /// Conservative list with instances less likely to be rate-limited
     fn get_fallback_instances() -> Vec<SearxInstance> {
         let fallback_urls = [
-            "https://search.bus-hit.me",
-            "https://searx.tiekoetter.com",
-            "https://search.projectsegfau.lt",
-            "https://searx.work",
+            // Try a mix of lesser-known but stable instances
+            "https://searx.be",
+            "https://search.nerdvpn.de", 
+            "https://searx.thefloatinglab.world",
+            "https://sx.catgirl.cloud",
+            "https://search.charliewhiskey.net",
+            // Add the official searxng demo (usually available)
             "https://search.sapti.me",
         ];
 
         fallback_urls
             .iter()
-            .map(|url| SearxInstance::new(url.to_string(), "B".to_string(), 95.0, 2000))
+            .map(|url| SearxInstance::new(url.to_string(), "B".to_string(), 90.0, 2500))
             .collect()
     }
 }
@@ -455,7 +459,7 @@ mod tests {
         let instances = InstanceManager::get_fallback_instances();
 
         assert!(!instances.is_empty());
-        assert_eq!(instances.len(), 5);
+        assert_eq!(instances.len(), 6);
 
         for instance in &instances {
             assert!(instance.url.starts_with("https://"));

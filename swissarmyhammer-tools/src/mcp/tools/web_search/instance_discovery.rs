@@ -121,12 +121,50 @@ struct SearxSpaceResponse {
 /// Instance information from searx.space API
 #[derive(Debug, Deserialize)]
 struct InstanceInfo {
+    // HTTP grade information
+    http: Option<HttpInfo>,
+    // Timing information with search performance
+    timing: Option<TimingInfo>, 
+    // Network information
+    network: Option<NetworkInfo>,
+    // Uptime statistics
+    uptime: Option<UptimeInfo>,
+    // Version and generator info
+    generator: Option<String>,
+    version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HttpInfo {
     grade: Option<String>,
-    uptime: Option<f32>,
-    response_time: Option<u64>,
-    api: Option<bool>,
-    #[serde(rename = "type")]
-    instance_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimingInfo {
+    search: Option<SearchTimingInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchTimingInfo {
+    success_percentage: Option<f64>,
+    #[serde(rename = "all")]
+    all_timing: Option<AllTimingInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AllTimingInfo {
+    median: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkInfo {
+    asn_privacy: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UptimeInfo {
+    #[serde(rename = "uptimeYear")]
+    uptime_year: Option<f64>,
 }
 
 /// Client for discovering SearXNG instances from searx.space API
@@ -197,34 +235,49 @@ impl InstanceDiscovery {
         let mut quality_instances = Vec::new();
 
         for (url, info) in instances {
-            // Skip instances without required fields
-            let Some(grade) = info.grade else {
-                continue;
-            };
-            let Some(uptime) = info.uptime else {
-                continue;
-            };
-            let Some(response_time) = info.response_time else {
-                continue;
-            };
-            let Some(has_api) = info.api else {
-                continue;
-            };
+            // Extract grade from http info
+            let grade = info
+                .http
+                .as_ref()
+                .and_then(|h| h.grade.as_ref())
+                .unwrap_or(&"C".to_string())
+                .clone();
 
-            // Skip instances without API support
-            if !has_api {
-                continue;
-            }
+            // Extract uptime from uptime info
+            let uptime = info
+                .uptime
+                .as_ref()
+                .and_then(|u| u.uptime_year)
+                .unwrap_or(0.0) as f32;
 
-            // Skip instances that are not public SearXNG instances
-            if let Some(instance_type) = &info.instance_type {
-                if instance_type != "searxng" {
+            // Extract response time from timing info
+            let response_time = info
+                .timing
+                .as_ref()
+                .and_then(|t| t.search.as_ref())
+                .and_then(|s| s.all_timing.as_ref())
+                .and_then(|a| a.median)
+                .unwrap_or(5000.0) as u64;
+
+            // Extract search success percentage
+            let success_percentage = info
+                .timing
+                .as_ref()
+                .and_then(|t| t.search.as_ref())
+                .and_then(|s| s.success_percentage)
+                .unwrap_or(0.0);
+
+            // Skip instances that are not SearXNG
+            if let Some(generator) = &info.generator {
+                if generator != "searxng" {
                     continue;
                 }
+            } else {
+                continue; // Skip if no generator info
             }
 
             // Apply quality filters
-            if !self.meets_quality_criteria(&grade, uptime, response_time) {
+            if !self.meets_quality_criteria(&grade, uptime, response_time, success_percentage) {
                 continue;
             }
 
@@ -251,20 +304,25 @@ impl InstanceDiscovery {
     }
 
     /// Checks if an instance meets our quality criteria
-    fn meets_quality_criteria(&self, grade: &str, uptime: f32, response_time: u64) -> bool {
+    fn meets_quality_criteria(&self, grade: &str, uptime: f32, response_time: u64, success_percentage: f64) -> bool {
         // Only accept A+, A, and B grade instances
         let acceptable_grades = ["A+", "A", "B"];
         if !acceptable_grades.contains(&grade) {
             return false;
         }
 
-        // Minimum uptime requirement
-        if uptime < 90.0 {
+        // Minimum uptime requirement (80% to be more permissive)
+        if uptime < 80.0 {
             return false;
         }
 
-        // Maximum response time requirement (5 seconds)
-        if response_time > 5000 {
+        // Maximum response time requirement (10 seconds to be more permissive)
+        if response_time > 10000 {
+            return false;
+        }
+
+        // Minimum search success percentage
+        if success_percentage < 50.0 {
             return false;
         }
 
@@ -409,23 +467,26 @@ mod tests {
     fn test_meets_quality_criteria() {
         let discovery = InstanceDiscovery::new();
 
-        // Should pass - A+ grade, good uptime, fast response
-        assert!(discovery.meets_quality_criteria("A+", 98.5, 1200));
+        // Should pass - A+ grade, good uptime, fast response, good success rate
+        assert!(discovery.meets_quality_criteria("A+", 98.5, 1200, 95.0));
 
-        // Should pass - A grade, minimum uptime, acceptable response time
-        assert!(discovery.meets_quality_criteria("A", 90.0, 5000));
+        // Should pass - A grade, minimum uptime, acceptable response time, decent success rate  
+        assert!(discovery.meets_quality_criteria("A", 80.0, 10000, 70.0));
 
         // Should pass - B grade, good stats
-        assert!(discovery.meets_quality_criteria("B", 95.0, 2000));
+        assert!(discovery.meets_quality_criteria("B", 95.0, 2000, 85.0));
 
         // Should fail - C grade (not acceptable)
-        assert!(!discovery.meets_quality_criteria("C", 95.0, 1000));
+        assert!(!discovery.meets_quality_criteria("C", 95.0, 1000, 90.0));
 
         // Should fail - low uptime
-        assert!(!discovery.meets_quality_criteria("A+", 85.0, 1000));
+        assert!(!discovery.meets_quality_criteria("A+", 75.0, 1000, 90.0));
 
         // Should fail - slow response time
-        assert!(!discovery.meets_quality_criteria("A+", 95.0, 6000));
+        assert!(!discovery.meets_quality_criteria("A+", 95.0, 15000, 90.0));
+
+        // Should fail - low success percentage
+        assert!(!discovery.meets_quality_criteria("A+", 95.0, 2000, 30.0));
     }
 
     #[test]
@@ -437,11 +498,23 @@ mod tests {
         instances.insert(
             "https://good.example.org".to_string(),
             InstanceInfo {
-                grade: Some("A+".to_string()),
-                uptime: Some(98.5),
-                response_time: Some(1200),
-                api: Some(true),
-                instance_type: Some("searxng".to_string()),
+                http: Some(HttpInfo {
+                    grade: Some("A+".to_string()),
+                }),
+                timing: Some(TimingInfo {
+                    search: Some(SearchTimingInfo {
+                        success_percentage: Some(95.0),
+                        all_timing: Some(AllTimingInfo {
+                            median: Some(1200.0),
+                        }),
+                    }),
+                }),
+                uptime: Some(UptimeInfo {
+                    uptime_year: Some(98.5),
+                }),
+                generator: Some("searxng".to_string()),
+                network: None,
+                version: None,
             },
         );
 
@@ -449,11 +522,23 @@ mod tests {
         instances.insert(
             "https://decent.example.org".to_string(),
             InstanceInfo {
-                grade: Some("A".to_string()),
-                uptime: Some(92.0),
-                response_time: Some(2000),
-                api: Some(true),
-                instance_type: Some("searxng".to_string()),
+                http: Some(HttpInfo {
+                    grade: Some("A".to_string()),
+                }),
+                timing: Some(TimingInfo {
+                    search: Some(SearchTimingInfo {
+                        success_percentage: Some(85.0),
+                        all_timing: Some(AllTimingInfo {
+                            median: Some(2000.0),
+                        }),
+                    }),
+                }),
+                uptime: Some(UptimeInfo {
+                    uptime_year: Some(92.0),
+                }),
+                generator: Some("searxng".to_string()),
+                network: None,
+                version: None,
             },
         );
 
@@ -461,23 +546,47 @@ mod tests {
         instances.insert(
             "https://bad.example.org".to_string(),
             InstanceInfo {
-                grade: Some("D".to_string()),
-                uptime: Some(60.0),
-                response_time: Some(8000),
-                api: Some(true),
-                instance_type: Some("searxng".to_string()),
+                http: Some(HttpInfo {
+                    grade: Some("D".to_string()),
+                }),
+                timing: Some(TimingInfo {
+                    search: Some(SearchTimingInfo {
+                        success_percentage: Some(30.0),
+                        all_timing: Some(AllTimingInfo {
+                            median: Some(8000.0),
+                        }),
+                    }),
+                }),
+                uptime: Some(UptimeInfo {
+                    uptime_year: Some(60.0),
+                }),
+                generator: Some("searxng".to_string()),
+                network: None,
+                version: None,
             },
         );
 
-        // No API support (should be filtered out)
+        // No generator info (should be filtered out)
         instances.insert(
-            "https://noapi.example.org".to_string(),
+            "https://nogen.example.org".to_string(),
             InstanceInfo {
-                grade: Some("A+".to_string()),
-                uptime: Some(98.0),
-                response_time: Some(1000),
-                api: Some(false),
-                instance_type: Some("searxng".to_string()),
+                http: Some(HttpInfo {
+                    grade: Some("A+".to_string()),
+                }),
+                timing: Some(TimingInfo {
+                    search: Some(SearchTimingInfo {
+                        success_percentage: Some(95.0),
+                        all_timing: Some(AllTimingInfo {
+                            median: Some(1000.0),
+                        }),
+                    }),
+                }),
+                uptime: Some(UptimeInfo {
+                    uptime_year: Some(98.0),
+                }),
+                generator: None, // No generator info
+                network: None,
+                version: None,
             },
         );
 
@@ -485,11 +594,23 @@ mod tests {
         instances.insert(
             "http://insecure.example.org".to_string(),
             InstanceInfo {
-                grade: Some("A+".to_string()),
-                uptime: Some(98.0),
-                response_time: Some(1000),
-                api: Some(true),
-                instance_type: Some("searxng".to_string()),
+                http: Some(HttpInfo {
+                    grade: Some("A+".to_string()),
+                }),
+                timing: Some(TimingInfo {
+                    search: Some(SearchTimingInfo {
+                        success_percentage: Some(95.0),
+                        all_timing: Some(AllTimingInfo {
+                            median: Some(1000.0),
+                        }),
+                    }),
+                }),
+                uptime: Some(UptimeInfo {
+                    uptime_year: Some(98.0),
+                }),
+                generator: Some("searxng".to_string()),
+                network: None,
+                version: None,
             },
         );
 
