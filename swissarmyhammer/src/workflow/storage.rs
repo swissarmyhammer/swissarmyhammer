@@ -1099,7 +1099,7 @@ mod tests {
     fn test_workflow_resolver_user_workflows() {
         use crate::test_utils::IsolatedTestHome;
         use std::fs;
-        
+
         let _env = IsolatedTestHome::new();
         let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
         let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
@@ -1253,7 +1253,7 @@ stateDiagram-v2
 
         // Change to project directory
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&project_dir).unwrap();
+        std::env::set_current_dir(project_dir).unwrap();
 
         // Load all workflows (user first, then local to test precedence)
         resolver.load_all_workflows(&mut storage).unwrap();

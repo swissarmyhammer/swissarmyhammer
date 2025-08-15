@@ -162,6 +162,10 @@ async fn main() {
             tracing::info!("Running config command");
             run_config(subcommand).await
         }
+        Some(Commands::Implement) => {
+            tracing::info!("Running implement command");
+            run_implement().await
+        }
         None => {
             // This case is handled early above for performance
             unreachable!()
@@ -397,7 +401,7 @@ async fn run_plan(plan_filename: String) -> i32 {
 
     // Create a FlowSubcommand::Run with the validated plan_filename variable
     let plan_var = format!("plan_filename={}", validated_file.path.display());
-    
+
     let subcommand = FlowSubcommand::Run {
         workflow: "plan".to_string(),
         vars: vec![plan_var],
@@ -465,6 +469,44 @@ async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             tracing::error!("Config error: {}", e);
+            EXIT_WARNING
+        }
+    }
+}
+
+async fn run_implement() -> i32 {
+    use cli::FlowSubcommand;
+    use flow;
+
+    // Create a FlowSubcommand::Run equivalent to 'sah flow run implement'
+    let subcommand = FlowSubcommand::Run {
+        workflow: "implement".to_string(),
+        vars: Vec::new(),
+        set: Vec::new(),
+        interactive: false,
+        dry_run: false,
+        test: false,
+        timeout: None,
+        quiet: false,
+    };
+
+    tracing::info!("Executing implement workflow");
+
+    match flow::run_flow_command(subcommand).await {
+        Ok(_) => {
+            tracing::info!("Implement workflow completed successfully");
+            EXIT_SUCCESS
+        }
+        Err(e) => {
+            // Check if this is an abort error (file-based detection)
+            if let SwissArmyHammerError::ExecutorError(
+                swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
+            ) = &e
+            {
+                tracing::error!("Implement workflow aborted: {}", abort_reason);
+                return EXIT_ERROR;
+            }
+            tracing::error!("Implement workflow error: {}", e);
             EXIT_WARNING
         }
     }

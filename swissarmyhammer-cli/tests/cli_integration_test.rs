@@ -148,7 +148,6 @@ fn test_prompt_help() -> Result<()> {
     Ok(())
 }
 
-
 /// Test shell completion generation
 #[test]
 fn test_completion_command() -> Result<()> {
@@ -344,7 +343,6 @@ fn test_flow_test_quiet_mode() -> Result<()> {
 
     Ok(())
 }
-
 
 /// Test flow test command with custom workflow directory
 #[test]
@@ -1283,7 +1281,6 @@ fn test_root_validate_absolute_relative_paths() -> Result<()> {
 
     Ok(())
 }
-
 
 /// Test validation with special characters in file paths
 #[test]

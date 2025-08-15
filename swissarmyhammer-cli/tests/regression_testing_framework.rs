@@ -551,4 +551,3 @@ fn test_custom_regression_suite() -> Result<()> {
 
     Ok(())
 }
-

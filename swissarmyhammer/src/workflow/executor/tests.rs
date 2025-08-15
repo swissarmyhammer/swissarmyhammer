@@ -1821,6 +1821,7 @@ async fn test_abort_file_performance_impact() {
     let start_with_abort = Instant::now();
     for _ in 0..10 {
         // Recreate the abort file each time since it gets detected and errors
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
         std::fs::write(".swissarmyhammer/.abort", "Performance test abort").unwrap();
         let mut run = executor.start_workflow(workflow.clone()).unwrap();
         let _ = executor.execute_state_with_limit(&mut run, 1000).await;

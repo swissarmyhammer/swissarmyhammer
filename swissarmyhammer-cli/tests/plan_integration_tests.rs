@@ -709,7 +709,6 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
     Ok(())
 }
 
-
 /// Test enhanced error handling: comprehensive file validation
 #[tokio::test]
 async fn test_plan_enhanced_error_file_not_found() -> Result<()> {

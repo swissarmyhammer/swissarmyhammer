@@ -402,6 +402,56 @@ The file should be a readable markdown file containing
 the specification or requirements to be planned.")]
         plan_filename: String,
     },
+    /// Execute the implement workflow for autonomous issue resolution
+    #[command(long_about = "
+Execute the implement workflow to autonomously work through and resolve all pending issues.
+This is a convenience command equivalent to 'sah flow run implement'.
+
+The implement workflow will:
+• Check for pending issues in the ./issues directory
+• Work through each issue systematically  
+• Continue until all issues are resolved
+• Provide status updates throughout the process
+
+USAGE:
+  swissarmyhammer implement
+
+This command provides:
+• Consistency with other top-level workflow commands like 'sah plan'
+• Convenient shortcut for the common implement workflow
+• Autonomous issue resolution without manual intervention
+• Integration with existing workflow infrastructure
+
+EXAMPLES:
+  # Run the implement workflow
+  swissarmyhammer implement
+  
+  # Run with verbose output for debugging
+  swissarmyhammer --verbose implement
+  
+  # Run in quiet mode showing only errors
+  swissarmyhammer --quiet implement
+
+WORKFLOW DETAILS:
+The implement workflow performs the following steps:
+1. Checks if all issues are complete
+2. If not complete, runs the 'do_issue' workflow on the next issue
+3. Repeats until all issues are resolved
+4. Provides completion confirmation
+
+For more control over workflow execution, use:
+  swissarmyhammer flow run implement --interactive
+  swissarmyhammer flow run implement --dry-run
+
+TROUBLESHOOTING:
+If implementation fails:
+• Check that ./issues directory exists and contains valid issues
+• Ensure you have proper permissions to modify issue files
+• Review workflow logs for specific error details
+• Use --verbose flag for detailed execution information
+• Verify the implement workflow exists in builtin workflows
+")]
+    Implement,
     /// Configuration management commands
     #[command(long_about = "
 Manage sah.toml configuration files with comprehensive CLI commands for validation, inspection, and debugging.
@@ -2264,5 +2314,75 @@ mod tests {
         } else {
             panic!("Expected Plan command");
         }
+    }
+
+    #[test]
+    fn test_cli_implement_subcommand() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "implement"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(cli.command, Some(Commands::Implement)));
+    }
+
+    #[test]
+    fn test_cli_implement_with_verbose() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--verbose", "implement"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        assert!(matches!(cli.command, Some(Commands::Implement)));
+    }
+
+    #[test]
+    fn test_cli_implement_with_quiet() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--quiet", "implement"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.quiet);
+        assert!(matches!(cli.command, Some(Commands::Implement)));
+    }
+
+    #[test]
+    fn test_cli_implement_with_debug() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--debug", "implement"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.debug);
+        assert!(matches!(cli.command, Some(Commands::Implement)));
+    }
+
+    #[test]
+    fn test_cli_implement_help() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "implement", "--help"]);
+        assert!(result.is_err()); // Help exits with error but that's expected
+
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn test_cli_implement_no_extra_args() {
+        // Ensure implement command doesn't accept unexpected arguments
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "implement", "extra"]);
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn test_cli_implement_combined_flags() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--verbose", "--debug", "implement"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        assert!(cli.debug);
+        assert!(matches!(cli.command, Some(Commands::Implement)));
     }
 }

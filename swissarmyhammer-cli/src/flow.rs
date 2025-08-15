@@ -284,7 +284,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     // Store both regular variables and set variables in context for liquid template rendering
     let mut template_vars = variables;
     template_vars.extend(set_variables);
-    
+
     if !template_vars.is_empty() {
         run.context.insert(
             "_template_vars".to_string(),

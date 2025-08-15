@@ -123,22 +123,32 @@ impl McpTool for MergeIssueTool {
 
         // Auto-complete the issue if it's not already completed
         if !issue_info.completed {
-            tracing::info!("Issue '{}' is not completed, marking as complete before merge", request.name);
-            
+            tracing::info!(
+                "Issue '{}' is not completed, marking as complete before merge",
+                request.name
+            );
+
             // Use the mark_complete tool to complete the issue
             use crate::mcp::tools::issues::mark_complete::MarkCompleteIssueTool;
             use serde_json::json;
-            
+
             let mut args = serde_json::Map::new();
             args.insert("name".to_string(), json!(request.name));
-            
+
             let mark_complete_tool = MarkCompleteIssueTool;
-            mark_complete_tool.execute(args, &context).await
-                .map_err(|e| McpError::internal_error(
-                    format!("Failed to auto-complete issue '{}' before merge: {}", request.name, e),
-                    None
-                ))?;
-                
+            mark_complete_tool
+                .execute(args, context)
+                .await
+                .map_err(|e| {
+                    McpError::internal_error(
+                        format!(
+                            "Failed to auto-complete issue '{}' before merge: {}",
+                            request.name, e
+                        ),
+                        None,
+                    )
+                })?;
+
             tracing::info!("Successfully marked issue '{}' as complete", request.name);
         }
 

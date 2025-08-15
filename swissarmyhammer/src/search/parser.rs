@@ -1700,6 +1700,4 @@ pub async fn handle_memo_command(command: MemoCommands) -> Result<(), Box<dyn st
             "Should extract chunks from at least one of the test files"
         );
     }
-
-
 }

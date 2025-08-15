@@ -70,7 +70,6 @@ pub enum ValidationError {
         message: String,
     },
 
-
     /// File permissions are insufficient for safe access
     #[error("Insufficient file permissions: {path} - {reason}")]
     InsufficientPermissions {
@@ -467,7 +466,6 @@ impl Validator {
         Ok(())
     }
 
-
     /// Validate file permissions for safe access
     pub fn validate_file_permissions(&self, path: &std::path::Path) -> Result<(), ValidationError> {
         use std::os::unix::fs::PermissionsExt;
@@ -709,9 +707,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-
-
-
     #[test]
     fn test_file_permissions_validation() -> Result<(), Box<dyn std::error::Error>> {
         use std::io::Write;
@@ -753,7 +748,6 @@ mod tests {
             Ok(()) => {}                                    // Good
             Err(e) => println!("Validation failed: {e:?}"), // Debug output
         }
-
 
         Ok(())
     }
