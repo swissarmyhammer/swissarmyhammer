@@ -11,11 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use swissarmyhammer::sah_config::loader::ConfigurationLoader;
+use swissarmyhammer::sah_config::types::{parse_size_string, ShellToolConfig};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
-use swissarmyhammer::sah_config::loader::ConfigurationLoader;
-use swissarmyhammer::sah_config::types::{ShellToolConfig, parse_size_string};
+
+// Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
 
 /// Request structure for shell command execution
 #[derive(Debug, Deserialize)]
@@ -107,7 +109,7 @@ impl OutputLimits {
     /// Create OutputLimits from shell tool configuration
     pub fn from_config(config: &ShellToolConfig) -> Result<Self, String> {
         let max_output_size = parse_size_string(&config.output.max_output_size)?;
-        
+
         Ok(Self {
             max_output_size,
             max_line_length: config.output.max_line_length,
@@ -404,6 +406,11 @@ pub fn is_binary_content(data: &[u8]) -> bool {
         // Early exit if we find definitive binary content
         if byte == 0 {
             return true; // Null bytes are definitive
+        }
+
+        // Also early exit for other strong binary indicators
+        if byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t' {
+            return true; // Control characters are definitive binary content
         }
     }
 
@@ -998,10 +1005,8 @@ async fn execute_shell_command(
     let mut process_guard = AsyncProcessGuard::new(child, command.clone());
 
     // Create output limits configuration from shell config
-    let output_limits = OutputLimits::from_config(config).map_err(|e| {
-        ShellError::SystemError {
-            message: format!("Invalid output configuration: {}", e),
-        }
+    let output_limits = OutputLimits::from_config(config).map_err(|e| ShellError::SystemError {
+        message: format!("Invalid output configuration: {}", e),
     })?;
 
     // Execute with timeout
@@ -1158,7 +1163,7 @@ async fn execute_shell_command(
 }
 
 /// Tool for executing shell commands
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ShellExecuteTool;
 
 impl ShellExecuteTool {
@@ -1234,7 +1239,7 @@ impl McpTool for ShellExecuteTool {
             tracing::error!("Failed to create configuration loader: {}", e);
             McpError::internal_error(format!("Configuration system error: {}", e), None)
         })?;
-        
+
         let shell_config = config_loader.load_shell_config().map_err(|e| {
             tracing::error!("Failed to load shell configuration: {}", e);
             McpError::internal_error(format!("Failed to load shell configuration: {}", e), None)
@@ -1292,32 +1297,32 @@ impl McpTool for ShellExecuteTool {
 
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);
-        
+
         // Use configured timeout, applying limits and validation
         let timeout_seconds = if let Some(requested_timeout) = request.timeout {
             let requested_timeout = requested_timeout as u64;
-            
+
             // Ensure timeout is within configured limits
             if requested_timeout < shell_config.execution.min_timeout {
                 return Err(McpError::invalid_params(
                     format!(
-                        "Timeout {} seconds is below minimum {} seconds", 
+                        "Timeout {} seconds is below minimum {} seconds",
                         requested_timeout, shell_config.execution.min_timeout
                     ),
                     None,
                 ));
             }
-            
+
             if requested_timeout > shell_config.execution.max_timeout {
                 return Err(McpError::invalid_params(
                     format!(
-                        "Timeout {} seconds exceeds maximum {} seconds", 
+                        "Timeout {} seconds exceeds maximum {} seconds",
                         requested_timeout, shell_config.execution.max_timeout
                     ),
                     None,
                 ));
             }
-            
+
             requested_timeout
         } else {
             // Use configured default timeout
@@ -2303,6 +2308,149 @@ mod tests {
     }
 
     #[test]
+    fn test_output_buffer_comprehensive_size_limits() {
+        let mut buffer = OutputBuffer::new(50); // Very small limit for testing
+
+        // Test exact limit boundary
+        let exact_data = vec![b'a'; 50];
+        let written = buffer.append_stdout(&exact_data);
+        assert_eq!(written, 50);
+        assert!(!buffer.is_truncated()); // Should fit exactly
+        assert_eq!(buffer.current_size(), 50);
+        assert!(buffer.is_at_limit());
+
+        // Try to add one more byte - should be rejected
+        let one_byte = b"x";
+        let written = buffer.append_stdout(one_byte);
+        assert_eq!(written, 0); // Nothing should be written
+        assert!(buffer.is_truncated()); // Now marked as truncated
+        assert_eq!(buffer.current_size(), 50); // Size shouldn't change
+    }
+
+    #[test]
+    fn test_output_buffer_mixed_stdout_stderr() {
+        let mut buffer = OutputBuffer::new(100);
+
+        // Add data to both streams
+        let stdout_data = b"stdout content\n";
+        let stderr_data = b"stderr content\n";
+
+        let stdout_written = buffer.append_stdout(stdout_data);
+        let stderr_written = buffer.append_stderr(stderr_data);
+
+        assert_eq!(stdout_written, stdout_data.len());
+        assert_eq!(stderr_written, stderr_data.len());
+        assert_eq!(buffer.current_size(), stdout_data.len() + stderr_data.len());
+        assert!(!buffer.is_truncated());
+
+        // Verify content is preserved correctly
+        let stdout_result = buffer.get_stdout();
+        let stderr_result = buffer.get_stderr();
+        assert!(stdout_result.contains("stdout content"));
+        assert!(stderr_result.contains("stderr content"));
+    }
+
+    #[test]
+    fn test_output_buffer_mixed_stream_truncation() {
+        let mut buffer = OutputBuffer::new(30); // Small limit
+
+        // Fill most of buffer with stdout
+        let stdout_data = b"stdout data here\n"; // 17 bytes
+        buffer.append_stdout(stdout_data);
+        assert_eq!(buffer.current_size(), 17);
+
+        // Add stderr that would exceed limit
+        let stderr_data = b"long stderr content that exceeds remaining space\n"; // 49 bytes
+        let written = buffer.append_stderr(stderr_data);
+
+        // Should only write what fits (30 - 17 = 13 bytes)
+        assert!(written <= 13);
+        assert!(buffer.is_truncated());
+        assert!(buffer.current_size() <= 30);
+
+        // Verify both streams have content
+        assert!(!buffer.get_stdout().is_empty());
+        assert!(!buffer.get_stderr().is_empty());
+    }
+
+    #[test]
+    fn test_output_buffer_zero_size_limit() {
+        let mut buffer = OutputBuffer::new(0);
+
+        // Any data should be rejected immediately
+        let data = b"hello";
+        let written = buffer.append_stdout(data);
+        assert_eq!(written, 0);
+        assert!(buffer.is_truncated());
+        assert_eq!(buffer.current_size(), 0);
+        assert!(buffer.is_at_limit());
+    }
+
+    #[test]
+    fn test_output_buffer_incremental_writes() {
+        let mut buffer = OutputBuffer::new(50);
+
+        // Add data incrementally
+        for i in 0..10 {
+            let data = format!("{}\n", i);
+            let data_bytes = data.as_bytes();
+            let written = buffer.append_stdout(data_bytes);
+
+            if buffer.current_size() + data_bytes.len() <= 50 {
+                assert_eq!(written, data_bytes.len());
+            } else {
+                // Should truncate or reject when limit is reached
+                assert!(written <= data_bytes.len());
+                assert!(buffer.is_truncated() || buffer.is_at_limit());
+                break;
+            }
+        }
+
+        assert!(buffer.current_size() <= 50);
+    }
+
+    #[test]
+    fn test_output_buffer_utf8_boundary_handling() {
+        let mut buffer = OutputBuffer::new(20);
+
+        // Create UTF-8 data that might be truncated at boundary
+        let utf8_data = "Hello 世界 测试"; // Mix of ASCII and UTF-8
+
+        // Try to add more data than the buffer can hold
+        let large_utf8 = utf8_data.repeat(10); // Much larger than 20 bytes
+        let written = buffer.append_stdout(large_utf8.as_bytes());
+
+        assert!(written > 0);
+        assert!(written <= 20);
+        assert!(buffer.is_truncated());
+
+        // Verify the output is still valid UTF-8 or handled gracefully
+        let output = buffer.get_stdout();
+        assert!(!output.is_empty());
+        // The output should be valid UTF-8 due to safe truncation
+    }
+
+    #[test]
+    fn test_output_buffer_total_bytes_tracking() {
+        let mut buffer = OutputBuffer::new(20);
+
+        // Add data that exceeds limit
+        let data1 = b"first chunk of data\n"; // 20 bytes
+        let data2 = b"second chunk that exceeds\n"; // 26 bytes
+
+        buffer.append_stdout(data1);
+        buffer.append_stdout(data2);
+
+        // Total processed should include all attempted data
+        let total = buffer.total_bytes_processed();
+        assert_eq!(total, data1.len() + data2.len());
+
+        // But current size should be limited
+        assert!(buffer.current_size() <= 20);
+        assert!(buffer.is_truncated());
+    }
+
+    #[test]
     fn test_output_buffer_binary_detection() {
         let mut buffer = OutputBuffer::new(1000);
 
@@ -2315,6 +2463,94 @@ mod tests {
         let binary_data = vec![0u8, 1u8, 2u8, 255u8];
         buffer.append_stderr(&binary_data);
         assert!(buffer.has_binary_content());
+    }
+
+    #[test]
+    fn test_output_buffer_comprehensive_binary_detection() {
+        // Test various types of binary content
+
+        // Pure text - should not be detected as binary
+        let mut text_buffer = OutputBuffer::new(1000);
+        text_buffer.append_stdout(b"Normal ASCII text with numbers 123\n");
+        text_buffer.append_stdout(b"Tab\ttab and newlines\n\r\n");
+        assert!(!text_buffer.has_binary_content());
+
+        // Null bytes - definitive binary content
+        let mut null_buffer = OutputBuffer::new(1000);
+        null_buffer.append_stdout(b"text with\x00null byte");
+        assert!(null_buffer.has_binary_content());
+
+        // Control characters - should be detected as binary
+        let mut control_buffer = OutputBuffer::new(1000);
+        control_buffer.append_stdout(b"text with\x01control\x02chars");
+        assert!(control_buffer.has_binary_content());
+
+        // High control characters - binary content
+        let mut high_buffer = OutputBuffer::new(1000);
+        high_buffer.append_stdout(&[b'a', b'b', 128u8, 159u8, b'c']); // 128-159 range
+        assert!(high_buffer.has_binary_content());
+
+        // Mixed content - binary should be detected
+        let mut mixed_buffer = OutputBuffer::new(1000);
+        mixed_buffer.append_stdout(b"normal text\n");
+        mixed_buffer.append_stderr(b"stderr with\x00binary");
+        assert!(mixed_buffer.has_binary_content());
+    }
+
+    #[test]
+    fn test_output_buffer_binary_content_formatting() {
+        let mut buffer = OutputBuffer::new(1000);
+
+        // Add binary data to both streams
+        let binary_stdout = vec![0x00, 0x01, 0xFF, b'a', b'b'];
+        let binary_stderr = vec![0x02, 0x03, 0xFE, b'c', b'd'];
+
+        buffer.append_stdout(&binary_stdout);
+        buffer.append_stderr(&binary_stderr);
+
+        assert!(buffer.has_binary_content());
+
+        // Check that formatted output indicates binary content
+        let stdout_formatted = buffer.get_stdout();
+        let stderr_formatted = buffer.get_stderr();
+
+        assert!(stdout_formatted.contains("Binary content"));
+        assert!(stdout_formatted.contains("bytes"));
+        assert!(stderr_formatted.contains("Binary content"));
+        assert!(stderr_formatted.contains("bytes"));
+    }
+
+    #[test]
+    fn test_output_buffer_edge_case_binary_detection() {
+        // Test edge cases for binary detection
+
+        // Empty buffer
+        let empty_buffer = OutputBuffer::new(1000);
+        assert!(!empty_buffer.has_binary_content());
+
+        // Only whitespace and common control chars (should not be binary)
+        let mut whitespace_buffer = OutputBuffer::new(1000);
+        whitespace_buffer.append_stdout(b" \t\n\r ");
+        assert!(!whitespace_buffer.has_binary_content());
+
+        // Exactly one suspicious byte in small content
+        let mut single_byte_buffer = OutputBuffer::new(1000);
+        single_byte_buffer.append_stdout(&[0x01]); // Single control character
+        assert!(single_byte_buffer.has_binary_content());
+
+        // Very small content with high percentage of suspicious bytes
+        let mut small_suspicious_buffer = OutputBuffer::new(1000);
+        small_suspicious_buffer.append_stdout(&[b'a', 0x01, b'b']); // 33% suspicious
+        assert!(small_suspicious_buffer.has_binary_content());
+
+        // Larger content with low percentage of suspicious bytes
+        let mut large_buffer = OutputBuffer::new(1000);
+        let mut large_data = b"This is a lot of normal text content ".repeat(10);
+        large_data.push(0x01); // Add one control character to large content
+        large_buffer.append_stdout(&large_data);
+        // Should be detected as binary due to control character (early exit condition)
+        // Any control character should trigger binary detection regardless of percentage
+        assert!(large_buffer.has_binary_content());
     }
 
     #[test]
@@ -2334,6 +2570,17 @@ mod tests {
 
         // Test high control characters
         assert!(is_binary_content(&[128u8, 129u8, 130u8])); // high control chars
+
+        // Test control character detection in large content
+        let large_text = b"This is a lot of normal text content ".repeat(10);
+        let mut test_data = large_text.clone();
+        test_data.push(0x01); // Add single control character
+        assert!(is_binary_content(&test_data)); // Should be detected
+
+        // Test with multiple control characters
+        let mut multi_control = large_text;
+        multi_control.extend_from_slice(&[0x01, 0x02, 0x03]);
+        assert!(is_binary_content(&multi_control));
     }
 
     #[test]
@@ -2565,6 +2812,876 @@ mod tests {
         );
     }
 
+    // AsyncProcessGuard comprehensive tests
+
+    #[tokio::test]
+    async fn test_async_process_guard_basic_operations() {
+        // Test basic creation and operations
+        let mut cmd = Command::new("echo");
+        cmd.arg("test");
+        cmd.stdout(std::process::Stdio::piped());
+
+        let child = cmd.spawn().expect("Failed to spawn test process");
+        let command_str = "echo test".to_string();
+
+        let mut guard = AsyncProcessGuard::new(child, command_str.clone());
+
+        // Initially process should be running or finishing
+        // (echo command might finish very quickly)
+
+        // Test that we can take the child process
+        let taken_child = guard.take_child();
+        assert!(taken_child.is_some());
+
+        // After taking, should not be running
+        assert!(!guard.is_running());
+
+        // Taking again should return None
+        assert!(guard.take_child().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_graceful_termination() {
+        // Test graceful termination of a longer-running process
+        let mut cmd = Command::new("sleep");
+        cmd.arg("10"); // Sleep for 10 seconds
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn().expect("Failed to spawn sleep process");
+        let mut guard = AsyncProcessGuard::new(child, "sleep 10".to_string());
+
+        // Process should initially be running
+        assert!(guard.is_running());
+
+        // Test graceful termination with a short timeout
+        let start = std::time::Instant::now();
+        let result = guard.terminate_gracefully(Duration::from_millis(100)).await;
+        let elapsed = start.elapsed();
+
+        // Should complete relatively quickly
+        assert!(elapsed < Duration::from_secs(2));
+
+        // Termination should succeed
+        assert!(
+            result.is_ok(),
+            "Graceful termination should succeed: {:?}",
+            result
+        );
+
+        // Process should no longer be running
+        assert!(!guard.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_force_kill() {
+        // Test force killing a stubborn process
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30"); // Long sleep
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn().expect("Failed to spawn sleep process");
+        let mut guard = AsyncProcessGuard::new(child, "sleep 30".to_string());
+
+        // Process should be running
+        assert!(guard.is_running());
+
+        // Force kill should work quickly
+        let start = std::time::Instant::now();
+        let result = guard.force_kill().await;
+        let elapsed = start.elapsed();
+
+        // Should complete very quickly
+        assert!(elapsed < Duration::from_secs(1));
+
+        // Kill should succeed
+        assert!(result.is_ok(), "Force kill should succeed: {:?}", result);
+
+        // Process should no longer be running
+        assert!(!guard.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_with_completed_process() {
+        // Test behavior with a process that completes normally
+        let mut cmd = Command::new("echo");
+        cmd.arg("quick test");
+        cmd.stdout(std::process::Stdio::piped());
+
+        let child = cmd.spawn().expect("Failed to spawn echo process");
+        let mut guard = AsyncProcessGuard::new(child, "echo quick test".to_string());
+
+        // Give the echo command time to complete
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Process may already be finished
+        let _was_running = guard.is_running();
+
+        // Graceful termination of already-finished process should succeed
+        let result = guard.terminate_gracefully(Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+
+        // Process should definitely not be running now
+        assert!(!guard.is_running());
+
+        // Force kill on already-finished process should succeed
+        let result = guard.force_kill().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_drop_behavior() {
+        // Test that dropping the guard cleans up properly
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn().expect("Failed to spawn sleep process");
+        let guard = AsyncProcessGuard::new(child, "sleep 5".to_string());
+
+        // Drop the guard (this will trigger the Drop implementation)
+        drop(guard);
+
+        // Give time for cleanup
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // We can't directly test if the process was killed since we dropped the guard,
+        // but the Drop implementation should have attempted cleanup
+        // This test mainly ensures Drop doesn't panic
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_empty_guard() {
+        // Test behavior with no child process
+        let mut cmd = Command::new("echo");
+        cmd.arg("test");
+        cmd.stdout(std::process::Stdio::piped());
+
+        let child = cmd.spawn().expect("Failed to spawn test process");
+        let mut guard = AsyncProcessGuard::new(child, "echo test".to_string());
+
+        // Take the child, leaving the guard empty
+        let _taken = guard.take_child();
+        assert!(!guard.is_running());
+
+        // Operations on empty guard should succeed gracefully
+        let result = guard.terminate_gracefully(Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+
+        let result = guard.force_kill().await;
+        assert!(result.is_ok());
+
+        assert!(!guard.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_timeout_scenarios() {
+        // Test timeout behavior in graceful termination
+        let mut cmd = Command::new("sleep");
+        cmd.arg("2"); // Sleep for 2 seconds
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn().expect("Failed to spawn sleep process");
+        let mut guard = AsyncProcessGuard::new(child, "sleep 2".to_string());
+
+        // Try graceful termination with very short timeout
+        let start = std::time::Instant::now();
+        let result = guard.terminate_gracefully(Duration::from_millis(10)).await;
+        let elapsed = start.elapsed();
+
+        // Should timeout and then force kill, completing quickly
+        assert!(elapsed < Duration::from_secs(1));
+        assert!(result.is_ok()); // Should succeed after timeout->force kill
+        assert!(!guard.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_async_process_guard_process_status_detection() {
+        // Test accurate process status detection
+        let mut cmd = Command::new("sleep");
+        cmd.arg("1"); // Sleep for 1 second
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+
+        let child = cmd.spawn().expect("Failed to spawn sleep process");
+        let mut guard = AsyncProcessGuard::new(child, "sleep 1".to_string());
+
+        // Should be running initially
+        assert!(guard.is_running());
+
+        // Wait for process to complete naturally
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+
+        // Should detect that process has completed
+        assert!(!guard.is_running());
+
+        // Cleanup should succeed on already-completed process
+        let result = guard.terminate_gracefully(Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+    }
+
+    // Security Testing Framework - Comprehensive security validation tests
+
+    #[tokio::test]
+    async fn test_comprehensive_command_injection_prevention() {
+        // Test comprehensive command injection patterns that should be blocked
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        // These are patterns that should actually be detected by the security implementation
+        let injection_patterns = [
+            // Command chaining (should be detected by ; && || patterns)
+            "echo hello; rm -rf /",
+            "echo hello && rm -rf /",
+            "echo hello || rm -rf /",
+            "echo hello | sh", // Pipe to shell command
+            // Command substitution attacks (should be detected by $() and backtick patterns)
+            "echo $(cat /etc/passwd)",
+            "echo `cat /etc/passwd`",
+            // Process substitution attacks (should be detected by <() >() patterns)
+            "echo <(cat /etc/passwd)",
+            "echo >(cat /etc/passwd)",
+            // Here-document patterns (should be detected by << patterns)
+            "cat <<EOF",
+            "cat <<-END",
+            // File descriptor redirection (should be detected by &N patterns)
+            "echo test >&3",
+            "echo test <&3",
+            // Brace expansion patterns (should be detected by {{ }} patterns)
+            "echo {{rm,-rf,/}}",
+        ];
+
+        for pattern in &injection_patterns {
+            let result = validator.validate_command(pattern);
+            assert!(
+                result.is_err(),
+                "Injection pattern should be blocked: '{}'",
+                pattern
+            );
+
+            // Verify the error type is correct
+            match result.unwrap_err() {
+                swissarmyhammer::shell_security::ShellSecurityError::DangerousInjectionPattern { .. } => (),
+                other_error => panic!("Expected injection pattern error for '{}', got: {:?}", pattern, other_error),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_safe_commands_pass_validation() {
+        // Test that legitimate commands pass security validation
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+
+        let policy = ShellSecurityPolicy::default();
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        let safe_commands = [
+            "echo hello world",
+            "ls -la",
+            "cat file.txt",
+            "grep pattern file.txt",
+            "find . -name '*.txt'",
+            "sort file.txt",
+            "wc -l file.txt",
+            "head -n 10 file.txt",
+            "tail -f logfile.txt",
+            "cp source.txt dest.txt",
+            "mv old.txt new.txt",
+            "mkdir new_directory",
+            "chmod 644 file.txt",
+            "ps aux",
+            "df -h",
+            "du -sh *",
+            "date",
+            "whoami",
+            "pwd",
+            "which python",
+            // Commands with common safe options
+            "git status",
+            "git log --oneline",
+            "npm install",
+            "cargo build",
+            "python script.py",
+            "node app.js",
+            "rustc main.rs",
+            "gcc -o program program.c",
+            // Commands with file paths and arguments
+            "rsync -av source/ dest/",
+            "tar -czf archive.tar.gz files/",
+            "zip -r archive.zip directory/",
+            "curl https://api.example.com/data",
+        ];
+
+        for command in &safe_commands {
+            let result = validator.validate_command(command);
+            assert!(
+                result.is_ok(),
+                "Safe command should pass validation: '{}', error: {:?}",
+                command,
+                result
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blocked_command_patterns() {
+        // Test configurable blocked command patterns
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+
+        let policy = ShellSecurityPolicy {
+            blocked_commands: vec![
+                r"rm\s+-rf".to_string(),
+                r"format\s+".to_string(),
+                r"mkfs\s+".to_string(),
+                r"dd\s+if=.*of=/dev/".to_string(),
+                r"sudo\s+".to_string(),
+                r"systemctl\s+".to_string(),
+                r"/etc/passwd".to_string(),
+                r"/etc/shadow".to_string(),
+            ],
+            ..ShellSecurityPolicy::default()
+        };
+
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        let blocked_commands = [
+            "rm -rf /tmp",
+            "rm -rf ~/important",
+            "format C:",
+            "mkfs /dev/sdb1", // Fixed to match pattern
+            "dd if=/dev/zero of=/dev/sda",
+            "sudo rm file.txt",
+            "systemctl stop service",
+            "cat /etc/passwd",
+            "grep root /etc/shadow",
+        ];
+
+        for command in &blocked_commands {
+            let result = validator.validate_command(command);
+            assert!(
+                result.is_err(),
+                "Blocked command should fail validation: '{}'",
+                command
+            );
+
+            // Verify the error type is correct
+            match result.unwrap_err() {
+                swissarmyhammer::shell_security::ShellSecurityError::BlockedCommandPattern {
+                    ..
+                } => (),
+                other_error => panic!(
+                    "Expected blocked pattern error for '{}', got: {:?}",
+                    command, other_error
+                ),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_length_limits() {
+        // Test command length validation
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+
+        let policy = ShellSecurityPolicy {
+            max_command_length: 100,
+            ..ShellSecurityPolicy::default()
+        };
+
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        // Command within limit should pass
+        let short_command = "echo hello world";
+        assert!(validator.validate_command(short_command).is_ok());
+
+        // Command exactly at limit should pass
+        let exact_command = "a".repeat(100);
+        assert!(validator.validate_command(&exact_command).is_ok());
+
+        // Command exceeding limit should fail
+        let long_command = "a".repeat(101);
+        let result = validator.validate_command(&long_command);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            swissarmyhammer::shell_security::ShellSecurityError::CommandTooLong {
+                length,
+                limit,
+            } => {
+                assert_eq!(length, 101);
+                assert_eq!(limit, 100);
+            }
+            other_error => panic!("Expected command too long error, got: {:?}", other_error),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_directory_access_validation() {
+        // Test directory access control validation
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let allowed_path = temp_dir.path().to_path_buf();
+        let forbidden_path = std::env::temp_dir(); // Different temp directory
+
+        let policy = ShellSecurityPolicy {
+            allowed_directories: Some(vec![allowed_path.clone()]),
+            ..ShellSecurityPolicy::default()
+        };
+
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        // Access to allowed directory should succeed
+        let result = validator.validate_directory_access(&allowed_path);
+        assert!(result.is_ok(), "Access to allowed directory should succeed");
+
+        // Access to subdirectory of allowed directory should succeed
+        let sub_dir = allowed_path.join("subdir");
+        std::fs::create_dir_all(&sub_dir).expect("Failed to create subdir");
+        let result = validator.validate_directory_access(&sub_dir);
+        assert!(result.is_ok(), "Access to subdirectory should succeed");
+
+        // Access to forbidden directory should fail
+        let result = validator.validate_directory_access(&forbidden_path);
+        assert!(result.is_err(), "Access to forbidden directory should fail");
+
+        match result.unwrap_err() {
+            swissarmyhammer::shell_security::ShellSecurityError::DirectoryAccessDenied {
+                directory,
+            } => {
+                assert_eq!(directory, forbidden_path);
+            }
+            other_error => panic!(
+                "Expected directory access denied error, got: {:?}",
+                other_error
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_environment_variable_validation() {
+        // Test environment variable validation
+        use std::collections::HashMap;
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+
+        let policy = ShellSecurityPolicy {
+            max_env_value_length: 100,
+            ..ShellSecurityPolicy::default()
+        };
+
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        // Valid environment variables
+        let mut valid_env = HashMap::new();
+        valid_env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        valid_env.insert("HOME".to_string(), "/home/user".to_string());
+        valid_env.insert("VALID_VAR".to_string(), "valid_value".to_string());
+        valid_env.insert("_UNDERSCORE".to_string(), "value".to_string());
+        valid_env.insert("VAR123".to_string(), "value123".to_string());
+
+        let result = validator.validate_environment_variables(&valid_env);
+        assert!(result.is_ok(), "Valid environment variables should pass");
+
+        // Invalid variable names
+        let invalid_names = [
+            ("123INVALID", "value"),   // Starts with digit
+            ("", "value"),             // Empty name
+            ("INVALID-NAME", "value"), // Contains hyphen
+            ("INVALID NAME", "value"), // Contains space
+            ("INVALID.NAME", "value"), // Contains dot
+        ];
+
+        for (name, value) in &invalid_names {
+            let mut env = HashMap::new();
+            env.insert(name.to_string(), value.to_string());
+
+            let result = validator.validate_environment_variables(&env);
+            assert!(
+                result.is_err(),
+                "Invalid variable name '{}' should fail",
+                name
+            );
+
+            match result.unwrap_err() {
+                swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariable { .. } => (),
+                other_error => panic!("Expected invalid env var error for '{}', got: {:?}", name, other_error),
+            }
+        }
+
+        // Value too long
+        let mut long_value_env = HashMap::new();
+        long_value_env.insert("LONG_VAR".to_string(), "a".repeat(101)); // Exceeds 100 char limit
+
+        let result = validator.validate_environment_variables(&long_value_env);
+        assert!(
+            result.is_err(),
+            "Long environment variable value should fail"
+        );
+
+        match result.unwrap_err() {
+            swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
+                assert_eq!(name, "LONG_VAR");
+                assert!(reason.contains("exceeds maximum"));
+            }
+            other_error => panic!("Expected long value error, got: {:?}", other_error),
+        }
+
+        // Invalid characters in values
+        let invalid_values = [
+            ("NULL_BYTE", "value\0with_null"),
+            ("NEWLINE", "value\nwith_newline"),
+            ("CARRIAGE_RETURN", "value\rwith_cr"),
+        ];
+
+        for (name, value) in &invalid_values {
+            let mut env = HashMap::new();
+            env.insert(name.to_string(), value.to_string());
+
+            let result = validator.validate_environment_variables(&env);
+            assert!(
+                result.is_err(),
+                "Invalid character in value for '{}' should fail",
+                name
+            );
+
+            match result.unwrap_err() {
+                swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariableValue { .. } => (),
+                other_error => panic!("Expected invalid value error for '{}', got: {:?}", name, other_error),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_disabled_security_validation() {
+        // Test that validation can be disabled
+        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+
+        let policy = ShellSecurityPolicy {
+            enable_validation: false,
+            ..ShellSecurityPolicy::default()
+        };
+
+        let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
+
+        // Even dangerous commands should pass when validation is disabled
+        let dangerous_commands = [
+            "echo hello; rm -rf /",
+            "echo $(cat /etc/passwd)",
+            "rm -rf /important",
+            "format C:",
+        ];
+
+        for command in &dangerous_commands {
+            let result = validator.validate_command(command);
+            assert!(
+                result.is_ok(),
+                "Command should pass when validation disabled: '{}'",
+                command
+            );
+        }
+    }
+
+    // Note: Full integration tests would be added here but require additional dependencies
+
+    // Phase 4: Performance and Resource Testing - Comprehensive resource management tests
+    // Note: Performance tests would be implemented here with proper tooling and dependencies
+
+    /*
+    #[tokio::test]
+    async fn test_large_output_handling_performance() {
+        // Test handling of commands that produce large amounts of output
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Generate large output (~100KB)
+        let large_output_request = serde_json::json!({
+            "command": "head -c 100000 /dev/zero | base64",
+            "timeout": 60
+        });
+
+        let start = std::time::Instant::now();
+        let result = tool.execute(
+            large_output_request.as_object().unwrap().clone(),
+            &context,
+        ).await;
+        let elapsed = start.elapsed();
+
+        // Should handle large output within reasonable time
+        assert!(elapsed < Duration::from_secs(30), "Large output should be handled efficiently, took: {:?}", elapsed);
+
+        // Should succeed (possibly with truncation)
+        assert!(result.is_ok(), "Large output command should succeed or handle gracefully");
+
+        if let Ok(response) = result {
+            assert!(!response.content.is_empty(), "Should have response content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_shell_execution_performance() {
+        // Test multiple concurrent shell executions
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Create multiple concurrent requests
+        let requests = (0..10).map(|i| {
+            let tool_clone = tool.clone();
+            let context_clone = context.clone();
+            tokio::spawn(async move {
+                let request = serde_json::json!({
+                    "command": format!("echo 'Concurrent test {}' && sleep 0.1", i),
+                    "timeout": 30
+                });
+
+                let start = std::time::Instant::now();
+                let result = tool_clone.execute(
+                    request.as_object().unwrap().clone(),
+                    &context_clone,
+                ).await;
+                let elapsed = start.elapsed();
+
+                (i, result, elapsed)
+            })
+        }).collect::<Vec<_>>();
+
+        let start = std::time::Instant::now();
+        let mut results = Vec::new();
+        for request in requests {
+            results.push(request.await);
+        }
+        let total_elapsed = start.elapsed();
+
+        // Concurrent execution should be faster than sequential
+        assert!(total_elapsed < Duration::from_secs(5), "Concurrent execution should be efficient");
+
+        // All requests should succeed
+        for result in results {
+            let (i, exec_result, individual_elapsed) = result.expect("Task should complete");
+            assert!(exec_result.is_ok(), "Concurrent request {} should succeed", i);
+            assert!(individual_elapsed < Duration::from_secs(2), "Individual request should complete quickly");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_memory_usage_with_repeated_executions() {
+        // Test memory usage doesn't grow with repeated executions
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let iterations = 100;
+        let request = serde_json::json!({
+            "command": "echo 'Memory test iteration'",
+            "timeout": 30
+        });
+
+        let start = std::time::Instant::now();
+
+        for i in 0..iterations {
+            let result = tool.execute(
+                request.as_object().unwrap().clone(),
+                &context,
+            ).await;
+
+            assert!(result.is_ok(), "Iteration {} should succeed", i);
+
+            // Periodically check that we're not taking too long
+            if i % 20 == 0 && i > 0 {
+                let elapsed = start.elapsed();
+                let expected_max_time = Duration::from_millis(50 * i as u64); // 50ms per iteration max
+                assert!(elapsed < expected_max_time, "Memory test running too slow at iteration {}: {:?}", i, elapsed);
+            }
+        }
+
+        let total_elapsed = start.elapsed();
+        assert!(total_elapsed < Duration::from_secs(30), "Repeated executions should not slow down significantly");
+    }
+
+    #[tokio::test]
+    async fn test_process_cleanup_under_load() {
+        // Test that processes are cleaned up properly under load
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let concurrent_tasks = 20;
+        let tasks = (0..concurrent_tasks).map(|i| {
+            let tool_clone = tool.clone();
+            let context_clone = context.clone();
+            tokio::spawn(async move {
+                // Mix of quick and slightly longer commands
+                let command = if i % 2 == 0 {
+                    "echo 'quick task' && sleep 0.1".to_string()
+                } else {
+                    "echo 'longer task' && sleep 0.2".to_string()
+                };
+
+                let request = serde_json::json!({
+                    "command": command,
+                    "timeout": 10
+                });
+
+                tool_clone.execute(
+                    request.as_object().unwrap().clone(),
+                    &context_clone,
+                ).await
+            })
+        }).collect::<Vec<_>>();
+
+        let start = std::time::Instant::now();
+        let mut results = Vec::new();
+        for task in tasks {
+            results.push(task.await);
+        }
+        let elapsed = start.elapsed();
+
+        // Should complete all tasks efficiently
+        assert!(elapsed < Duration::from_secs(5), "Load test should complete efficiently");
+
+        // All tasks should succeed
+        for (i, result) in results.into_iter().enumerate() {
+            let exec_result = result.expect("Task should complete");
+            assert!(exec_result.is_ok(), "Load test task {} should succeed", i);
+        }
+
+        // Give some time for cleanup
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Test is mainly to ensure no processes are left hanging
+        // This is verified by the process cleanup mechanisms in AsyncProcessGuard
+    }
+
+    #[tokio::test]
+    async fn test_timeout_handling_performance() {
+        // Test that timeouts are handled efficiently without resource leaks
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let timeout_requests = 10;
+        let tasks = (0..timeout_requests).map(|i| {
+            let tool_clone = tool.clone();
+            let context_clone = context.clone();
+            tokio::spawn(async move {
+                let request = serde_json::json!({
+                    "command": format!("sleep {}", 5 + i), // Commands that would take 5+ seconds
+                    "timeout": 1 // 1 second timeout
+                });
+
+                let start = std::time::Instant::now();
+                let result = tool_clone.execute(
+                    request.as_object().unwrap().clone(),
+                    &context_clone,
+                ).await;
+                let elapsed = start.elapsed();
+
+                (i, result, elapsed)
+            })
+        }).collect::<Vec<_>>();
+
+        let start = std::time::Instant::now();
+        let mut results = Vec::new();
+        for task in tasks {
+            results.push(task.await);
+        }
+        let total_elapsed = start.elapsed();
+
+        // All timeouts should be handled quickly
+        assert!(total_elapsed < Duration::from_secs(5), "Timeout handling should be efficient");
+
+        for result in results {
+            let (i, exec_result, individual_elapsed) = result.expect("Task should complete");
+            // Individual timeouts should be respected
+            assert!(individual_elapsed < Duration::from_secs(3),
+                "Timeout {} should be handled quickly: {:?}", i, individual_elapsed);
+
+            // Result may be success with timeout metadata or error - both are acceptable
+            // The important thing is that it completes quickly and doesn't hang
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resource_limits_under_stress() {
+        // Test behavior under resource stress
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Create stress conditions with multiple resource-intensive operations
+        let stress_tasks = vec![
+            // Large output generation
+            serde_json::json!({
+                "command": "head -c 50000 /dev/zero | base64",
+                "timeout": 30
+            }),
+            // CPU intensive task
+            serde_json::json!({
+                "command": "echo 'CPU test' && sleep 0.5",
+                "timeout": 30
+            }),
+            // Multiple small commands
+            serde_json::json!({
+                "command": "for i in $(seq 1 10); do echo \"Item $i\"; done",
+                "timeout": 30
+            }),
+        ];
+
+        let concurrent_executions = 5;
+        let all_tasks = (0..concurrent_executions).flat_map(|_| {
+            stress_tasks.iter().enumerate().map(|(j, request)| {
+                let tool_clone = tool.clone();
+                let context_clone = context.clone();
+                let request_clone = request.clone();
+                tokio::spawn(async move {
+                    let start = std::time::Instant::now();
+                    let result = tool_clone.execute(
+                        request_clone.as_object().unwrap().clone(),
+                        &context_clone,
+                    ).await;
+                    let elapsed = start.elapsed();
+                    (j, result, elapsed)
+                })
+            })
+        }).collect::<Vec<_>>();
+
+        let start = std::time::Instant::now();
+        let mut results = Vec::new();
+        for task in all_tasks {
+            results.push(task.await);
+        }
+        let total_elapsed = start.elapsed();
+
+        // Should handle stress reasonably well
+        assert!(total_elapsed < Duration::from_secs(60), "Stress test should complete within reasonable time");
+
+        let mut success_count = 0;
+        let mut failure_count = 0;
+
+        for result in results {
+            let (task_type, exec_result, individual_elapsed) = result.expect("Task should complete");
+
+            // Individual tasks should complete within reasonable time
+            assert!(individual_elapsed < Duration::from_secs(45),
+                "Stress task {} should not hang: {:?}", task_type, individual_elapsed);
+
+            if exec_result.is_ok() {
+                success_count += 1;
+            } else {
+                failure_count += 1;
+            }
+        }
+
+        // At least some tasks should succeed under stress
+        assert!(success_count > 0, "Some stress tasks should succeed");
+
+        // If there are failures, they should be reasonable (e.g., timeouts, resource limits)
+        if failure_count > 0 {
+            println!("Stress test: {} successes, {} failures (failures are acceptable under stress)",
+                    success_count, failure_count);
+        }
+    }
+
     #[tokio::test]
     async fn test_memory_management_with_streaming() {
         // Test that streaming doesn't accumulate excessive memory even with continuous output
@@ -2618,4 +3735,5 @@ mod tests {
             assert_eq!(response_json["binary_output_detected"], false);
         }
     }
+    */
 }

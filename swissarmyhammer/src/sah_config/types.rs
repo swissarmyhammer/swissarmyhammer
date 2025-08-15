@@ -255,13 +255,13 @@ impl Default for Configuration {
 pub struct ShellToolConfig {
     /// Security settings for command execution
     pub security: ShellSecurityConfig,
-    
+
     /// Output handling and limits
     pub output: ShellOutputConfig,
-    
+
     /// Timeout and execution limits
     pub execution: ShellExecutionConfig,
-    
+
     /// Audit and logging configuration
     pub audit: ShellAuditConfig,
 }
@@ -271,16 +271,16 @@ pub struct ShellToolConfig {
 pub struct ShellSecurityConfig {
     /// Enable command validation and security checks
     pub enable_validation: bool,
-    
+
     /// List of blocked command patterns
     pub blocked_commands: Vec<String>,
-    
+
     /// Allowed directories for command execution
     pub allowed_directories: Option<Vec<String>>,
-    
+
     /// Maximum allowed command length
     pub max_command_length: usize,
-    
+
     /// Enable injection pattern detection
     pub enable_injection_detection: bool,
 }
@@ -290,13 +290,13 @@ pub struct ShellSecurityConfig {
 pub struct ShellOutputConfig {
     /// Maximum output size before truncation (e.g., "10MB")
     pub max_output_size: String,
-    
+
     /// Maximum line length before truncation
     pub max_line_length: usize,
-    
+
     /// Enable binary content detection
     pub detect_binary_content: bool,
-    
+
     /// Truncation strategy
     pub truncation_strategy: TruncationStrategy,
 }
@@ -306,13 +306,13 @@ pub struct ShellOutputConfig {
 pub struct ShellExecutionConfig {
     /// Default timeout for commands (seconds)
     pub default_timeout: u64,
-    
+
     /// Maximum allowed timeout (seconds)
     pub max_timeout: u64,
-    
+
     /// Minimum allowed timeout (seconds)
     pub min_timeout: u64,
-    
+
     /// Enable process tree cleanup
     pub cleanup_process_tree: bool,
 }
@@ -322,13 +322,13 @@ pub struct ShellExecutionConfig {
 pub struct ShellAuditConfig {
     /// Enable audit logging
     pub enable_audit_logging: bool,
-    
+
     /// Audit log level
     pub log_level: String,
-    
+
     /// Include command output in audit logs
     pub log_command_output: bool,
-    
+
     /// Maximum audit log entry size
     pub max_audit_entry_size: usize,
 }
@@ -343,7 +343,6 @@ pub enum TruncationStrategy {
     /// Truncate at word boundaries when possible
     WordBoundary,
 }
-
 
 impl Default for ShellSecurityConfig {
     fn default() -> Self {
@@ -405,23 +404,25 @@ impl Default for TruncationStrategy {
 /// Utility function to parse size strings (e.g., "10MB", "1GB") to bytes
 pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
     let size_str = size_str.trim().to_uppercase();
-    
+
     if size_str.is_empty() {
         return Err("Empty size string".to_string());
     }
-    
+
     // Extract numeric part and unit
     let (numeric_part, unit) = if let Some(pos) = size_str.find(|c: char| c.is_alphabetic()) {
         (&size_str[..pos], &size_str[pos..])
     } else {
         // No unit, assume bytes
-        return size_str.parse::<usize>()
+        return size_str
+            .parse::<usize>()
             .map_err(|_| format!("Invalid numeric value: {}", size_str));
     };
-    
-    let base_size: usize = numeric_part.parse()
+
+    let base_size: usize = numeric_part
+        .parse()
         .map_err(|_| format!("Invalid numeric value: {}", numeric_part))?;
-    
+
     let multiplier = match unit {
         "B" | "" => 1,
         "KB" => 1_024,
@@ -429,8 +430,9 @@ pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
         "GB" => 1_024 * 1_024 * 1_024,
         _ => return Err(format!("Unknown size unit: {}", unit)),
     };
-    
-    base_size.checked_mul(multiplier)
+
+    base_size
+        .checked_mul(multiplier)
         .ok_or_else(|| "Size value too large".to_string())
 }
 
@@ -619,26 +621,29 @@ mod tests {
     #[test]
     fn test_shell_tool_config_defaults() {
         let config = ShellToolConfig::default();
-        
+
         // Test security defaults
         assert!(config.security.enable_validation);
         assert!(!config.security.blocked_commands.is_empty());
         assert_eq!(config.security.max_command_length, 1000);
         assert!(config.security.enable_injection_detection);
         assert!(config.security.allowed_directories.is_none());
-        
+
         // Test output defaults
         assert_eq!(config.output.max_output_size, "10MB");
         assert_eq!(config.output.max_line_length, 2000);
         assert!(config.output.detect_binary_content);
-        assert_eq!(config.output.truncation_strategy, TruncationStrategy::PreserveStructure);
-        
+        assert_eq!(
+            config.output.truncation_strategy,
+            TruncationStrategy::PreserveStructure
+        );
+
         // Test execution defaults
         assert_eq!(config.execution.default_timeout, 300);
         assert_eq!(config.execution.max_timeout, 1800);
         assert_eq!(config.execution.min_timeout, 1);
         assert!(config.execution.cleanup_process_tree);
-        
+
         // Test audit defaults
         assert!(!config.audit.enable_audit_logging); // Disabled by default
         assert_eq!(config.audit.log_level, "info");
@@ -657,25 +662,25 @@ mod tests {
         // Test bytes
         assert_eq!(parse_size_string("1000")?, 1000);
         assert_eq!(parse_size_string("1000B")?, 1000);
-        
+
         // Test kilobytes
         assert_eq!(parse_size_string("1KB")?, 1_024);
         assert_eq!(parse_size_string("2KB")?, 2 * 1_024);
-        
+
         // Test megabytes
         assert_eq!(parse_size_string("1MB")?, 1_024 * 1_024);
         assert_eq!(parse_size_string("10MB")?, 10 * 1_024 * 1_024);
-        
+
         // Test gigabytes
         assert_eq!(parse_size_string("1GB")?, 1_024 * 1_024 * 1_024);
-        
+
         // Test with spaces
         assert_eq!(parse_size_string(" 1MB ")?, 1_024 * 1_024);
-        
+
         // Test case insensitive
         assert_eq!(parse_size_string("1mb")?, 1_024 * 1_024);
         assert_eq!(parse_size_string("1Mb")?, 1_024 * 1_024);
-        
+
         Ok(())
     }
 
@@ -684,12 +689,12 @@ mod tests {
         // Test empty string
         assert!(parse_size_string("").is_err());
         assert!(parse_size_string("   ").is_err());
-        
+
         // Test invalid numeric values
         assert!(parse_size_string("abc").is_err());
         assert!(parse_size_string("abc MB").is_err());
         assert!(parse_size_string("-1MB").is_err());
-        
+
         // Test unknown units
         assert!(parse_size_string("1TB").is_err());
         assert!(parse_size_string("1XYZ").is_err());
@@ -698,7 +703,7 @@ mod tests {
     #[test]
     fn test_shell_security_config_blocked_commands() {
         let config = ShellSecurityConfig::default();
-        
+
         // Verify some dangerous commands are blocked by default
         assert!(config.blocked_commands.contains(&"rm -rf /".to_string()));
         assert!(config.blocked_commands.contains(&"format".to_string()));
@@ -710,18 +715,28 @@ mod tests {
     #[test]
     fn test_shell_config_serialization() {
         let config = ShellToolConfig::default();
-        
+
         // Test serialization to JSON
         let json = serde_json::to_string(&config).expect("Should serialize to JSON");
         assert!(!json.is_empty());
-        
+
         // Test deserialization from JSON
-        let deserialized: ShellToolConfig = serde_json::from_str(&json).expect("Should deserialize from JSON");
-        
+        let deserialized: ShellToolConfig =
+            serde_json::from_str(&json).expect("Should deserialize from JSON");
+
         // Compare some key fields to ensure round-trip works
-        assert_eq!(config.security.enable_validation, deserialized.security.enable_validation);
-        assert_eq!(config.output.max_output_size, deserialized.output.max_output_size);
-        assert_eq!(config.execution.default_timeout, deserialized.execution.default_timeout);
+        assert_eq!(
+            config.security.enable_validation,
+            deserialized.security.enable_validation
+        );
+        assert_eq!(
+            config.output.max_output_size,
+            deserialized.output.max_output_size
+        );
+        assert_eq!(
+            config.execution.default_timeout,
+            deserialized.execution.default_timeout
+        );
         assert_eq!(config.audit.log_level, deserialized.audit.log_level);
     }
 
@@ -732,10 +747,11 @@ mod tests {
             TruncationStrategy::SimpleTruncation,
             TruncationStrategy::WordBoundary,
         ];
-        
+
         for strategy in strategies {
             let json = serde_json::to_string(&strategy).expect("Should serialize");
-            let deserialized: TruncationStrategy = serde_json::from_str(&json).expect("Should deserialize");
+            let deserialized: TruncationStrategy =
+                serde_json::from_str(&json).expect("Should deserialize");
             assert_eq!(strategy, deserialized);
         }
     }

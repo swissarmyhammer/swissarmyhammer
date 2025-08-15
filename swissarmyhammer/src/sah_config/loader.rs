@@ -1,6 +1,6 @@
 use crate::sah_config::{
     env_vars::{EnvVarError, EnvVarProcessor},
-    types::{CacheMetadata, ConfigValue, Configuration, ShellToolConfig, parse_size_string},
+    types::{parse_size_string, CacheMetadata, ConfigValue, Configuration, ShellToolConfig},
     validation::{ValidationError, Validator},
 };
 use std::collections::HashMap;
@@ -407,18 +407,19 @@ impl ConfigurationLoader {
 
         if let Some(ConfigValue::String(strategy)) = table.get("truncation_strategy") {
             use crate::sah_config::types::TruncationStrategy;
-            config.truncation_strategy = match strategy.as_str() {
-                "preserve_structure" => TruncationStrategy::PreserveStructure,
-                "simple_truncation" => TruncationStrategy::SimpleTruncation,
-                "word_boundary" => TruncationStrategy::WordBoundary,
-                _ => {
-                    return Err(ConfigurationError::InvalidShellValue {
+            config.truncation_strategy =
+                match strategy.as_str() {
+                    "preserve_structure" => TruncationStrategy::PreserveStructure,
+                    "simple_truncation" => TruncationStrategy::SimpleTruncation,
+                    "word_boundary" => TruncationStrategy::WordBoundary,
+                    _ => return Err(ConfigurationError::InvalidShellValue {
                         key: "truncation_strategy".to_string(),
                         value: strategy.clone(),
-                        reason: "Must be one of: preserve_structure, simple_truncation, word_boundary".to_string(),
-                    })
-                }
-            };
+                        reason:
+                            "Must be one of: preserve_structure, simple_truncation, word_boundary"
+                                .to_string(),
+                    }),
+                };
         }
 
         Ok(())
@@ -483,23 +484,23 @@ impl ConfigurationLoader {
 
         // Security overrides
         if let Ok(val) = env::var("SAH_SHELL_SECURITY_ENABLE_VALIDATION") {
-            config.security.enable_validation = val.parse().map_err(|_| {
-                ConfigurationError::InvalidShellValue {
-                    key: "SAH_SHELL_SECURITY_ENABLE_VALIDATION".to_string(),
-                    value: val,
-                    reason: "Must be 'true' or 'false'".to_string(),
-                }
-            })?;
+            config.security.enable_validation =
+                val.parse()
+                    .map_err(|_| ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_SECURITY_ENABLE_VALIDATION".to_string(),
+                        value: val,
+                        reason: "Must be 'true' or 'false'".to_string(),
+                    })?;
         }
 
         if let Ok(val) = env::var("SAH_SHELL_SECURITY_MAX_COMMAND_LENGTH") {
-            config.security.max_command_length = val.parse().map_err(|_| {
-                ConfigurationError::InvalidShellValue {
-                    key: "SAH_SHELL_SECURITY_MAX_COMMAND_LENGTH".to_string(),
-                    value: val,
-                    reason: "Must be a positive integer".to_string(),
-                }
-            })?;
+            config.security.max_command_length =
+                val.parse()
+                    .map_err(|_| ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_SECURITY_MAX_COMMAND_LENGTH".to_string(),
+                        value: val,
+                        reason: "Must be a positive integer".to_string(),
+                    })?;
         }
 
         // Output overrides
@@ -514,45 +515,45 @@ impl ConfigurationLoader {
         }
 
         if let Ok(val) = env::var("SAH_SHELL_OUTPUT_MAX_LINE_LENGTH") {
-            config.output.max_line_length = val.parse().map_err(|_| {
-                ConfigurationError::InvalidShellValue {
-                    key: "SAH_SHELL_OUTPUT_MAX_LINE_LENGTH".to_string(),
-                    value: val,
-                    reason: "Must be a positive integer".to_string(),
-                }
-            })?;
+            config.output.max_line_length =
+                val.parse()
+                    .map_err(|_| ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_OUTPUT_MAX_LINE_LENGTH".to_string(),
+                        value: val,
+                        reason: "Must be a positive integer".to_string(),
+                    })?;
         }
 
         // Execution overrides
         if let Ok(val) = env::var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT") {
-            config.execution.default_timeout = val.parse().map_err(|_| {
-                ConfigurationError::InvalidShellValue {
-                    key: "SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT".to_string(),
-                    value: val,
-                    reason: "Must be a positive integer (seconds)".to_string(),
-                }
-            })?;
+            config.execution.default_timeout =
+                val.parse()
+                    .map_err(|_| ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT".to_string(),
+                        value: val,
+                        reason: "Must be a positive integer (seconds)".to_string(),
+                    })?;
         }
 
         if let Ok(val) = env::var("SAH_SHELL_EXECUTION_MAX_TIMEOUT") {
-            config.execution.max_timeout = val.parse().map_err(|_| {
-                ConfigurationError::InvalidShellValue {
-                    key: "SAH_SHELL_EXECUTION_MAX_TIMEOUT".to_string(),
-                    value: val,
-                    reason: "Must be a positive integer (seconds)".to_string(),
-                }
-            })?;
+            config.execution.max_timeout =
+                val.parse()
+                    .map_err(|_| ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_EXECUTION_MAX_TIMEOUT".to_string(),
+                        value: val,
+                        reason: "Must be a positive integer (seconds)".to_string(),
+                    })?;
         }
 
         // Audit overrides
         if let Ok(val) = env::var("SAH_SHELL_AUDIT_ENABLE_LOGGING") {
-            config.audit.enable_audit_logging = val.parse().map_err(|_| {
-                ConfigurationError::InvalidShellValue {
-                    key: "SAH_SHELL_AUDIT_ENABLE_LOGGING".to_string(),
-                    value: val,
-                    reason: "Must be 'true' or 'false'".to_string(),
-                }
-            })?;
+            config.audit.enable_audit_logging =
+                val.parse()
+                    .map_err(|_| ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_AUDIT_ENABLE_LOGGING".to_string(),
+                        value: val,
+                        reason: "Must be 'true' or 'false'".to_string(),
+                    })?;
         }
 
         if let Ok(val) = env::var("SAH_SHELL_AUDIT_LOG_LEVEL") {
@@ -575,10 +576,7 @@ impl ConfigurationLoader {
     }
 
     /// Validate shell configuration for consistency and security
-    fn validate_shell_config(
-        &self,
-        config: &ShellToolConfig,
-    ) -> Result<(), ConfigurationError> {
+    fn validate_shell_config(&self, config: &ShellToolConfig) -> Result<(), ConfigurationError> {
         // Validate timeout ranges
         if config.execution.default_timeout < config.execution.min_timeout {
             return Err(ConfigurationError::InvalidShellValue {
@@ -910,8 +908,8 @@ for = "invalid_reserved_name"
 
     #[test]
     fn test_load_shell_config_from_file() -> Result<(), Box<dyn std::error::Error>> {
-        use tempfile::NamedTempFile;
         use std::io::Write;
+        use tempfile::NamedTempFile;
 
         let mut temp_file = NamedTempFile::new()?;
         writeln!(
@@ -1048,7 +1046,8 @@ log_level = "debug"
     }
 
     #[test]
-    fn test_shell_config_validation_excessive_command_length() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_shell_config_validation_excessive_command_length(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let loader = ConfigurationLoader::new()?.with_validation(false);
 
         let mut config = ShellToolConfig::default();
@@ -1060,8 +1059,8 @@ log_level = "debug"
 
     #[test]
     fn test_truncation_strategy_parsing() -> Result<(), Box<dyn std::error::Error>> {
-        use tempfile::NamedTempFile;
         use std::io::Write;
+        use tempfile::NamedTempFile;
 
         let mut temp_file = NamedTempFile::new()?;
         writeln!(
@@ -1076,15 +1075,18 @@ truncation_strategy = "word_boundary"
         let file_config = loader.load_from_file(temp_file.path())?;
         let config = loader.merge_shell_config(ShellToolConfig::default(), &file_config)?;
 
-        assert_eq!(config.output.truncation_strategy, crate::sah_config::types::TruncationStrategy::WordBoundary);
+        assert_eq!(
+            config.output.truncation_strategy,
+            crate::sah_config::types::TruncationStrategy::WordBoundary
+        );
 
         Ok(())
     }
 
     #[test]
     fn test_invalid_truncation_strategy() -> Result<(), Box<dyn std::error::Error>> {
-        use tempfile::NamedTempFile;
         use std::io::Write;
+        use tempfile::NamedTempFile;
 
         let mut temp_file = NamedTempFile::new()?;
         writeln!(
