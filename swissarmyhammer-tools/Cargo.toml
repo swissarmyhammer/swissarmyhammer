@@ -43,6 +43,7 @@ libc = "0.2.175"
 
 # Web search dependencies
 reqwest = { workspace = true }
+html2text = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

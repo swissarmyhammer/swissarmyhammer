@@ -5,6 +5,7 @@
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
+use html2text::from_read;
 use reqwest::Client;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
@@ -39,14 +40,30 @@ impl WebSearchTool {
     }
 
     /// List of SearXNG instances to try
-    /// For now using a hardcoded list, in future this could be dynamic
-    fn get_searxng_instances() -> Vec<&'static str> {
+    /// Loads from configuration or falls back to hardcoded defaults
+    fn get_searxng_instances() -> Vec<String> {
+        // Try to load from configuration
+        if let Ok(Some(config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+            if let Some(swissarmyhammer::ConfigValue::Array(instances)) = config.get("web_search.searxng_instances") {
+                let mut instance_urls = Vec::new();
+                for instance in instances {
+                    if let swissarmyhammer::ConfigValue::String(url) = instance {
+                        instance_urls.push(url.clone());
+                    }
+                }
+                if !instance_urls.is_empty() {
+                    return instance_urls;
+                }
+            }
+        }
+        
+        // Fallback to hardcoded instances if configuration not available or invalid
         vec![
-            "https://search.bus-hit.me",
-            "https://searx.tiekoetter.com",
-            "https://search.projectsegfau.lt",
-            "https://searx.work",
-            "https://search.sapti.me",
+            "https://search.bus-hit.me".to_string(),
+            "https://searx.tiekoetter.com".to_string(),
+            "https://search.projectsegfau.lt".to_string(),
+            "https://searx.work".to_string(),
+            "https://search.sapti.me".to_string(),
         ]
     }
 
@@ -175,21 +192,8 @@ impl WebSearchTool {
         let html = response.text().await?;
         let fetch_time = start_time.elapsed();
 
-        // Basic HTML to text conversion (simplified for now)
-        let text = html
-            .replace("<br>", "\n")
-            .replace("</p>", "\n\n")
-            .replace("</div>", "\n")
-            .replace("</h1>", "\n")
-            .replace("</h2>", "\n")
-            .replace("</h3>", "\n");
-
-        // Remove HTML tags (very basic)
-        let text = regex::Regex::new(r"<[^>]*>")
-            .unwrap()
-            .replace_all(&text, "")
-            .trim()
-            .to_string();
+        // Convert HTML to text using html2text for proper formatting
+        let text = from_read(html.as_bytes(), 80); // 80 character line width
 
         let word_count = text.split_whitespace().count();
         let summary = if word_count > 50 {
@@ -263,9 +267,9 @@ impl McpTool for WebSearchTool {
         let mut attempted_instances = Vec::new();
 
         for instance in instances {
-            attempted_instances.push(instance.to_string());
+            attempted_instances.push(instance.clone());
 
-            match search_tool.perform_search(instance, &request).await {
+            match search_tool.perform_search(&instance, &request).await {
                 Ok(mut searxng_response) => {
                     let search_time = start_time.elapsed();
 

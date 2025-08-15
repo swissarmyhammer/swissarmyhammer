@@ -1,1 +1,13 @@
 project_name = "SwissArmyHammer"
+
+# Web search configuration
+[web_search]
+# Custom SearXNG instances for web search (optional)
+# If not specified, defaults to hardcoded list of public instances
+# searxng_instances = [
+#   "https://search.bus-hit.me",
+#   "https://searx.tiekoetter.com",
+#   "https://search.projectsegfau.lt",
+#   "https://searx.work",
+#   "https://search.sapti.me"
+# ]
