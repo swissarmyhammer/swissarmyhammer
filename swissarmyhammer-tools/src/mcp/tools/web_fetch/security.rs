@@ -89,9 +89,12 @@ impl SecurityValidator {
     pub fn validate_url(&self, url_str: &str) -> Result<Url, SecurityError> {
         // Check for obviously malformed URLs before parsing
         if url_str.contains("///") && !url_str.starts_with("file:///") {
-            warn!("Blocked URL with triple slash (not file scheme): {}", url_str);
+            warn!(
+                "Blocked URL with triple slash (not file scheme): {}",
+                url_str
+            );
             return Err(SecurityError::InvalidUrl(
-                "URLs with triple slashes are not allowed except for file scheme".to_string()
+                "URLs with triple slashes are not allowed except for file scheme".to_string(),
             ));
         }
 
@@ -131,16 +134,27 @@ impl SecurityValidator {
         // Reject empty or invalid hosts
         if host.is_empty() {
             warn!("Blocked empty host for URL: {}", url);
-            return Err(SecurityError::InvalidUrl("Host cannot be empty".to_string()));
+            return Err(SecurityError::InvalidUrl(
+                "Host cannot be empty".to_string(),
+            ));
         }
 
         // Reject hosts with path traversal attempts or invalid dot/hyphen patterns
-        if host.contains("..") || host.contains("./") || host.starts_with(".") || host.ends_with(".") 
-            || host.starts_with("-") || host.ends_with("-") 
-            || host.contains("-.") || host.contains(".-") {
-            warn!("Blocked host with invalid characters: {} for URL: {}", host, url);
+        if host.contains("..")
+            || host.contains("./")
+            || host.starts_with(".")
+            || host.ends_with(".")
+            || host.starts_with("-")
+            || host.ends_with("-")
+            || host.contains("-.")
+            || host.contains(".-")
+        {
+            warn!(
+                "Blocked host with invalid characters: {} for URL: {}",
+                host, url
+            );
             return Err(SecurityError::InvalidUrl(format!(
-                "Host '{}' contains invalid characters or patterns", host
+                "Host '{host}' contains invalid characters or patterns"
             )));
         }
 

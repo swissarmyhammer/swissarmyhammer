@@ -171,7 +171,7 @@ impl<'de> Deserialize<'de> for WebFetchRequest {
         D: serde::Deserializer<'de>,
     {
         use serde::de::Error;
-        
+
         #[derive(Deserialize)]
         struct WebFetchRequestHelper {
             url: String,
@@ -180,38 +180,38 @@ impl<'de> Deserialize<'de> for WebFetchRequest {
             max_content_length: Option<u32>,
             user_agent: Option<String>,
         }
-        
+
         let helper = WebFetchRequestHelper::deserialize(deserializer)?;
-        
+
         // Validate timeout range
         const MIN_TIMEOUT_SECONDS: u32 = 5;
         const MAX_TIMEOUT_SECONDS: u32 = 120;
-        
+
         let timeout = helper.timeout.map(|timeout| {
-            if timeout < MIN_TIMEOUT_SECONDS || timeout > MAX_TIMEOUT_SECONDS {
+            if !(MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout) {
                 return Err(Error::custom(format!(
                     "Timeout must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS} seconds"
                 )));
             }
             Ok(timeout)
         }).transpose()?;
-        
+
         // Validate and clamp max_content_length
         const MIN_CONTENT_LENGTH_BYTES: u32 = 1024;
         const MAX_CONTENT_LENGTH_BYTES: u32 = 10_485_760;
-        
+
         let max_content_length = helper.max_content_length.map(|length| {
-            if length < MIN_CONTENT_LENGTH_BYTES || length > MAX_CONTENT_LENGTH_BYTES {
+            if !(MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES).contains(&length) {
                 return Err(Error::custom(format!(
                     "Maximum content length must be between {MIN_CONTENT_LENGTH_BYTES} and {MAX_CONTENT_LENGTH_BYTES} bytes"
                 )));
             }
             Ok(length)
         }).transpose()?;
-        
+
         // Keep user_agent as-is for now, validation will handle empty strings
         let user_agent = helper.user_agent;
-        
+
         Ok(WebFetchRequest {
             url: helper.url,
             timeout,
