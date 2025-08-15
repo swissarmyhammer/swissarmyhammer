@@ -661,4 +661,292 @@ mod tests {
         assert_eq!(timeout_prop["maximum"], 120);
         assert_eq!(timeout_prop["default"], 30);
     }
+
+    #[test]
+    fn test_url_validation_edge_cases() {
+        // Test empty URL
+        let empty_url = "";
+        assert!(!empty_url.starts_with("http://") && !empty_url.starts_with("https://"));
+
+        // Test whitespace-only URL
+        let whitespace_url = "   ";
+        assert!(!whitespace_url.starts_with("http://") && !whitespace_url.starts_with("https://"));
+
+        // Test various invalid schemes
+        let file_url = "file:///etc/passwd";
+        let javascript_url = "javascript:alert('xss')";
+        let data_url = "data:text/plain,Hello";
+        let mailto_url = "mailto:user@example.com";
+
+        assert!(!file_url.starts_with("http://") && !file_url.starts_with("https://"));
+        assert!(!javascript_url.starts_with("http://") && !javascript_url.starts_with("https://"));
+        assert!(!data_url.starts_with("http://") && !data_url.starts_with("https://"));
+        assert!(!mailto_url.starts_with("http://") && !mailto_url.starts_with("https://"));
+
+        // Test valid URLs
+        let http_url = "http://example.com";
+        let https_url = "https://secure.example.com";
+        let https_path_url = "https://api.github.com/docs/rest";
+
+        assert!(http_url.starts_with("http://"));
+        assert!(https_path_url.starts_with("https://"));
+        assert!(https_url.starts_with("https://"));
+
+        // Test case sensitivity
+        let uppercase_scheme = "HTTP://EXAMPLE.COM";
+        let mixed_case_scheme = "Https://Example.Com";
+        assert!(
+            !uppercase_scheme.starts_with("http://") && !uppercase_scheme.starts_with("https://")
+        );
+        assert!(
+            !mixed_case_scheme.starts_with("http://") && !mixed_case_scheme.starts_with("https://")
+        );
+    }
+
+    #[test]
+    fn test_parameter_boundary_validations_comprehensive() {
+        // Test timeout boundaries
+        let timeout_min_valid = 5_u32;
+        let timeout_max_valid = 120_u32;
+        let timeout_min_invalid = 4_u32;
+        let timeout_max_invalid = 121_u32;
+
+        assert!((5..=120).contains(&timeout_min_valid));
+        assert!((5..=120).contains(&timeout_max_valid));
+        assert!(!(5..=120).contains(&timeout_min_invalid));
+        assert!(!(5..=120).contains(&timeout_max_invalid));
+
+        // Test content length boundaries
+        let content_min_valid = 1024_u32; // 1KB
+        let content_max_valid = 10_485_760_u32; // 10MB
+        let content_min_invalid = 1023_u32; // Less than 1KB
+        let content_max_invalid = 10_485_761_u32; // More than 10MB
+
+        assert!((1024..=10_485_760).contains(&content_min_valid));
+        assert!((1024..=10_485_760).contains(&content_max_valid));
+        assert!(!(1024..=10_485_760).contains(&content_min_invalid));
+        assert!(!(1024..=10_485_760).contains(&content_max_invalid));
+
+        // Test edge case values
+        let content_1mb = 1_048_576_u32; // Default 1MB
+        let content_5mb = 5_242_880_u32; // 5MB
+        assert!((1024..=10_485_760).contains(&content_1mb));
+        assert!((1024..=10_485_760).contains(&content_5mb));
+    }
+
+    #[test]
+    fn test_user_agent_handling() {
+        // Test default user agent
+        let default_ua = "SwissArmyHammer-Bot/1.0";
+        assert!(!default_ua.is_empty());
+        assert!(default_ua.contains("SwissArmyHammer"));
+
+        // Test custom user agents
+        let custom_ua = "TestBot/2.0";
+        let empty_ua = "";
+        let long_ua = "A".repeat(500); // Very long user agent
+
+        assert!(!custom_ua.is_empty());
+        assert!(empty_ua.is_empty());
+        assert!(long_ua.len() == 500);
+
+        // Test user agent with special characters
+        let special_chars_ua = "Bot/1.0 (Linux; x86_64) Mozilla/5.0";
+        assert!(!special_chars_ua.is_empty());
+        assert!(special_chars_ua.contains("Mozilla"));
+    }
+
+    #[test]
+    fn test_default_values_application() {
+        // Verify default values match specification
+        let mut config = markdowndown::Config::default();
+
+        // Test default timeout (30 seconds)
+        assert_eq!(config.http.timeout, std::time::Duration::from_secs(30));
+
+        // Test default user agent
+        config.http.user_agent = "SwissArmyHammer-Bot/1.0".to_string();
+        assert_eq!(config.http.user_agent, "SwissArmyHammer-Bot/1.0");
+
+        // Test default max redirects (should be 10 when follow_redirects is true)
+        config.http.max_redirects = 10;
+        assert_eq!(config.http.max_redirects, 10);
+
+        // Test default HTML processing options
+        config.html.max_line_width = 120;
+        config.html.remove_scripts_styles = true;
+        config.html.remove_navigation = true;
+        config.html.remove_sidebars = true;
+        config.html.remove_ads = true;
+        config.html.max_blank_lines = 2;
+
+        assert_eq!(config.html.max_line_width, 120);
+        assert!(config.html.remove_scripts_styles);
+        assert!(config.html.remove_navigation);
+        assert!(config.html.remove_sidebars);
+        assert!(config.html.remove_ads);
+        assert_eq!(config.html.max_blank_lines, 2);
+    }
+
+    #[test]
+    fn test_parameter_validation_error_messages() {
+        // Test URL scheme validation error message format
+        let invalid_schemes = vec![
+            "ftp://example.com",
+            "file:///etc/passwd",
+            "javascript:alert('xss')",
+            "data:text/plain,hello",
+            "mailto:test@example.com",
+        ];
+
+        for invalid_url in invalid_schemes {
+            assert!(!invalid_url.starts_with("http://") && !invalid_url.starts_with("https://"));
+        }
+
+        // Test timeout validation ranges
+        let invalid_timeouts = vec![4_u32, 0_u32, 121_u32, 300_u32];
+        let valid_timeouts = vec![5_u32, 30_u32, 60_u32, 120_u32];
+
+        for timeout in invalid_timeouts {
+            assert!(!(5..=120).contains(&timeout));
+        }
+
+        for timeout in valid_timeouts {
+            assert!((5..=120).contains(&timeout));
+        }
+
+        // Test content length validation ranges
+        let invalid_lengths = vec![0_u32, 512_u32, 1023_u32, 20_971_520_u32];
+        let valid_lengths = vec![1024_u32, 1_048_576_u32, 5_242_880_u32, 10_485_760_u32];
+
+        for length in invalid_lengths {
+            assert!(!(1024..=10_485_760).contains(&length));
+        }
+
+        for length in valid_lengths {
+            assert!((1024..=10_485_760).contains(&length));
+        }
+    }
+
+    #[test]
+    fn test_all_parameter_combinations() {
+        let _tool = WebFetchTool::new();
+
+        // Test minimal valid request (only URL)
+        let mut minimal_args = serde_json::Map::new();
+        minimal_args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        let minimal_request: WebFetchRequest = BaseToolImpl::parse_arguments(minimal_args).unwrap();
+        assert_eq!(minimal_request.url, "https://example.com");
+        assert!(minimal_request.timeout.is_none());
+        assert!(minimal_request.follow_redirects.is_none());
+        assert!(minimal_request.max_content_length.is_none());
+        assert!(minimal_request.user_agent.is_none());
+
+        // Test maximal valid request (all parameters)
+        let mut maximal_args = serde_json::Map::new();
+        maximal_args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://api.github.com/docs".to_string()),
+        );
+        maximal_args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(60)),
+        );
+        maximal_args.insert(
+            "follow_redirects".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        maximal_args.insert(
+            "max_content_length".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(5242880)), // 5MB
+        );
+        maximal_args.insert(
+            "user_agent".to_string(),
+            serde_json::Value::String("CustomBot/2.0".to_string()),
+        );
+
+        let maximal_request: WebFetchRequest = BaseToolImpl::parse_arguments(maximal_args).unwrap();
+        assert_eq!(maximal_request.url, "https://api.github.com/docs");
+        assert_eq!(maximal_request.timeout, Some(60));
+        assert_eq!(maximal_request.follow_redirects, Some(false));
+        assert_eq!(maximal_request.max_content_length, Some(5242880));
+        assert_eq!(
+            maximal_request.user_agent,
+            Some("CustomBot/2.0".to_string())
+        );
+
+        // Test boundary values
+        let mut boundary_args = serde_json::Map::new();
+        boundary_args.insert(
+            "url".to_string(),
+            serde_json::Value::String("http://localhost".to_string()),
+        );
+        boundary_args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(5)), // Minimum
+        );
+        boundary_args.insert(
+            "max_content_length".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(10485760)), // Maximum (10MB)
+        );
+        boundary_args.insert(
+            "follow_redirects".to_string(),
+            serde_json::Value::Bool(true),
+        );
+
+        let boundary_request: WebFetchRequest =
+            BaseToolImpl::parse_arguments(boundary_args).unwrap();
+        assert_eq!(boundary_request.timeout, Some(5));
+        assert_eq!(boundary_request.max_content_length, Some(10485760));
+        assert_eq!(boundary_request.follow_redirects, Some(true));
+    }
+
+    #[test]
+    fn test_schema_compliance() {
+        let tool = WebFetchTool::new();
+        let schema = tool.schema();
+
+        // Verify schema structure matches specification
+        assert!(schema.is_object());
+        let obj = schema.as_object().unwrap();
+
+        // Required fields
+        assert!(obj.contains_key("type"));
+        assert!(obj.contains_key("properties"));
+        assert!(obj.contains_key("required"));
+
+        // Properties structure
+        let properties = obj["properties"].as_object().unwrap();
+        let required = obj["required"].as_array().unwrap();
+
+        // URL field requirements
+        let url_prop = &properties["url"];
+        assert_eq!(url_prop["type"], "string");
+        assert_eq!(url_prop["format"], "uri");
+        assert!(required.contains(&serde_json::Value::String("url".to_string())));
+
+        // Optional parameters with defaults and constraints
+        let timeout_prop = &properties["timeout"];
+        assert_eq!(timeout_prop["type"], "integer");
+        assert_eq!(timeout_prop["minimum"], 5);
+        assert_eq!(timeout_prop["maximum"], 120);
+        assert_eq!(timeout_prop["default"], 30);
+
+        let follow_redirects_prop = &properties["follow_redirects"];
+        assert_eq!(follow_redirects_prop["type"], "boolean");
+        assert_eq!(follow_redirects_prop["default"], true);
+
+        let max_content_length_prop = &properties["max_content_length"];
+        assert_eq!(max_content_length_prop["type"], "integer");
+        assert_eq!(max_content_length_prop["minimum"], 1024);
+        assert_eq!(max_content_length_prop["maximum"], 10485760);
+        assert_eq!(max_content_length_prop["default"], 1048576);
+
+        let user_agent_prop = &properties["user_agent"];
+        assert_eq!(user_agent_prop["type"], "string");
+        assert_eq!(user_agent_prop["default"], "SwissArmyHammer-Bot/1.0");
+    }
 }

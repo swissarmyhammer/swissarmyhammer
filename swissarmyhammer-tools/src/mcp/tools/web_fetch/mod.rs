@@ -36,7 +36,7 @@
 //!             .expect("Tool description should be available")
 //!     }
 //!
-//!     fn schema(&self) -> serde_json::Value { 
+//!     fn schema(&self) -> serde_json::Value {
 //!         serde_json::json!({ "type": "object" })
 //!     }
 //!
