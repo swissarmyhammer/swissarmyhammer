@@ -93,34 +93,34 @@ impl McpTool for NotifyTool {
 
         // Get the notification level, defaulting to "info"
         let level = request.level.as_deref().unwrap_or("info");
-        
+
         // Get the context, defaulting to empty object
         let notification_context = request.context.unwrap_or_default();
 
         // Send the notification through the tracing system with the "llm_notify" target
         match level {
             "info" => tracing::info!(
-                target: "llm_notify", 
-                context = %notification_context, 
-                "{}", 
+                target: "llm_notify",
+                context = %notification_context,
+                "{}",
                 request.message
             ),
             "warn" => tracing::warn!(
-                target: "llm_notify", 
-                context = %notification_context, 
-                "{}", 
+                target: "llm_notify",
+                context = %notification_context,
+                "{}",
                 request.message
             ),
             "error" => tracing::error!(
-                target: "llm_notify", 
-                context = %notification_context, 
-                "{}", 
+                target: "llm_notify",
+                context = %notification_context,
+                "{}",
                 request.message
             ),
             _ => tracing::info!(
-                target: "llm_notify", 
-                context = %notification_context, 
-                "{}", 
+                target: "llm_notify",
+                context = %notification_context,
+                "{}",
                 request.message
             ),
         }
@@ -204,7 +204,10 @@ mod tests {
         let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.message, "Test notification message");
         assert_eq!(request.level, Some("warn".to_string()));
-        assert_eq!(request.context, Some(json!({"stage": "analysis", "file_count": 42})));
+        assert_eq!(
+            request.context,
+            Some(json!({"stage": "analysis", "file_count": 42}))
+        );
     }
 
     #[test]
@@ -233,10 +236,7 @@ mod tests {
             "message".to_string(),
             serde_json::Value::String("Test message".to_string()),
         );
-        args.insert(
-            "level".to_string(),
-            serde_json::Value::Number(42.into()),
-        );
+        args.insert("level".to_string(), serde_json::Value::Number(42.into()));
 
         let result: Result<NotifyCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn test_parse_valid_levels() {
         let levels = ["info", "warn", "error"];
-        
+
         for level in levels {
             let mut args = serde_json::Map::new();
             args.insert(
