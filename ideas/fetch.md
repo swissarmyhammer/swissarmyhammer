@@ -232,55 +232,31 @@ Map `markdowndown` errors to MCP-appropriate error responses:
 
 ### URL Validation
 - Verify URL scheme (HTTP/HTTPS only)
-- Validate domain names and prevent internal network access
 - Check against domain blacklists and security policies
 - Prevent SSRF (Server-Side Request Forgery) attacks
 
-### Content Security
-- Validate Content-Type headers before processing
-- Implement content size limits to prevent DoS
-- Strip potentially dangerous HTML elements
-- Sanitize markdown output for safe consumption
-
 ### Rate Limiting
-- Implement per-domain request limiting
-- Global rate limiting across all web fetch operations
-- Configurable cooldown periods for repeated requests
 - Circuit breaker pattern for problematic domains
 
 ### Privacy Protection
-- Respect robots.txt files when configured
-- Support Do Not Track headers
 - Configurable User-Agent identification
 - Optional request logging with privacy controls
 
 ## Configuration Options
 
 ### Global Settings
+
+These are the defaults for parameters -- do not create a config file.
 ```toml
 [web_fetch]
 default_timeout = 30          # seconds
 max_content_size = "1MB"      # maximum content size
 max_redirects = 10            # maximum redirect hops
-rate_limit_per_domain = 10    # requests per minute per domain
 user_agent = "SwissArmyHammer-Bot/1.0"
-respect_robots_txt = true
 
-# Domain restrictions
-allowed_domains = ["*.rust-lang.org", "*.github.com"]
-blocked_domains = ["*.internal.com", "localhost"]
-
-# Security settings
-allow_private_ips = false
 max_response_time = 60        # seconds
 verify_ssl = true
 ```
-
-### Per-Request Overrides
-- Timeout adjustments within configured limits
-- Content size limits (cannot exceed global maximum)
-- Custom headers for specific sites
-- Redirect behavior control
 
 ## Error Handling
 
@@ -302,26 +278,6 @@ verify_ssl = true
 - Rate limit violations
 - Invalid redirect chains
 
-## Performance Considerations
-
-### Caching Strategy
-- Optional response caching with configurable TTL
-- ETag and Last-Modified header support
-- Memory-efficient streaming for large content
-- Disk-based cache for frequently accessed URLs
-
-### Resource Management
-- Connection pooling for HTTP clients
-- Memory limits for content processing
-- Concurrent request limits
-- Timeout enforcement at multiple levels
-
-### Optimization Features
-- Gzip/compression support
-- Conditional requests (If-Modified-Since)
-- Partial content range requests
-- Connection reuse for same-domain requests
-
 ## Integration Points
 
 ### Workflow Integration
@@ -332,34 +288,7 @@ verify_ssl = true
 
 ### Logging Integration
 - Structured logging with request/response metadata
-- Performance metrics collection
 - Error categorization and reporting
-- Privacy-aware log filtering
-
-### MCP Tool Chaining
-- Output can be processed by other MCP tools
-- Content can be stored using memo tools
-- Integration with search/indexing tools
-- Support for batch processing workflows
-
-## Implementation Strategy
-
-### Phase 1: Core Implementation
-- Basic URL fetching with `markdowndown` integration
-- Essential error handling and validation
-- Simple response formatting and metadata
-
-### Phase 2: Security and Performance
-- Domain validation and blacklisting
-- Rate limiting and abuse protection
-- Caching implementation
-- Enhanced error reporting
-
-### Phase 3: Advanced Features
-- Robots.txt compliance
-- Advanced content filtering options
-- Batch processing capabilities
-- Integration with external security services
 
 ## Inspiration and References
 
@@ -395,35 +324,6 @@ Leverages the [SwissArmyHammer MarkdownDown](https://github.com/swissarmyhammer/
 ### Performance Tests
 - Large content handling and memory usage
 - Concurrent request processing
-- Rate limiting enforcement
-- Cache effectiveness measurement
 
 ### Security Tests
-- SSRF attack prevention
-- Malicious content handling
-- Domain blacklist enforcement
 - SSL certificate validation
-
-## Future Enhancements
-
-### Advanced Content Processing
-- Smart content extraction (main content vs. navigation)
-- Structured data extraction (JSON-LD, microdata)
-- Image processing and description generation
-- PDF and document format support
-
-### Integration Enhancements
-- Browser automation for JavaScript-heavy sites
-- Screenshot capture capabilities
-- Form interaction and submission
-- Session management and authentication
-
-### Analytics and Monitoring
-- Content change detection and monitoring
-- Performance analytics and optimization
-- Usage patterns analysis
-- Quality metrics for converted content
-
-## Conclusion
-
-The MCP WebFetch tool provides essential web content access capabilities for LLM workflows while maintaining security, performance, and reliability. The integration with `markdowndown` ensures high-quality content conversion, and the comprehensive parameter set enables flexible usage across diverse web scraping and content analysis scenarios.
