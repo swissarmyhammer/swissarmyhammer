@@ -31,7 +31,6 @@ test_output.txt
 # Scratch files
 CODE_REVIEW.md
 TEST_FAILURES.md
-TEST_RESULTS.md
 
 # Test issue files
 swissarmyhammer/issues/
