@@ -18,6 +18,7 @@ mod shell;
 mod signal_handler;
 mod test;
 mod validate;
+mod web_search;
 
 use clap::CommandFactory;
 use cli::{Cli, Commands};
@@ -158,6 +159,10 @@ async fn main() {
         Some(Commands::Plan { plan_filename }) => {
             tracing::info!("Running plan command");
             run_plan(plan_filename).await
+        }
+        Some(Commands::WebSearch { subcommand }) => {
+            tracing::info!("Running web search command");
+            run_web_search(subcommand).await
         }
         Some(Commands::Config { subcommand }) => {
             tracing::info!("Running config command");
@@ -524,6 +529,18 @@ async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             tracing::error!("Shell error: {}", e);
+            EXIT_WARNING
+        }
+    }
+}
+
+async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
+    use web_search;
+
+    match web_search::handle_web_search_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            tracing::error!("Web search error: {}", e);
             EXIT_WARNING
         }
     }

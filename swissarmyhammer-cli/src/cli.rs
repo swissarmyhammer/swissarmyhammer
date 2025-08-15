@@ -452,6 +452,51 @@ If implementation fails:
 • Verify the implement workflow exists in builtin workflows
 ")]
     Implement,
+    /// Web search commands
+    #[command(long_about = "
+Perform web searches using SearXNG metasearch engines with privacy protection and optional content fetching.
+Uses the same backend as the MCP web_search tool for consistent functionality.
+
+Basic usage:
+  swissarmyhammer web-search search <query>           # Perform web search
+  swissarmyhammer web-search search <query> --results 20 --category it --format json
+
+Search options:
+  <query>                                              # Search query string (required)
+  --category <category>                                # Search category (general, images, videos, news, etc.)
+  --results <count>                                    # Number of results to return (1-50, default: 10)
+  --language <lang>                                    # Language code (e.g., 'en', 'fr', 'en-US', default: 'en')
+  --fetch-content true/false                           # Whether to fetch page content (default: true)
+  --safe-search <level>                                # Safe search level: 0=off, 1=moderate, 2=strict (default: 1)
+  --time-range <range>                                 # Time filter: day, week, month, year (default: all time)
+  --format <format>                                    # Output format: table, json, yaml (default: table)
+
+Categories:
+  general, images, videos, news, map, music, it, science, files
+
+Examples:
+  swissarmyhammer web-search search \"rust async programming\"
+  swissarmyhammer web-search search \"python web scraping\" --results 15 --fetch-content false
+  swissarmyhammer web-search search \"machine learning\" --category science --time-range month
+  swissarmyhammer web-search search \"docker tutorial\" --category it --language en --format json
+  swissarmyhammer web-search search \"latest news\" --category news --time-range day --safe-search 2
+
+Privacy features:
+  • Uses SearXNG instances that don't track users
+  • Rotates between multiple instances for load distribution
+  • No search history storage or logging
+  • Encrypted communication with all instances
+
+Performance:
+  • Search operations typically complete in 1-3 seconds
+  • Content fetching adds 2-5 seconds depending on target sites
+  • Automatic fallback to alternative instances
+  • Graceful degradation when content fetching fails
+")]
+    WebSearch {
+        #[command(subcommand)]
+        subcommand: WebSearchCommands,
+    },
     /// Configuration management commands
     #[command(long_about = "
 Manage sah.toml configuration files with comprehensive CLI commands for validation, inspection, and debugging.
@@ -1041,6 +1086,43 @@ pub enum SearchCommands {
         limit: usize,
         /// Output format
         #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WebSearchCommands {
+    /// Search the web using SearXNG
+    Search {
+        /// The search query string
+        query: String,
+
+        /// Search category
+        #[arg(long, default_value = "general")]
+        category: String,
+
+        /// Number of results to return
+        #[arg(long, default_value = "10")]
+        results: usize,
+
+        /// Search language code (e.g., "en", "fr", "en-US")
+        #[arg(long, default_value = "en")]
+        language: String,
+
+        /// Whether to fetch content from result URLs
+        #[arg(long, default_value = "true")]
+        fetch_content: bool,
+
+        /// Safe search level (0=off, 1=moderate, 2=strict)
+        #[arg(long, default_value = "1")]
+        safe_search: u8,
+
+        /// Time range filter ("", "day", "week", "month", "year")
+        #[arg(long, default_value = "")]
+        time_range: String,
+
+        /// Output format
+        #[arg(long, value_enum, default_value = "table")]
         format: OutputFormat,
     },
 }
