@@ -473,6 +473,12 @@ pub fn register_memo_tools(registry: &mut ToolRegistry) {
     memoranda::register_memoranda_tools(registry);
 }
 
+/// Register all notification-related tools with the registry
+pub fn register_notify_tools(registry: &mut ToolRegistry) {
+    use super::tools::notify;
+    notify::register_notify_tools(registry);
+}
+
 /// Register all search-related tools with the registry
 pub fn register_search_tools(registry: &mut ToolRegistry) {
     use super::tools::search;

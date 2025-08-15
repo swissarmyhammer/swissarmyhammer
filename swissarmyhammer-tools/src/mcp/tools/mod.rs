@@ -38,6 +38,7 @@
 pub mod abort;
 pub mod issues;
 pub mod memoranda;
+pub mod notify;
 pub mod outline;
 pub mod search;
 pub mod shell;

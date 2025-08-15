@@ -21,8 +21,9 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_abort_tools, register_issue_tools, register_memo_tools, register_outline_tools,
-    register_search_tools, register_shell_tools, register_todo_tools, ToolContext, ToolRegistry,
+    register_abort_tools, register_issue_tools, register_memo_tools, register_notify_tools,
+    register_outline_tools, register_search_tools, register_shell_tools, register_todo_tools,
+    ToolContext, ToolRegistry,
 };
 
 /// MCP server for serving prompts and workflows
@@ -133,6 +134,7 @@ impl McpServer {
         register_abort_tools(&mut tool_registry);
         register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
+        register_notify_tools(&mut tool_registry);
         register_outline_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
