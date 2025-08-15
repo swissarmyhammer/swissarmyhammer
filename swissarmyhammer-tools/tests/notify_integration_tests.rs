@@ -4,22 +4,24 @@
 //! including MCP protocol handling, tool registry integration, and end-to-end scenarios.
 
 use serde_json::json;
-use swissarmyhammer_tools::mcp::tool_registry::{ToolRegistry, ToolContext};
-use swissarmyhammer_tools::mcp::tools::notify;
-use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
-use swissarmyhammer::git::GitOperations;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer::git::GitOperations;
+use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
+use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
+use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
+use swissarmyhammer_tools::mcp::tools::notify;
 use tokio::time::{timeout, Duration};
 
 /// Create a test context with mock storage backends for testing MCP tools
 async fn create_test_context() -> ToolContext {
-    let issue_storage: Arc<tokio::sync::RwLock<Box<dyn IssueStorage>>> = Arc::new(tokio::sync::RwLock::new(Box::new(
-        FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
-    )));
-    let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> = Arc::new(tokio::sync::Mutex::new(None));
+    let issue_storage: Arc<tokio::sync::RwLock<Box<dyn IssueStorage>>> =
+        Arc::new(tokio::sync::RwLock::new(Box::new(
+            FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+        )));
+    let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
     let memo_storage: Arc<tokio::sync::RwLock<Box<dyn MemoStorage>>> =
         Arc::new(tokio::sync::RwLock::new(Box::new(MockMemoStorage::new())));
 
@@ -109,14 +111,8 @@ async fn test_notify_tool_with_all_parameters() {
 
     // Test notification with all parameters
     let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "message".to_string(),
-        json!("Full parameter test"),
-    );
-    arguments.insert(
-        "level".to_string(),
-        json!("warn"),
-    );
+    arguments.insert("message".to_string(), json!("Full parameter test"));
+    arguments.insert("level".to_string(), json!("warn"));
     arguments.insert(
         "context".to_string(),
         json!({"stage": "integration_test", "file_count": 42}),
@@ -174,7 +170,10 @@ async fn test_notify_tool_different_levels() {
 
     for level in levels {
         let mut args = serde_json::Map::new();
-        args.insert("message".to_string(), json!(format!("Test {} message", level)));
+        args.insert(
+            "message".to_string(),
+            json!(format!("Test {} message", level)),
+        );
         args.insert("level".to_string(), json!(level));
 
         let result = tool.execute(args, &context).await;
@@ -278,7 +277,10 @@ async fn test_notify_tool_rate_limiting_integration() {
     // Test multiple notifications succeed (MockRateLimiter allows all)
     for i in 0..5 {
         let mut args = serde_json::Map::new();
-        args.insert("message".to_string(), json!(format!("Rate limit test {}", i)));
+        args.insert(
+            "message".to_string(),
+            json!(format!("Rate limit test {}", i)),
+        );
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
@@ -297,13 +299,20 @@ async fn test_notify_tool_performance_characteristics() {
     // Perform many notifications and measure time
     for i in 0..num_operations {
         let mut args = serde_json::Map::new();
-        args.insert("message".to_string(), json!(format!("Performance test {}", i)));
+        args.insert(
+            "message".to_string(),
+            json!(format!("Performance test {}", i)),
+        );
 
         let result = timeout(Duration::from_millis(100), tool.execute(args, &context)).await;
 
         assert!(result.is_ok(), "Timeout on operation {}", i);
         let execution_result = result.unwrap();
-        assert!(execution_result.is_ok(), "Execution failed on operation {}", i);
+        assert!(
+            execution_result.is_ok(),
+            "Execution failed on operation {}",
+            i
+        );
     }
 
     let elapsed = start_time.elapsed();
