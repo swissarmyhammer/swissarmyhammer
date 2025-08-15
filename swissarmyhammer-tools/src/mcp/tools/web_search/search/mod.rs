@@ -3,6 +3,7 @@
 //! This module provides the WebSearchTool for performing web searches through the MCP protocol.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::web_search::instance_manager::{InstanceManager, InstanceManagerConfig};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
 use html2text::from_read;
@@ -10,7 +11,10 @@ use reqwest::Client;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::OnceCell;
+use tracing::warn;
 use url::Url;
 
 /// Structured error types for web search operations
@@ -70,6 +74,9 @@ impl std::fmt::Display for WebSearchInternalError {
 
 impl std::error::Error for WebSearchInternalError {}
 
+// Global instance manager - initialized lazily on first use
+static INSTANCE_MANAGER: OnceCell<Arc<InstanceManager>> = OnceCell::const_new();
+
 /// Tool for performing web searches using SearXNG
 #[derive(Default)]
 pub struct WebSearchTool {
@@ -96,32 +103,56 @@ impl WebSearchTool {
         self.client.as_ref().unwrap()
     }
 
-    /// List of SearXNG instances to try
-    /// Loads from configuration or falls back to hardcoded defaults
-    fn get_searxng_instances() -> Vec<String> {
+    /// Gets or initializes the global instance manager
+    async fn get_instance_manager() -> &'static Arc<InstanceManager> {
+        INSTANCE_MANAGER
+            .get_or_init(|| async {
+                // Load configuration for instance discovery
+                let config = Self::load_instance_manager_config();
+                let manager = InstanceManager::with_config(config).await;
+                Arc::new(manager)
+            })
+            .await
+    }
+
+    /// Loads configuration for the instance manager
+    fn load_instance_manager_config() -> InstanceManagerConfig {
+        let mut config = InstanceManagerConfig::default();
+        
         // Try to load from configuration
-        if let Ok(Some(config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
-            if let Some(swissarmyhammer::ConfigValue::Array(instances)) = config.get("web_search.searxng_instances") {
-                let mut instance_urls = Vec::new();
-                for instance in instances {
-                    if let swissarmyhammer::ConfigValue::String(url) = instance {
-                        instance_urls.push(url.clone());
-                    }
+        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+            // Discovery settings
+            if let Some(swissarmyhammer::ConfigValue::Boolean(enabled)) = 
+                repo_config.get("web_search.discovery.enabled") {
+                config.discovery_enabled = *enabled;
+            }
+            
+            // Discovery refresh interval
+            if let Some(swissarmyhammer::ConfigValue::Integer(interval)) = 
+                repo_config.get("web_search.discovery.refresh_interval_seconds") {
+                if *interval > 0 {
+                    config.discovery_refresh_interval = Duration::from_secs(*interval as u64);
                 }
-                if !instance_urls.is_empty() {
-                    return instance_urls;
+            }
+            
+            // Health check interval
+            if let Some(swissarmyhammer::ConfigValue::Integer(interval)) = 
+                repo_config.get("web_search.discovery.health_check_interval_seconds") {
+                if *interval > 0 {
+                    config.health_check_interval = Duration::from_secs(*interval as u64);
+                }
+            }
+            
+            // Max consecutive failures
+            if let Some(swissarmyhammer::ConfigValue::Integer(failures)) = 
+                repo_config.get("web_search.discovery.max_consecutive_failures") {
+                if *failures > 0 {
+                    config.max_consecutive_failures = *failures as u32;
                 }
             }
         }
         
-        // Fallback to hardcoded instances if configuration not available or invalid
-        vec![
-            "https://search.bus-hit.me".to_string(),
-            "https://searx.tiekoetter.com".to_string(),
-            "https://search.projectsegfau.lt".to_string(),
-            "https://searx.work".to_string(),
-            "https://search.sapti.me".to_string(),
-        ]
+        config
     }
 
     /// Performs a search using a SearXNG instance with comprehensive parameter support
@@ -551,88 +582,104 @@ impl McpTool for WebSearchTool {
         let start_time = Instant::now();
         let mut search_tool = WebSearchTool::new();
 
-        // Try each SearXNG instance until one works
-        let instances = Self::get_searxng_instances();
-        let mut last_error = None;
+        // Get instance manager and try instances until one works
+        let instance_manager = Self::get_instance_manager().await;
+        let max_attempts = 3; // Try up to 3 different instances
         let mut attempted_instances = Vec::new();
+        let mut last_error = None;
 
-        for instance in instances {
-            attempted_instances.push(instance.clone());
+        for attempt in 0..max_attempts {
+            if let Some(instance) = instance_manager.get_next_instance().await {
+                attempted_instances.push(instance.url.clone());
+                
+                match search_tool.perform_search(&instance.url, &request).await {
+                    Ok(mut searxng_response) => {
+                        let search_time = start_time.elapsed();
 
-            match search_tool.perform_search(&instance, &request).await {
-                Ok(mut searxng_response) => {
-                    let search_time = start_time.elapsed();
+                        // Optionally fetch content from each result
+                        let mut content_fetch_stats = None;
 
-                    // Optionally fetch content from each result
-                    let mut content_fetch_stats = None;
+                        if request.fetch_content.unwrap_or(true) {
+                            let content_start = Instant::now();
+                            let mut successful = 0;
+                            let mut failed = 0;
 
-                    if request.fetch_content.unwrap_or(true) {
-                        let content_start = Instant::now();
-                        let mut successful = 0;
-                        let mut failed = 0;
-
-                        for result in &mut searxng_response.results {
-                            match search_tool.fetch_content(&result.url).await {
-                                Ok(content) => {
-                                    result.content = Some(content);
-                                    successful += 1;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to fetch content from {}: {}",
-                                        result.url,
-                                        e
-                                    );
-                                    failed += 1;
+                            for result in &mut searxng_response.results {
+                                match search_tool.fetch_content(&result.url).await {
+                                    Ok(content) => {
+                                        result.content = Some(content);
+                                        successful += 1;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to fetch content from {}: {}",
+                                            result.url,
+                                            e
+                                        );
+                                        failed += 1;
+                                    }
                                 }
                             }
+
+                            content_fetch_stats = Some(ContentFetchStats {
+                                attempted: searxng_response.results.len(),
+                                successful,
+                                failed,
+                                total_time_ms: content_start.elapsed().as_millis() as u64,
+                            });
                         }
 
-                        content_fetch_stats = Some(ContentFetchStats {
-                            attempted: searxng_response.results.len(),
-                            successful,
-                            failed,
-                            total_time_ms: content_start.elapsed().as_millis() as u64,
-                        });
+                        let response = WebSearchResponse {
+                            results: searxng_response.results,
+                            metadata: SearchMetadata {
+                                query: request.query.clone(),
+                                category: request.category.unwrap_or_default(),
+                                language: request.language.unwrap_or_else(|| "en".to_string()),
+                                results_count: request.results_count.unwrap_or(10),
+                                search_time_ms: search_time.as_millis() as u64,
+                                instance_used: instance.url.clone(),
+                                total_results: searxng_response.total_results,
+                                engines_used: searxng_response.engines_used,
+                                content_fetch_stats,
+                                fetch_content: request.fetch_content.unwrap_or(true),
+                            },
+                        };
+
+                        tracing::info!(
+                            "Web search completed: found {} results for '{}' in {:?}",
+                            response.results.len(),
+                            response.metadata.query,
+                            search_time
+                        );
+
+                        return Ok(BaseToolImpl::create_success_response(
+                            serde_json::to_string_pretty(&response).map_err(|e| {
+                                McpError::internal_error(
+                                    format!("Failed to serialize response: {e}"),
+                                    None,
+                                )
+                            })?,
+                        ));
                     }
-
-                    let response = WebSearchResponse {
-                        results: searxng_response.results,
-                        metadata: SearchMetadata {
-                            query: request.query.clone(),
-                            category: request.category.unwrap_or_default(),
-                            language: request.language.unwrap_or_else(|| "en".to_string()),
-                            results_count: request.results_count.unwrap_or(10),
-                            search_time_ms: search_time.as_millis() as u64,
-                            instance_used: instance.to_string(),
-                            total_results: searxng_response.total_results,
-                            engines_used: searxng_response.engines_used,
-                            content_fetch_stats,
-                            fetch_content: request.fetch_content.unwrap_or(true),
-                        },
-                    };
-
-                    tracing::info!(
-                        "Web search completed: found {} results for '{}' in {:?}",
-                        response.results.len(),
-                        response.metadata.query,
-                        search_time
-                    );
-
-                    return Ok(BaseToolImpl::create_success_response(
-                        serde_json::to_string_pretty(&response).map_err(|e| {
-                            McpError::internal_error(
-                                format!("Failed to serialize response: {e}"),
-                                None,
-                            )
-                        })?,
-                    ));
+                    Err(e) => {
+                        tracing::warn!("Search failed on instance {}: {}", instance.url, e);
+                        
+                        // Mark instance as failed for health tracking
+                        instance_manager.mark_instance_failed(&instance.url).await;
+                        
+                        // Check if it's a rate limit error and handle appropriately
+                        if e.to_string().contains("rate limit") || e.to_string().contains("429") {
+                            instance_manager.mark_instance_rate_limited(&instance.url, Duration::from_secs(300)).await;
+                        }
+                        
+                        last_error = Some(e.to_string());
+                        continue;
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Search failed on instance {}: {}", instance, e);
-                    last_error = Some(e.to_string());
-                    continue;
-                }
+            } else {
+                // No healthy instances available
+                warn!("No healthy instances available on attempt {}", attempt + 1);
+                break;
             }
         }
 
@@ -708,13 +755,14 @@ mod tests {
     }
 
     #[test]
-    fn test_get_searxng_instances() {
-        let instances = WebSearchTool::get_searxng_instances();
-        assert!(!instances.is_empty());
-
-        for instance in instances {
-            assert!(instance.starts_with("https://"));
-        }
+    fn test_load_instance_manager_config() {
+        let config = WebSearchTool::load_instance_manager_config();
+        
+        // Should have default values when no config is present
+        assert!(config.discovery_enabled);
+        assert_eq!(config.discovery_refresh_interval, Duration::from_secs(3600));
+        assert_eq!(config.health_check_interval, Duration::from_secs(300));
+        assert_eq!(config.max_consecutive_failures, 3);
     }
 
     #[test]

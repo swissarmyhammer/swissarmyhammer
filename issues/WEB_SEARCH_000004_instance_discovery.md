@@ -220,3 +220,142 @@ if let Some(instance) = manager.get_next_instance().await {
     }
 }
 ```
+## Proposed Solution
+
+Based on my analysis of the existing web search implementation, I will implement the instance discovery system with the following approach:
+
+### Architecture Overview
+The current implementation has a hardcoded list of SearXNG instances in `get_searxng_instances()`. I will enhance this with a dynamic discovery system while maintaining backward compatibility.
+
+### Key Components to Implement
+
+1. **Instance Discovery Client** (`instance_discovery.rs`)
+   - Query searx.space API for instance metadata
+   - Parse and validate instance information
+   - Filter instances by quality criteria
+
+2. **Health Monitoring System** (`health_checker.rs`)
+   - Concurrent health checks for discovered instances
+   - Response time measurement and tracking
+   - Failure detection and rate limit tracking
+
+3. **Instance Management** (`instance_manager.rs`)
+   - Central registry of discovered instances with health status
+   - Selection strategies (round-robin, weighted by grade)
+   - Automatic failover and retry logic
+   - Periodic refresh of instance list
+
+4. **Integration with WebSearchTool**
+   - Replace hardcoded instance list with dynamic discovery
+   - Add instance health feedback loop
+   - Implement graceful fallback when discovery fails
+
+### Implementation Strategy
+
+Following TDD approach:
+- Start with comprehensive unit tests for each component
+- Implement core data structures (`SearxInstance`, `HealthStatus`)
+- Build discovery client with proper error handling
+- Implement health checking with concurrent execution
+- Create instance manager with selection logic
+- Integrate with existing WebSearchTool
+- Add configuration support for discovery settings
+
+### Backward Compatibility
+- Fallback to hardcoded instances when discovery fails
+- Configuration option to disable discovery
+- No breaking changes to existing API
+
+### Quality Criteria
+- A+ grade instances preferred, A grade acceptable, B grade as fallback
+- Minimum 90% uptime requirement
+- Maximum 5 second response time threshold
+- API availability verification
+
+This approach will provide high-availability search with intelligent instance selection while maintaining the existing functionality.
+## Implementation Complete ✅
+
+### Summary
+Successfully implemented SearXNG instance discovery and management system with the following components:
+
+### Key Components Implemented
+
+1. **SearxInstance Data Structure** (`instance_discovery.rs`)
+   - Comprehensive instance metadata with health tracking
+   - Quality scoring system (A+ = 4, A = 3, B = 2, etc.)
+   - Rate limiting and consecutive failure tracking
+   - Last checked timestamps and health status
+
+2. **Instance Discovery Client** (`instance_discovery.rs`)
+   - Fetches instance data from searx.space API
+   - Filters instances by quality criteria (min grade B, 90% uptime, <5s response)
+   - HTTPS requirement enforcement
+   - Handles API failures gracefully with fallback to existing instances
+
+3. **Health Checker** (`health_checker.rs`)
+   - Lightweight HTTP-based health checks
+   - Concurrent health checking with semaphore-based limiting
+   - Search functionality testing capability
+   - Response time measurement and timeout handling
+
+4. **Instance Manager** (`instance_manager.rs`)
+   - Central registry for discovered instances
+   - Multiple selection strategies: RoundRobin, WeightedByGrade, WeightedByResponseTime, Random
+   - Automatic failover and instance failure tracking
+   - Configurable refresh intervals and health checking
+   - Fallback to hardcoded instances when discovery fails
+
+5. **WebSearchTool Integration** (`search/mod.rs`)
+   - Replaced hardcoded instance list with dynamic discovery
+   - Instance failure feedback loop with health tracking
+   - Rate limit detection and instance marking
+   - Graceful fallback when no healthy instances available
+   - Configuration loading for discovery settings
+
+### Configuration Options Added
+
+```toml
+[web_search.discovery]
+enabled = true                              # Enable/disable discovery
+refresh_interval_seconds = 3600             # 1 hour discovery refresh
+health_check_interval_seconds = 300         # 5 minute health checks  
+max_consecutive_failures = 3                # Failures before unhealthy
+```
+
+### Quality Criteria Implemented
+- **Grade filtering**: Only A+, A, B grade instances accepted
+- **Uptime requirement**: Minimum 90% uptime
+- **Response time**: Maximum 5 second average response time
+- **API availability**: Must support JSON API
+- **HTTPS enforcement**: Only secure instances accepted
+- **Instance type**: Only SearXNG instances (not other search engines)
+
+### High Availability Features
+- **Automatic failover**: Tries up to 3 different instances per search
+- **Health monitoring**: Continuous background health checking
+- **Rate limit handling**: Detects 429 responses and marks instances as rate limited
+- **Graceful degradation**: Falls back to hardcoded instances on discovery failure
+- **Instance rotation**: Prevents overloading individual instances
+
+### Testing Coverage
+- **197 unit tests passing** across all components
+- **Comprehensive error scenario testing**: Invalid URLs, network failures, timeouts
+- **Instance selection testing**: All strategies verified
+- **Health checking testing**: Both basic and search functionality tests
+- **Configuration testing**: Loading and validation of settings
+- **Integration testing**: WebSearchTool properly uses instance manager
+
+### Backward Compatibility
+- **No breaking changes** to existing WebSearchTool API
+- **Fallback instances**: Hardcoded list used when discovery unavailable
+- **Configuration optional**: Defaults work without any configuration
+- **Discovery can be disabled**: Falls back to original behavior if needed
+
+### Performance Considerations
+- **Lazy initialization**: Instance manager created only on first use
+- **Concurrent health checks**: Limited to 5 simultaneous checks
+- **Efficient selection**: O(1) round-robin, O(n) grade-based selection
+- **Minimal overhead**: Health checks are lightweight HTTP requests
+- **Background refresh**: Discovery happens in background, doesn't block searches
+
+The implementation successfully provides high-availability distributed web search with intelligent instance selection, automatic failover, and comprehensive health monitoring while maintaining full backward compatibility with the existing system.

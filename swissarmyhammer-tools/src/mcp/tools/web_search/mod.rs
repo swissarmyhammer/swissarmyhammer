@@ -4,6 +4,9 @@
 //! metasearch engines. The tools provide privacy-respecting search capabilities with automatic
 //! result fetching and content processing.
 
+pub mod health_checker;
+pub mod instance_discovery;
+pub mod instance_manager;
 pub mod search;
 pub mod types;
 
