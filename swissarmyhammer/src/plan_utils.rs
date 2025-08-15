@@ -243,27 +243,6 @@ pub fn validate_issues_directory() -> Result<PathBuf, PlanCommandError> {
         });
     }
 
-    // Test writability by creating a temporary file
-    let test_file = issues_dir.join(".write_test");
-    match fs.write(&test_file, "test") {
-        Ok(()) => {
-            // Clean up test file
-            let _ = fs.remove_file(&test_file);
-        }
-        Err(e) => {
-            return Err(PlanCommandError::IssuesDirectoryNotWritable {
-                path: issues_dir.display().to_string(),
-                source: match e {
-                    crate::error::SwissArmyHammerError::Io(io_err) => io_err,
-                    _ => std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!("Cannot write to issues directory: {e}"),
-                    ),
-                },
-            });
-        }
-    }
-
     // Return canonicalized path
     match issues_dir.canonicalize() {
         Ok(canonical_path) => Ok(canonical_path),

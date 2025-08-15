@@ -70,12 +70,6 @@ pub enum ValidationError {
         message: String,
     },
 
-    /// Path traversal attack detected in file path
-    #[error("Path traversal attack detected: {path}")]
-    PathTraversalAttack {
-        /// The suspicious path
-        path: String,
-    },
 
     /// File permissions are insufficient for safe access
     #[error("Insufficient file permissions: {path} - {reason}")]
@@ -473,63 +467,6 @@ impl Validator {
         Ok(())
     }
 
-    /// Validate file path for security issues
-    ///
-    /// Checks for:
-    /// - Path traversal attempts (../ sequences)
-    /// - Absolute paths outside allowed directories
-    /// - Hidden files/directories (starting with .)
-    /// - Non-UTF8 path components
-    pub fn validate_file_path(&self, path: &std::path::Path) -> Result<(), ValidationError> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| ValidationError::PathTraversalAttack {
-                path: path.to_string_lossy().to_string(),
-            })?;
-
-        // Check for path traversal patterns
-        if path_str.contains("../") || path_str.contains("..\\") {
-            return Err(ValidationError::PathTraversalAttack {
-                path: path_str.to_string(),
-            });
-        }
-
-        // Check for absolute paths (which could escape sandbox)
-        if path.is_absolute() {
-            // Allow only if it's within expected directories
-            let temp_dir_str = std::env::temp_dir().to_string_lossy().to_string();
-            let allowed_prefixes = ["/tmp/", "/var/tmp/", temp_dir_str.as_str()];
-
-            let is_allowed = allowed_prefixes
-                .iter()
-                .any(|prefix| path_str.starts_with(prefix));
-            if !is_allowed {
-                return Err(ValidationError::PathTraversalAttack {
-                    path: path_str.to_string(),
-                });
-            }
-        }
-
-        // Check for hidden files/directories (potential security risk)
-        // But allow temporary files that start with .tmp (common pattern)
-        for component in path.components() {
-            if let std::path::Component::Normal(os_str) = component {
-                if let Some(name) = os_str.to_str() {
-                    if name.starts_with('.')
-                        && name != "."
-                        && name != ".."
-                        && !name.starts_with(".tmp")
-                    {
-                        return Err(ValidationError::PathTraversalAttack {
-                            path: path_str.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
 
     /// Validate file permissions for safe access
     pub fn validate_file_permissions(&self, path: &std::path::Path) -> Result<(), ValidationError> {
@@ -577,7 +514,6 @@ impl Validator {
 
     /// Perform comprehensive security validation on a file path
     pub fn validate_file_security(&self, path: &std::path::Path) -> Result<(), ValidationError> {
-        self.validate_file_path(path)?;
         self.validate_file_permissions(path)?;
         Ok(())
     }
@@ -773,82 +709,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_path_traversal_detection() {
-        let validator = Validator::new();
 
-        // Test various path traversal patterns
-        let bad_paths = [
-            "../etc/passwd",
-            "../../secret.txt",
-            "config/../../../etc/hosts",
-            r"config\..\..\..\windows\system32\config\sam",
-        ];
 
-        for bad_path in &bad_paths {
-            let path = std::path::Path::new(bad_path);
-            let result = validator.validate_file_path(path);
-            assert!(
-                matches!(result, Err(ValidationError::PathTraversalAttack { .. })),
-                "Failed to detect path traversal in: {bad_path}"
-            );
-        }
-
-        // Test valid paths
-        let good_paths = ["config.toml", "configs/app.toml", "relative/path/file.toml"];
-
-        for good_path in &good_paths {
-            let path = std::path::Path::new(good_path);
-            let result = validator.validate_file_path(path);
-            assert!(
-                result.is_ok(),
-                "False positive path traversal detection for: {good_path}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_hidden_file_detection() {
-        let validator = Validator::new();
-
-        // Test hidden files/directories (security risk)
-        let hidden_paths = [".secret", "config/.hidden", "path/to/.env"];
-
-        for hidden_path in &hidden_paths {
-            let path = std::path::Path::new(hidden_path);
-            let result = validator.validate_file_path(path);
-            assert!(
-                matches!(result, Err(ValidationError::PathTraversalAttack { .. })),
-                "Failed to detect hidden file/directory: {hidden_path}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_absolute_path_validation() {
-        let validator = Validator::new();
-
-        // Test absolute paths outside allowed directories
-        let bad_absolute_paths = ["/etc/passwd", "/home/user/.bashrc", "/root/secret"];
-
-        for bad_path in &bad_absolute_paths {
-            let path = std::path::Path::new(bad_path);
-            let result = validator.validate_file_path(path);
-            assert!(
-                matches!(result, Err(ValidationError::PathTraversalAttack { .. })),
-                "Failed to detect dangerous absolute path: {bad_path}"
-            );
-        }
-
-        // Test allowed absolute paths (temp directories)
-        let temp_dir = std::env::temp_dir();
-        let allowed_path = temp_dir.join("sah_config_test.toml");
-        let result = validator.validate_file_path(&allowed_path);
-        assert!(
-            result.is_ok(),
-            "False positive for allowed temp directory path"
-        );
-    }
 
     #[test]
     fn test_file_permissions_validation() -> Result<(), Box<dyn std::error::Error>> {
@@ -892,13 +754,6 @@ mod tests {
             Err(e) => println!("Validation failed: {e:?}"), // Debug output
         }
 
-        // Test with a path traversal attempt
-        let bad_path = std::path::Path::new("../../../etc/passwd");
-        let result = validator.validate_file_security(bad_path);
-        assert!(matches!(
-            result,
-            Err(ValidationError::PathTraversalAttack { .. })
-        ));
 
         Ok(())
     }

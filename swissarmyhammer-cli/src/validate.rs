@@ -715,11 +715,6 @@ impl Validator {
                         format!("Validation rule '{rule}' failed: {message}"),
                         None,
                     ),
-                    ConfigValidationError::PathTraversalAttack { path } => (
-                        ValidationLevel::Error,
-                        format!("Path traversal attack detected: {path}"),
-                        Some("Use relative paths within the project directory".to_string()),
-                    ),
                     ConfigValidationError::InsufficientPermissions { path, reason } => (
                         ValidationLevel::Warning,
                         format!("File permission issue for '{path}': {reason}"),

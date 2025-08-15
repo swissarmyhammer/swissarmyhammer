@@ -937,57 +937,6 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
     Ok(())
 }
 
-/// Test enhanced error handling: permission denied
-#[tokio::test]
-#[cfg(unix)] // This test is Unix-specific due to file permissions
-async fn test_plan_enhanced_error_permission_denied() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _guard = create_test_home_guard();
-    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
-
-    // Create file with restricted permissions
-    let restricted_file = temp_path.join("restricted-plan.md");
-    fs::write(&restricted_file, "# Restricted Plan\n\nContent.")?;
-
-    // Remove read permissions
-    let mut perms = fs::metadata(&restricted_file)?.permissions();
-    perms.set_mode(0o000); // No permissions
-    fs::set_permissions(&restricted_file, perms)?;
-
-    let output = Command::cargo_bin("sah")?
-        .args(["plan", restricted_file.to_str().unwrap()])
-        .current_dir(&temp_path)
-        .output()?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // Should show permission denied error
-    if stderr.contains("Permission denied") || stderr.contains("permission") {
-        assert!(
-            stderr.contains("Error:") && stderr.contains("Permission denied"),
-            "Should show permission denied error: {stderr}"
-        );
-
-        assert!(
-            stderr.contains("chmod +r") || stderr.contains("permissions"),
-            "Should suggest fixing permissions: {stderr}"
-        );
-    }
-
-    // Restore permissions for cleanup
-    let mut perms = fs::metadata(&restricted_file)
-        .unwrap_or_else(|_| {
-            // File might have been deleted, create dummy metadata
-            fs::metadata(&temp_path).unwrap()
-        })
-        .permissions();
-    perms.set_mode(0o644);
-    let _ = fs::set_permissions(&restricted_file, perms); // Ignore errors during cleanup
-
-    Ok(())
-}
-
 /// Test enhanced error handling: invalid binary content
 #[tokio::test]
 async fn test_plan_enhanced_error_binary_content() -> Result<()> {

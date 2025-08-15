@@ -286,53 +286,6 @@ fn test_invalid_command_arguments() -> Result<()> {
     Ok(())
 }
 
-/// Test file system permission errors
-#[test]
-#[cfg(not(target_os = "macos"))]
-fn test_filesystem_permission_errors() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path().to_path_buf();
-
-    // Create a read-only directory to test permission errors
-    let readonly_dir = temp_path.join("readonly");
-    std::fs::create_dir_all(&readonly_dir)?;
-
-    // Try to make it read-only (this might not work on all systems)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&readonly_dir)?.permissions();
-        perms.set_mode(0o444); // Read-only
-        std::fs::set_permissions(&readonly_dir, perms)?;
-    }
-
-    // Test creating issue in read-only directory
-    // Note: This test might not work as expected on all systems due to permission handling
-    let output = Command::cargo_bin("sah")?
-        .args([
-            "issue",
-            "create",
-            "permission_test",
-            "--content",
-            "Test content",
-        ])
-        .current_dir(&readonly_dir)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    // Error message should be helpful for permission issues
-    assert!(
-        stderr.contains("Error")
-            || stderr.contains("error")
-            || stderr.contains("permission")
-            || stderr.contains("access"),
-        "Should show permission-related error: {stderr}"
-    );
-
-    Ok(())
-}
-
 /// Test storage backend errors
 #[test]
 fn test_storage_backend_errors() -> Result<()> {

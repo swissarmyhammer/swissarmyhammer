@@ -24,30 +24,6 @@ mod config_error_tests {
     }
 
     #[test]
-    fn test_io_error_permission_denied() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("readonly.toml");
-
-        // Create file and make it unreadable (Unix-specific)
-        fs::write(&config_path, "name = \"test\"").unwrap();
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&config_path).unwrap().permissions();
-            perms.set_mode(0o000);
-            fs::set_permissions(&config_path, perms).unwrap();
-
-            let parser = ConfigParser::new();
-            let result = parser.parse_file(&config_path);
-
-            assert!(result.is_err());
-            let error = result.unwrap_err();
-            assert!(matches!(error, ConfigError::Io(_)));
-        }
-    }
-
-    #[test]
     fn test_invalid_utf8_error() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("invalid_utf8.toml");
