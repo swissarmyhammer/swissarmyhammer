@@ -1,1 +1,0 @@
-the semantic index duckdb needs to be stored in the current project repository root under ./swissarmyhammer -- NOT in the user home directory, we want searches to be repository wise, not user wise

@@ -1,1 +1,0 @@
-eliminate the help.md and example.md builtin prompts. use say-hello.md for testing if you need a prompt for unit tests.

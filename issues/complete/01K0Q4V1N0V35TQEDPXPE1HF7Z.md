@@ -1,1 +1,0 @@
-Get rid of CachedIssueStorage -- no caching, it is just trouble. Reading the filesystem will be fine and fast.
