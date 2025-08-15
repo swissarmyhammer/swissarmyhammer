@@ -40,9 +40,9 @@ Currently, LLMs working within MCP workflows have limited ways to communicate im
       "default": "info"
     },
     "context": {
-      "type": "string",
-      "description": "Optional context or category for the notification",
-      "default": "llm"
+      "type": "object",
+      "description": "Optional structured JSON data for the notification",
+      "default": {}
     }
   },
   "required": ["message"]
@@ -146,36 +146,6 @@ When running CLI commands, notifications appear in the terminal output stream, p
 - **Invalid Level**: Default to "info" level
 - **Logging Failure**: Should not cause tool execution to fail
 
-## Configuration and Filtering
-
-
-
-### Context Filtering
-The optional `context` parameter allows filtering notifications by category:
-
-- `analysis` - Code analysis results
-- `workflow` - Workflow state changes  
-- `safety` - Safety warnings and recommendations
-- `performance` - Performance-related notifications
-- `discovery` - Insights and discoveries
-
-## Future Enhancements
-
-### Enhanced Delivery Mechanisms
-- **Desktop Notifications**: OS-level notifications for important messages
-- **File Output**: Write notifications to dedicated log files
-- **Structured Data**: Support for rich notification data (links, code snippets)
-- **User Interaction**: Ability to prompt user for decisions or confirmations
-
-### Message Formatting
-- **Markdown Support**: Rich text formatting in notifications
-- **Code Highlighting**: Syntax-highlighted code snippets in notifications
-- **Progress Indicators**: Progress bars or completion percentages
-
-### Integration Extensions
-- **IDE Integration**: Show notifications in VS Code, Vim, etc.
-- **Webhook Support**: Send notifications to external services
-- **Aggregation**: Batch similar notifications to reduce noise
 
 ## Benefits
 
@@ -189,9 +159,7 @@ The optional `context` parameter allows filtering notifications by category:
 ## Implementation Considerations
 
 ### Performance
-- Notifications should not significantly impact tool execution speed
-- Logging should be asynchronous to avoid blocking operations
-- Consider rate limiting for chatty LLMs
+- None
 
 ### Security
 - None
@@ -202,7 +170,6 @@ The optional `context` parameter allows filtering notifications by category:
 2. **Integration Tests**: Verify logging integration and message delivery
 3. **Prompt Tests**: Test notification usage within prompt templates
 4. **CLI Tests**: Verify notifications appear correctly in CLI output
-5. **Filtering Tests**: Test context and level filtering functionality
 
 ## Conclusion
 
