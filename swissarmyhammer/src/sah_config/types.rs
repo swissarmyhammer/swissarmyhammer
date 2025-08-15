@@ -251,7 +251,7 @@ impl Default for Configuration {
 }
 
 /// Shell tool configuration structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ShellToolConfig {
     /// Security settings for command execution
     pub security: ShellSecurityConfig,
@@ -344,16 +344,6 @@ pub enum TruncationStrategy {
     WordBoundary,
 }
 
-impl Default for ShellToolConfig {
-    fn default() -> Self {
-        Self {
-            security: ShellSecurityConfig::default(),
-            output: ShellOutputConfig::default(),
-            execution: ShellExecutionConfig::default(),
-            audit: ShellAuditConfig::default(),
-        }
-    }
-}
 
 impl Default for ShellSecurityConfig {
     fn default() -> Self {
