@@ -70,7 +70,6 @@ impl WebFetchTool {
         }
     }
 
-
     /// Creates an optimized HTTP client with connection pooling and performance settings
     fn create_optimized_http_client() -> reqwest::Client {
         reqwest::Client::builder()
@@ -374,7 +373,11 @@ impl WebFetchTool {
                 }
                 Err(_) => {
                     tracing::warn!("HTML conversion timed out after 30s, using fallback");
-                    let content_snippet = if content.len() > 1000 { &content[..1000] } else { content };
+                    let content_snippet = if content.len() > 1000 {
+                        &content[..1000]
+                    } else {
+                        content
+                    };
                     let content_len = content.len();
                     Ok(format!("```html\n{content_snippet}\n\n[Conversion timed out - original length: {content_len} characters]\n```"))
                 }
@@ -3255,7 +3258,7 @@ mod tests {
                         // Let's test the security validator directly
                         let result = tool.security_validator.validate_url(&request.url);
                         assert!(result.is_err(),
-                            "Security validator should block malicious URL: {} but validation passed", url);
+                            "Security validator should block malicious URL: {url} but validation passed");
                         println!("✓ Security validator blocked malicious URL: {url}");
                     }
                 }
@@ -3297,9 +3300,7 @@ mod tests {
                 let validation_result = tool.security_validator.validate_url(&request.url);
                 assert!(
                     validation_result.is_ok(),
-                    "Valid public URL should pass security validation: {} - Error: {:?}",
-                    url,
-                    validation_result
+                    "Valid public URL should pass security validation: {url} - Error: {validation_result:?}"
                 );
 
                 println!("✓ Valid public URL allowed: {url}");
@@ -3333,9 +3334,7 @@ mod tests {
                 let result = tool.security_validator.validate_url(url);
                 assert!(
                     matches!(result, Err(SecurityError::UnsupportedScheme(_))),
-                    "Should block invalid scheme: {} but got: {:?}",
-                    url,
-                    result
+                    "Should block invalid scheme: {url} but got: {result:?}"
                 );
 
                 println!("✓ Successfully blocked invalid scheme: {url}");
@@ -3375,16 +3374,13 @@ mod tests {
                     Err(SecurityError::SsrfAttempt(_))
                     | Err(SecurityError::BlockedDomain(_))
                     | Err(SecurityError::InvalidUrl(_)) => {
-                        println!("✓ Successfully blocked edge case URL: {}", url);
+                        println!("✓ Successfully blocked edge case URL: {url}");
                     }
                     Ok(_) => {
                         panic!("Edge case URL should have been blocked: {url}");
                     }
                     Err(e) => {
-                        println!(
-                            "✓ URL blocked with different error (acceptable): {} - {:?}",
-                            url, e
-                        );
+                        println!("✓ URL blocked with different error (acceptable): {url} - {e:?}");
                     }
                 }
             }
@@ -3457,25 +3453,20 @@ mod tests {
                 if should_be_blocked {
                     assert!(
                         result.is_err(),
-                        "Private IP should be blocked: {} but validation passed",
-                        ip_str
+                        "Private IP should be blocked: {ip_str} but validation passed"
                     );
-                    println!("✓ Successfully blocked private IP: {}", ip_str);
+                    println!("✓ Successfully blocked private IP: {ip_str}");
                 } else {
                     // Public IPs should pass validation (though may fail for other reasons like no HTTPS)
                     match result {
-                        Ok(_) => println!("✓ Public IP allowed: {}", ip_str),
+                        Ok(_) => println!("✓ Public IP allowed: {ip_str}"),
                         Err(SecurityError::SsrfAttempt(_))
                         | Err(SecurityError::BlockedDomain(_)) => {
-                            assert!(
-                                false,
-                                "Public IP should not be blocked as private: {}",
-                                ip_str
-                            );
+                            panic!("Public IP should not be blocked as private: {ip_str}");
                         }
                         Err(_) => {
                             // Other errors are acceptable for public IPs
-                            println!("✓ Public IP not blocked for security (other validation may apply): {}", ip_str);
+                            println!("✓ Public IP not blocked for security (other validation may apply): {ip_str}");
                         }
                     }
                 }
@@ -3517,19 +3508,17 @@ mod tests {
                 // All malformed URLs should be rejected
                 assert!(
                     result.is_err(),
-                    "Malformed URL should be rejected: {} but validation passed",
-                    url
+                    "Malformed URL should be rejected: {url} but validation passed"
                 );
 
                 // Most should be InvalidUrl errors
                 match result {
                     Err(SecurityError::InvalidUrl(_)) => {
-                        println!("✓ Successfully rejected malformed URL: {}", url);
+                        println!("✓ Successfully rejected malformed URL: {url}");
                     }
                     Err(other_error) => {
                         println!(
-                            "✓ Malformed URL rejected with different error (acceptable): {} - {:?}",
-                            url, other_error
+                            "✓ Malformed URL rejected with different error (acceptable): {url} - {other_error:?}"
                         );
                     }
                     Ok(_) => unreachable!("Already checked that result is error"),
@@ -3557,9 +3546,9 @@ mod tests {
                 );
 
                 if should_be_valid {
-                    println!("✓ Content length {} bytes is valid", length);
+                    println!("✓ Content length {length} bytes is valid");
                 } else {
-                    println!("✓ Content length {} bytes correctly rejected", length);
+                    println!("✓ Content length {length} bytes correctly rejected");
                 }
             }
         }
@@ -3618,28 +3607,21 @@ mod tests {
                 if should_succeed {
                     assert!(
                         result.is_ok(),
-                        "Parameter {} with value {:?} should be valid",
-                        param_name,
-                        param_value
+                        "Parameter {param_name} with value {param_value:?} should be valid"
                     );
-                    println!(
-                        "✓ Parameter {} with extreme value handled correctly",
-                        param_name
-                    );
+                    println!("✓ Parameter {param_name} with extreme value handled correctly");
                 } else {
                     // Either parsing fails or validation catches it
                     match result {
                         Err(_) => {
                             println!(
-                                "✓ Extreme parameter {} value correctly rejected during parsing",
-                                param_name
+                                "✓ Extreme parameter {param_name} value correctly rejected during parsing"
                             );
                         }
                         Ok(request) => {
                             // If parsing succeeds, the value should be clamped or ignored
                             println!(
-                                "✓ Extreme parameter {} value handled gracefully (clamped/ignored)",
-                                param_name
+                                "✓ Extreme parameter {param_name} value handled gracefully (clamped/ignored)"
                             );
 
                             // Verify values are within reasonable bounds
@@ -3685,14 +3667,13 @@ mod tests {
                 let is_valid = (MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout_value);
                 assert_eq!(
                     is_valid, should_be_valid,
-                    "Timeout validation failed for {} seconds",
-                    timeout_value
+                    "Timeout validation failed for {timeout_value} seconds"
                 );
 
                 if should_be_valid {
-                    println!("✓ Timeout {} seconds is valid", timeout_value);
+                    println!("✓ Timeout {timeout_value} seconds is valid");
                 } else {
-                    println!("✓ Timeout {} seconds correctly rejected", timeout_value);
+                    println!("✓ Timeout {timeout_value} seconds correctly rejected");
                 }
             }
         }
@@ -3729,11 +3710,7 @@ mod tests {
                     BaseToolImpl::parse_arguments(args);
 
                 if should_be_valid {
-                    assert!(
-                        result.is_ok(),
-                        "User agent '{}' should be valid",
-                        user_agent
-                    );
+                    assert!(result.is_ok(), "User agent '{user_agent}' should be valid");
 
                     let request = result.unwrap();
                     if user_agent.is_empty() {
@@ -3752,14 +3729,13 @@ mod tests {
                         );
                     }
 
-                    println!("✓ User agent '{}' handled correctly", user_agent);
+                    println!("✓ User agent '{user_agent}' handled correctly");
                 } else {
                     assert!(
                         result.is_err(),
-                        "User agent '{}' should be invalid",
-                        user_agent
+                        "User agent '{user_agent}' should be invalid"
                     );
-                    println!("✓ Invalid user agent '{}' correctly rejected", user_agent);
+                    println!("✓ Invalid user agent '{user_agent}' correctly rejected");
                 }
             }
         }
@@ -3795,16 +3771,13 @@ mod tests {
                             assert_eq!(
                                 request.max_content_length,
                                 Some(size),
-                                "Content length should be set to {}",
-                                size
+                                "Content length should be set to {size}"
                             );
-                            println!("✓ Content size limit {} bytes accepted", size);
+                            println!("✓ Content size limit {size} bytes accepted");
                         }
                         Err(e) => {
-                            assert!(
-                                false,
-                                "Valid content size {} should be accepted, got error: {:?}",
-                                size, e
+                            panic!(
+                                "Valid content size {size} should be accepted, got error: {e:?}"
                             );
                         }
                     }
@@ -3812,7 +3785,7 @@ mod tests {
                     // Should either fail parsing or be handled gracefully
                     match result {
                         Err(_) => {
-                            println!("✓ Invalid content size {} bytes correctly rejected", size);
+                            println!("✓ Invalid content size {size} bytes correctly rejected");
                         }
                         Ok(request) => {
                             // If accepted, should be clamped to valid range
@@ -3820,13 +3793,11 @@ mod tests {
                                 assert!(
                                     (MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES)
                                         .contains(&actual_size),
-                                    "Content size should be clamped to valid range, got {}",
-                                    actual_size
+                                    "Content size should be clamped to valid range, got {actual_size}"
                                 );
                             }
                             println!(
-                                "✓ Invalid content size {} bytes handled gracefully (clamped)",
-                                size
+                                "✓ Invalid content size {size} bytes handled gracefully (clamped)"
                             );
                         }
                     }
@@ -3862,8 +3833,7 @@ mod tests {
                 if should_be_valid {
                     assert!(
                         result.is_ok(),
-                        "Follow redirects parameter {:?} should be valid",
-                        follow_redirects
+                        "Follow redirects parameter {follow_redirects:?} should be valid"
                     );
 
                     let request = result.unwrap();
@@ -3872,8 +3842,7 @@ mod tests {
                             assert_eq!(
                                 request.follow_redirects,
                                 Some(expected),
-                                "Follow redirects should be set to {}",
-                                expected
+                                "Follow redirects should be set to {expected}"
                             );
                         }
                         None => {
@@ -3884,19 +3853,14 @@ mod tests {
                         }
                     }
 
-                    println!(
-                        "✓ Follow redirects parameter {:?} handled correctly",
-                        follow_redirects
-                    );
+                    println!("✓ Follow redirects parameter {follow_redirects:?} handled correctly");
                 } else {
                     assert!(
                         result.is_err(),
-                        "Follow redirects parameter {:?} should be invalid",
-                        follow_redirects
+                        "Follow redirects parameter {follow_redirects:?} should be invalid"
                     );
                     println!(
-                        "✓ Invalid follow redirects parameter {:?} correctly rejected",
-                        follow_redirects
+                        "✓ Invalid follow redirects parameter {follow_redirects:?} correctly rejected"
                     );
                 }
             }
@@ -3967,7 +3931,7 @@ mod tests {
                         }
                         Err(e) => {
                             // Some malformed HTML might fail, which is acceptable
-                            println!("✓ HTML conversion handled error gracefully: {:?}", e);
+                            println!("✓ HTML conversion handled error gracefully: {e:?}");
                         }
                     }
                 } else {
@@ -4016,7 +3980,7 @@ mod tests {
                             assert!(!markdown.is_empty(), "Markdown output should not be empty");
                         }
                         Err(e) => {
-                            println!("✓ Encoding issue handled gracefully: {:?}", e);
+                            println!("✓ Encoding issue handled gracefully: {e:?}");
                         }
                     }
                 } else {
@@ -4068,10 +4032,9 @@ mod tests {
                         assert_eq!(
                             actual.trim(),
                             expected,
-                            "Title extraction failed for markdown: {}",
-                            markdown
+                            "Title extraction failed for markdown: {markdown}"
                         );
-                        println!("✓ Extracted title: '{}'", actual);
+                        println!("✓ Extracted title: '{actual}'");
                     }
                     (None, None) => {
                         println!(
@@ -4080,17 +4043,11 @@ mod tests {
                         );
                     }
                     (Some(actual), None) => {
-                        assert!(
-                            false,
-                            "Expected no title but got: '{}' from markdown: '{}'",
-                            actual, markdown
-                        );
+                        panic!("Expected no title but got: '{actual}' from markdown: '{markdown}'");
                     }
                     (None, Some(expected)) => {
-                        assert!(
-                            false,
-                            "Expected title '{}' but got none from markdown: '{}'",
-                            expected, markdown
+                        panic!(
+                            "Expected title '{expected}' but got none from markdown: '{markdown}'"
                         );
                     }
                 }
@@ -4155,7 +4112,7 @@ mod tests {
                         println!("✓ Dangerous HTML safely converted to markdown");
                     }
                     Err(e) => {
-                        println!("✓ Dangerous HTML rejected during conversion: {:?}", e);
+                        println!("✓ Dangerous HTML rejected during conversion: {e:?}");
                     }
                 }
             }
@@ -4207,10 +4164,7 @@ mod tests {
                         );
                     }
                     Err(e) => {
-                        println!(
-                            "✓ Large content handled with error (may be acceptable): {:?}",
-                            e
-                        );
+                        println!("✓ Large content handled with error (may be acceptable): {e:?}");
                         // Large content failure might be acceptable depending on limits
                     }
                 }
@@ -4275,7 +4229,7 @@ mod tests {
 
                 match result {
                     Ok(markdown) => {
-                        println!("✓ {} handled successfully", description);
+                        println!("✓ {description} handled successfully");
                         // Basic sanity check - should not be dramatically longer than input
                         // (some expansion is expected due to markdown formatting)
                         assert!(
@@ -4284,7 +4238,7 @@ mod tests {
                         );
                     }
                     Err(e) => {
-                        println!("✓ {} handled with error (acceptable): {:?}", description, e);
+                        println!("✓ {description} handled with error (acceptable): {e:?}");
                     }
                 }
             }
@@ -4314,7 +4268,7 @@ mod tests {
             }
 
             let duration = start.elapsed();
-            println!("Multiple client accesses took: {:?}", duration);
+            println!("Multiple client accesses took: {duration:?}");
 
             // Verify the client has performance optimizations enabled
             // (This is more of a configuration check since we can't easily inspect internal state)
@@ -4338,7 +4292,7 @@ mod tests {
                 .collect();
 
             let duration = start.elapsed();
-            println!("Content chunking simulation took: {:?}", duration);
+            println!("Content chunking simulation took: {duration:?}");
 
             // Verify chunking is efficient
             assert!(!chunks.is_empty());
@@ -4405,8 +4359,7 @@ mod tests {
             let duration = start.elapsed();
 
             println!(
-                "Memory pressure check took: {:?} (pressure: {}, limit: {})",
-                duration, under_pressure, limit
+                "Memory pressure check took: {duration:?} (pressure: {under_pressure}, limit: {limit})"
             );
 
             assert!(duration.as_micros() < 100); // Should be nearly instant
@@ -4529,14 +4482,13 @@ mod tests {
                 if !within_limit {
                     // Simulate the error that would be generated
                     let _error_msg = format!(
-                        "Content too large: {} bytes exceeds limit of {} bytes",
-                        size, MAX_CONTENT_LENGTH_BYTES
+                        "Content too large: {size} bytes exceeds limit of {MAX_CONTENT_LENGTH_BYTES} bytes"
                     );
                 }
             }
 
             let duration = start.elapsed();
-            println!("Content size limit checks took: {:?}", duration);
+            println!("Content size limit checks took: {duration:?}");
 
             assert!(duration.as_micros() < 1000); // Should be fast (allowing for CI/test environment variations)
         }
@@ -4558,7 +4510,7 @@ mod tests {
             }
 
             let duration = start.elapsed();
-            println!("10000 constant accesses took: {:?}", duration);
+            println!("10000 constant accesses took: {duration:?}");
 
             // Should be optimized away by the compiler
             assert!(duration.as_micros() < 1000);
