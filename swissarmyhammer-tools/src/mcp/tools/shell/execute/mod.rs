@@ -2326,7 +2326,7 @@ mod tests {
         let limits = OutputLimits::default();
         assert_eq!(limits.max_output_size, 10 * 1024 * 1024); // 10MB
         assert_eq!(limits.max_line_length, 2000);
-        assert_eq!(limits.enable_streaming, false);
+        assert!(!limits.enable_streaming);
     }
 
     #[tokio::test]

@@ -4,7 +4,9 @@
 //! including Claude integration, variable operations, and control flow actions.
 
 use crate::sah_config;
-use crate::shell_security::{get_validator, log_shell_completion, log_shell_execution, ShellSecurityError};
+use crate::shell_security::{
+    get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
+};
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
 use serde_json::Value;
@@ -1215,7 +1217,7 @@ pub fn log_command_execution(
     // Use the comprehensive audit logging from the security module
     let working_dir_path = working_dir.map(std::path::Path::new);
     log_shell_execution(command, working_dir_path, env);
-    
+
     // Also maintain backward compatibility with existing logging
     tracing::info!(
         "Executing shell command: {} (working_dir: {:?}, env_vars: {})",
@@ -1249,7 +1251,7 @@ impl ShellAction {
 
         // Log command completion with comprehensive security audit logging
         log_shell_completion(command, exit_code, duration_ms);
-        
+
         tracing::debug!(
             "Command completed: exit_code={}, duration_ms={}",
             exit_code,

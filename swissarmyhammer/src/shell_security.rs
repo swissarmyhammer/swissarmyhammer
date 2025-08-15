@@ -31,52 +31,52 @@ const MAX_TIMEOUT_SECONDS: u64 = 3600;
 pub enum ShellSecurityError {
     /// Command contains dangerous injection pattern
     #[error("Command contains dangerous injection pattern: {pattern} in command: {command}")]
-    DangerousInjectionPattern { 
+    DangerousInjectionPattern {
         /// The matched dangerous pattern
-        pattern: String, 
+        pattern: String,
         /// The command containing the pattern
-        command: String 
+        command: String,
     },
 
     /// Command contains blocked pattern
     #[error("Command contains blocked pattern: {pattern} in command: {command}")]
-    BlockedCommandPattern { 
+    BlockedCommandPattern {
         /// The matched blocked pattern
-        pattern: String, 
+        pattern: String,
         /// The command containing the pattern
-        command: String 
+        command: String,
     },
 
     /// Command exceeds maximum allowed length
     #[error("Command too long: {length} characters exceeds limit of {limit}")]
-    CommandTooLong { 
+    CommandTooLong {
         /// Actual command length
-        length: usize, 
+        length: usize,
         /// Maximum allowed length
-        limit: usize 
+        limit: usize,
     },
 
     /// Directory access denied by security policy
     #[error("Directory access denied: {directory} is not in allowed directories")]
-    DirectoryAccessDenied { 
+    DirectoryAccessDenied {
         /// Directory that was denied access
-        directory: PathBuf 
+        directory: PathBuf,
     },
 
     /// Invalid directory path or access error
     #[error("Invalid directory: {directory} - {reason}")]
-    InvalidDirectory { 
+    InvalidDirectory {
         /// Directory path
-        directory: String, 
+        directory: String,
         /// Reason for invalidity
-        reason: String 
+        reason: String,
     },
 
     /// Environment variable name is invalid
     #[error("Environment variable name invalid: {name}")]
     InvalidEnvironmentVariable {
         /// Name of the invalid environment variable
-        name: String 
+        name: String,
     },
 
     /// Environment variable value contains invalid characters or exceeds limits
@@ -90,9 +90,9 @@ pub enum ShellSecurityError {
 
     /// Command validation failed for general reasons
     #[error("Command validation failed: {reason}")]
-    ValidationFailed { 
+    ValidationFailed {
         /// Reason for the validation failure
-        reason: String 
+        reason: String,
     },
 }
 
@@ -122,6 +122,9 @@ pub struct ShellSecurityPolicy {
 
     /// Maximum allowed timeout in seconds
     pub max_timeout_seconds: u64,
+
+    /// Maximum allowed environment variable value length
+    pub max_env_value_length: usize,
 }
 
 impl Default for ShellSecurityPolicy {
@@ -135,7 +138,6 @@ impl Default for ShellSecurityPolicy {
                 r"format\s+".to_string(),
                 r"mkfs\s+".to_string(),
                 r"dd\s+if=.*of=/dev/".to_string(),
-                
                 // System modification commands
                 r"fdisk\s+".to_string(),
                 r"parted\s+".to_string(),
@@ -145,17 +147,14 @@ impl Default for ShellSecurityPolicy {
                 r"systemctl\s+".to_string(),
                 r"crontab\s+".to_string(),
                 r"chmod\s+\+s\s+".to_string(),
-                
-                // Network-based attacks  
+                // Network-based attacks
                 r"wget.*http.*\|.*sh".to_string(),
                 r"curl.*http.*\|.*sh".to_string(),
                 r"nc\s+-l\s+".to_string(),
                 r"ssh\s+.*@".to_string(),
-                
                 // Code execution patterns
                 r"eval\s+".to_string(),
                 r"exec\s+/bin/".to_string(),
-                
                 // Sensitive file access
                 r"/etc/passwd".to_string(),
                 r"/etc/shadow".to_string(),
@@ -166,6 +165,7 @@ impl Default for ShellSecurityPolicy {
             enable_injection_prevention: true,
             default_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
             max_timeout_seconds: MAX_TIMEOUT_SECONDS,
+            max_env_value_length: MAX_ENV_VALUE_LENGTH,
         }
     }
 }
@@ -192,7 +192,7 @@ impl ShellSecurityValidator {
     }
 
     /// Create a validator with default policy
-    pub fn default() -> Result<Self> {
+    pub fn with_default_policy() -> Result<Self> {
         Self::new(ShellSecurityPolicy::default())
     }
 
@@ -217,14 +217,18 @@ impl ShellSecurityValidator {
     }
 
     /// Validate directory access according to policy
-    pub fn validate_directory_access(&self, directory: &Path) -> std::result::Result<(), ShellSecurityError> {
+    pub fn validate_directory_access(
+        &self,
+        directory: &Path,
+    ) -> std::result::Result<(), ShellSecurityError> {
         if let Some(allowed_dirs) = &self.policy.allowed_directories {
-            let canonical_dir = directory
-                .canonicalize()
-                .map_err(|e| ShellSecurityError::InvalidDirectory {
-                    directory: directory.display().to_string(),
-                    reason: format!("Cannot canonicalize: {}", e),
-                })?;
+            let canonical_dir =
+                directory
+                    .canonicalize()
+                    .map_err(|e| ShellSecurityError::InvalidDirectory {
+                        directory: directory.display().to_string(),
+                        reason: format!("Cannot canonicalize: {}", e),
+                    })?;
 
             let is_allowed = allowed_dirs.iter().any(|allowed| {
                 allowed
@@ -251,19 +255,17 @@ impl ShellSecurityValidator {
         for (key, value) in env_vars {
             // Check variable name validity
             if !Self::is_valid_env_var_name(key) {
-                return Err(ShellSecurityError::InvalidEnvironmentVariable {
-                    name: key.clone(),
-                });
+                return Err(ShellSecurityError::InvalidEnvironmentVariable { name: key.clone() });
             }
 
             // Check value length limits
-            if value.len() > MAX_ENV_VALUE_LENGTH {
+            if value.len() > self.policy.max_env_value_length {
                 return Err(ShellSecurityError::InvalidEnvironmentVariableValue {
                     name: key.clone(),
                     reason: format!(
                         "Value length {} exceeds maximum of {} characters",
                         value.len(),
-                        MAX_ENV_VALUE_LENGTH
+                        self.policy.max_env_value_length
                     ),
                 });
             }
@@ -307,7 +309,10 @@ impl ShellSecurityValidator {
     }
 
     /// Check for dangerous injection patterns
-    fn check_injection_patterns(&self, command: &str) -> std::result::Result<(), ShellSecurityError> {
+    fn check_injection_patterns(
+        &self,
+        command: &str,
+    ) -> std::result::Result<(), ShellSecurityError> {
         for pattern in &self.injection_patterns {
             if pattern.is_match(command) {
                 return Err(ShellSecurityError::DangerousInjectionPattern {
@@ -335,20 +340,31 @@ impl ShellSecurityValidator {
     /// Compile injection detection patterns
     fn compile_injection_patterns() -> Result<Vec<Regex>> {
         let patterns = [
-            r";\s*\w",                 // Command separation/chaining with following command
-            r"\|\s*\w",                // Pipes to any command (potential injection)
-            r"&&\s*\w",                // Command chaining with AND
-            r"\|\|\s*\w",              // Command chaining with OR  
-            r"\$\([^)]*\)",           // Command substitution with $()
-            r"`[^`]*`",                // Backtick command substitution
-            r"<\s*/dev/[^/\s]+",      // Input redirection from devices
-            r"exec\s*\([^)]*\)",       // Exec function calls
+            r";\s*\w",           // Command separation/chaining with following command
+            r"\|\s*\w",          // Pipes to any command (potential injection)
+            r"&&\s*\w",          // Command chaining with AND
+            r"\|\|\s*\w",        // Command chaining with OR
+            r"\$\([^)]*\)",      // Command substitution with $()
+            r"`[^`]*`",          // Backtick command substitution
+            r"<\s*/dev/[^/\s]+", // Input redirection from devices
+            r"exec\s*\([^)]*\)", // Exec function calls
+            r">\s*&[3-9]",       // File descriptor redirection to higher numbers (potential attack)
+            r"<\s*&[3-9]",       // File descriptor redirection from higher numbers (potential attack)
+            r"<\s*\([^)]*\)",    // Process substitution input <(command)
+            r">\s*\([^)]*\)",    // Process substitution output >(command)
+            r"<<\s*[A-Za-z_]",   // Here-document start (<<EOF, <<END)
+            r"<<-\s*[A-Za-z_]",  // Here-document with tab stripping (<<-EOF)
+            r"\{\{.*\}\}",       // Brace expansion (potential code injection)
+            r"\*\{.*\}",         // Glob brace expansion
         ];
 
         let mut compiled = Vec::new();
         for pattern in &patterns {
             compiled.push(Regex::new(pattern).map_err(|e| {
-                SwissArmyHammerError::Other(format!("Failed to compile injection pattern '{}': {}", pattern, e))
+                SwissArmyHammerError::Other(format!(
+                    "Failed to compile injection pattern '{}': {}",
+                    pattern, e
+                ))
             })?);
         }
         Ok(compiled)
@@ -359,7 +375,10 @@ impl ShellSecurityValidator {
         let mut compiled = Vec::new();
         for pattern in patterns {
             compiled.push(Regex::new(pattern).map_err(|e| {
-                SwissArmyHammerError::Other(format!("Failed to compile blocked pattern '{}': {}", pattern, e))
+                SwissArmyHammerError::Other(format!(
+                    "Failed to compile blocked pattern '{}': {}",
+                    pattern, e
+                ))
             })?);
         }
         Ok(compiled)
@@ -383,12 +402,12 @@ impl ShellSecurityValidator {
     fn warn_if_protected_env_var(name: &str) {
         const PROTECTED_VARS: &[&str] = &[
             "PATH",
-            "LD_LIBRARY_PATH", 
+            "LD_LIBRARY_PATH",
             "HOME",
             "USER",
             "SHELL",
             "SSH_AUTH_SOCK",
-            "SUDO_USER", 
+            "SUDO_USER",
             "SUDO_UID",
         ];
 
@@ -468,39 +487,65 @@ static GLOBAL_VALIDATOR: OnceLock<ShellSecurityValidator> = OnceLock::new();
 pub fn get_validator() -> &'static ShellSecurityValidator {
     GLOBAL_VALIDATOR.get_or_init(|| {
         // Try to load configuration from SahConfig
-        let policy = load_security_policy().unwrap_or_default();
-        ShellSecurityValidator::new(policy)
-            .unwrap_or_else(|e| {
-                warn!("Failed to create security validator: {}. Using default policy.", e);
-                ShellSecurityValidator::new(ShellSecurityPolicy::default())
-                    .expect("Default policy should always work")
-            })
+        let policy = match load_security_policy() {
+            Ok(Some(policy)) => {
+                info!(target: "shell_security", "Loaded security policy from configuration");
+                policy
+            }
+            Ok(None) => {
+                info!(target: "shell_security", "No security configuration found, using default policy");
+                ShellSecurityPolicy::default()
+            }
+            Err(e) => {
+                // This is a critical error - invalid security configuration could be a security risk
+                panic!("Critical security error: {}. Application cannot start with invalid security configuration.", e);
+            }
+        };
+
+        ShellSecurityValidator::new(policy).unwrap_or_else(|e| {
+            warn!(
+                "Failed to create security validator: {}. Using default policy.",
+                e
+            );
+            ShellSecurityValidator::new(ShellSecurityPolicy::default())
+                .expect("Default policy should always work")
+        })
     })
 }
 
-/// Load security policy from configuration
-fn load_security_policy() -> Option<ShellSecurityPolicy> {
+/// Load security policy from configuration, failing fast on invalid configuration
+fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
     // Try to load from default sah.toml location
     let config_path = std::path::Path::new("sah.toml");
     if !config_path.exists() {
-        return None;
+        return Ok(None);
     }
 
     match load_config(config_path) {
         Ok(config) => {
             // Try to extract shell security policy from config
-            config.get("shell_security").and_then(|value| {
-                // Convert ConfigValue to JSON Value for deserialization
-                let json_value = config_value_to_json(value);
-                serde_json::from_value(json_value).map_err(|e| {
-                    warn!("Failed to deserialize shell security policy: {}", e);
-                    e
-                }).ok()
-            })
+            match config.get("shell_security") {
+                Some(value) => {
+                    // Convert ConfigValue to JSON Value for deserialization
+                    let json_value = config_value_to_json(value);
+                    match serde_json::from_value(json_value) {
+                        Ok(policy) => Ok(Some(policy)),
+                        Err(e) => {
+                            let error_msg = format!("Invalid shell security policy configuration: {}. Security configuration must be valid to prevent security vulnerabilities.", e);
+                            error!(target: "shell_security", "Failed to deserialize shell security policy: {}", e);
+                            Err(SwissArmyHammerError::Other(error_msg))
+                        }
+                    }
+                }
+                None => Ok(None), // No shell_security section is fine
+            }
         }
         Err(e) => {
-            warn!("Failed to load configuration: {}", e);
-            None
+            // Config file exists but can't be loaded - this could indicate corruption or permission issues
+            let error_msg = format!("Failed to load configuration from '{}': {}. This could indicate a corrupted config file or permission issues.", 
+                                   config_path.display(), e);
+            error!(target: "shell_security", "Failed to load configuration: {}", e);
+            Err(SwissArmyHammerError::Other(error_msg))
         }
     }
 }
@@ -514,13 +559,14 @@ fn config_value_to_json(value: &ConfigValue) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         ConfigValue::Boolean(b) => serde_json::Value::Bool(*b),
-        ConfigValue::Array(arr) => serde_json::Value::Array(
-            arr.iter().map(config_value_to_json).collect()
-        ),
+        ConfigValue::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(config_value_to_json).collect())
+        }
         ConfigValue::Table(table) => serde_json::Value::Object(
-            table.iter()
+            table
+                .iter()
                 .map(|(k, v)| (k.clone(), config_value_to_json(v)))
-                .collect()
+                .collect(),
         ),
     }
 }
@@ -536,11 +582,7 @@ pub fn log_shell_execution(
         return;
     }
 
-    let audit_event = ShellAuditEvent::new(
-        command.to_string(),
-        working_dir,
-        environment_vars,
-    );
+    let audit_event = ShellAuditEvent::new(command.to_string(), working_dir, environment_vars);
 
     // Log using structured logging
     info!(
@@ -554,11 +596,7 @@ pub fn log_shell_execution(
 }
 
 /// Log shell command completion for audit purposes
-pub fn log_shell_completion(
-    command: &str,
-    exit_code: i32,
-    execution_time_ms: u64,
-) {
+pub fn log_shell_completion(command: &str, exit_code: i32, execution_time_ms: u64) {
     let validator = get_validator();
     if !validator.policy().enable_audit_logging {
         return;
@@ -613,7 +651,10 @@ mod tests {
         let long_command = "a".repeat(11);
         let result = validator.validate_command(&long_command);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ShellSecurityError::CommandTooLong { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::CommandTooLong { .. }
+        ));
     }
 
     #[test]
@@ -637,7 +678,10 @@ mod tests {
         for cmd in &dangerous_commands {
             let result = validator.validate_command(cmd);
             assert!(result.is_err(), "Command should be blocked: {}", cmd);
-            assert!(matches!(result.unwrap_err(), ShellSecurityError::DangerousInjectionPattern { .. }));
+            assert!(matches!(
+                result.unwrap_err(),
+                ShellSecurityError::DangerousInjectionPattern { .. }
+            ));
         }
     }
 
@@ -655,7 +699,10 @@ mod tests {
         // Blocked pattern should fail
         let result = validator.validate_command("test_blocked command");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ShellSecurityError::BlockedCommandPattern { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::BlockedCommandPattern { .. }
+        ));
     }
 
     #[test]
@@ -676,7 +723,10 @@ mod tests {
         // Access to forbidden directory should fail
         let result = validator.validate_directory_access(&forbidden_path);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ShellSecurityError::DirectoryAccessDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::DirectoryAccessDenied { .. }
+        ));
     }
 
     #[test]
@@ -696,19 +746,18 @@ mod tests {
         invalid_env.insert("123INVALID".to_string(), "value".to_string()); // Starts with digit
         let result = validator.validate_environment_variables(&invalid_env);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ShellSecurityError::InvalidEnvironmentVariable { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ShellSecurityError::InvalidEnvironmentVariable { .. }
+        ));
     }
 
     #[test]
     fn test_audit_event_creation() {
         let temp_dir = TempDir::new().unwrap();
         let env_vars = HashMap::new();
-        
-        let event = ShellAuditEvent::new(
-            "echo test".to_string(),
-            Some(temp_dir.path()),
-            &env_vars,
-        );
+
+        let event = ShellAuditEvent::new("echo test".to_string(), Some(temp_dir.path()), &env_vars);
 
         assert_eq!(event.command, "echo test");
         assert_eq!(event.working_directory, Some(temp_dir.path().to_path_buf()));
@@ -720,10 +769,12 @@ mod tests {
         assert!(ShellSecurityValidator::is_valid_env_var_name("PATH"));
         assert!(ShellSecurityValidator::is_valid_env_var_name("_UNDERSCORE"));
         assert!(ShellSecurityValidator::is_valid_env_var_name("VAR123"));
-        
+
         assert!(!ShellSecurityValidator::is_valid_env_var_name("123INVALID"));
         assert!(!ShellSecurityValidator::is_valid_env_var_name(""));
-        assert!(!ShellSecurityValidator::is_valid_env_var_name("INVALID-NAME"));
+        assert!(!ShellSecurityValidator::is_valid_env_var_name(
+            "INVALID-NAME"
+        ));
     }
 
     #[test]

