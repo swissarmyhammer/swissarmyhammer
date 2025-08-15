@@ -136,8 +136,7 @@ The component should follow existing patterns in the codebase:
 - [ ] Performance meets requirements
 
 This specification should result in multiple focused issues that can be implemented incrementally.
-"#,
-        title = title
+"#
     );
 
     fs::write(&plan_file, content)?;
@@ -312,9 +311,7 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
         stderr.contains("Running plan command")
             || stderr.contains("Starting workflow: plan")
             || stderr.contains("Making the plan for"),
-        "Should show plan execution started. stdout: '{}', stderr: '{}'",
-        stdout,
-        stderr
+        "Should show plan execution started. stdout: '{stdout}', stderr: '{stderr}'"
     );
 
     Ok(())
@@ -352,22 +349,19 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
     // Verify test mode execution indicators
     assert!(
         stdout.contains("Test mode") || stdout.contains("🧪"),
-        "Should indicate test mode execution: {}",
-        stdout
+        "Should indicate test mode execution: {stdout}"
     );
 
     // Verify coverage report
     assert!(
         stdout.contains("Coverage Report") && stdout.contains("States visited"),
-        "Should show coverage report: {}",
-        stdout
+        "Should show coverage report: {stdout}"
     );
 
     // Verify the plan workflow achieves good coverage
     assert!(
         stdout.contains("100.0%") || stdout.contains("Full"),
-        "Should achieve high coverage: {}",
-        stdout
+        "Should achieve high coverage: {stdout}"
     );
 
     Ok(())
@@ -405,8 +399,7 @@ async fn test_plan_command_relative_path() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Test mode") && stdout.contains("Coverage Report"),
-        "Should execute workflow in test mode: {}",
-        stdout
+        "Should execute workflow in test mode: {stdout}"
     );
 
     Ok(())
@@ -442,8 +435,7 @@ async fn test_plan_command_absolute_path() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Test mode") && stdout.contains("100.0%"),
-        "Should execute workflow successfully: {}",
-        stdout
+        "Should execute workflow successfully: {stdout}"
     );
 
     Ok(())
@@ -479,14 +471,12 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Test mode"),
-        "Should run in test mode: {}",
-        stdout
+        "Should run in test mode: {stdout}"
     );
 
     assert!(
         stdout.contains("Coverage Report"),
-        "Should show coverage report: {}",
-        stdout
+        "Should show coverage report: {stdout}"
     );
 
     Ok(())
@@ -513,8 +503,7 @@ async fn test_plan_command_file_not_found() -> Result<()> {
         stderr.contains("not found")
             || stderr.contains("does not exist")
             || stderr.contains("No such file"),
-        "Should show file not found error: {}",
-        stderr
+        "Should show file not found error: {stderr}"
     );
 
     Ok(())
@@ -543,8 +532,7 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("directory") || stderr.contains("not a file") || stderr.contains("invalid"),
-        "Should show appropriate error for directory: {}",
-        stderr
+        "Should show appropriate error for directory: {stderr}"
     );
 
     Ok(())
@@ -616,8 +604,7 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Test mode") && stdout.contains("Coverage Report"),
-        "Should execute workflow in test mode: {}",
-        stdout
+        "Should execute workflow in test mode: {stdout}"
     );
 
     // Verify existing issues are preserved (unchanged during test mode)
@@ -628,8 +615,7 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
 
     assert!(
         existing_files.iter().any(|f| f.starts_with("EXISTING_")),
-        "Should preserve existing issues: {:?}",
-        existing_files
+        "Should preserve existing issues: {existing_files:?}"
     );
 
     Ok(())
@@ -668,8 +654,7 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("Test mode") && stdout.contains("Coverage Report"),
-        "Should execute workflow successfully: {}",
-        stdout
+        "Should execute workflow successfully: {stdout}"
     );
 
     Ok(())
@@ -690,8 +675,8 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
 
             let plan_file = create_test_plan_file(
                 &temp_path,
-                &format!("concurrent-test-{}.md", i),
-                &format!("Concurrent Test {}", i),
+                &format!("concurrent-test-{i}.md"),
+                &format!("Concurrent Test {i}"),
             )
             .unwrap();
 
@@ -717,8 +702,7 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
         let (i, success) = result?;
         assert!(
             success,
-            "Concurrent plan workflow execution {} should succeed",
-            i
+            "Concurrent plan workflow execution {i} should succeed"
         );
     }
 
@@ -752,11 +736,10 @@ async fn test_plan_command_performance() -> Result<()> {
     // Should complete in reasonable time (less than 2 minutes for complex plan)
     assert!(
         elapsed < std::time::Duration::from_secs(120),
-        "Plan command should complete in reasonable time: {:?}",
-        elapsed
+        "Plan command should complete in reasonable time: {elapsed:?}"
     );
 
-    println!("Plan execution completed in {:?}", elapsed);
+    println!("Plan execution completed in {elapsed:?}");
 
     Ok(())
 }
@@ -782,21 +765,18 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
     // Test enhanced error message format
     assert!(
         stderr.contains("Error:") || stderr.contains("Plan file not found"),
-        "Should show enhanced error message format: {}",
-        stderr
+        "Should show enhanced error message format: {stderr}"
     );
 
     // Test user guidance suggestions
     assert!(
         stderr.contains("Suggestions:") || stderr.contains("Check the file path"),
-        "Should provide user guidance: {}",
-        stderr
+        "Should provide user guidance: {stderr}"
     );
 
     assert!(
         stderr.contains("typos") || stderr.contains("ls -la") || stderr.contains("absolute path"),
-        "Should include actionable suggestions: {}",
-        stderr
+        "Should include actionable suggestions: {stderr}"
     );
 
     Ok(())
@@ -825,15 +805,13 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
         // Test warning level for empty files
         assert!(
             stderr.contains("Warning:") || stderr.contains("empty or contains no valid content"),
-            "Should show warning for empty file: {}",
-            stderr
+            "Should show warning for empty file: {stderr}"
         );
 
         // Test user guidance for empty files
         assert!(
             stderr.contains("Add content") || stderr.contains("whitespace"),
-            "Should provide guidance for empty files: {}",
-            stderr
+            "Should provide guidance for empty files: {stderr}"
         );
     }
 
@@ -861,14 +839,12 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
     if stderr.contains("Warning:") || stderr.contains("empty") {
         assert!(
             stderr.contains("empty or contains no valid content"),
-            "Should show warning for whitespace-only file: {}",
-            stderr
+            "Should show warning for whitespace-only file: {stderr}"
         );
 
         assert!(
             stderr.contains("whitespace"),
-            "Should mention whitespace in guidance: {}",
-            stderr
+            "Should mention whitespace in guidance: {stderr}"
         );
     }
 
@@ -901,15 +877,13 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
     assert!(
         stderr.contains("Error:")
             && (stderr.contains("directory") || stderr.contains("not a file")),
-        "Should show enhanced error for directory: {}",
-        stderr
+        "Should show enhanced error for directory: {stderr}"
     );
 
     // Test specific guidance for directories
     assert!(
         stderr.contains("Specify a file path instead") || stderr.contains("directory"),
-        "Should provide specific guidance for directory error: {}",
-        stderr
+        "Should provide specific guidance for directory error: {stderr}"
     );
 
     Ok(())
@@ -938,14 +912,12 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
     if stderr.contains("too large") || stderr.contains("bytes") {
         assert!(
             stderr.contains("Error:") && stderr.contains("too large"),
-            "Should show file too large error: {}",
-            stderr
+            "Should show file too large error: {stderr}"
         );
 
         assert!(
             stderr.contains("Break large plans") || stderr.contains("smaller"),
-            "Should suggest breaking large plans into smaller files: {}",
-            stderr
+            "Should suggest breaking large plans into smaller files: {stderr}"
         );
     }
 
@@ -981,14 +953,12 @@ async fn test_plan_enhanced_error_permission_denied() -> Result<()> {
     if stderr.contains("Permission denied") || stderr.contains("permission") {
         assert!(
             stderr.contains("Error:") && stderr.contains("Permission denied"),
-            "Should show permission denied error: {}",
-            stderr
+            "Should show permission denied error: {stderr}"
         );
 
         assert!(
             stderr.contains("chmod +r") || stderr.contains("permissions"),
-            "Should suggest fixing permissions: {}",
-            stderr
+            "Should suggest fixing permissions: {stderr}"
         );
     }
 
@@ -1027,20 +997,17 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
     if stderr.contains("Invalid") || stderr.contains("null bytes") {
         assert!(
             stderr.contains("Error:") && stderr.contains("Invalid"),
-            "Should show invalid format error: {}",
-            stderr
+            "Should show invalid format error: {stderr}"
         );
 
         assert!(
             stderr.contains("null bytes") || stderr.contains("binary"),
-            "Should mention null bytes or binary content: {}",
-            stderr
+            "Should mention null bytes or binary content: {stderr}"
         );
 
         assert!(
             stderr.contains("UTF-8") || stderr.contains("corrupted"),
-            "Should suggest checking encoding: {}",
-            stderr
+            "Should suggest checking encoding: {stderr}"
         );
     }
 
@@ -1151,14 +1118,12 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
     if stderr.contains("Issues directory") || stderr.contains("not writable") {
         assert!(
             stderr.contains("Error:") && stderr.contains("Issues"),
-            "Should show issues directory error: {}",
-            stderr
+            "Should show issues directory error: {stderr}"
         );
 
         assert!(
             stderr.contains("mkdir -p") || stderr.contains("directory"),
-            "Should suggest creating directory: {}",
-            stderr
+            "Should suggest creating directory: {stderr}"
         );
     }
 
@@ -1188,20 +1153,17 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
 
         assert!(
             has_error_label,
-            "Should have error severity label: {}",
-            stderr
+            "Should have error severity label: {stderr}"
         );
 
         assert!(
             has_suggestions,
-            "Should have suggestions section: {}",
-            stderr
+            "Should have suggestions section: {stderr}"
         );
 
         assert!(
             has_bullet_points,
-            "Should have bulleted suggestions: {}",
-            stderr
+            "Should have bulleted suggestions: {stderr}"
         );
     }
 

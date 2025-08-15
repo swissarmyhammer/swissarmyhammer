@@ -90,9 +90,7 @@ transitions:
         // Should NOT contain abort-related error messages
         assert!(
             !stderr.contains("abort") && !stderr.contains("Abort"),
-            "Normal workflow should not fail due to abort: stderr={}, stdout={}",
-            stderr,
-            stdout
+            "Normal workflow should not fail due to abort: stderr={stderr}, stdout={stdout}"
         );
 
         // If it fails, it should be for legitimate reasons (missing MCP server, etc.)
@@ -126,9 +124,7 @@ fn test_prompt_commands_still_work() -> Result<()> {
             // Should not contain abort-related errors
             assert!(
                 !stderr.contains("abort") && !stderr.contains("Abort"),
-                "Command {:?} should not fail due to abort: {}",
-                command_args,
-                stderr
+                "Command {command_args:?} should not fail due to abort: {stderr}"
             );
         }
     }
@@ -207,8 +203,7 @@ transitions:
     // Should contain validation/workflow errors, not abort errors
     assert!(
         !stderr.contains("abort") && !stderr.contains("Abort"),
-        "Invalid workflow should fail with validation error, not abort: {}",
-        stderr
+        "Invalid workflow should fail with validation error, not abort: {stderr}"
     );
 
     // Should contain some indication of the real problem
@@ -219,8 +214,7 @@ transitions:
             || stderr.contains("Invalid")
             || stderr.contains("state")
             || stderr.contains("workflow"),
-        "Should contain meaningful error message: {}",
-        stderr
+        "Should contain meaningful error message: {stderr}"
     );
 
     ensure_no_abort_file();
