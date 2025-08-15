@@ -12,18 +12,18 @@
 //! ## Architecture
 //!
 //! Follows the established MCP tool pattern:
-//! ```
+//! ```text
 //! tools/todo/
-//! ├── mod.rs              # This file - module exports and registration
-//! ├── create/
-//! │   ├── mod.rs         # CreateTodoTool implementation
-//! │   └── description.md # Tool description
-//! ├── show/
-//! │   ├── mod.rs         # ShowTodoTool implementation  
-//! │   └── description.md # Tool description
-//! └── mark_complete/
-//!     ├── mod.rs         # MarkCompleteTodoTool implementation
-//!     └── description.md # Tool description
+//! |-- mod.rs              # This file - module exports and registration
+//! |-- create/
+//! |   |-- mod.rs         # CreateTodoTool implementation
+//! |   +-- description.md # Tool description
+//! |-- show/
+//! |   |-- mod.rs         # ShowTodoTool implementation  
+//! |   +-- description.md # Tool description
+//! +-- mark_complete/
+//!     |-- mod.rs         # MarkCompleteTodoTool implementation
+//!     +-- description.md # Tool description
 //! ```
 
 use crate::mcp::tool_registry::ToolRegistry;

@@ -25,14 +25,22 @@
 //! ## Tool Implementation Pattern
 //!
 //! Abort tools follow the standard MCP pattern with file operations:
-//! ```rust
-//! // Create abort file
-//! fs::write(".swissarmyhammer/.abort", reason)?;
+//! ```rust,no_run
+//! use std::fs;
+//! use std::path::Path;
 //!
-//! // Check for abort file
-//! if Path::new(".swissarmyhammer/.abort").exists() {
-//!     let reason = fs::read_to_string(".swissarmyhammer/.abort")?;
-//!     // Handle abort...
+//! fn example() -> std::io::Result<()> {
+//!     let reason = "User cancelled operation";
+//!     
+//!     // Create abort file
+//!     fs::write(".swissarmyhammer/.abort", reason)?;
+//!
+//!     // Check for abort file
+//!     if Path::new(".swissarmyhammer/.abort").exists() {
+//!         let reason = fs::read_to_string(".swissarmyhammer/.abort")?;
+//!         // Handle abort...
+//!     }
+//!     Ok(())
 //! }
 //! ```
 //!

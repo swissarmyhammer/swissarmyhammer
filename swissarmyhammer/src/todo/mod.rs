@@ -24,13 +24,13 @@
 //! // Create a new todo item
 //! let item = storage.create_todo_item(
 //!     "implement_feature",
-//!     "Implement file read functionality",
+//!     "Implement file read functionality".to_string(),
 //!     Some("Use existing codebase patterns for inspiration".to_string())
 //! ).await?;
 //! println!("Created todo item with ID: {}", item.id);
 //!
 //! // Get the next incomplete item
-//! let next_item = storage.get_next_todo("implement_feature").await?;
+//! let next_item = storage.get_todo_item("implement_feature", "next").await?;
 //! if let Some(item) = next_item {
 //!     println!("Next task: {}", item.task);
 //! }

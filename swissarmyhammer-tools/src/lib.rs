@@ -25,10 +25,9 @@
 //! use swissarmyhammer_tools::McpServer;
 //! use swissarmyhammer::PromptLibrary;
 //!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let library = PromptLibrary::new();
-//! let server = McpServer::new(library).await?;
+//! let server = McpServer::new(library)?;
 //!
 //! // Server is ready to handle MCP requests
 //! # Ok(())

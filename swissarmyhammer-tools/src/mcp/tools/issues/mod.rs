@@ -17,10 +17,10 @@
 //! ## Tool Implementation Pattern
 //!
 //! Each tool follows the standard MCP pattern:
-//! ```rust
+//! ```rust,no_run
 //! use async_trait::async_trait;
-//! use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-//! use crate::mcp::tool_descriptions;
+//! use swissarmyhammer_tools::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+//! use swissarmyhammer_tools::mcp::tool_descriptions;
 //!
 //! #[derive(Default)]
 //! pub struct ExampleIssueTool;

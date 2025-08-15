@@ -41,8 +41,8 @@ pub fn list_all_descriptions() -> Vec<(&'static str, &'static str)> {
 /// * `None` - If the tool is not found
 ///
 /// # Example
-/// ```rust
-/// use crate::mcp::tool_descriptions::get_tool_description;
+/// ```rust,no_run
+/// use swissarmyhammer_tools::mcp::tool_descriptions::get_tool_description;
 /// let desc = get_tool_description("issues", "create");
 /// assert!(desc.is_some());
 /// ```

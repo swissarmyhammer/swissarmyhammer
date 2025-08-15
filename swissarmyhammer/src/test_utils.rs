@@ -347,6 +347,7 @@ pub struct IsolatedTestEnvironment {
 
 #[cfg(test)]
 impl IsolatedTestEnvironment {
+    /// Creates a new isolated test environment with both home and working directory isolation.
     pub fn new() -> std::io::Result<Self> {
         let original_cwd = std::env::current_dir()?;
         let home_guard = IsolatedTestHome::new();

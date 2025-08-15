@@ -34,7 +34,7 @@
 //!
 //! // Mark as complete
 //! let completed = storage.mark_complete(&issue.name).await?;
-//! println!("Issue completed and moved to: {}", completed.file_path.display());
+//! println!("Issue '{}' marked as complete", completed.name);
 //! # Ok(())
 //! # }
 //! ```
@@ -63,7 +63,7 @@
 //! let completed = storage.mark_complete(&issue.name).await?;
 //!
 //! // 6. Merge branch
-//! git_ops.merge_issue_branch(&format!("issue/{}", issue.name))?;
+//! git_ops.merge_issue_branch_simple(&issue.name)?;
 //! # Ok(())
 //! # }
 //! ```

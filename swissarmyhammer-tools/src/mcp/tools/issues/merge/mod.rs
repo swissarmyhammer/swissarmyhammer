@@ -121,15 +121,25 @@ impl McpTool for MergeIssueTool {
             }
         };
 
-        // Validate that the issue is completed before allowing merge
+        // Auto-complete the issue if it's not already completed
         if !issue_info.completed {
-            let error_msg = format!("Issue '{}' must be completed before merging", request.name);
-            tracing::error!("{}", error_msg);
-
-            // Create abort file to signal workflow termination
-            create_abort_file_current_dir(&error_msg);
-
-            return Err(McpError::invalid_params(error_msg, None));
+            tracing::info!("Issue '{}' is not completed, marking as complete before merge", request.name);
+            
+            // Use the mark_complete tool to complete the issue
+            use crate::mcp::tools::issues::mark_complete::MarkCompleteIssueTool;
+            use serde_json::json;
+            
+            let mut args = serde_json::Map::new();
+            args.insert("name".to_string(), json!(request.name));
+            
+            let mark_complete_tool = MarkCompleteIssueTool;
+            mark_complete_tool.execute(args, &context).await
+                .map_err(|e| McpError::internal_error(
+                    format!("Failed to auto-complete issue '{}' before merge: {}", request.name, e),
+                    None
+                ))?;
+                
+            tracing::info!("Successfully marked issue '{}' as complete", request.name);
         }
 
         // Note: Removed working directory check to allow merge operations when issue completion
