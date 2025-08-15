@@ -1,10 +1,18 @@
 # Web Search Tool
 
-Perform web searches using SearXNG metasearch engines with privacy protection and optional content fetching.
+Perform web searches using DuckDuckGo with privacy protection and optional content fetching.
 
 ## Purpose
 
-The web search tool enables LLMs to search the web for current information, technical documentation, fact-checking, and research tasks. It uses SearXNG instances to provide privacy-respecting search capabilities without tracking user queries.
+The web search tool enables LLMs to search the web for current information, technical documentation, fact-checking, and research tasks. It uses DuckDuckGo to provide privacy-respecting search capabilities without tracking user queries.
+
+## Important Limitations
+
+**Bot Detection**: DuckDuckGo may occasionally detect automated requests and require CAPTCHA verification. When this happens, you'll receive a clear error message explaining the situation. This is a protective measure by DuckDuckGo to prevent abuse. If you encounter CAPTCHA challenges:
+
+- Wait a few minutes before retrying
+- The tool uses human-like User-Agent strings to minimize detection
+- Consider using the DuckDuckGo web interface directly for immediate access
 
 ## Parameters
 
@@ -153,11 +161,11 @@ Get quick answers without full content fetching:
 
 ## Privacy and Security Features
 
-- **Privacy Protection**: Uses SearXNG instances that don't track users
-- **Instance Rotation**: Distributes requests across multiple instances
-- **Anonymous Requests**: No persistent user identification
+- **Privacy Protection**: Uses DuckDuckGo which doesn't track users
+- **Anonymous Requests**: No persistent user identification or logging
 - **Secure Communication**: All requests use HTTPS
-- **Rate Limiting**: Respects instance limits and implements backoff
+- **Human-like Requests**: Uses realistic User-Agent strings and headers
+- **Bot Detection Awareness**: Handles CAPTCHA challenges gracefully
 
 ## Performance Considerations
 
@@ -171,11 +179,11 @@ Get quick answers without full content fetching:
 
 The tool handles various error conditions gracefully:
 
-- **Instance Unavailability**: Automatic failover to backup instances
-- **Rate Limiting**: Respects rate limits with exponential backoff
+- **CAPTCHA Detection**: Clear error messages when bot protection is triggered
 - **Content Fetch Failures**: Returns search results even if content fetching fails
 - **Invalid Parameters**: Clear validation error messages
 - **Network Issues**: Timeout handling with retry logic
+- **Rate Limiting**: Handles DuckDuckGo's protective measures
 
 ## Integration
 

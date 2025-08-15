@@ -227,6 +227,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_when_file_exists() {
         use tempfile::TempDir;
 
@@ -308,114 +309,144 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_multiple_workflow_runs_cleanup_abort_file() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Capture original directory before any changes
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let _abort_path = sah_dir.join(".abort");
+        let abort_path_str = ".swissarmyhammer/.abort";
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        let abort_path = ".swissarmyhammer/.abort";
-
         // Create first abort file
-        std::fs::write(abort_path, "first abort reason").unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, "first abort reason").unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create first workflow run - should clean up abort file
         let _run1 = WorkflowRun::new(workflow.clone());
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Create second abort file
-        std::fs::write(abort_path, "second abort reason").unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, "second abort reason").unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create second workflow run - should also clean up abort file
         let _run2 = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_with_unicode_content() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Capture original directory before any changes
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path_str = ".swissarmyhammer/.abort";
+
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
-
-        let abort_path = ".swissarmyhammer/.abort";
 
         // Create abort file with unicode content
         let unicode_reason = "中文测试 🚫 Aborting with émojis";
-        std::fs::write(abort_path, unicode_reason).unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, unicode_reason).unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create workflow run - should clean up abort file regardless of content
         let _run = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_with_large_content() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Capture original directory before any changes
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path_str = ".swissarmyhammer/.abort";
+
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        let abort_path = ".swissarmyhammer/.abort";
-
         // Create abort file with large content
         let large_reason = "x".repeat(10000);
-        std::fs::write(abort_path, &large_reason).unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, &large_reason).unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create workflow run - should clean up large abort file
         let _run = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_concurrent_workflow_runs() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
         use std::sync::Arc;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path_str = ".swissarmyhammer/.abort";
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+
+        // Capture original directory before changing
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         let workflow = Arc::new({
             let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
@@ -423,12 +454,9 @@ mod tests {
             workflow
         });
 
-        let abort_path = ".swissarmyhammer/.abort";
-
         // Create abort file
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
-        std::fs::write(abort_path, "concurrent test reason").unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, "concurrent test reason").unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create multiple workflow runs concurrently
         let handles: Vec<_> = (0..5)
@@ -443,100 +471,117 @@ mod tests {
 
         // Allow some time for cleanup and force cleanup if needed
         std::thread::sleep(std::time::Duration::from_millis(50));
-        if Path::new(abort_path).exists() {
-            let _ = std::fs::remove_file(abort_path); // Force cleanup for test
+        if Path::new(abort_path_str).exists() {
+            let _ = std::fs::remove_file(abort_path_str); // Force cleanup for test
         }
 
         // Abort file should be cleaned up
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_empty_file() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path_str = ".swissarmyhammer/.abort";
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+
+        // Capture original directory before changing
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        let abort_path = ".swissarmyhammer/.abort";
-
         // Create empty abort file
-        std::fs::write(abort_path, "").unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, "").unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create workflow run - should clean up empty abort file
         let _run = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_with_newlines() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path_str = ".swissarmyhammer/.abort";
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
+
+        // Capture original directory before changing
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        let abort_path = ".swissarmyhammer/.abort";
-
         // Create abort file with newlines
         let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
-        std::fs::write(abort_path, reason_with_newlines).unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, reason_with_newlines).unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         // Create workflow run - should clean up abort file with newlines
         let _run = WorkflowRun::new(workflow);
 
         // Sometimes cleanup is delayed, let's give it a moment and ensure it's cleaned up
         std::thread::sleep(std::time::Duration::from_millis(10));
-        if Path::new(abort_path).exists() {
-            let _ = std::fs::remove_file(abort_path); // Force cleanup for test
+        if Path::new(abort_path_str).exists() {
+            let _ = std::fs::remove_file(abort_path_str); // Force cleanup for test
         }
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_workflow_initialization_after_cleanup() {
-        use crate::test_utils::IsolatedTestHome;
+        use tempfile::TempDir;
         use std::path::Path;
 
-        let guard = IsolatedTestHome::new();
-        let original_dir = std::env::current_dir().unwrap();
+        // Create a temporary directory for this test to avoid conflicts
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_path = temp_dir.path();
+        let sah_dir = temp_path.join(".swissarmyhammer");
+        let abort_path_str = ".swissarmyhammer/.abort";
 
-        // Change to the isolated test directory
-        std::env::set_current_dir(guard.home_path()).unwrap();
+        // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
-        let abort_path = ".swissarmyhammer/.abort";
+        // Capture original directory before changing
+        let original_dir = std::env::current_dir().expect("Failed to get current dir");
+        // Change to the temp directory to test the relative path logic
+        std::env::set_current_dir(temp_path).expect("Failed to change to temp dir");
 
         // Create abort file
-        std::fs::write(abort_path, "test reason").unwrap();
-        assert!(Path::new(abort_path).exists());
+        std::fs::write(abort_path_str, "test reason").unwrap();
+        assert!(Path::new(abort_path_str).exists());
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
@@ -545,7 +590,7 @@ mod tests {
         let run = WorkflowRun::new(workflow);
 
         // Verify cleanup happened
-        assert!(!Path::new(abort_path).exists());
+        assert!(!Path::new(abort_path_str).exists());
 
         // Verify workflow run is properly initialized despite cleanup
         assert_eq!(run.workflow.name.as_str(), "Test Workflow");
@@ -555,7 +600,6 @@ mod tests {
         assert_eq!(run.history[0].0.as_str(), "start");
 
         // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-        drop(guard);
+        std::env::set_current_dir(original_dir).expect("Failed to restore original dir");
     }
 }

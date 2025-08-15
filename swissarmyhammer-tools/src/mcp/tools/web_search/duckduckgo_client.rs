@@ -29,6 +29,9 @@ pub enum DuckDuckGoError {
     /// Search completed but no results were found
     #[error("No results found")]
     NoResults,
+    /// DuckDuckGo is requesting CAPTCHA verification
+    #[error("DuckDuckGo is requesting CAPTCHA verification to confirm this search was made by a human. This is a bot protection measure. Please try again later or use the web interface directly.")]
+    CaptchaRequired,
 }
 
 impl DuckDuckGoClient {
@@ -36,7 +39,7 @@ impl DuckDuckGoClient {
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent("SwissArmyHammer/1.0 (Privacy-Focused Web Search)")
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -85,6 +88,11 @@ impl DuckDuckGoClient {
         // Get the response body as text
         let html_content = response.text().await.map_err(DuckDuckGoError::Network)?;
 
+        // Check for CAPTCHA challenges before attempting to parse results
+        if self.is_captcha_challenge(&html_content) {
+            return Err(DuckDuckGoError::CaptchaRequired);
+        }
+
         // Parse the HTML to extract search results
         let results =
             self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
@@ -92,6 +100,15 @@ impl DuckDuckGoClient {
         tracing::debug!("DuckDuckGo search found {} results", results.len());
 
         Ok(results)
+    }
+
+    /// Checks if the HTML response contains a CAPTCHA challenge
+    fn is_captcha_challenge(&self, html_content: &str) -> bool {
+        // Look for CAPTCHA-related elements in the HTML
+        html_content.contains("anomaly-modal")
+            || html_content.contains("Unfortunately, bots use DuckDuckGo too")
+            || html_content.contains("challenge-form")
+            || html_content.contains("Please complete the following challenge")
     }
 
     /// Builds the search URL with proper parameters
@@ -406,5 +423,29 @@ mod tests {
         // This should still build a valid URL, but DuckDuckGo will return no results
         let url_result = client.build_search_url(&request);
         assert!(url_result.is_ok());
+    }
+
+    #[test]
+    fn test_is_captcha_challenge() {
+        let client = DuckDuckGoClient::new();
+
+        // Test with CAPTCHA HTML content
+        let captcha_html = r#"
+            <div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div>
+            <div class="anomaly-modal__description">Please complete the following challenge to confirm this search was made by a human.</div>
+        "#;
+        assert!(client.is_captcha_challenge(captcha_html));
+
+        // Test with normal HTML content
+        let normal_html = r#"
+            <div class="result">
+                <a href="https://example.com">Example</a>
+            </div>
+        "#;
+        assert!(!client.is_captcha_challenge(normal_html));
+
+        // Test with challenge form
+        let challenge_html = r#"<form id="challenge-form" action="/anomaly.js">"#;
+        assert!(client.is_captcha_challenge(challenge_html));
     }
 }

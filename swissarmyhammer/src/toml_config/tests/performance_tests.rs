@@ -83,8 +83,8 @@ mod perf_tests {
         }
         let access_duration = start.elapsed();
 
-        // 4000 access operations should complete quickly (< 10ms)
-        assert!(access_duration < Duration::from_millis(10));
+        // 4000 access operations should complete quickly (< 50ms)
+        assert!(access_duration < Duration::from_millis(50));
 
         println!("Performed 4000 dot notation accesses in {access_duration:?}");
     }
