@@ -8,6 +8,16 @@
 //! 3. Stress testing and edge cases
 //! 4. User experience validation
 //! 5. Complete regression testing scenarios
+//!
+//! ## Important Testing Notes
+//!
+//! These tests should be run with single-threaded execution to avoid race conditions:
+//! ```
+//! cargo test --test abort_final_integration_tests -- --test-threads=1
+//! ```
+//!
+//! The tests use temporary directories but may interfere with each other when run
+//! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
 use assert_cmd::Command;
@@ -239,22 +249,20 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
         match result {
             Ok(output) => {
                 if output.status.success() {
-                    println!("Workflow {} completed before abort", i);
+                    println!("Workflow {i} completed before abort");
                 } else {
-                    println!("Workflow {} was aborted", i);
+                    println!("Workflow {i} was aborted");
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     // Verify it's either an abort or a workflow not found error
                     assert!(
                         stderr.to_lowercase().contains("abort")
                             || stderr.contains("not found")
                             || stderr.contains("No such file"),
-                        "Unexpected error for workflow {}: {}",
-                        i,
-                        stderr
+                        "Unexpected error for workflow {i}: {stderr}"
                     );
                 }
             }
-            Err(e) => panic!("Thread {} failed: {}", i, e),
+            Err(e) => panic!("Thread {i} failed: {e}"),
         }
     }
 
@@ -268,7 +276,7 @@ fn test_rapid_abort_invocations() -> Result<()> {
 
     // Test rapid creation and deletion of abort files
     for i in 0..10 {
-        let reason = format!("Rapid abort test iteration {}", i);
+        let reason = format!("Rapid abort test iteration {i}");
         env.create_abort_file(&reason)?;
         env.verify_abort_file(&reason)?;
 
@@ -310,8 +318,7 @@ fn test_large_abort_reasons() -> Result<()> {
     // We don't expect the full reason to be in the error message, but abort should be detected
     assert!(
         stderr.to_lowercase().contains("abort") || stderr.contains("not found"),
-        "Should detect abort with large reason. Stderr: {}",
-        stderr
+        "Should detect abort with large reason. Stderr: {stderr}"
     );
 
     Ok(())
@@ -384,12 +391,11 @@ fn test_abort_error_messages_user_experience() -> Result<()> {
     assert_eq!(
         output.status.code(),
         Some(2),
-        "Should exit with code 2 for abort. Output: {:?}",
-        output
+        "Should exit with code 2 for abort. Output: {output:?}"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("Error message: {}", stderr);
+    println!("Error message: {stderr}");
 
     // Error message should be clear and user-friendly
     // Note: The exact error depends on whether abort is detected before or after workflow loading
@@ -431,8 +437,7 @@ fn test_abort_file_cleanup_between_runs() -> Result<()> {
         let stderr = String::from_utf8_lossy(&output2.stderr);
         assert!(
             !stderr.to_lowercase().contains("abort"),
-            "Second run should not fail due to abort. Stderr: {}",
-            stderr
+            "Second run should not fail due to abort. Stderr: {stderr}"
         );
     }
 
@@ -514,7 +519,7 @@ fn test_cross_platform_abort_file_paths() -> Result<()> {
     let abort_file = abort_dir.join(".abort");
 
     // Create directory and file manually to test path handling
-    fs::create_dir_all(&abort_dir)?;
+    fs::create_dir_all(abort_dir)?;
     fs::write(&abort_file, "Cross-platform test")?;
 
     assert!(
@@ -527,7 +532,7 @@ fn test_cross_platform_abort_file_paths() -> Result<()> {
 
     // Cleanup
     fs::remove_file(&abort_file)?;
-    fs::remove_dir(&abort_dir)?;
+    fs::remove_dir(abort_dir)?;
 
     Ok(())
 }

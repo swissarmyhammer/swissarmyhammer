@@ -1344,6 +1344,26 @@ async fn execute_workflow_test_mode(
     Ok(coverage)
 }
 
+/// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
+fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
+    use std::fs;
+
+    // Create local .swissarmyhammer/workflow-runs directory
+    let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
+    fs::create_dir_all(&local_dir).map_err(|e| {
+        SwissArmyHammerError::Other(format!(
+            "Failed to create .swissarmyhammer/workflow-runs directory: {e}"
+        ))
+    })?;
+
+    let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
+        .map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
+        })?;
+
+    Ok(Box::new(run_storage))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1761,19 +1781,28 @@ mod tests {
 
         // Create a workflow run without plan_filename parameter
         let run = swissarmyhammer::workflow::WorkflowRun::new(workflow.clone());
-        
+
         // This should work without plan_filename - testing backward compatibility
         assert_eq!(run.workflow.name.as_str(), "plan");
-        assert_eq!(run.status, swissarmyhammer::workflow::WorkflowRunStatus::Running);
-        
+        assert_eq!(
+            run.status,
+            swissarmyhammer::workflow::WorkflowRunStatus::Running
+        );
+
         // The workflow should have the expected states
         assert_eq!(workflow.states.len(), 3);
-        assert!(workflow.states.contains_key(&swissarmyhammer::workflow::StateId::new("start")));
-        assert!(workflow.states.contains_key(&swissarmyhammer::workflow::StateId::new("plan")));
-        assert!(workflow.states.contains_key(&swissarmyhammer::workflow::StateId::new("done")));
+        assert!(workflow
+            .states
+            .contains_key(&swissarmyhammer::workflow::StateId::new("start")));
+        assert!(workflow
+            .states
+            .contains_key(&swissarmyhammer::workflow::StateId::new("plan")));
+        assert!(workflow
+            .states
+            .contains_key(&swissarmyhammer::workflow::StateId::new("done")));
     }
 
-    #[tokio::test]  
+    #[tokio::test]
     async fn test_plan_workflow_with_parameters() {
         // Test new parameterized functionality
         let workflow_storage = WorkflowStorage::file_system().unwrap();
@@ -1789,31 +1818,14 @@ mod tests {
 
         // This should work with plan_filename - testing new functionality
         assert_eq!(run.workflow.name.as_str(), "plan");
-        assert_eq!(run.status, swissarmyhammer::workflow::WorkflowRunStatus::Running);
+        assert_eq!(
+            run.status,
+            swissarmyhammer::workflow::WorkflowRunStatus::Running
+        );
         assert!(run.context.contains_key("plan_filename"));
         assert_eq!(
             run.context.get("plan_filename").unwrap(),
             &serde_json::json!("./specification/test.md")
         );
     }
-}
-
-/// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
-fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBackend>> {
-    use std::fs;
-
-    // Create local .swissarmyhammer/workflow-runs directory
-    let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
-    fs::create_dir_all(&local_dir).map_err(|e| {
-        SwissArmyHammerError::Other(format!(
-            "Failed to create .swissarmyhammer/workflow-runs directory: {e}"
-        ))
-    })?;
-
-    let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
-        .map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
-        })?;
-
-    Ok(Box::new(run_storage))
 }
