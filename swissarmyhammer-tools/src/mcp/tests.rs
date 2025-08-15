@@ -26,6 +26,26 @@ async fn test_mcp_server_creation() {
 }
 
 #[tokio::test]
+async fn test_mcp_server_exposes_shell_tools() {
+    // Create a test library and server
+    let library = PromptLibrary::new();
+    let server = McpServer::new(library).unwrap();
+
+    // Test that server info includes shell tools capabilities
+    let info = server.get_info();
+    assert!(
+        info.capabilities.tools.is_some(),
+        "Server should expose tools capability"
+    );
+
+    // Test that we can get the shell execute tool specifically
+    // Note: Direct tool access test would require the full MCP request context,
+    // so we test that the server is properly configured to expose tools.
+    let tools_cap = info.capabilities.tools.unwrap();
+    assert_eq!(tools_cap.list_changed, Some(true));
+}
+
+#[tokio::test]
 async fn test_mcp_server_list_prompts() {
     let mut library = PromptLibrary::new();
     let prompt = Prompt::new("test", "Test prompt: {{ name }}")

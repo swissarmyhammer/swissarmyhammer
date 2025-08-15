@@ -1603,7 +1603,7 @@ impl Action for ShellAction {
             .spawn()
             .map_err(|e| ActionError::ExecutionError(format!("Failed to spawn command: {e}")))?;
 
-        let result = if let Some(timeout_duration) = self.timeout {
+        if let Some(timeout_duration) = self.timeout {
             // Timeout already validated in security checks above
 
             // Execute with timeout and proper process cleanup
@@ -1671,9 +1671,7 @@ impl Action for ShellAction {
                     "Command execution failed: {e}"
                 ))),
             }
-        };
-
-        result
+        }
     }
 
     fn description(&self) -> String {

@@ -40,4 +40,5 @@ pub mod issues;
 pub mod memoranda;
 pub mod outline;
 pub mod search;
+pub mod shell;
 pub mod todo;

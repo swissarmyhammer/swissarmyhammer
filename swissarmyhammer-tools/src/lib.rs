@@ -46,7 +46,8 @@ pub mod test_utils;
 // Re-export key types for convenience
 pub use mcp::McpServer;
 pub use mcp::{
-    register_issue_tools, register_memo_tools, register_search_tools, register_todo_tools,
+    register_issue_tools, register_memo_tools, register_search_tools, register_shell_tools,
+    register_todo_tools,
 };
 pub use mcp::{ToolContext, ToolRegistry};
 

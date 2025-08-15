@@ -285,9 +285,7 @@ mod memo_response_formatting {
             format!("{} No memos available for context", "ℹ️".blue())
         } else {
             // Add document emoji to the context header
-            let result =
-                response_text.replace("All memo context", &format!("{} All memo context", "📄"));
-            result
+            response_text.replace("All memo context", &format!("{} All memo context", "📄"))
         }
     }
 
