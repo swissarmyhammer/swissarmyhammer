@@ -13,6 +13,76 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::Duration;
 
+/// Configuration constants for web fetch operations
+/// Maximum number of redirects to follow when follow_redirects is enabled
+const MAX_REDIRECTS: usize = 10;
+
+/// Timeout configuration constants (in seconds)
+const DEFAULT_TIMEOUT_SECONDS: u32 = 30;
+const MIN_TIMEOUT_SECONDS: u32 = 5;
+const MAX_TIMEOUT_SECONDS: u32 = 120;
+
+/// Content length configuration constants (in bytes)
+const DEFAULT_CONTENT_LENGTH_BYTES: u32 = 1_048_576; // 1MB
+const MIN_CONTENT_LENGTH_BYTES: u32 = 1024; // 1KB
+const MAX_CONTENT_LENGTH_BYTES: u32 = 10_485_760; // 10MB
+
+/// Error configuration structure for consistent error handling
+struct ErrorConfig {
+    error_type: &'static str,
+    suggestion: &'static str,
+    is_retryable: bool,
+}
+
+/// Static configuration for error types and their suggestions
+const ERROR_CONFIGURATIONS: &[ErrorConfig] = &[
+    ErrorConfig {
+        error_type: "network_error",
+        suggestion: "Check your internet connection and try again. The server may be temporarily unavailable.",
+        is_retryable: true,
+    },
+    ErrorConfig {
+        error_type: "security_error",
+        suggestion: "The URL was blocked for security reasons. Check if the URL scheme is HTTPS/HTTP and the domain is not restricted.",
+        is_retryable: false,
+    },
+    ErrorConfig {
+        error_type: "redirect_error",
+        suggestion: "Too many redirects detected. The URL may have redirect loops.",
+        is_retryable: true,
+    },
+    ErrorConfig {
+        error_type: "not_found_error",
+        suggestion: "The requested page was not found. Verify the URL is correct and the page exists.",
+        is_retryable: false,
+    },
+    ErrorConfig {
+        error_type: "access_denied_error",
+        suggestion: "Access to the resource is forbidden. Check if authentication is required.",
+        is_retryable: false,
+    },
+    ErrorConfig {
+        error_type: "server_error",
+        suggestion: "The server encountered an error. Try again later or contact the website administrator.",
+        is_retryable: true,
+    },
+    ErrorConfig {
+        error_type: "content_processing_error",
+        suggestion: "Failed to convert HTML to markdown. The page may have complex HTML structures or encoding issues.",
+        is_retryable: true,
+    },
+    ErrorConfig {
+        error_type: "content_error",
+        suggestion: "Failed to process the content. The page may have malformed HTML or encoding issues.",
+        is_retryable: false,
+    },
+    ErrorConfig {
+        error_type: "size_limit_error",
+        suggestion: "Content is too large. Try reducing max_content_length or use a different URL.",
+        is_retryable: false,
+    },
+];
+
 /// Represents a single step in a redirect chain
 #[derive(Debug, Clone)]
 pub struct RedirectStep {
@@ -69,7 +139,7 @@ impl WebFetchTool {
                     .as_deref()
                     .unwrap_or("SwissArmyHammer-Bot/1.0"),
             )
-            .timeout(Duration::from_secs(request.timeout.unwrap_or(30) as u64))
+            .timeout(Duration::from_secs(request.timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS) as u64))
             .redirect(reqwest::redirect::Policy::none()) // Handle redirects manually
             .build()?;
 
@@ -77,7 +147,7 @@ impl WebFetchTool {
         let mut current_url = url.to_string();
         let mut redirect_count = 0;
         let max_redirects = if request.follow_redirects.unwrap_or(true) {
-            10
+            MAX_REDIRECTS
         } else {
             0
         };
@@ -145,18 +215,31 @@ impl WebFetchTool {
                 .unwrap_or("text/html")
                 .to_string();
 
-            let body = response.text().await?;
-
-            // Check content length limits
-            if let Some(max_length) = request.max_content_length {
-                if body.len() > max_length as usize {
-                    let body_len = body.len();
+            // Stream content with size validation
+            let max_length = request.max_content_length.unwrap_or(DEFAULT_CONTENT_LENGTH_BYTES) as usize;
+            let mut body_bytes = Vec::new();
+            let mut stream = response.bytes_stream();
+            
+            use futures_util::StreamExt;
+            
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                body_bytes.extend_from_slice(&chunk);
+                
+                // Check size limit during streaming
+                if body_bytes.len() > max_length {
                     return Err(format!(
-                        "Content too large: {body_len} bytes exceeds limit of {max_length} bytes"
-                    )
-                    .into());
+                        "Content too large: {} bytes exceeds limit of {} bytes",
+                        body_bytes.len(),
+                        max_length
+                    ).into());
                 }
             }
+            
+            // Convert bytes to string
+            let body = String::from_utf8(body_bytes).map_err(|e| {
+                format!("Invalid UTF-8 content: {e}")
+            })?;
 
             // Convert HTML to markdown using markdowndown
             let markdown_content = if content_type.contains("text/html") {
@@ -309,26 +392,20 @@ impl WebFetchTool {
 
     /// Get error suggestion based on error type
     fn get_error_suggestion(error_type: &str) -> &'static str {
-        match error_type {
-            "network_error" => "Check your internet connection and try again. The server may be temporarily unavailable.",
-            "security_error" => "The URL was blocked for security reasons. Check if the URL scheme is HTTPS/HTTP and the domain is not restricted.",
-            "redirect_error" => "Too many redirects detected. The URL may have redirect loops.",
-            "not_found_error" => "The requested page was not found. Verify the URL is correct and the page exists.",
-            "access_denied_error" => "Access to the resource is forbidden. Check if authentication is required.",
-            "server_error" => "The server encountered an error. Try again later or contact the website administrator.",
-            "content_processing_error" => "Failed to convert HTML to markdown. The page may have complex HTML structures or encoding issues.",
-            "content_error" => "Failed to process the content. The page may have malformed HTML or encoding issues.",
-            "size_limit_error" => "Content is too large. Try reducing max_content_length or use a different URL.",
-            _ => "An unexpected error occurred. Check the URL and try again."
-        }
+        ERROR_CONFIGURATIONS
+            .iter()
+            .find(|config| config.error_type == error_type)
+            .map(|config| config.suggestion)
+            .unwrap_or("An unexpected error occurred. Check the URL and try again.")
     }
 
     /// Check if an error type is retryable
     fn is_retryable_error(error_type: &str) -> bool {
-        matches!(
-            error_type,
-            "network_error" | "server_error" | "redirect_error" | "content_processing_error"
-        )
+        ERROR_CONFIGURATIONS
+            .iter()
+            .find(|config| config.error_type == error_type)
+            .map(|config| config.is_retryable)
+            .unwrap_or(false)
     }
 }
 
@@ -354,10 +431,10 @@ impl McpTool for WebFetchTool {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Request timeout in seconds (optional, defaults to 30 seconds)",
-                    "minimum": 5,
-                    "maximum": 120,
-                    "default": 30
+                    "description": format!("Request timeout in seconds (optional, defaults to {} seconds)", DEFAULT_TIMEOUT_SECONDS),
+                    "minimum": MIN_TIMEOUT_SECONDS,
+                    "maximum": MAX_TIMEOUT_SECONDS,
+                    "default": DEFAULT_TIMEOUT_SECONDS
                 },
                 "follow_redirects": {
                     "type": "boolean",
@@ -366,10 +443,10 @@ impl McpTool for WebFetchTool {
                 },
                 "max_content_length": {
                     "type": "integer",
-                    "description": "Maximum content length in bytes (optional, defaults to 1MB)",
-                    "minimum": 1024,
-                    "maximum": 10485760,
-                    "default": 1048576
+                    "description": format!("Maximum content length in bytes (optional, defaults to {} bytes)", DEFAULT_CONTENT_LENGTH_BYTES),
+                    "minimum": MIN_CONTENT_LENGTH_BYTES,
+                    "maximum": MAX_CONTENT_LENGTH_BYTES,
+                    "default": DEFAULT_CONTENT_LENGTH_BYTES
                 },
                 "user_agent": {
                     "type": "string",
@@ -380,6 +457,7 @@ impl McpTool for WebFetchTool {
             "required": ["url"]
         })
     }
+
 
     async fn execute(
         &self,
@@ -399,6 +477,32 @@ impl McpTool for WebFetchTool {
 
         tracing::debug!("Fetching web content from URL: {}", request.url);
 
+        // Validate request parameters
+        let _validated_url = self.validate_request_parameters(&request).await?;
+
+        // Implement web fetching with redirect tracking
+        tracing::info!("Fetching web content from: {}", request.url);
+
+        let start_time = std::time::Instant::now();
+        let fetch_result = self
+            .fetch_with_redirect_tracking(&request.url, &request)
+            .await;
+        let response_time_ms = start_time.elapsed().as_millis() as u64;
+
+        match fetch_result {
+            Ok((markdown_content, redirect_info)) => {
+                Self::build_success_response(markdown_content, redirect_info, response_time_ms, &request)
+            }
+            Err(error) => {
+                Self::build_error_response(error.as_ref(), response_time_ms, &request)
+            }
+        }
+    }
+}
+
+impl WebFetchTool {
+    /// Validates request parameters including URL security, timeout, and content length
+    async fn validate_request_parameters(&self, request: &WebFetchRequest) -> Result<String, McpError> {
         // Comprehensive URL security validation
         let validated_url = match self.security_validator.validate_url(&request.url) {
             Ok(url) => url,
@@ -452,9 +556,9 @@ impl McpTool for WebFetchTool {
 
         // Validate optional timeout range
         if let Some(timeout) = request.timeout {
-            if !(5..=120).contains(&timeout) {
+            if !(MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout) {
                 return Err(McpError::invalid_params(
-                    "Timeout must be between 5 and 120 seconds".to_string(),
+                    format!("Timeout must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS} seconds"),
                     None,
                 ));
             }
@@ -462,136 +566,139 @@ impl McpTool for WebFetchTool {
 
         // Validate optional max_content_length range
         if let Some(max_length) = request.max_content_length {
-            if !(1024..=10_485_760).contains(&max_length) {
+            if !(MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES).contains(&max_length) {
                 return Err(McpError::invalid_params(
-                    "Maximum content length must be between 1KB and 10MB".to_string(),
+                    format!("Maximum content length must be between {MIN_CONTENT_LENGTH_BYTES} and {MAX_CONTENT_LENGTH_BYTES} bytes"),
                     None,
                 ));
             }
         }
 
-        // Implement web fetching with redirect tracking
-        tracing::info!("Fetching web content from: {}", request.url);
+        Ok(validated_url.to_string())
+    }
 
-        let start_time = std::time::Instant::now();
-        let fetch_result = self
-            .fetch_with_redirect_tracking(&request.url, &request)
-            .await;
-        let response_time_ms = start_time.elapsed().as_millis() as u64;
+    /// Builds a successful response with content and metadata
+    fn build_success_response(
+        content: String,
+        redirect_info: RedirectInfo,
+        response_time_ms: u64,
+        request: &WebFetchRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let content_str = content.as_str();
+        let content_length = content_str.len();
+        let word_count = content_str.split_whitespace().count();
 
-        match fetch_result {
-            Ok((markdown_content, redirect_info)) => {
-                let content_str = markdown_content.as_str();
-                let content_length = content_str.len();
-                let word_count = content_str.split_whitespace().count();
+        // Extract HTML title from markdown content (first heading)
+        let extracted_title = Self::extract_title_from_markdown(content_str);
 
-                // Extract HTML title from markdown content (first heading)
-                let extracted_title = Self::extract_title_from_markdown(content_str);
+        // Extract description (first paragraph after title)
+        let extracted_description = Self::extract_description_from_markdown(content_str);
 
-                // Extract description (first paragraph after title)
-                let extracted_description = Self::extract_description_from_markdown(content_str);
+        tracing::info!(
+            "Successfully fetched content from {} ({}ms, {} bytes, {} words)",
+            request.url,
+            response_time_ms,
+            content_length,
+            word_count
+        );
 
-                tracing::info!(
-                    "Successfully fetched content from {} ({}ms, {} bytes, {} words)",
-                    request.url,
-                    response_time_ms,
-                    content_length,
-                    word_count
-                );
+        // Create redirect chain formatted as per specification
+        let redirect_chain_formatted: Vec<String> = redirect_info
+            .redirect_chain
+            .iter()
+            .map(|step| {
+                let url = &step.url;
+                let status_code = step.status_code;
+                format!("{url} -> {status_code}")
+            })
+            .collect();
 
-                // Create redirect chain formatted as per specification
-                let redirect_chain_formatted: Vec<String> = redirect_info
-                    .redirect_chain
-                    .iter()
-                    .map(|step| {
-                        let url = &step.url;
-                        let status_code = step.status_code;
-                        format!("{url} -> {status_code}")
-                    })
-                    .collect();
+        // Create comprehensive response with markdown content and redirect metadata
+        let mut response = serde_json::json!({
+            "url": request.url,
+            "final_url": redirect_info.final_url,
+            "status": "success",
+            "status_code": redirect_info.redirect_chain.last().map(|s| s.status_code).unwrap_or(200),
+            "response_time_ms": response_time_ms,
+            "content_length": content_length,
+            "word_count": word_count,
+            "title": extracted_title,
+            "description": extracted_description,
+            "content_type": "text/html",
+            "markdown_content": content_str,
+            "encoding": "utf-8"
+        });
 
-                // Create comprehensive response with markdown content and redirect metadata
-                let mut response = serde_json::json!({
-                    "url": request.url,
-                    "final_url": redirect_info.final_url,
-                    "status": "success",
-                    "status_code": redirect_info.redirect_chain.last().map(|s| s.status_code).unwrap_or(200),
-                    "response_time_ms": response_time_ms,
-                    "content_length": content_length,
-                    "word_count": word_count,
-                    "title": extracted_title,
-                    "description": extracted_description,
-                    "content_type": "text/html",
-                    "markdown_content": content_str,
-                    "encoding": "utf-8"
-                });
-
-                // Add redirect information if redirects occurred
-                if redirect_info.redirect_count > 0 {
-                    response["redirect_count"] = serde_json::Value::Number(
-                        serde_json::Number::from(redirect_info.redirect_count),
-                    );
-                    response["redirect_chain"] = serde_json::Value::Array(
-                        redirect_chain_formatted
-                            .into_iter()
-                            .map(serde_json::Value::String)
-                            .collect(),
-                    );
-                }
-
-                let success_message = if redirect_info.redirect_count > 0 {
-                    let url = &request.url;
-                    let redirect_count = redirect_info.redirect_count;
-                    let redirect_s = if redirect_count == 1 { "" } else { "s" };
-                    let final_url = &redirect_info.final_url;
-                    let metadata = serde_json::to_string_pretty(&response).unwrap_or_default();
-                    format!(
-                        "Successfully fetched and converted content from {url} (followed {redirect_count} redirect{redirect_s})\nFinal URL: {final_url}\n\nMetadata: {metadata}\n\nContent:\n{content_str}"
-                    )
-                } else {
-                    let url = &request.url;
-                    let metadata = serde_json::to_string_pretty(&response).unwrap_or_default();
-                    format!(
-                        "Successfully fetched and converted content from {url}\n\nMetadata: {metadata}\n\nContent:\n{content_str}"
-                    )
-                };
-
-                Ok(BaseToolImpl::create_success_response(success_message))
-            }
-            Err(error) => {
-                let error_type = Self::categorize_error(error.as_ref());
-                let error_suggestion = Self::get_error_suggestion(error_type);
-
-                tracing::warn!(
-                    "Failed to fetch content from {} after {}ms: {} (category: {})",
-                    request.url,
-                    response_time_ms,
-                    error,
-                    error_type
-                );
-
-                // Create comprehensive error response
-                let error_info = serde_json::json!({
-                    "url": request.url,
-                    "status": "error",
-                    "error_type": error_type,
-                    "error_details": error.to_string(),
-                    "error_suggestion": error_suggestion,
-                    "response_time_ms": response_time_ms,
-                    "encoding": "utf-8",
-                    "retry_recommended": Self::is_retryable_error(error_type)
-                });
-
-                let url = &request.url;
-                let error_details = serde_json::to_string_pretty(&error_info).unwrap_or_default();
-                Err(McpError::invalid_params(
-                    format!(
-                        "Failed to fetch content from {url}: {error}\n\nError Type: {error_type}\nSuggestion: {error_suggestion}\n\nError details: {error_details}"
-                    ),
-                    None,
-                ))
-            }
+        // Add redirect information if redirects occurred
+        if redirect_info.redirect_count > 0 {
+            response["redirect_count"] = serde_json::Value::Number(
+                serde_json::Number::from(redirect_info.redirect_count),
+            );
+            response["redirect_chain"] = serde_json::Value::Array(
+                redirect_chain_formatted
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            );
         }
+
+        let success_message = if redirect_info.redirect_count > 0 {
+            let url = &request.url;
+            let redirect_count = redirect_info.redirect_count;
+            let redirect_s = if redirect_count == 1 { "" } else { "s" };
+            let final_url = &redirect_info.final_url;
+            let metadata = serde_json::to_string_pretty(&response).unwrap_or_default();
+            format!(
+                "Successfully fetched and converted content from {url} (followed {redirect_count} redirect{redirect_s})\nFinal URL: {final_url}\n\nMetadata: {metadata}\n\nContent:\n{content_str}"
+            )
+        } else {
+            let url = &request.url;
+            let metadata = serde_json::to_string_pretty(&response).unwrap_or_default();
+            format!(
+                "Successfully fetched and converted content from {url}\n\nMetadata: {metadata}\n\nContent:\n{content_str}"
+            )
+        };
+
+        Ok(BaseToolImpl::create_success_response(success_message))
+    }
+
+    /// Builds an error response with detailed error information
+    fn build_error_response(
+        error: &(dyn std::error::Error + Send + Sync),
+        response_time_ms: u64,
+        request: &WebFetchRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let error_type = Self::categorize_error(error);
+        let error_suggestion = Self::get_error_suggestion(error_type);
+
+        tracing::warn!(
+            "Failed to fetch content from {} after {}ms: {} (category: {})",
+            request.url,
+            response_time_ms,
+            error,
+            error_type
+        );
+
+        // Create comprehensive error response
+        let error_info = serde_json::json!({
+            "url": request.url,
+            "status": "error",
+            "error_type": error_type,
+            "error_details": error.to_string(),
+            "error_suggestion": error_suggestion,
+            "response_time_ms": response_time_ms,
+            "encoding": "utf-8",
+            "retry_recommended": Self::is_retryable_error(error_type)
+        });
+
+        let url = &request.url;
+        let error_details = serde_json::to_string_pretty(&error_info).unwrap_or_default();
+        Err(McpError::invalid_params(
+            format!(
+                "Failed to fetch content from {url}: {error}\n\nError Type: {error_type}\nSuggestion: {error_suggestion}\n\nError details: {error_details}"
+            ),
+            None,
+        ))
     }
 }
 

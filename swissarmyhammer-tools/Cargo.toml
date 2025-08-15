@@ -38,8 +38,8 @@ thiserror = "1.0"
 # Web fetch functionality
 markdowndown = { workspace = true }
 reqwest = { workspace = true }
-html2md = "0.2"
 url = { workspace = true }
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
