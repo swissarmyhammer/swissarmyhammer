@@ -55,6 +55,32 @@ struct ShellExecutionResult {
 }
 
 /// Configuration for output limits and handling
+///
+/// Controls how command output is captured, processed, and limited to prevent
+/// memory exhaustion and handle large outputs gracefully.
+///
+/// # Examples
+///
+/// ```rust
+/// use swissarmyhammer_tools::mcp::tools::shell::execute::OutputLimits;
+///
+/// // Use default limits (10MB max output, 2000 char lines)
+/// let limits = OutputLimits::default();
+///
+/// // Custom limits for memory-constrained environments
+/// let custom_limits = OutputLimits {
+///     max_output_size: 1024 * 1024, // 1MB limit
+///     max_line_length: 1000,         // Shorter lines
+///     enable_streaming: false,       // Future streaming support
+/// };
+///
+/// // High-throughput configuration for CI/build systems
+/// let build_limits = OutputLimits {
+///     max_output_size: 50 * 1024 * 1024, // 50MB for build outputs
+///     max_line_length: 4000,              // Longer lines for verbose tools
+///     enable_streaming: false,
+/// };
+/// ```
 #[derive(Debug, Clone)]
 pub struct OutputLimits {
     /// Maximum total output size in bytes (default: 10MB)
@@ -76,6 +102,55 @@ impl Default for OutputLimits {
 }
 
 /// Buffer for managing output capture with size limits and binary detection
+///
+/// Provides intelligent output buffering that prevents memory exhaustion while
+/// preserving output structure and detecting binary content. Handles concurrent
+/// stdout/stderr streams with configurable size limits and graceful truncation.
+///
+/// # Key Features
+///
+/// - **Size Limiting**: Enforces maximum output size to prevent memory issues
+/// - **Binary Detection**: Automatically detects and safely formats binary content
+/// - **Structure Preservation**: Truncates at line boundaries when possible
+/// - **Concurrent Streams**: Handles stdout and stderr independently
+/// - **Metadata Tracking**: Records truncation status and total bytes processed
+///
+/// # Examples
+///
+/// ```rust
+/// use swissarmyhammer_tools::mcp::tools::shell::execute::OutputBuffer;
+///
+/// // Create buffer with 1MB limit
+/// let mut buffer = OutputBuffer::new(1024 * 1024);
+///
+/// // Append output data
+/// let bytes_written = buffer.append_stdout(b"Hello, world!\n");
+/// assert_eq!(bytes_written, 14);
+///
+/// // Check buffer status
+/// assert!(!buffer.is_truncated());
+/// assert_eq!(buffer.current_size(), 14);
+///
+/// // Get formatted output
+/// let stdout = buffer.get_stdout();
+/// assert_eq!(stdout, "Hello, world!\n");
+///
+/// // Example with binary content detection
+/// let mut bin_buffer = OutputBuffer::new(1000);
+/// bin_buffer.append_stdout(&[0x00, 0x01, 0x02, 0xFF]); // Binary data
+/// assert!(bin_buffer.has_binary_content());
+///
+/// let output = bin_buffer.get_stdout();
+/// assert!(output.starts_with("[Binary content:"));
+/// ```
+///
+/// # Memory Management
+///
+/// The buffer enforces strict size limits during capture, not after:
+/// - Output is processed in streaming fashion
+/// - Size limits are checked for each append operation
+/// - Truncation occurs at line boundaries when possible
+/// - Memory usage stays constant regardless of total output size
 pub struct OutputBuffer {
     /// Maximum allowed total size
     max_size: usize,
@@ -117,7 +192,7 @@ impl OutputBuffer {
     /// Append data to stdout buffer with size limit enforcement
     pub fn append_stdout(&mut self, data: &[u8]) -> usize {
         self.total_bytes_processed += data.len();
-        
+
         // Check for binary content in this chunk
         if !self.binary_detected && is_binary_content(data) {
             self.binary_detected = true;
@@ -125,14 +200,14 @@ impl OutputBuffer {
 
         // Calculate how much we can append without exceeding limit
         let available_space = self.max_size.saturating_sub(self.current_size());
-        
+
         if available_space == 0 {
             self.truncated = true;
             return 0;
         }
 
         let bytes_to_append = std::cmp::min(data.len(), available_space);
-        
+
         if bytes_to_append < data.len() {
             self.truncated = true;
         }
@@ -151,7 +226,7 @@ impl OutputBuffer {
     /// Append data to stderr buffer with size limit enforcement
     pub fn append_stderr(&mut self, data: &[u8]) -> usize {
         self.total_bytes_processed += data.len();
-        
+
         // Check for binary content in this chunk
         if !self.binary_detected && is_binary_content(data) {
             self.binary_detected = true;
@@ -159,14 +234,14 @@ impl OutputBuffer {
 
         // Calculate how much we can append without exceeding limit
         let available_space = self.max_size.saturating_sub(self.current_size());
-        
+
         if available_space == 0 {
             self.truncated = true;
             return 0;
         }
 
         let bytes_to_append = std::cmp::min(data.len(), available_space);
-        
+
         if bytes_to_append < data.len() {
             self.truncated = true;
         }
@@ -238,26 +313,32 @@ impl OutputBuffer {
         if self.truncated {
             let marker = b"\n[Output truncated - exceeded size limit]";
             let available = self.max_size.saturating_sub(self.current_size());
-            
+
             // If there's not enough space, make room by truncating existing content
             if available < marker.len() {
                 let needed_space = marker.len() - available;
-                
+
                 // Truncate from stdout first, then stderr if needed
                 if !self.stdout_buffer.is_empty() {
                     let to_remove = std::cmp::min(needed_space, self.stdout_buffer.len());
-                    self.stdout_buffer.truncate(self.stdout_buffer.len() - to_remove);
-                    
+                    self.stdout_buffer
+                        .truncate(self.stdout_buffer.len() - to_remove);
+
                     // Try to find a good truncation point (line boundary)
-                    while !self.stdout_buffer.is_empty() && self.stdout_buffer[self.stdout_buffer.len() - 1] != b'\n' {
+                    while !self.stdout_buffer.is_empty()
+                        && self.stdout_buffer[self.stdout_buffer.len() - 1] != b'\n'
+                    {
                         self.stdout_buffer.pop();
                     }
                 } else if !self.stderr_buffer.is_empty() {
                     let to_remove = std::cmp::min(needed_space, self.stderr_buffer.len());
-                    self.stderr_buffer.truncate(self.stderr_buffer.len() - to_remove);
-                    
+                    self.stderr_buffer
+                        .truncate(self.stderr_buffer.len() - to_remove);
+
                     // Try to find a good truncation point (line boundary)
-                    while !self.stderr_buffer.is_empty() && self.stderr_buffer[self.stderr_buffer.len() - 1] != b'\n' {
+                    while !self.stderr_buffer.is_empty()
+                        && self.stderr_buffer[self.stderr_buffer.len() - 1] != b'\n'
+                    {
                         self.stderr_buffer.pop();
                     }
                 }
@@ -288,31 +369,32 @@ pub fn is_binary_content(data: &[u8]) -> bool {
 
     // Check first 8KB for binary markers to avoid scanning huge text files
     let sample = &data[..std::cmp::min(data.len(), 8192)];
-    
+
     // Count suspicious bytes
     let mut suspicious_count = 0;
     let mut total_count = 0;
-    
+
     for &byte in sample {
         total_count += 1;
-        
+
         // Check for various binary indicators
         if (byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t') // Control characters
             || byte == 0 // Null bytes are a strong indicator
-            || (byte > 127 && byte < 160) // High control characters
+            || (byte > 127 && byte < 160)
+        // High control characters
         {
             suspicious_count += 1;
         }
-        
+
         // Early exit if we find definitive binary content
         if byte == 0 {
             return true; // Null bytes are definitive
         }
     }
-    
+
     // Consider binary if:
     // 1. More than 5% of bytes are suspicious, OR
-    // 2. Any null bytes found (handled above), OR  
+    // 2. Any null bytes found (handled above), OR
     // 3. Multiple suspicious bytes in small content
     let percentage_threshold = total_count / 20; // 5% threshold
     let threshold = if total_count < 20 {
@@ -320,7 +402,7 @@ pub fn is_binary_content(data: &[u8]) -> bool {
     } else {
         std::cmp::max(1, percentage_threshold)
     };
-    
+
     suspicious_count >= threshold
 }
 
@@ -595,19 +677,13 @@ async fn process_child_output_with_limits(
     output_limits: &OutputLimits,
 ) -> Result<(std::process::ExitStatus, OutputBuffer), ShellError> {
     // Take stdout and stderr from the child process
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| ShellError::SystemError {
-            message: "Failed to capture stdout from child process".to_string(),
-        })?;
+    let stdout = child.stdout.take().ok_or_else(|| ShellError::SystemError {
+        message: "Failed to capture stdout from child process".to_string(),
+    })?;
 
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| ShellError::SystemError {
-            message: "Failed to capture stderr from child process".to_string(),
-        })?;
+    let stderr = child.stderr.take().ok_or_else(|| ShellError::SystemError {
+        message: "Failed to capture stderr from child process".to_string(),
+    })?;
 
     // Create output buffer with configured limits
     let mut output_buffer = OutputBuffer::new(output_limits.max_output_size);
@@ -627,9 +703,9 @@ async fn process_child_output_with_limits(
                         let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                         line_with_newline.extend_from_slice(line_bytes);
                         line_with_newline.push(b'\n');
-                        
+
                         let bytes_written = output_buffer.append_stdout(&line_with_newline);
-                        
+
                         // If we couldn't write anything, we've hit the limit
                         if bytes_written == 0 && output_buffer.is_at_limit() {
                             tracing::debug!("Output buffer limit reached, stopping stdout processing");
@@ -646,7 +722,7 @@ async fn process_child_output_with_limits(
                     }
                 }
             }
-            
+
             // Read from stderr
             stderr_line = stderr_reader.next_line() => {
                 match stderr_line {
@@ -655,9 +731,9 @@ async fn process_child_output_with_limits(
                         let mut line_with_newline = Vec::with_capacity(line_bytes.len() + 1);
                         line_with_newline.extend_from_slice(line_bytes);
                         line_with_newline.push(b'\n');
-                        
+
                         let bytes_written = output_buffer.append_stderr(&line_with_newline);
-                        
+
                         // If we couldn't write anything, we've hit the limit
                         if bytes_written == 0 && output_buffer.is_at_limit() {
                             tracing::debug!("Output buffer limit reached, stopping stderr processing");
@@ -674,16 +750,16 @@ async fn process_child_output_with_limits(
                     }
                 }
             }
-            
+
             // Check if process has exited
             exit_status = child.wait() => {
                 match exit_status {
                     Ok(status) => {
                         tracing::debug!("Process exited with status: {:?}", status);
-                        
+
                         // Continue reading any remaining output after process exit
                         // This is important for processes that exit quickly but have buffered output
-                        
+
                         // Read remaining stdout
                         while let Ok(Some(line)) = stdout_reader.next_line().await {
                             if output_buffer.is_at_limit() {
@@ -695,7 +771,7 @@ async fn process_child_output_with_limits(
                             line_with_newline.push(b'\n');
                             output_buffer.append_stdout(&line_with_newline);
                         }
-                        
+
                         // Read remaining stderr
                         while let Ok(Some(line)) = stderr_reader.next_line().await {
                             if output_buffer.is_at_limit() {
@@ -707,10 +783,10 @@ async fn process_child_output_with_limits(
                             line_with_newline.push(b'\n');
                             output_buffer.append_stderr(&line_with_newline);
                         }
-                        
+
                         // Add truncation marker if needed
                         output_buffer.add_truncation_marker();
-                        
+
                         return Ok((status, output_buffer));
                     }
                     Err(e) => {
@@ -767,6 +843,80 @@ async fn process_child_output_with_limits(
 /// Returns a `Result` containing either a `ShellExecutionResult` with complete
 /// execution metadata or a `ShellError` describing the failure mode, including
 /// timeout errors with partial output.
+///
+/// # Examples
+///
+/// ```rust
+/// use swissarmyhammer_tools::mcp::tools::shell::execute::execute_shell_command;
+/// use std::collections::HashMap;
+/// use std::path::PathBuf;
+///
+/// # tokio_test::block_on(async {
+/// // Simple command execution
+/// let result = execute_shell_command(
+///     "echo 'Hello World'".to_string(),
+///     None,
+///     30,
+///     None
+/// ).await.unwrap();
+///
+/// assert_eq!(result.exit_code, 0);
+/// assert_eq!(result.stdout.trim(), "Hello World");
+/// assert!(!result.output_truncated);
+///
+/// // Command with working directory
+/// let result = execute_shell_command(
+///     "pwd".to_string(),
+///     Some(PathBuf::from("/tmp")),
+///     30,
+///     None
+/// ).await.unwrap();
+///
+/// assert_eq!(result.working_directory, PathBuf::from("/tmp"));
+///
+/// // Command with environment variables
+/// let mut env = HashMap::new();
+/// env.insert("MY_VAR".to_string(), "test_value".to_string());
+///
+/// let result = execute_shell_command(
+///     "echo $MY_VAR".to_string(),
+///     None,
+///     30,
+///     Some(env)
+/// ).await.unwrap();
+///
+/// assert_eq!(result.stdout.trim(), "test_value");
+///
+/// // Handling command that produces large output
+/// let result = execute_shell_command(
+///     "yes | head -n 100000".to_string(), // Large output
+///     None,
+///     30,
+///     None
+/// ).await.unwrap();
+///
+/// // Output may be truncated if it exceeds limits
+/// if result.output_truncated {
+///     println!("Output truncated at {} bytes", result.total_output_size);
+/// }
+/// # });
+/// ```
+///
+/// # Timeout Behavior
+///
+/// When a command times out, the function attempts to:
+/// 1. Capture any available partial output
+/// 2. Gracefully terminate the process (SIGTERM)
+/// 3. Force-kill if graceful termination fails
+/// 4. Return a `ShellError::TimeoutError` with partial output
+///
+/// # Output Handling
+///
+/// The function provides advanced output management:
+/// - **Size Limits**: Default 10MB limit prevents memory exhaustion
+/// - **Binary Detection**: Binary content is safely formatted as descriptive text
+/// - **Streaming Processing**: Output is processed in real-time, not buffered entirely
+/// - **Metadata**: Results include truncation status, binary detection, and byte counts
 async fn execute_shell_command(
     command: String,
     working_directory: Option<PathBuf>,
@@ -846,7 +996,8 @@ async fn execute_shell_command(
             })?;
 
         // Process output with limits using streaming
-        let (exit_status, output_buffer) = process_child_output_with_limits(child, &output_limits).await?;
+        let (exit_status, output_buffer) =
+            process_child_output_with_limits(child, &output_limits).await?;
 
         Ok::<_, ShellError>((exit_status, output_buffer))
     })
@@ -867,7 +1018,10 @@ async fn execute_shell_command(
 
                     // Log execution completion with output metadata
                     let truncation_info = if output_buffer.is_truncated() {
-                        format!(" (output truncated at {} bytes)", output_limits.max_output_size)
+                        format!(
+                            " (output truncated at {} bytes)",
+                            output_limits.max_output_size
+                        )
                     } else {
                         String::new()
                     };
@@ -905,10 +1059,59 @@ async fn execute_shell_command(
         Err(_timeout_error) => {
             // Timeout occurred - attempt to collect partial output and clean up process
             tracing::warn!(
-                "Command '{}' timed out after {}s, attempting cleanup",
+                "Command '{}' timed out after {}s, attempting to capture partial output",
                 command,
                 timeout_seconds
             );
+
+            // Try to capture partial output if the process is still running
+            let (partial_stdout, partial_stderr) = if process_guard.child.is_some() {
+                // Attempt to capture any available output with a very short timeout
+                match tokio::time::timeout(Duration::from_millis(100), async {
+                    // Take the child process to read its outputs
+                    let captured_child =
+                        process_guard
+                            .take_child()
+                            .ok_or_else(|| ShellError::SystemError {
+                                message: "Process guard has no child process".to_string(),
+                            })?;
+
+                    // Create a small output buffer for partial capture
+                    let partial_output_limits = OutputLimits {
+                        max_output_size: 1024 * 1024, // 1MB limit for partial output
+                        ..OutputLimits::default()
+                    };
+
+                    // Try to process available output
+                    process_child_output_with_limits(captured_child, &partial_output_limits).await
+                })
+                .await
+                {
+                    Ok(Ok((_, output_buffer))) => {
+                        // Successfully captured some partial output
+                        let stdout = output_buffer.get_stdout();
+                        let stderr = output_buffer.get_stderr();
+
+                        tracing::info!(
+                            "Captured partial output: {} bytes stdout, {} bytes stderr",
+                            stdout.len(),
+                            stderr.len()
+                        );
+
+                        (stdout, stderr)
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!("Failed to capture partial output: {}", e);
+                        (String::new(), String::new())
+                    }
+                    Err(_) => {
+                        tracing::debug!("Timed out while capturing partial output");
+                        (String::new(), String::new())
+                    }
+                }
+            } else {
+                (String::new(), String::new())
+            };
 
             // Try to gracefully terminate the process
             if let Err(e) = process_guard
@@ -922,13 +1125,12 @@ async fn execute_shell_command(
                 }
             }
 
-            // Return timeout error with partial output (empty in this case since we can't capture partial)
-            // In a more sophisticated implementation, we could stream output and capture what was received
+            // Return timeout error with captured partial output
             Err(ShellError::TimeoutError {
                 command,
                 timeout_seconds,
-                partial_stdout: String::new(), // TODO: Could be enhanced with streaming output capture
-                partial_stderr: String::new(), // TODO: Could be enhanced with streaming output capture
+                partial_stdout,
+                partial_stderr,
                 working_directory: work_dir,
             })
         }
@@ -1960,10 +2162,14 @@ mod tests {
             // Verify metadata values for a simple command
             assert_eq!(response_json["output_truncated"], false);
             assert_eq!(response_json["binary_output_detected"], false);
-            
+
             // Total output size should be reasonable for a simple echo command
             let total_size = response_json["total_output_size"].as_u64().unwrap();
-            assert!(total_size > 0 && total_size < 100, "Output size should be reasonable: {}", total_size);
+            assert!(
+                total_size > 0 && total_size < 100,
+                "Output size should be reasonable: {}",
+                total_size
+            );
         }
     }
 
@@ -1994,15 +2200,15 @@ mod tests {
 
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
             let total_size = response_json["total_output_size"].as_u64().unwrap();
-            println!("Binary test - total_size: {}, binary_detected: {}, stdout: '{}'", 
-                     total_size, 
-                     response_json["binary_output_detected"], 
-                     response_json["stdout"]);
-            
+            println!(
+                "Binary test - total_size: {}, binary_detected: {}, stdout: '{}'",
+                total_size, response_json["binary_output_detected"], response_json["stdout"]
+            );
+
             // If we got output, it should contain binary markers and be detected as binary
             if total_size > 0 {
                 assert_eq!(response_json["binary_output_detected"], true);
-                
+
                 // stdout should indicate binary content rather than showing raw bytes
                 let stdout = response_json["stdout"].as_str().unwrap();
                 assert!(stdout.contains("Binary content"));
@@ -2043,7 +2249,7 @@ mod tests {
         buffer.append_stdout(text_data);
         assert!(!buffer.has_binary_content());
 
-        // Add binary data  
+        // Add binary data
         let binary_data = vec![0u8, 1u8, 2u8, 255u8];
         buffer.append_stderr(&binary_data);
         assert!(buffer.has_binary_content());
@@ -2063,7 +2269,7 @@ mod tests {
 
         // Test mixed content (should be detected as binary)
         assert!(is_binary_content(b"text with \x01 control char"));
-        
+
         // Test high control characters
         assert!(is_binary_content(&[128u8, 129u8, 130u8])); // high control chars
     }
@@ -2075,7 +2281,7 @@ mod tests {
         let result = format_output_content(text_data, false);
         assert_eq!(result, "hello world");
 
-        // Test binary content formatting  
+        // Test binary content formatting
         let binary_data = vec![0u8, 1u8, 2u8];
         let result = format_output_content(&binary_data, true);
         assert!(result.contains("Binary content"));
@@ -2089,7 +2295,7 @@ mod tests {
     #[test]
     fn test_output_buffer_truncation_marker() {
         let mut buffer = OutputBuffer::new(50);
-        
+
         // Fill buffer to capacity
         let data = vec![b'a'; 60];
         let _written = buffer.append_stdout(&data);
@@ -2133,11 +2339,13 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert(
             "command".to_string(),
-            serde_json::Value::String("yes 'This is a test line that is reasonably long' | head -100".to_string()),
+            serde_json::Value::String(
+                "yes 'This is a test line that is reasonably long' | head -100".to_string(),
+            ),
         );
 
         let result = tool.execute(args, &context).await;
-        
+
         // Check if the command succeeded or if it failed due to security validation
         match result {
             Ok(call_result) => {
@@ -2152,13 +2360,16 @@ mod tests {
                     // Check that metadata is populated correctly
                     let total_size = response_json["total_output_size"].as_u64().unwrap();
                     assert!(total_size > 0);
-                    
+
                     // Output should not be detected as binary for text commands
                     assert_eq!(response_json["binary_output_detected"], false);
 
                     // For this amount of output, truncation depends on the actual size vs limit
                     let truncated = response_json["output_truncated"].as_bool().unwrap();
-                    println!("Large output test: {} bytes, truncated: {}", total_size, truncated);
+                    println!(
+                        "Large output test: {} bytes, truncated: {}",
+                        total_size, truncated
+                    );
                 }
             }
             Err(e) => {
@@ -2170,7 +2381,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]  
+    #[tokio::test]
     async fn test_stderr_output_handling() {
         let tool = ShellExecuteTool::new();
         let context = create_test_context();
@@ -2202,7 +2413,7 @@ mod tests {
             // Check metadata
             assert_eq!(response_json["binary_output_detected"], false);
             assert_eq!(response_json["output_truncated"], false);
-            
+
             let total_size = response_json["total_output_size"].as_u64().unwrap();
             assert!(total_size > 0);
         }
@@ -2212,7 +2423,7 @@ mod tests {
     async fn test_mixed_stdout_stderr_output() {
         // This test verifies that our output handling correctly captures both stdout and stderr
         // We'll test this with a command that fails (goes to stderr) but might also produce stdout
-        
+
         let tool = ShellExecuteTool::new();
         let context = create_test_context();
 
@@ -2236,14 +2447,14 @@ mod tests {
 
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
             let stderr = response_json["stderr"].as_str().unwrap();
-            
+
             // Should contain error message in stderr
             assert!(!stderr.is_empty());
-            
+
             // Check that total size includes the error output
             let total_size = response_json["total_output_size"].as_u64().unwrap();
             assert!(total_size > 0);
-            
+
             // Should not be binary
             assert_eq!(response_json["binary_output_detected"], false);
         }
@@ -2260,16 +2471,16 @@ mod tests {
         // Simulate processing a large amount of data in chunks
         let chunk_size = 100;
         let chunk = vec![b'A'; chunk_size];
-        
+
         let mut total_written = 0;
         let mut iterations = 0;
-        
+
         // Keep adding data until we hit the limit
         while !buffer.is_at_limit() && iterations < 50 {
             let written = buffer.append_stdout(&chunk);
             total_written += written;
             iterations += 1;
-            
+
             // Verify we don't exceed our limit
             assert!(buffer.current_size() <= small_limit);
         }
@@ -2283,16 +2494,20 @@ mod tests {
         buffer.add_truncation_marker();
         let output = buffer.get_stdout();
         assert!(output.contains("Output truncated"));
-        
-        println!("Memory test: wrote {} bytes, buffer size: {}, truncated: {}", 
-                 total_written, buffer.current_size(), buffer.is_truncated());
+
+        println!(
+            "Memory test: wrote {} bytes, buffer size: {}, truncated: {}",
+            total_written,
+            buffer.current_size(),
+            buffer.is_truncated()
+        );
     }
 
     #[tokio::test]
     async fn test_memory_management_with_streaming() {
         // Test that streaming doesn't accumulate excessive memory even with continuous output
         use std::time::Duration;
-        
+
         let tool = ShellExecuteTool::new();
         let context = create_test_context();
 
@@ -2300,7 +2515,9 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert(
             "command".to_string(),
-            serde_json::Value::String("echo 'Testing continuous output with reasonable size'".to_string()),
+            serde_json::Value::String(
+                "echo 'Testing continuous output with reasonable size'".to_string(),
+            ),
         );
 
         let start_time = std::time::Instant::now();
@@ -2308,13 +2525,16 @@ mod tests {
         let execution_time = start_time.elapsed();
 
         assert!(result.is_ok());
-        
+
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
         // Verify execution completed quickly (not hanging on memory issues)
-        assert!(execution_time < Duration::from_secs(5), 
-                "Execution took too long: {:?}", execution_time);
+        assert!(
+            execution_time < Duration::from_secs(5),
+            "Execution took too long: {:?}",
+            execution_time
+        );
 
         // Parse response to verify output handling
         let content_text = match &call_result.content[0].raw {
@@ -2325,10 +2545,12 @@ mod tests {
         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
             let total_size = response_json["total_output_size"].as_u64().unwrap();
             let truncated = response_json["output_truncated"].as_bool().unwrap();
-            
-            println!("Memory streaming test: {} bytes, truncated: {}, time: {:?}", 
-                     total_size, truncated, execution_time);
-            
+
+            println!(
+                "Memory streaming test: {} bytes, truncated: {}, time: {:?}",
+                total_size, truncated, execution_time
+            );
+
             // Basic assertions
             assert!(total_size > 0);
             assert_eq!(response_json["binary_output_detected"], false);
