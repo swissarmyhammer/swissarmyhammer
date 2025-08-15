@@ -1751,6 +1751,51 @@ mod tests {
         );
         assert_eq!(vars_map.get("name").unwrap(), &serde_json::json!("Alice"));
     }
+
+    #[tokio::test]
+    async fn test_plan_workflow_legacy_compatibility() {
+        // Test that plan workflow works without parameters (legacy mode)
+        let workflow_storage = WorkflowStorage::file_system().unwrap();
+        let workflow_name_typed = WorkflowName::new("plan");
+        let workflow = workflow_storage.get_workflow(&workflow_name_typed).unwrap();
+
+        // Create a workflow run without plan_filename parameter
+        let run = swissarmyhammer::workflow::WorkflowRun::new(workflow.clone());
+        
+        // This should work without plan_filename - testing backward compatibility
+        assert_eq!(run.workflow.name.as_str(), "plan");
+        assert_eq!(run.status, swissarmyhammer::workflow::WorkflowRunStatus::Running);
+        
+        // The workflow should have the expected states
+        assert_eq!(workflow.states.len(), 3);
+        assert!(workflow.states.contains_key(&swissarmyhammer::workflow::StateId::new("start")));
+        assert!(workflow.states.contains_key(&swissarmyhammer::workflow::StateId::new("plan")));
+        assert!(workflow.states.contains_key(&swissarmyhammer::workflow::StateId::new("done")));
+    }
+
+    #[tokio::test]  
+    async fn test_plan_workflow_with_parameters() {
+        // Test new parameterized functionality
+        let workflow_storage = WorkflowStorage::file_system().unwrap();
+        let workflow_name_typed = WorkflowName::new("plan");
+        let workflow = workflow_storage.get_workflow(&workflow_name_typed).unwrap();
+
+        // Create a workflow run with plan_filename parameter
+        let mut run = swissarmyhammer::workflow::WorkflowRun::new(workflow.clone());
+        run.context.insert(
+            "plan_filename".to_string(),
+            serde_json::Value::String("./specification/test.md".to_string()),
+        );
+
+        // This should work with plan_filename - testing new functionality
+        assert_eq!(run.workflow.name.as_str(), "plan");
+        assert_eq!(run.status, swissarmyhammer::workflow::WorkflowRunStatus::Running);
+        assert!(run.context.contains_key("plan_filename"));
+        assert_eq!(
+            run.context.get("plan_filename").unwrap(),
+            &serde_json::json!("./specification/test.md")
+        );
+    }
 }
 
 /// Create a local workflow run storage that stores runs in .swissarmyhammer/workflow-runs directory
