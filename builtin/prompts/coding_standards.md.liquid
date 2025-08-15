@@ -135,7 +135,8 @@ YOU MUST follow this debugging framework for ANY technical issue:
 - Always format your files with `cargo fmt`
   - Format all files with `cargo fmt --all`
 - Test with https://nexte.st
-  - `cargo nextest run` is the way
+  - `cargo nextest run --fail-fast` is the way
+  - do not use `--no-capture` unless you are debugging specific tests -- it is VERY SLOW
   - if `cargo nextest` is not available, install with `cargo install cargo-nextest`
 - Always lint your files with `cargo clippy`
   - All lint errors and warnings should be included as todo items in code review
