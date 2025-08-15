@@ -5216,6 +5216,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs 5.0.1",
+ "libc",
  "regex",
  "rmcp",
  "schemars",

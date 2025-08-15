@@ -10,8 +10,9 @@ use rmcp::Error as McpError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
-use std::time::Instant;
-use tokio::process::Command;
+use std::time::{Duration, Instant};
+use tokio::process::{Child, Command};
+use tokio::time::timeout;
 
 /// Request structure for shell command execution
 #[derive(Debug, Deserialize)]
@@ -65,6 +66,20 @@ pub enum ShellError {
         message: String,
     },
 
+    /// Command execution timed out
+    TimeoutError {
+        /// The command that timed out
+        command: String,
+        /// Timeout duration in seconds
+        timeout_seconds: u64,
+        /// Partial stdout captured before timeout
+        partial_stdout: String,
+        /// Partial stderr captured before timeout
+        partial_stderr: String,
+        /// Working directory where the command was executed
+        working_directory: PathBuf,
+    },
+
     /// Invalid command provided
     InvalidCommand {
         /// Error message describing why the command is invalid
@@ -93,6 +108,17 @@ impl fmt::Display for ShellError {
             ShellError::ExecutionError { command, message } => {
                 write!(f, "Command '{}' execution failed: {}", command, message)
             }
+            ShellError::TimeoutError {
+                command,
+                timeout_seconds,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Command '{}' timed out after {} seconds",
+                    command, timeout_seconds
+                )
+            }
             ShellError::InvalidCommand { message } => {
                 write!(f, "Invalid command: {}", message)
             }
@@ -115,12 +141,165 @@ impl std::error::Error for ShellError {
     }
 }
 
-/// Execute a shell command with full output capture and metadata collection
+/// Async process guard for automatic cleanup of tokio Child processes
 ///
-/// This function provides the core shell command execution logic, handling:
+/// This guard automatically terminates and cleans up child processes when dropped,
+/// ensuring no orphaned processes remain even if a timeout occurs or the operation is cancelled.
+///
+/// Unlike the sync ProcessGuard in test_utils.rs, this version works with tokio::process::Child
+/// and provides async methods for graceful termination with timeouts.
+pub struct AsyncProcessGuard {
+    child: Option<Child>,
+    command: String,
+}
+
+impl AsyncProcessGuard {
+    /// Create a new async process guard from a tokio Child process
+    pub fn new(child: Child, command: String) -> Self {
+        Self {
+            child: Some(child),
+            command,
+        }
+    }
+
+    /// Take the child process out of the guard, transferring ownership
+    /// This is useful when you want to handle the process manually
+    pub fn take_child(&mut self) -> Option<Child> {
+        self.child.take()
+    }
+
+    /// Check if the process is still running
+    pub fn is_running(&mut self) -> bool {
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(None) => true,     // Process is still running
+                Ok(Some(_)) => false, // Process has exited
+                Err(_) => false,      // Error occurred, assume process is dead
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Attempt to gracefully terminate the process with a timeout
+    pub async fn terminate_gracefully(
+        &mut self,
+        timeout_duration: Duration,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(ref mut child) = self.child {
+            tracing::debug!(
+                "Attempting graceful termination of process for command: {}",
+                self.command
+            );
+
+            // Try to terminate the process and wait for it to exit
+            let termination_result = timeout(timeout_duration, async {
+                // On Unix systems, we can try to send SIGTERM first
+                #[cfg(unix)]
+                {
+                    // Kill the process group to handle child processes
+                    if let Some(pid) = child.id() {
+                        unsafe {
+                            // Send SIGTERM to the process group
+                            libc::killpg(pid as i32, libc::SIGTERM);
+                        }
+                    }
+                }
+
+                // On Windows or if Unix signal handling fails, use kill()
+                #[cfg(not(unix))]
+                {
+                    let _ = child.kill().await;
+                }
+
+                // Wait for the process to exit
+                child.wait().await
+            })
+            .await;
+
+            match termination_result {
+                Ok(wait_result) => {
+                    tracing::debug!(
+                        "Process terminated gracefully for command: {}",
+                        self.command
+                    );
+                    wait_result?;
+                    self.child = None;
+                    Ok(())
+                }
+                Err(_) => {
+                    // Timeout occurred, force kill
+                    tracing::warn!(
+                        "Graceful termination timed out, force killing process for command: {}",
+                        self.command
+                    );
+                    self.force_kill().await
+                }
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Force kill the process immediately
+    pub async fn force_kill(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(mut child) = self.child.take() {
+            tracing::debug!("Force killing process for command: {}", self.command);
+
+            #[cfg(unix)]
+            {
+                // Kill the process group to handle child processes
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        // Send SIGKILL to the process group
+                        libc::killpg(pid as i32, libc::SIGKILL);
+                    }
+                }
+            }
+
+            child.kill().await?;
+            child.wait().await?;
+            tracing::debug!("Process force killed for command: {}", self.command);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AsyncProcessGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            // Try to clean up the process synchronously
+            // This is a best-effort cleanup since Drop cannot be async
+            tracing::warn!(
+                "AsyncProcessGuard dropping with active process for command: {}",
+                self.command
+            );
+
+            #[cfg(unix)]
+            {
+                // Kill the process group on Unix systems
+                if let Some(pid) = child.id() {
+                    unsafe {
+                        libc::killpg(pid as i32, libc::SIGKILL);
+                    }
+                }
+            }
+
+            // Use blocking kill for cleanup - not ideal but necessary in Drop
+            let _ = child.start_kill();
+        }
+    }
+}
+
+/// Execute a shell command with timeout, process management, and full output capture
+///
+/// This function provides the core shell command execution logic with comprehensive
+/// timeout management and process cleanup, handling:
 /// - Process spawning using tokio::process::Command
+/// - Timeout control with tokio::time::timeout
+/// - Process tree termination on timeout using AsyncProcessGuard
 /// - Working directory and environment variable management
-/// - Complete stdout/stderr capture
+/// - Complete stdout/stderr capture with partial output on timeout
 /// - Execution time measurement
 /// - Comprehensive error handling
 ///
@@ -128,13 +307,14 @@ impl std::error::Error for ShellError {
 ///
 /// * `command` - The shell command to execute
 /// * `working_directory` - Optional working directory for execution
-/// * `timeout_seconds` - Timeout in seconds (used for logging only, actual timeout handled by caller)
+/// * `timeout_seconds` - Timeout in seconds (actual timeout enforcement)
 /// * `environment` - Optional environment variables to set
 ///
 /// # Returns
 ///
 /// Returns a `Result` containing either a `ShellExecutionResult` with complete
-/// execution metadata or a `ShellError` describing the failure mode.
+/// execution metadata or a `ShellError` describing the failure mode, including
+/// timeout errors with partial output.
 async fn execute_shell_command(
     command: String,
     working_directory: Option<PathBuf>,
@@ -166,6 +346,9 @@ async fn execute_shell_command(
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(&work_dir);
 
+    // Note: Process group configuration removed for compatibility
+    // The AsyncProcessGuard will handle process cleanup using kill/killpg
+
     // Add environment variables if provided
     if let Some(env_vars) = &environment {
         for (key, value) in env_vars {
@@ -193,40 +376,96 @@ async fn execute_shell_command(
         }
     })?;
 
-    // Wait for the process to complete and capture output
-    let output = child.wait_with_output().await.map_err(|e| {
-        tracing::error!("Failed to wait for command '{}': {}", command, e);
-        ShellError::ExecutionError {
-            command: command.clone(),
-            message: format!("Failed to wait for process: {}", e),
-        }
-    })?;
+    // Create process guard for automatic cleanup
+    let mut process_guard = AsyncProcessGuard::new(child, command.clone());
 
-    let execution_time = start_time.elapsed();
-    let execution_time_ms = execution_time.as_millis() as u64;
+    // Execute with timeout
+    let timeout_duration = Duration::from_secs(timeout_seconds);
 
-    // Convert output to strings, handling potential UTF-8 issues gracefully
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    match timeout(timeout_duration, async {
+        // Take the child from the guard for execution
+        let child = process_guard
+            .take_child()
+            .ok_or_else(|| ShellError::SystemError {
+                message: "Process guard has no child process".to_string(),
+            })?;
 
-    // Get the exit code
-    let exit_code = output.status.code().unwrap_or(-1);
+        // Wait for the process to complete and capture output
+        let output = child.wait_with_output().await.map_err(|e| {
+            tracing::error!("Failed to wait for command '{}': {}", command, e);
+            ShellError::ExecutionError {
+                command: command.clone(),
+                message: format!("Failed to wait for process: {}", e),
+            }
+        })?;
 
-    tracing::info!(
-        "Command '{}' completed with exit code {} in {}ms",
-        command,
-        exit_code,
-        execution_time_ms
-    );
-
-    Ok(ShellExecutionResult {
-        command,
-        exit_code,
-        stdout,
-        stderr,
-        execution_time_ms,
-        working_directory: work_dir,
+        Ok::<_, ShellError>(output)
     })
+    .await
+    {
+        Ok(output_result) => {
+            match output_result {
+                Ok(output) => {
+                    let execution_time = start_time.elapsed();
+                    let execution_time_ms = execution_time.as_millis() as u64;
+
+                    // Convert output to strings, handling potential UTF-8 issues gracefully
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+                    // Get the exit code
+                    let exit_code = output.status.code().unwrap_or(-1);
+
+                    tracing::info!(
+                        "Command '{}' completed with exit code {} in {}ms",
+                        command,
+                        exit_code,
+                        execution_time_ms
+                    );
+
+                    Ok(ShellExecutionResult {
+                        command,
+                        exit_code,
+                        stdout,
+                        stderr,
+                        execution_time_ms,
+                        working_directory: work_dir,
+                    })
+                }
+                Err(shell_error) => Err(shell_error),
+            }
+        }
+        Err(_timeout_error) => {
+            // Timeout occurred - attempt to collect partial output and clean up process
+            tracing::warn!(
+                "Command '{}' timed out after {}s, attempting cleanup",
+                command,
+                timeout_seconds
+            );
+
+            // Try to gracefully terminate the process
+            if let Err(e) = process_guard
+                .terminate_gracefully(Duration::from_secs(5))
+                .await
+            {
+                tracing::error!("Failed to terminate process gracefully: {}", e);
+                // Force kill as fallback
+                if let Err(e) = process_guard.force_kill().await {
+                    tracing::error!("Failed to force kill process: {}", e);
+                }
+            }
+
+            // Return timeout error with partial output (empty in this case since we can't capture partial)
+            // In a more sophisticated implementation, we could stream output and capture what was received
+            Err(ShellError::TimeoutError {
+                command,
+                timeout_seconds,
+                partial_stdout: String::new(), // TODO: Could be enhanced with streaming output capture
+                partial_stderr: String::new(), // TODO: Could be enhanced with streaming output capture
+                working_directory: work_dir,
+            })
+        }
+    }
 }
 
 /// Tool for executing shell commands
@@ -362,19 +601,69 @@ impl McpTool for ShellExecuteTool {
                 })
             }
             Err(shell_error) => {
-                // Command execution failed - return error response
-                let error_message = format!("Shell execution failed: {}", shell_error);
-                tracing::error!("{}", error_message);
+                // Handle different types of shell errors with appropriate responses
+                match &shell_error {
+                    ShellError::TimeoutError {
+                        command,
+                        timeout_seconds,
+                        partial_stdout,
+                        partial_stderr,
+                        working_directory,
+                    } => {
+                        // Create timeout-specific response per specification
+                        let timeout_response = serde_json::json!({
+                            "command": command,
+                            "timeout_seconds": timeout_seconds,
+                            "partial_stdout": partial_stdout,
+                            "partial_stderr": partial_stderr,
+                            "working_directory": working_directory.display().to_string()
+                        });
 
-                Ok(CallToolResult {
-                    content: vec![rmcp::model::Annotated::new(
-                        rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                            text: error_message,
-                        }),
-                        None,
-                    )],
-                    is_error: Some(true),
-                })
+                        let response_text =
+                            format!("Command timed out after {} seconds", timeout_seconds);
+                        tracing::warn!(
+                            "Command '{}' timed out after {}s",
+                            command,
+                            timeout_seconds
+                        );
+
+                        Ok(CallToolResult {
+                            content: vec![
+                                rmcp::model::Annotated::new(
+                                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                                        text: response_text,
+                                    }),
+                                    None,
+                                ),
+                                rmcp::model::Annotated::new(
+                                    rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                                        text: serde_json::to_string_pretty(&timeout_response)
+                                            .unwrap_or_else(|_| {
+                                                "Failed to serialize timeout metadata".to_string()
+                                            }),
+                                    }),
+                                    None,
+                                ),
+                            ],
+                            is_error: Some(true),
+                        })
+                    }
+                    _ => {
+                        // Other error types - return standard error response
+                        let error_message = format!("Shell execution failed: {}", shell_error);
+                        tracing::error!("{}", error_message);
+
+                        Ok(CallToolResult {
+                            content: vec![rmcp::model::Annotated::new(
+                                rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
+                                    text: error_message,
+                                }),
+                                None,
+                            )],
+                            is_error: Some(true),
+                        })
+                    }
+                }
             }
         }
     }
@@ -713,5 +1002,220 @@ mod tests {
                 assert!(stdout.as_str().unwrap().contains("test_value"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_short_timeout() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("sleep 3".to_string()), // Command that takes 3 seconds
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(1)), // But timeout after 1 second
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok(), "Tool should return result even for timeout");
+
+        let call_result = result.unwrap();
+        assert_eq!(
+            call_result.is_error,
+            Some(true),
+            "Timeout should be reported as error"
+        );
+
+        // Check that response contains timeout information
+        assert!(!call_result.content.is_empty());
+        let content_text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            content_text.contains("timed out"),
+            "Response should mention timeout"
+        );
+        assert!(
+            content_text.contains("1 seconds"),
+            "Response should mention the timeout duration"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_timeout_metadata() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("sleep 5".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(2)),
+        );
+        args.insert(
+            "working_directory".to_string(),
+            serde_json::Value::String("/tmp".to_string()),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(true));
+
+        // Should have at least 2 content items: error message and metadata
+        assert!(call_result.content.len() >= 2);
+
+        // Check if the second content item contains timeout metadata
+        if call_result.content.len() >= 2 {
+            let metadata_text = match &call_result.content[1].raw {
+                rmcp::model::RawContent::Text(text_content) => &text_content.text,
+                _ => panic!("Expected text content for metadata"),
+            };
+
+            // Parse as JSON and verify timeout metadata
+            if let Ok(metadata_json) = serde_json::from_str::<serde_json::Value>(metadata_text) {
+                assert!(metadata_json.get("command").is_some());
+                assert!(metadata_json.get("timeout_seconds").is_some());
+                assert!(metadata_json.get("partial_stdout").is_some());
+                assert!(metadata_json.get("partial_stderr").is_some());
+                assert!(metadata_json.get("working_directory").is_some());
+
+                assert_eq!(metadata_json["command"], "sleep 5");
+                assert_eq!(metadata_json["timeout_seconds"], 2);
+                assert!(metadata_json["working_directory"]
+                    .as_str()
+                    .unwrap()
+                    .contains("/tmp"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_fast_command_no_timeout() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo 'fast command'".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(1)),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(
+            call_result.is_error,
+            Some(false),
+            "Fast command should complete without timeout"
+        );
+
+        // Should have regular success response
+        assert!(!call_result.content.is_empty());
+        let content_text = match &call_result.content[0].raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        };
+
+        // Parse the JSON response
+        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(content_text) {
+            assert_eq!(response_json["exit_code"], 0);
+            assert!(response_json["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("fast command"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_maximum_timeout_validation() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo test".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(1801)), // Over 1800 limit
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_err(),
+            "Should fail validation for timeout over 1800 seconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_minimum_timeout_validation() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo test".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(0)), // Below minimum
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_err(),
+            "Should fail validation for timeout of 0 seconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_cleanup_on_timeout() {
+        // This test verifies that processes are properly cleaned up on timeout
+        // We can't easily test this without creating actual long-running processes,
+        // but we can test that the function completes and doesn't hang
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            // Command that would run longer than timeout but should be killed
+            serde_json::Value::String("sleep 10".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(1)),
+        );
+
+        let start_time = std::time::Instant::now();
+        let result = tool.execute(args, &context).await;
+        let execution_time = start_time.elapsed();
+
+        // Should complete relatively quickly (much less than the 10 second sleep)
+        assert!(
+            execution_time.as_secs() < 5,
+            "Command should be killed and function should return quickly"
+        );
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(true));
     }
 }

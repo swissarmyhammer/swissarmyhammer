@@ -34,6 +34,10 @@ dirs = { workspace = true }
 regex = { workspace = true }
 schemars = "0.8"
 
+# Unix process management
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio-test = "0.4"
 serial_test = { workspace = true }
