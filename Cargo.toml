@@ -91,16 +91,16 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 
 # Profile for faster test compilation
 [profile.test]
-opt-level = 0        # No optimization for faster compilation
-debug = 1            # Minimal debug info to reduce binary size
-incremental = true   # Enable incremental compilation
-codegen-units = 256  # More codegen units for parallel compilation
+opt-level = 0       # No optimization for faster compilation
+debug = 1           # Minimal debug info to reduce binary size
+incremental = true  # Enable incremental compilation
+codegen-units = 256 # More codegen units for parallel compilation
 
 # Fast test profile - use with CARGO_PROFILE=fast-test
 [profile.fast-test]
 inherits = "test"
 opt-level = 0
-debug = 0            # No debug info for maximum speed
+debug = 0           # No debug info for maximum speed
 lto = false         # Disable link-time optimization
 panic = "abort"     # Faster panics
 codegen-units = 256

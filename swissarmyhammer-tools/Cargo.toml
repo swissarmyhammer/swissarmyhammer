@@ -37,10 +37,12 @@ thiserror = "1.0"
 
 # Web fetch functionality
 markdowndown = { workspace = true }
-reqwest = { workspace = true }
 url = { workspace = true }
 futures-util = "0.3"
 libc = "0.2.175"
+
+# Web search dependencies
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

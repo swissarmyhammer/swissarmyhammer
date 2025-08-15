@@ -23,7 +23,7 @@ use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_abort_tools, register_issue_tools, register_memo_tools, register_notify_tools,
     register_outline_tools, register_search_tools, register_shell_tools, register_todo_tools,
-    register_web_fetch_tools, ToolContext, ToolRegistry,
+    register_web_fetch_tools, register_web_search_tools, ToolContext, ToolRegistry,
 };
 
 /// MCP server for serving prompts and workflows
@@ -140,6 +140,7 @@ impl McpServer {
         register_shell_tools(&mut tool_registry);
         register_todo_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);
+        register_web_search_tools(&mut tool_registry);
 
         Ok(Self {
             library: Arc::new(RwLock::new(library)),

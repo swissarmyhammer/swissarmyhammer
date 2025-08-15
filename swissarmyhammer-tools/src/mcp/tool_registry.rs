@@ -509,6 +509,12 @@ pub fn register_web_fetch_tools(registry: &mut ToolRegistry) {
     web_fetch::register_web_fetch_tools(registry);
 }
 
+/// Register all web search-related tools with the registry
+pub fn register_web_search_tools(registry: &mut ToolRegistry) {
+    use super::tools::web_search;
+    web_search::register_web_search_tools(registry);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

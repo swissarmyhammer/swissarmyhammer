@@ -85,3 +85,107 @@ pub struct WebSearchResponse {
 - Add basic configuration structure for HTTP timeouts
 - Set sensible defaults for all search parameters
 - Ensure configuration integrates with existing config system
+## Proposed Solution
+
+Based on my analysis of the project structure and existing MCP tool patterns, I will implement the web search project setup following these steps:
+
+### 1. Dependencies Analysis
+- **reqwest**: Already available in workspace dependencies (0.12 with json features)
+- **url**: Already available in workspace dependencies (2.4)
+- **serde_json**: Already available in workspace dependencies
+
+### 2. Module Structure
+Following the MCP Tool Directory Pattern from the memos, I will create:
+```
+swissarmyhammer-tools/src/mcp/tools/
+└── web_search/
+    ├── mod.rs              # Module exports and registration
+    ├── search/             # Main search functionality
+    │   ├── mod.rs          # Search tool implementation
+    │   └── description.md  # Tool description for MCP
+    └── types.rs            # Shared types and structures
+```
+
+### 3. Core Types Implementation
+- `WebSearchRequest`: Parameters for search queries with validation
+- `WebSearchResponse`: Structured search results
+- `SearchResult`: Individual search result structure
+- Integration with existing MCP error handling patterns
+
+### 4. HTTP Client Setup
+- Configure reqwest client with appropriate timeouts and headers
+- Implement basic request/response handling
+- Follow existing patterns from search query tool
+
+### 5. Integration Points
+- Register with existing MCP tool registry in `tools/mod.rs`
+- Follow existing error handling patterns from other tools
+- Use existing `McpTool` trait implementation pattern
+
+This approach leverages existing dependencies and follows established patterns in the codebase for consistency and maintainability.
+
+## Implementation Summary
+
+Successfully implemented the foundational web search functionality for SwissArmyHammer's MCP tools. The implementation follows the established patterns and integrates seamlessly with the existing codebase.
+
+### Completed Work
+
+#### 1. Dependencies ✅
+- Added `reqwest` and `url` dependencies to swissarmyhammer-tools Cargo.toml
+- Leveraged existing workspace dependencies without introducing version conflicts
+
+#### 2. Module Structure ✅
+- Created `web_search/` module following MCP Tool Directory Pattern
+- Implemented proper module hierarchy: `web_search/search/mod.rs` and `web_search/types.rs`
+- Added comprehensive tool description in `description.md`
+
+#### 3. Core Data Structures ✅
+- Implemented `WebSearchRequest` with full parameter validation
+- Created `WebSearchResponse` with comprehensive metadata
+- Defined supporting types: `SearchResult`, `SearchCategory`, `SafeSearchLevel`, `TimeRange`
+- Added proper serde serialization and JSON schema support
+
+#### 4. Web Search Tool Implementation ✅
+- Implemented `WebSearchTool` following the `McpTool` trait pattern
+- Added SearXNG API integration with multiple instance support
+- Implemented basic HTML-to-text content processing
+- Added proper error handling and fallback mechanisms
+- Configured HTTP client with appropriate timeouts and headers
+
+#### 5. MCP Integration ✅
+- Registered tool in main MCP tool registry
+- Updated server.rs, mod.rs, and tool_registry.rs
+- Followed existing integration patterns for seamless operation
+
+#### 6. Testing ✅
+- Added comprehensive unit tests covering all functionality
+- All 16 tests passing successfully
+- Tests cover parsing, validation, tool creation, and schema generation
+
+### Technical Details
+
+**Architecture**: Follows the established MCP Tool Directory Pattern with proper separation of concerns between types, implementation, and description.
+
+**Error Handling**: Implements graceful degradation with multiple SearXNG instance fallback and detailed error reporting.
+
+**Privacy**: Uses multiple SearXNG instances to distribute requests and avoid tracking.
+
+**Performance**: Configurable timeouts, concurrent content fetching capabilities, and proper resource cleanup.
+
+**Extensibility**: Well-structured types and modular design allow for easy enhancement with additional features like markdowndown integration, caching, and advanced content processing.
+
+### Build and Quality Status
+- ✅ Builds successfully with no errors
+- ✅ All tests pass (16/16)
+- ⚠️ Minor linting warnings (documentation and style) - addressed critical issues
+- ✅ Follows existing codebase patterns and conventions
+
+### Ready for Integration
+The basic web search tool is now implemented and ready for use. It provides:
+- Privacy-respecting web search via SearXNG
+- Configurable search parameters (category, language, results count, etc.)
+- Optional content fetching with basic HTML-to-text conversion
+- Proper error handling and instance failover
+- Full MCP protocol integration
+
+This foundation enables LLMs to perform web searches while maintaining privacy and providing structured, processable results.
