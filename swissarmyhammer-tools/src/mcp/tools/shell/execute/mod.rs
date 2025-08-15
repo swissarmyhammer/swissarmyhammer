@@ -545,14 +545,10 @@ impl McpTool for ShellExecuteTool {
             .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
 
         // Apply comprehensive command security validation from workflow system
-        swissarmyhammer::workflow::validate_command(&request.command)
-            .map_err(|e| {
-                tracing::warn!("Command security validation failed: {}", e);
-                McpError::invalid_params(
-                    format!("Command security check failed: {}", e),
-                    None,
-                )
-            })?;
+        swissarmyhammer::workflow::validate_command(&request.command).map_err(|e| {
+            tracing::warn!("Command security validation failed: {}", e);
+            McpError::invalid_params(format!("Command security check failed: {}", e), None)
+        })?;
 
         // Validate timeout if provided
         if let Some(timeout) = request.timeout {
@@ -568,28 +564,30 @@ impl McpTool for ShellExecuteTool {
         if let Some(ref working_dir) = request.working_directory {
             McpValidation::validate_not_empty(working_dir, "working directory")
                 .map_err(|e| McpErrorHandler::handle_error(e, "validate working directory"))?;
-            
+
             // Apply security validation from workflow system
-            swissarmyhammer::workflow::validate_working_directory_security(working_dir)
-                .map_err(|e| {
+            swissarmyhammer::workflow::validate_working_directory_security(working_dir).map_err(
+                |e| {
                     tracing::warn!("Working directory security validation failed: {}", e);
                     McpError::invalid_params(
                         format!("Working directory security check failed: {}", e),
                         None,
                     )
-                })?;
+                },
+            )?;
         }
 
         // Validate environment variables if provided with security checks
         if let Some(ref env_vars) = request.environment {
-            swissarmyhammer::workflow::validate_environment_variables_security(env_vars)
-                .map_err(|e| {
+            swissarmyhammer::workflow::validate_environment_variables_security(env_vars).map_err(
+                |e| {
                     tracing::warn!("Environment variables security validation failed: {}", e);
                     McpError::invalid_params(
                         format!("Environment variables security check failed: {}", e),
                         None,
                     )
-                })?;
+                },
+            )?;
         }
 
         // Execute the shell command using our core execution function
@@ -1261,7 +1259,7 @@ mod tests {
         let dangerous_commands = [
             "echo hello; rm -rf /",
             "echo hello && rm file",
-            "echo hello || rm file",  
+            "echo hello || rm file",
             "echo `dangerous`",
             "echo $(dangerous)",
         ];
@@ -1298,11 +1296,7 @@ mod tests {
         let context = create_test_context();
 
         // Test path traversal attempts that should be blocked
-        let dangerous_paths = [
-            "../parent",
-            "path/../parent",
-            "/absolute/../parent",
-        ];
+        let dangerous_paths = ["../parent", "path/../parent", "/absolute/../parent"];
 
         for path in &dangerous_paths {
             let mut args = serde_json::Map::new();
@@ -1398,7 +1392,9 @@ mod tests {
         if let Err(mcp_error) = result {
             let error_str = mcp_error.to_string();
             assert!(
-                error_str.contains("security") || error_str.contains("long") || error_str.contains("length"),
+                error_str.contains("security")
+                    || error_str.contains("long")
+                    || error_str.contains("length"),
                 "Error should mention length/security concern"
             );
         }
@@ -1419,16 +1415,15 @@ mod tests {
         );
 
         let result = tool.execute(args, &context).await;
-        assert!(
-            result.is_err(),
-            "Command that's too long should be blocked"
-        );
+        assert!(result.is_err(), "Command that's too long should be blocked");
 
         // Verify error message mentions the issue
         if let Err(mcp_error) = result {
             let error_str = mcp_error.to_string();
             assert!(
-                error_str.contains("security") || error_str.contains("long") || error_str.contains("length"),
+                error_str.contains("security")
+                    || error_str.contains("long")
+                    || error_str.contains("length"),
                 "Error should mention length/security concern"
             );
         }
@@ -1440,11 +1435,7 @@ mod tests {
         let context = create_test_context();
 
         // Test that valid, safe commands still work after adding security validation
-        let valid_commands = [
-            "echo hello world",
-            "ls -la",
-            "pwd",
-        ];
+        let valid_commands = ["echo hello world", "ls -la", "pwd"];
 
         for cmd in &valid_commands {
             let mut args = serde_json::Map::new();
@@ -1463,7 +1454,7 @@ mod tests {
             if let Ok(call_result) = result {
                 // Exit code might be non-zero for commands like 'ls -la' if directory doesn't exist,
                 // but the tool should still execute successfully (not blocked by security)
-                assert!(call_result.content.len() > 0);
+                assert!(!call_result.content.is_empty());
             }
         }
     }
