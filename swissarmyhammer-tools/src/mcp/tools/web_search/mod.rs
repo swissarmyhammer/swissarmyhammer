@@ -107,7 +107,9 @@ mod tests {
 
         let enhanced_tool = registry.get_tool("enhanced_web_search").unwrap();
         assert!(!enhanced_tool.description().is_empty());
-        assert!(enhanced_tool.description().contains("comprehensive error handling"));
+        assert!(enhanced_tool
+            .description()
+            .contains("comprehensive error handling"));
     }
 
     #[test]

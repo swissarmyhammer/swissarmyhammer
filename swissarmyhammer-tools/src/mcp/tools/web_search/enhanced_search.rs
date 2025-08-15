@@ -7,15 +7,13 @@
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::error_recovery::{
-    CircuitBreakerConfig, ContentFetchError, EnhancedSearchMetadata, 
-    EnhancedWebSearchResponse, FailoverManager, RetryConfig, SearchResultBuilder,
-    WebSearchError as RecoveryWebSearchError,
+    CircuitBreakerConfig, ContentFetchError, EnhancedSearchMetadata, EnhancedWebSearchResponse,
+    FailoverManager, RetryConfig, SearchResultBuilder, WebSearchError as RecoveryWebSearchError,
 };
 use crate::mcp::tools::web_search::instance_manager::{InstanceManager, InstanceManagerConfig};
 use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
 use crate::mcp::tools::web_search::types::{
-    ContentFetchStats, SearchCategory, SearchMetadata, SearchResult, 
-    TimeRange, WebSearchRequest
+    ContentFetchStats, SearchCategory, SearchMetadata, SearchResult, TimeRange, WebSearchRequest,
 };
 use async_trait::async_trait;
 use reqwest::Client;
@@ -39,9 +37,7 @@ pub struct EnhancedWebSearchTool {
 impl EnhancedWebSearchTool {
     /// Creates a new instance of the Enhanced WebSearchTool
     pub fn new() -> Self {
-        Self {
-            client: None,
-        }
+        Self { client: None }
     }
 
     /// Gets or creates an HTTP client with appropriate configuration
@@ -56,7 +52,6 @@ impl EnhancedWebSearchTool {
         }
         self.client.as_ref().unwrap()
     }
-
 
     /// Gets or initializes the global instance manager
     async fn get_instance_manager() -> &'static Arc<InstanceManager> {
@@ -398,7 +393,7 @@ impl EnhancedWebSearchTool {
         request: &WebSearchRequest,
     ) -> Result<EnhancedWebSearchResponse, RecoveryWebSearchError> {
         let start_time = Instant::now();
-        
+
         // Load configurations
         let privacy_config = Self::load_privacy_config();
         let privacy_manager = PrivacyManager::new(privacy_config);
@@ -472,7 +467,7 @@ impl EnhancedWebSearchTool {
                             .fetch_search_results_with_privacy(search_results, &privacy_manager)
                             .await;
 
-                        // Add content fetch failures to result builder  
+                        // Add content fetch failures to result builder
                         if stats.failed > 0 {
                             for _ in 0..stats.failed {
                                 result_builder.add_content_failure(ContentFetchError {
@@ -501,7 +496,10 @@ impl EnhancedWebSearchTool {
                     instance_manager.mark_instance_failed(&instance_url).await;
 
                     // Handle rate limiting
-                    if let RecoveryWebSearchError::RateLimited { retry_after_secs, .. } = &error {
+                    if let RecoveryWebSearchError::RateLimited {
+                        retry_after_secs, ..
+                    } = &error
+                    {
                         instance_manager
                             .mark_instance_rate_limited(
                                 &instance_url,
@@ -524,14 +522,14 @@ impl EnhancedWebSearchTool {
 
         // Build final response with graceful degradation
         let search_time = start_time.elapsed();
-        
+
         // Collect metadata before moving result_builder
         let stats = result_builder.stats.clone();
         let warnings = result_builder.warnings.clone();
         let search_errors = result_builder.search_errors.clone();
         let search_results_found = stats.search_results_found;
         let content_fetch_failures = stats.content_fetch_failures;
-        
+
         let metadata = SearchMetadata {
             query: request.query.clone(),
             category: request.category.clone().unwrap_or_default(),
@@ -597,16 +595,20 @@ impl EnhancedWebSearchTool {
         let client = self.get_client();
 
         // Validate the instance URL
-        let instance_url = Url::parse(instance).map_err(|e| RecoveryWebSearchError::InvalidParameters {
-            details: format!("Invalid SearXNG instance URL '{instance}': {e}"),
-        })?;
+        let instance_url =
+            Url::parse(instance).map_err(|e| RecoveryWebSearchError::InvalidParameters {
+                details: format!("Invalid SearXNG instance URL '{instance}': {e}"),
+            })?;
 
         // Construct search URL
-        let mut url = instance_url
-            .join("search")
-            .map_err(|e| RecoveryWebSearchError::InvalidParameters {
-                details: format!("Failed to construct search URL for instance '{instance}': {e}"),
-            })?;
+        let mut url =
+            instance_url
+                .join("search")
+                .map_err(|e| RecoveryWebSearchError::InvalidParameters {
+                    details: format!(
+                        "Failed to construct search URL for instance '{instance}': {e}"
+                    ),
+                })?;
 
         // Build query parameters
         {
@@ -685,10 +687,14 @@ impl EnhancedWebSearchTool {
             });
         }
 
-        let json: Value = response.json().await.map_err(|e| RecoveryWebSearchError::ResponseParsing {
-            details: format!("Failed to parse JSON response: {e}"),
-            instance: instance.to_string(),
-        })?;
+        let json: Value =
+            response
+                .json()
+                .await
+                .map_err(|e| RecoveryWebSearchError::ResponseParsing {
+                    details: format!("Failed to parse JSON response: {e}"),
+                    instance: instance.to_string(),
+                })?;
 
         // Parse search results
         let results_array = json["results"].as_array();
@@ -732,10 +738,7 @@ impl EnhancedWebSearchTool {
                     .unwrap_or("unknown")
                     .to_string();
 
-                let score = result_json["score"]
-                    .as_f64()
-                    .unwrap_or(1.0)
-                    .clamp(0.0, 1.0);
+                let score = result_json["score"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
 
                 results.push(SearchResult {
                     title,
@@ -844,9 +847,13 @@ impl McpTool for EnhancedWebSearchTool {
         if let Err(validation_error) = Self::validate_request(&request) {
             let error_message = validation_error.user_friendly_message();
             let suggestions = validation_error.recovery_suggestions();
-            
+
             return Err(McpError::invalid_request(
-                format!("{}\n\nSuggestions:\n{}", error_message, suggestions.join("\n- ")),
+                format!(
+                    "{}\n\nSuggestions:\n{}",
+                    error_message,
+                    suggestions.join("\n- ")
+                ),
                 None,
             ));
         }
@@ -864,10 +871,7 @@ impl McpTool for EnhancedWebSearchTool {
 
                 Ok(BaseToolImpl::create_success_response(
                     serde_json::to_string_pretty(&response).map_err(|e| {
-                        McpError::internal_error(
-                            format!("Failed to serialize response: {e}"),
-                            None,
-                        )
+                        McpError::internal_error(format!("Failed to serialize response: {e}"), None)
                     })?,
                 ))
             }
@@ -886,7 +890,7 @@ impl McpTool for EnhancedWebSearchTool {
                         "query": request.query,
                         "error_type": match error {
                             RecoveryWebSearchError::NoInstancesAvailable => "no_instances_available",
-                            RecoveryWebSearchError::RateLimited { .. } => "rate_limited", 
+                            RecoveryWebSearchError::RateLimited { .. } => "rate_limited",
                             RecoveryWebSearchError::QueryValidation { .. } => "query_validation",
                             RecoveryWebSearchError::ConnectionTimeout { .. } => "connection_timeout",
                             RecoveryWebSearchError::ContentSizeLimit { .. } => "content_size_limit",
@@ -994,7 +998,10 @@ mod tests {
         };
         let result = EnhancedWebSearchTool::validate_request(&request);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RecoveryWebSearchError::QueryValidation { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            RecoveryWebSearchError::QueryValidation { .. }
+        ));
     }
 
     #[test]
@@ -1011,7 +1018,10 @@ mod tests {
         };
         let result = EnhancedWebSearchTool::validate_request(&request);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), RecoveryWebSearchError::QueryValidation { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            RecoveryWebSearchError::QueryValidation { .. }
+        ));
     }
 
     #[test]

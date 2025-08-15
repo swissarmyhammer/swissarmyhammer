@@ -39,17 +39,17 @@ pub enum WebSearchError {
 
     /// DNS resolution failed for the specified hostname
     #[error("DNS resolution failed for {host}")]
-    DnsResolution { 
+    DnsResolution {
         /// Hostname that could not be resolved via DNS
-        host: String 
+        host: String,
     },
 
     // SearXNG API errors
     /// SearXNG instance is not responding or not available
     #[error("SearXNG instance unavailable: {url}")]
-    InstanceUnavailable { 
+    InstanceUnavailable {
         /// URL of the unavailable SearXNG instance
-        url: String 
+        url: String,
     },
 
     /// Rate limiting has been applied by the SearXNG instance
@@ -63,9 +63,9 @@ pub enum WebSearchError {
 
     /// Search parameters provided to the API are invalid
     #[error("Invalid search parameters: {details}")]
-    InvalidParameters { 
+    InvalidParameters {
         /// Detailed explanation of what made the parameters invalid
-        details: String 
+        details: String,
     },
 
     /// Failed to parse the API response from SearXNG
@@ -84,59 +84,59 @@ pub enum WebSearchError {
 
     /// Failed to discover or validate available SearXNG instances
     #[error("Instance discovery failed: {details}")]
-    InstanceDiscovery { 
+    InstanceDiscovery {
         /// Details about the failure during instance discovery process
-        details: String 
+        details: String,
     },
 
     /// All available SearXNG instances have failed to handle the request
     #[error("All instances failed - last error: {last_error}")]
-    AllInstancesFailed { 
+    AllInstancesFailed {
         /// The error message from the last attempted instance
-        last_error: String 
+        last_error: String,
     },
 
     // Content fetching errors
     /// Failed to fetch full content from a search result URL
     #[error("Content fetching failed for {url}: {details}")]
-    ContentFetch { 
+    ContentFetch {
         /// URL from which content fetching failed
-        url: String, 
+        url: String,
         /// Specific error details about the content fetch failure
-        details: String 
+        details: String,
     },
 
     /// Content size exceeds the configured limit for fetching
     #[error("Content size limit exceeded: {size_mb}MB > {limit_mb}MB")]
-    ContentSizeLimit { 
+    ContentSizeLimit {
         /// Actual size of the content in megabytes
-        size_mb: u64, 
+        size_mb: u64,
         /// Maximum allowed size in megabytes
-        limit_mb: u64 
+        limit_mb: u64,
     },
 
     /// Content quality assessment determined the content is not suitable
     #[error("Content quality assessment failed: {reason}")]
-    ContentQuality { 
+    ContentQuality {
         /// Reason why the content quality assessment failed
-        reason: String 
+        reason: String,
     },
 
     // Configuration and validation errors
     /// Configuration error in the web search system
     #[error("Invalid configuration: {field} - {details}")]
-    Configuration { 
+    Configuration {
         /// Name of the configuration field that has an invalid value
-        field: String, 
+        field: String,
         /// Detailed explanation of the configuration problem
-        details: String 
+        details: String,
     },
 
     /// Search query failed validation checks
     #[error("Search query validation failed: {reason}")]
-    QueryValidation { 
+    QueryValidation {
         /// Specific reason why the query validation failed
-        reason: String 
+        reason: String,
     },
 }
 
@@ -185,16 +185,16 @@ impl WebSearchError {
                 "All search services are temporarily unavailable. Please try again in a few minutes, or check your internet connection.".to_string()
             }
             Self::RateLimited { retry_after_secs, .. } => {
-                format!("Search service is busy. Please wait {} seconds before searching again.", retry_after_secs)
+                format!("Search service is busy. Please wait {retry_after_secs} seconds before searching again.")
             }
             Self::QueryValidation { reason } => {
-                format!("Invalid search query: {}. Please check your search terms and try again.", reason)
+                format!("Invalid search query: {reason}. Please check your search terms and try again.")
             }
             Self::ConnectionTimeout { .. } => {
                 "Search request timed out. Please check your internet connection and try again.".to_string()
             }
             Self::ContentSizeLimit { size_mb, limit_mb } => {
-                format!("Content too large ({} MB exceeds {} MB limit). Showing search results without content.", size_mb, limit_mb)
+                format!("Content too large ({size_mb} MB exceeds {limit_mb} MB limit). Showing search results without content.")
             }
             Self::InstanceDiscovery { .. } => {
                 "Search service discovery failed. Using fallback search services.".to_string()
@@ -205,7 +205,7 @@ impl WebSearchError {
             Self::ContentFetch { .. } => {
                 "Unable to fetch full content for some results. Search results are still available.".to_string()
             }
-            _ => format!("Search error: {}", self),
+            _ => format!("Search error: {self}"),
         }
     }
 
@@ -217,7 +217,9 @@ impl WebSearchError {
                 "Try again in a few minutes".to_string(),
                 "Contact support if the problem persists".to_string(),
             ],
-            Self::RateLimited { retry_after_secs, .. } => vec![
+            Self::RateLimited {
+                retry_after_secs, ..
+            } => vec![
                 format!("Wait {} seconds before retrying", retry_after_secs),
                 "Reduce search frequency".to_string(),
             ],
@@ -389,13 +391,13 @@ impl CircuitBreaker {
             .or_insert_with(CircuitState::default);
 
         // Only count certain types of errors for circuit breaking
-        let should_count = match error {
-            WebSearchError::ConnectionTimeout { .. } => true,
-            WebSearchError::InstanceUnavailable { .. } => true,
-            WebSearchError::Network { .. } => true,
-            WebSearchError::DnsResolution { .. } => true,
-            _ => false,
-        };
+        let should_count = matches!(
+            error,
+            WebSearchError::ConnectionTimeout { .. }
+                | WebSearchError::InstanceUnavailable { .. }
+                | WebSearchError::Network { .. }
+                | WebSearchError::DnsResolution { .. }
+        );
 
         if should_count {
             state.failure_count += 1;
@@ -622,25 +624,13 @@ pub struct FailoverManager {
 }
 
 /// Health tracking for instances
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct InstanceHealth {
     consecutive_failures: u32,
     last_success: Option<Instant>,
     last_failure: Option<Instant>,
     total_requests: u64,
     successful_requests: u64,
-}
-
-impl Default for InstanceHealth {
-    fn default() -> Self {
-        Self {
-            consecutive_failures: 0,
-            last_success: None,
-            last_failure: None,
-            total_requests: 0,
-            successful_requests: 0,
-        }
-    }
 }
 
 impl FailoverManager {
