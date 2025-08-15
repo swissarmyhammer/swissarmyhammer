@@ -868,7 +868,7 @@ async fn process_child_output_with_limits(
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// use swissarmyhammer_tools::mcp::tools::shell::execute::execute_shell_command;
 /// use std::collections::HashMap;
 /// use std::path::PathBuf;

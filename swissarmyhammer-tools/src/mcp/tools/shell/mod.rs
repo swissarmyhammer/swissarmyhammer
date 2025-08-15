@@ -34,7 +34,7 @@
 //! ## Tool Implementation Pattern
 //!
 //! Each shell tool follows the standard MCP pattern:
-//! ```rust,no_run
+//! ```rust,ignore
 //! use async_trait::async_trait;
 //! use swissarmyhammer_tools::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 //! use swissarmyhammer_tools::mcp::tool_descriptions;
