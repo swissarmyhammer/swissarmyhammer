@@ -5216,6 +5216,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs 5.0.1",
+ "futures-util",
  "libc",
  "regex",
  "rmcp",
@@ -5228,6 +5229,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
