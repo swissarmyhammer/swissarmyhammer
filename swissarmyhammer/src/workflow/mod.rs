@@ -16,6 +16,7 @@ mod executor;
 mod graph;
 #[cfg(test)]
 mod graph_tests;
+mod mcp_integration;
 mod metrics;
 mod parser;
 mod run;
@@ -51,6 +52,7 @@ pub use executor::{
     ExecutionEvent, ExecutionEventType, ExecutorError, ExecutorResult, WorkflowExecutor,
 };
 pub use graph::{GraphError, GraphResult, WorkflowGraphAnalyzer};
+pub use mcp_integration::{WorkflowShellContext, response_processing};
 pub use metrics::{
     GlobalMetrics, MemoryMetrics, ResourceTrends, RunMetrics, StateExecutionCount, WorkflowMetrics,
     WorkflowSummaryMetrics,
