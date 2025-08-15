@@ -71,22 +71,50 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
             }
 
             // Create arguments for MCP tool
+            // Convert safe_search from integer to enum variant string (capitalized)
+            let safe_search_level = match safe_search {
+                0 => "Off",
+                1 => "Moderate", 
+                2 => "Strict",
+                _ => "Moderate", // Default to Moderate for invalid values
+            };
+            
             let mut args_vec = vec![
                 ("query", json!(query)),
                 ("results_count", json!(results)),
                 ("language", json!(language)),
                 ("fetch_content", json!(fetch_content)),
-                ("safe_search", json!(safe_search)),
+                ("safe_search", json!(safe_search_level)),
             ];
 
-            // Add optional category if not default
-            if category != "general" {
-                args_vec.push(("category", json!(category)));
-            }
+            // Convert category string to enum variant (lowercase)
+            let category_variant = match category.as_str() {
+                "general" => "general",
+                "images" => "images",
+                "videos" => "videos", 
+                "news" => "news",
+                "map" => "map",
+                "music" => "music",
+                "it" => "it",
+                "science" => "science",
+                "files" => "files",
+                _ => "general", // Default to general for unknown categories
+            };
+            
+            // Add category to arguments (always include it)
+            args_vec.push(("category", json!(category_variant)));
 
-            // Add optional time range if not default
+            // Convert time_range string to enum variant if provided (lowercase, empty string for "all")
             if !time_range.is_empty() {
-                args_vec.push(("time_range", json!(time_range)));
+                let time_range_variant = match time_range.as_str() {
+                    "day" => "day",
+                    "week" => "week", 
+                    "month" => "month",
+                    "year" => "year",
+                    "all" | "" => "", // All time range is represented as empty string
+                    _ => "", // Default to empty string (all time) for unknown values
+                };
+                args_vec.push(("time_range", json!(time_range_variant)));
             }
 
             let args = context.create_arguments(args_vec);
