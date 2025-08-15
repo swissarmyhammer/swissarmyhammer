@@ -33,6 +33,7 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 regex = { workspace = true }
 schemars = "0.8"
+thiserror = "1.0"
 
 # Web fetch functionality
 markdowndown = { workspace = true }

@@ -3,10 +3,12 @@
 //! This module provides the WebFetchTool for fetching web content and converting HTML to markdown
 //! through the MCP protocol using the markdowndown crate.
 
-use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
+// Security validation replaces the old basic validation utilities
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::types::WebFetchRequest;
+use crate::mcp::tools::web_fetch::security::{SecurityError, SecurityValidator};
 use async_trait::async_trait;
+use markdowndown::HtmlConverter;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::Duration;
@@ -32,13 +34,26 @@ pub struct RedirectInfo {
 }
 
 /// Tool for fetching web content and converting HTML to markdown
-#[derive(Default)]
-pub struct WebFetchTool;
+pub struct WebFetchTool {
+    /// Security validator for URL and domain validation
+    security_validator: SecurityValidator,
+    /// HTML converter for converting HTML to markdown
+    html_converter: HtmlConverter,
+}
+
+impl Default for WebFetchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl WebFetchTool {
     /// Creates a new instance of the WebFetchTool
     pub fn new() -> Self {
-        Self
+        Self {
+            security_validator: SecurityValidator::new(),
+            html_converter: HtmlConverter::new(),
+        }
     }
 
     /// Performs HTTP request with redirect tracking
@@ -143,9 +158,16 @@ impl WebFetchTool {
                 }
             }
 
-            // Convert HTML to markdown using html2md or similar
+            // Convert HTML to markdown using markdowndown
             let markdown_content = if content_type.contains("text/html") {
-                html2md::parse_html(&body)
+                match self.html_converter.convert_html(&body) {
+                    Ok(md) => md,
+                    Err(e) => {
+                        tracing::warn!("Failed to convert HTML to markdown using markdowndown: {}", e);
+                        // Fallback to plain text wrapped in code block
+                        format!("```html\n{body}\n```")
+                    }
+                }
             } else {
                 // For non-HTML content, return as-is wrapped in code block
                 format!("```\n{body}\n```")
@@ -239,17 +261,21 @@ impl WebFetchTool {
     fn categorize_error(error: &dyn std::error::Error) -> &'static str {
         let error_str = error.to_string().to_lowercase();
 
-        // Network-related errors
-        if error_str.contains("connection")
-            || error_str.contains("timeout")
-            || error_str.contains("dns")
-        {
-            "network_error"
-        } else if error_str.contains("ssl")
+        // Security-related errors (check first)
+        if error_str.contains("blocked domain")
+            || error_str.contains("ssrf")
+            || error_str.contains("unsupported scheme")
+            || error_str.contains("ssl")
             || error_str.contains("tls")
             || error_str.contains("certificate")
         {
             "security_error"
+        // Network-related errors
+        } else if error_str.contains("connection")
+            || error_str.contains("timeout")
+            || error_str.contains("dns")
+        {
+            "network_error"
         } else if error_str.contains("redirect") || error_str.contains("too many") {
             "redirect_error"
         } else if error_str.contains("404") || error_str.contains("not found") {
@@ -264,6 +290,11 @@ impl WebFetchTool {
             || error_str.contains("503")
         {
             "server_error"
+        } else if error_str.contains("markdowndown")
+            || error_str.contains("html conversion")
+            || error_str.contains("markdown conversion")
+        {
+            "content_processing_error"
         } else if error_str.contains("parse")
             || error_str.contains("encoding")
             || error_str.contains("invalid")
@@ -280,12 +311,13 @@ impl WebFetchTool {
     fn get_error_suggestion(error_type: &str) -> &'static str {
         match error_type {
             "network_error" => "Check your internet connection and try again. The server may be temporarily unavailable.",
-            "security_error" => "SSL/TLS certificate validation failed. Check if the URL uses HTTPS correctly.",
+            "security_error" => "The URL was blocked for security reasons. Check if the URL scheme is HTTPS/HTTP and the domain is not restricted.",
             "redirect_error" => "Too many redirects detected. The URL may have redirect loops.",
             "not_found_error" => "The requested page was not found. Verify the URL is correct and the page exists.",
             "access_denied_error" => "Access to the resource is forbidden. Check if authentication is required.",
             "server_error" => "The server encountered an error. Try again later or contact the website administrator.",
-            "content_error" => "Failed to process the HTML content. The page may have malformed HTML or encoding issues.",
+            "content_processing_error" => "Failed to convert HTML to markdown. The page may have complex HTML structures or encoding issues.",
+            "content_error" => "Failed to process the content. The page may have malformed HTML or encoding issues.",
             "size_limit_error" => "Content is too large. Try reducing max_content_length or use a different URL.",
             _ => "An unexpected error occurred. Check the URL and try again."
         }
@@ -295,7 +327,7 @@ impl WebFetchTool {
     fn is_retryable_error(error_type: &str) -> bool {
         matches!(
             error_type,
-            "network_error" | "server_error" | "redirect_error"
+            "network_error" | "server_error" | "redirect_error" | "content_processing_error"
         )
     }
 }
@@ -367,17 +399,56 @@ impl McpTool for WebFetchTool {
 
         tracing::debug!("Fetching web content from URL: {}", request.url);
 
-        // Validate URL is not empty and has valid scheme
-        McpValidation::validate_not_empty(&request.url, "URL")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate URL"))?;
+        // Comprehensive URL security validation
+        let validated_url = match self.security_validator.validate_url(&request.url) {
+            Ok(url) => url,
+            Err(SecurityError::InvalidUrl(msg)) => {
+                self.security_validator.log_security_event(
+                    "INVALID_URL", 
+                    &request.url, 
+                    &msg
+                );
+                return Err(McpError::invalid_params(
+                    format!("Invalid URL: {msg}"),
+                    None,
+                ));
+            }
+            Err(SecurityError::BlockedDomain(msg)) => {
+                self.security_validator.log_security_event(
+                    "BLOCKED_DOMAIN", 
+                    &request.url, 
+                    &msg
+                );
+                return Err(McpError::invalid_params(
+                    format!("Access denied: {msg}"),
+                    None,
+                ));
+            }
+            Err(SecurityError::SsrfAttempt(msg)) => {
+                self.security_validator.log_security_event(
+                    "SSRF_ATTEMPT", 
+                    &request.url, 
+                    &msg
+                );
+                return Err(McpError::invalid_params(
+                    format!("Security violation: {msg}"),
+                    None,
+                ));
+            }
+            Err(SecurityError::UnsupportedScheme(msg)) => {
+                self.security_validator.log_security_event(
+                    "UNSUPPORTED_SCHEME", 
+                    &request.url, 
+                    &msg
+                );
+                return Err(McpError::invalid_params(
+                    format!("Unsupported protocol: {msg}"),
+                    None,
+                ));
+            }
+        };
 
-        // Validate URL scheme (HTTP/HTTPS only)
-        if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
-            return Err(McpError::invalid_params(
-                "URL must use HTTP or HTTPS scheme".to_string(),
-                None,
-            ));
-        }
+        tracing::info!("URL security validation passed for: {}", validated_url);
 
         // Validate optional timeout range
         if let Some(timeout) = request.timeout {

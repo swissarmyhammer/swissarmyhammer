@@ -55,6 +55,7 @@
 //! - **fetch**: Retrieve web content and convert HTML to markdown for AI processing
 
 pub mod fetch;
+pub mod security;
 
 use crate::mcp::tool_registry::ToolRegistry;
 
