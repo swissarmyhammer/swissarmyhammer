@@ -373,3 +373,135 @@ max_audit_entry_size = 10000
 - Environment-specific configurations are critical for deployment
 - Security configurations should err on the side of safety
 - Performance configurations should balance usability with resource protection
+
+## Proposed Solution
+
+Based on my analysis of the existing codebase and the shell tool implementation, I propose the following implementation approach:
+
+### 1. Shell Tool Configuration Schema
+
+I will extend the existing `sah_config` system to support shell tool configuration by:
+
+- Adding shell configuration types to `swissarmyhammer/src/sah_config/types.rs`
+- Creating comprehensive configuration structures for security, output handling, execution limits, and audit settings
+- Implementing proper validation and defaults for each configuration section
+
+### 2. Configuration Integration Points
+
+The configuration system will integrate with:
+
+- **Existing OutputLimits**: Replace hardcoded values in shell tool with configurable limits
+- **Security Validation**: Use configuration to control command validation and directory restrictions
+- **Timeout Management**: Make timeout defaults and limits configurable
+- **Audit Logging**: Enable configurable audit logging for shell commands
+
+### 3. Implementation Strategy
+
+1. **Schema Definition**: Create structured configuration types with comprehensive validation
+2. **Loader Extension**: Extend `ConfigurationLoader` to handle shell-specific configuration loading
+3. **Shell Tool Integration**: Modify shell tool to use configuration instead of hardcoded values
+4. **Environment Variable Support**: Enable runtime configuration override via environment variables
+5. **Testing**: Comprehensive test coverage for all configuration scenarios
+
+### 4. Configuration Structure
+
+```rust
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ShellToolConfig {
+    pub security: ShellSecurityConfig,
+    pub output: ShellOutputConfig,  
+    pub execution: ShellExecutionConfig,
+    pub audit: ShellAuditConfig,
+}
+```
+
+This approach maintains compatibility with the existing configuration system while providing comprehensive shell tool configuration capabilities.
+
+### 5. Key Benefits
+
+- **Consistency**: Uses existing `sah_config` patterns and infrastructure
+- **Flexibility**: Supports development, testing, and production configurations  
+- **Security**: Configurable security policies and validation rules
+- **Performance**: Tunable resource limits and timeout configurations
+- **Auditability**: Configurable logging and audit trail capabilities
+## Implementation Complete ✅
+
+The shell tool configuration system has been fully implemented and integrated with the existing `sah_config` system:
+
+### ✅ Configuration Schema (swissarmyhammer/src/sah_config/types.rs)
+- Added comprehensive `ShellToolConfig` structure with security, output, execution, and audit configuration
+- Implemented `TruncationStrategy` enum for output handling options
+- Added `parse_size_string()` utility function for size configuration parsing
+- Created proper default implementations for all configuration sections
+- Added comprehensive serialization/deserialization support
+
+### ✅ Configuration Loading (swissarmyhammer/src/sah_config/loader.rs)
+- Extended `ConfigurationLoader` with `load_shell_config()` method
+- Implemented TOML configuration file merging for all shell configuration sections
+- Added environment variable override support with validation:
+  - `SAH_SHELL_SECURITY_ENABLE_VALIDATION`
+  - `SAH_SHELL_OUTPUT_MAX_SIZE`
+  - `SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT`
+  - `SAH_SHELL_AUDIT_ENABLE_LOGGING`
+  - And many more...
+- Added comprehensive configuration validation including timeout ranges, size formats, and reasonable limits
+
+### ✅ Shell Tool Integration (swissarmyhammer-tools/src/mcp/tools/shell/execute/mod.rs)
+- Modified `execute_shell_command()` to accept and use configuration
+- Replaced hardcoded `OutputLimits::default()` with config-based `OutputLimits::from_config()`
+- Updated timeout handling to use configured defaults with validation against min/max limits
+- Added configuration loading in `ShellExecuteTool::execute()` method
+- Maintained backward compatibility with existing tool interface
+
+### ✅ Comprehensive Testing
+- Added 70+ configuration tests covering all functionality
+- Tests include default values, file loading, environment variable overrides, validation, and error cases
+- All existing shell tool tests continue to pass (37 tests)
+- Configuration serialization/deserialization round-trip testing
+- Edge case and error condition testing
+
+### Key Features Delivered
+
+1. **Environment-Specific Configuration**: Development, testing, and production configurations supported through TOML files and environment variables
+
+2. **Security Policy Configuration**: Configurable command validation, blocked command patterns, directory restrictions, and injection detection
+
+3. **Performance Configuration**: Tunable timeout limits, output size limits, line length limits, and resource constraints
+
+4. **Audit Configuration**: Configurable audit logging with level control and output inclusion options
+
+5. **Runtime Validation**: Comprehensive configuration validation ensures consistency and security
+
+6. **Backward Compatibility**: Existing shell tool usage continues to work seamlessly with sensible defaults
+
+### Configuration Examples
+
+**Development Configuration (sah.toml):**
+```toml
+[shell.security]
+enable_validation = false
+max_command_length = 2000
+
+[shell.output]
+max_output_size = "50MB"
+
+[shell.execution]
+default_timeout = 600
+```
+
+**Production Configuration:**
+```toml
+[shell.security]
+enable_validation = true
+blocked_commands = ["rm", "format", "dd", "fdisk"]
+allowed_directories = ["/app", "/tmp/app"]
+
+[shell.output]
+max_output_size = "5MB"
+
+[shell.execution]
+default_timeout = 300
+max_timeout = 1800
+```
+
+The implementation successfully integrates the shell tool with the existing SwissArmyHammer configuration system while maintaining full backward compatibility and providing comprehensive configuration capabilities.

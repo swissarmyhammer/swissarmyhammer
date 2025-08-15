@@ -1,6 +1,6 @@
 use crate::sah_config::{
     env_vars::{EnvVarError, EnvVarProcessor},
-    types::{CacheMetadata, ConfigValue, Configuration},
+    types::{CacheMetadata, ConfigValue, Configuration, ShellToolConfig, parse_size_string},
     validation::{ValidationError, Validator},
 };
 use std::collections::HashMap;
@@ -46,6 +46,17 @@ pub enum ConfigurationError {
     /// Validation error occurred during configuration validation
     #[error("Configuration validation error: {0}")]
     Validation(#[from] ValidationError),
+
+    /// Invalid shell configuration value
+    #[error("Invalid shell configuration value for {key}: {value} - {reason}")]
+    InvalidShellValue {
+        /// Configuration key that failed validation
+        key: String,
+        /// Invalid value that was provided
+        value: String,
+        /// Reason why the value is invalid
+        reason: String,
+    },
 }
 
 /// Configuration loader that handles file loading and TOML parsing
@@ -280,6 +291,355 @@ impl ConfigurationLoader {
             }
             _ => {} // Other types don't need environment variable substitution
         }
+        Ok(())
+    }
+
+    /// Load shell tool configuration from repository root
+    pub fn load_shell_config(&self) -> Result<ShellToolConfig, ConfigurationError> {
+        // Start with default configuration
+        let mut config = ShellToolConfig::default();
+
+        // Load from configuration file if it exists
+        if let Some(file_config) = self.load_from_repo_root()? {
+            config = self.merge_shell_config(config, &file_config)?;
+        }
+
+        // Override with environment variables
+        config = self.apply_shell_env_overrides(config)?;
+
+        // Validate configuration
+        self.validate_shell_config(&config)?;
+
+        Ok(config)
+    }
+
+    /// Merge shell configuration from loaded file configuration
+    fn merge_shell_config(
+        &self,
+        mut config: ShellToolConfig,
+        file_config: &Configuration,
+    ) -> Result<ShellToolConfig, ConfigurationError> {
+        // Look for shell configuration section
+        if let Some(ConfigValue::Table(shell_table)) = file_config.get("shell") {
+            // Merge security settings
+            if let Some(ConfigValue::Table(security_table)) = shell_table.get("security") {
+                self.merge_shell_security_config(&mut config.security, security_table)?;
+            }
+
+            // Merge output settings
+            if let Some(ConfigValue::Table(output_table)) = shell_table.get("output") {
+                self.merge_shell_output_config(&mut config.output, output_table)?;
+            }
+
+            // Merge execution settings
+            if let Some(ConfigValue::Table(execution_table)) = shell_table.get("execution") {
+                self.merge_shell_execution_config(&mut config.execution, execution_table)?;
+            }
+
+            // Merge audit settings
+            if let Some(ConfigValue::Table(audit_table)) = shell_table.get("audit") {
+                self.merge_shell_audit_config(&mut config.audit, audit_table)?;
+            }
+        }
+
+        Ok(config)
+    }
+
+    /// Merge security configuration from TOML values
+    fn merge_shell_security_config(
+        &self,
+        config: &mut crate::sah_config::types::ShellSecurityConfig,
+        table: &HashMap<String, ConfigValue>,
+    ) -> Result<(), ConfigurationError> {
+        if let Some(ConfigValue::Boolean(enable)) = table.get("enable_validation") {
+            config.enable_validation = *enable;
+        }
+
+        if let Some(ConfigValue::Array(commands)) = table.get("blocked_commands") {
+            config.blocked_commands = commands
+                .iter()
+                .filter_map(|v| match v {
+                    ConfigValue::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect();
+        }
+
+        if let Some(ConfigValue::Array(dirs)) = table.get("allowed_directories") {
+            config.allowed_directories = Some(
+                dirs.iter()
+                    .filter_map(|v| match v {
+                        ConfigValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            );
+        }
+
+        if let Some(ConfigValue::Integer(length)) = table.get("max_command_length") {
+            config.max_command_length = *length as usize;
+        }
+
+        if let Some(ConfigValue::Boolean(enable)) = table.get("enable_injection_detection") {
+            config.enable_injection_detection = *enable;
+        }
+
+        Ok(())
+    }
+
+    /// Merge output configuration from TOML values
+    fn merge_shell_output_config(
+        &self,
+        config: &mut crate::sah_config::types::ShellOutputConfig,
+        table: &HashMap<String, ConfigValue>,
+    ) -> Result<(), ConfigurationError> {
+        if let Some(ConfigValue::String(size)) = table.get("max_output_size") {
+            config.max_output_size = size.clone();
+        }
+
+        if let Some(ConfigValue::Integer(length)) = table.get("max_line_length") {
+            config.max_line_length = *length as usize;
+        }
+
+        if let Some(ConfigValue::Boolean(detect)) = table.get("detect_binary_content") {
+            config.detect_binary_content = *detect;
+        }
+
+        if let Some(ConfigValue::String(strategy)) = table.get("truncation_strategy") {
+            use crate::sah_config::types::TruncationStrategy;
+            config.truncation_strategy = match strategy.as_str() {
+                "preserve_structure" => TruncationStrategy::PreserveStructure,
+                "simple_truncation" => TruncationStrategy::SimpleTruncation,
+                "word_boundary" => TruncationStrategy::WordBoundary,
+                _ => {
+                    return Err(ConfigurationError::InvalidShellValue {
+                        key: "truncation_strategy".to_string(),
+                        value: strategy.clone(),
+                        reason: "Must be one of: preserve_structure, simple_truncation, word_boundary".to_string(),
+                    })
+                }
+            };
+        }
+
+        Ok(())
+    }
+
+    /// Merge execution configuration from TOML values
+    fn merge_shell_execution_config(
+        &self,
+        config: &mut crate::sah_config::types::ShellExecutionConfig,
+        table: &HashMap<String, ConfigValue>,
+    ) -> Result<(), ConfigurationError> {
+        if let Some(ConfigValue::Integer(timeout)) = table.get("default_timeout") {
+            config.default_timeout = *timeout as u64;
+        }
+
+        if let Some(ConfigValue::Integer(timeout)) = table.get("max_timeout") {
+            config.max_timeout = *timeout as u64;
+        }
+
+        if let Some(ConfigValue::Integer(timeout)) = table.get("min_timeout") {
+            config.min_timeout = *timeout as u64;
+        }
+
+        if let Some(ConfigValue::Boolean(cleanup)) = table.get("cleanup_process_tree") {
+            config.cleanup_process_tree = *cleanup;
+        }
+
+        Ok(())
+    }
+
+    /// Merge audit configuration from TOML values
+    fn merge_shell_audit_config(
+        &self,
+        config: &mut crate::sah_config::types::ShellAuditConfig,
+        table: &HashMap<String, ConfigValue>,
+    ) -> Result<(), ConfigurationError> {
+        if let Some(ConfigValue::Boolean(enable)) = table.get("enable_audit_logging") {
+            config.enable_audit_logging = *enable;
+        }
+
+        if let Some(ConfigValue::String(level)) = table.get("log_level") {
+            config.log_level = level.clone();
+        }
+
+        if let Some(ConfigValue::Boolean(log_output)) = table.get("log_command_output") {
+            config.log_command_output = *log_output;
+        }
+
+        if let Some(ConfigValue::Integer(size)) = table.get("max_audit_entry_size") {
+            config.max_audit_entry_size = *size as usize;
+        }
+
+        Ok(())
+    }
+
+    /// Apply environment variable overrides for shell configuration
+    fn apply_shell_env_overrides(
+        &self,
+        mut config: ShellToolConfig,
+    ) -> Result<ShellToolConfig, ConfigurationError> {
+        use std::env;
+
+        // Security overrides
+        if let Ok(val) = env::var("SAH_SHELL_SECURITY_ENABLE_VALIDATION") {
+            config.security.enable_validation = val.parse().map_err(|_| {
+                ConfigurationError::InvalidShellValue {
+                    key: "SAH_SHELL_SECURITY_ENABLE_VALIDATION".to_string(),
+                    value: val,
+                    reason: "Must be 'true' or 'false'".to_string(),
+                }
+            })?;
+        }
+
+        if let Ok(val) = env::var("SAH_SHELL_SECURITY_MAX_COMMAND_LENGTH") {
+            config.security.max_command_length = val.parse().map_err(|_| {
+                ConfigurationError::InvalidShellValue {
+                    key: "SAH_SHELL_SECURITY_MAX_COMMAND_LENGTH".to_string(),
+                    value: val,
+                    reason: "Must be a positive integer".to_string(),
+                }
+            })?;
+        }
+
+        // Output overrides
+        if let Ok(val) = env::var("SAH_SHELL_OUTPUT_MAX_SIZE") {
+            // Validate the size string format
+            parse_size_string(&val).map_err(|reason| ConfigurationError::InvalidShellValue {
+                key: "SAH_SHELL_OUTPUT_MAX_SIZE".to_string(),
+                value: val.clone(),
+                reason,
+            })?;
+            config.output.max_output_size = val;
+        }
+
+        if let Ok(val) = env::var("SAH_SHELL_OUTPUT_MAX_LINE_LENGTH") {
+            config.output.max_line_length = val.parse().map_err(|_| {
+                ConfigurationError::InvalidShellValue {
+                    key: "SAH_SHELL_OUTPUT_MAX_LINE_LENGTH".to_string(),
+                    value: val,
+                    reason: "Must be a positive integer".to_string(),
+                }
+            })?;
+        }
+
+        // Execution overrides
+        if let Ok(val) = env::var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT") {
+            config.execution.default_timeout = val.parse().map_err(|_| {
+                ConfigurationError::InvalidShellValue {
+                    key: "SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT".to_string(),
+                    value: val,
+                    reason: "Must be a positive integer (seconds)".to_string(),
+                }
+            })?;
+        }
+
+        if let Ok(val) = env::var("SAH_SHELL_EXECUTION_MAX_TIMEOUT") {
+            config.execution.max_timeout = val.parse().map_err(|_| {
+                ConfigurationError::InvalidShellValue {
+                    key: "SAH_SHELL_EXECUTION_MAX_TIMEOUT".to_string(),
+                    value: val,
+                    reason: "Must be a positive integer (seconds)".to_string(),
+                }
+            })?;
+        }
+
+        // Audit overrides
+        if let Ok(val) = env::var("SAH_SHELL_AUDIT_ENABLE_LOGGING") {
+            config.audit.enable_audit_logging = val.parse().map_err(|_| {
+                ConfigurationError::InvalidShellValue {
+                    key: "SAH_SHELL_AUDIT_ENABLE_LOGGING".to_string(),
+                    value: val,
+                    reason: "Must be 'true' or 'false'".to_string(),
+                }
+            })?;
+        }
+
+        if let Ok(val) = env::var("SAH_SHELL_AUDIT_LOG_LEVEL") {
+            // Validate log level
+            match val.to_lowercase().as_str() {
+                "trace" | "debug" | "info" | "warn" | "error" => {
+                    config.audit.log_level = val.to_lowercase();
+                }
+                _ => {
+                    return Err(ConfigurationError::InvalidShellValue {
+                        key: "SAH_SHELL_AUDIT_LOG_LEVEL".to_string(),
+                        value: val,
+                        reason: "Must be one of: trace, debug, info, warn, error".to_string(),
+                    })
+                }
+            }
+        }
+
+        Ok(config)
+    }
+
+    /// Validate shell configuration for consistency and security
+    fn validate_shell_config(
+        &self,
+        config: &ShellToolConfig,
+    ) -> Result<(), ConfigurationError> {
+        // Validate timeout ranges
+        if config.execution.default_timeout < config.execution.min_timeout {
+            return Err(ConfigurationError::InvalidShellValue {
+                key: "execution.default_timeout".to_string(),
+                value: config.execution.default_timeout.to_string(),
+                reason: "Default timeout cannot be less than minimum timeout".to_string(),
+            });
+        }
+
+        if config.execution.default_timeout > config.execution.max_timeout {
+            return Err(ConfigurationError::InvalidShellValue {
+                key: "execution.default_timeout".to_string(),
+                value: config.execution.default_timeout.to_string(),
+                reason: "Default timeout cannot exceed maximum timeout".to_string(),
+            });
+        }
+
+        // Validate output size format
+        parse_size_string(&config.output.max_output_size).map_err(|reason| {
+            ConfigurationError::InvalidShellValue {
+                key: "output.max_output_size".to_string(),
+                value: config.output.max_output_size.clone(),
+                reason,
+            }
+        })?;
+
+        // Validate command length is reasonable
+        if config.security.max_command_length == 0 {
+            return Err(ConfigurationError::InvalidShellValue {
+                key: "security.max_command_length".to_string(),
+                value: config.security.max_command_length.to_string(),
+                reason: "Command length must be greater than 0".to_string(),
+            });
+        }
+
+        if config.security.max_command_length > 100_000 {
+            return Err(ConfigurationError::InvalidShellValue {
+                key: "security.max_command_length".to_string(),
+                value: config.security.max_command_length.to_string(),
+                reason: "Command length cannot exceed 100,000 characters".to_string(),
+            });
+        }
+
+        // Validate output line length is reasonable
+        if config.output.max_line_length == 0 {
+            return Err(ConfigurationError::InvalidShellValue {
+                key: "output.max_line_length".to_string(),
+                value: config.output.max_line_length.to_string(),
+                reason: "Line length must be greater than 0".to_string(),
+            });
+        }
+
+        // Validate audit entry size is reasonable
+        if config.audit.max_audit_entry_size == 0 {
+            return Err(ConfigurationError::InvalidShellValue {
+                key: "audit.max_audit_entry_size".to_string(),
+                value: config.audit.max_audit_entry_size.to_string(),
+                reason: "Audit entry size must be greater than 0".to_string(),
+            });
+        }
+
         Ok(())
     }
 }
@@ -530,6 +890,249 @@ for = "invalid_reserved_name"
 
         let config = loader.load_from_file(temp_file.path())?;
         assert_eq!(config.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_shell_config_defaults() -> Result<(), Box<dyn std::error::Error>> {
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let config = loader.load_shell_config()?;
+
+        // Should use default values when no configuration file exists
+        assert!(config.security.enable_validation);
+        assert_eq!(config.output.max_output_size, "10MB");
+        assert_eq!(config.execution.default_timeout, 300);
+        assert!(!config.audit.enable_audit_logging);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_shell_config_from_file() -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(
+            temp_file,
+            r#"
+[shell.security]
+enable_validation = false
+blocked_commands = ["rm", "format"]
+max_command_length = 2000
+
+[shell.output]
+max_output_size = "50MB"
+max_line_length = 5000
+
+[shell.execution]
+default_timeout = 600
+max_timeout = 3600
+
+[shell.audit]
+enable_audit_logging = true
+log_level = "debug"
+"#
+        )?;
+
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let file_config = loader.load_from_file(temp_file.path())?;
+        let config = loader.merge_shell_config(ShellToolConfig::default(), &file_config)?;
+
+        // Check that file values override defaults
+        assert!(!config.security.enable_validation);
+        assert_eq!(config.security.blocked_commands, vec!["rm", "format"]);
+        assert_eq!(config.security.max_command_length, 2000);
+        assert_eq!(config.output.max_output_size, "50MB");
+        assert_eq!(config.output.max_line_length, 5000);
+        assert_eq!(config.execution.default_timeout, 600);
+        assert_eq!(config.execution.max_timeout, 3600);
+        assert!(config.audit.enable_audit_logging);
+        assert_eq!(config.audit.log_level, "debug");
+
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_shell_env_overrides() -> Result<(), Box<dyn std::error::Error>> {
+        use std::env;
+
+        // Set test environment variables
+        env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", "false");
+        env::set_var("SAH_SHELL_OUTPUT_MAX_SIZE", "5MB");
+        env::set_var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT", "120");
+        env::set_var("SAH_SHELL_AUDIT_ENABLE_LOGGING", "true");
+
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let config = loader.apply_shell_env_overrides(ShellToolConfig::default())?;
+
+        // Check that environment variables override defaults
+        assert!(!config.security.enable_validation);
+        assert_eq!(config.output.max_output_size, "5MB");
+        assert_eq!(config.execution.default_timeout, 120);
+        assert!(config.audit.enable_audit_logging);
+
+        // Clean up environment variables
+        env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
+        env::remove_var("SAH_SHELL_OUTPUT_MAX_SIZE");
+        env::remove_var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT");
+        env::remove_var("SAH_SHELL_AUDIT_ENABLE_LOGGING");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_shell_config_validation_success() -> Result<(), Box<dyn std::error::Error>> {
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let config = ShellToolConfig::default();
+
+        // Default configuration should be valid
+        loader.validate_shell_config(&config)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_shell_config_validation_timeout_errors() -> Result<(), Box<dyn std::error::Error>> {
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+
+        // Test default timeout less than min timeout
+        let mut config = ShellToolConfig::default();
+        config.execution.default_timeout = 1;
+        config.execution.min_timeout = 5;
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        // Test default timeout greater than max timeout
+        let mut config = ShellToolConfig::default();
+        config.execution.default_timeout = 2000;
+        config.execution.max_timeout = 1800;
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_shell_config_validation_invalid_size() -> Result<(), Box<dyn std::error::Error>> {
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+
+        // Test invalid size string
+        let mut config = ShellToolConfig::default();
+        config.output.max_output_size = "invalid_size".to_string();
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_shell_config_validation_zero_values() -> Result<(), Box<dyn std::error::Error>> {
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+
+        // Test zero command length
+        let mut config = ShellToolConfig::default();
+        config.security.max_command_length = 0;
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        // Test zero line length
+        let mut config = ShellToolConfig::default();
+        config.output.max_line_length = 0;
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        // Test zero audit entry size
+        let mut config = ShellToolConfig::default();
+        config.audit.max_audit_entry_size = 0;
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_shell_config_validation_excessive_command_length() -> Result<(), Box<dyn std::error::Error>> {
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+
+        let mut config = ShellToolConfig::default();
+        config.security.max_command_length = 150_000; // Over 100,000 limit
+        assert!(loader.validate_shell_config(&config).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_truncation_strategy_parsing() -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(
+            temp_file,
+            r#"
+[shell.output]
+truncation_strategy = "word_boundary"
+"#
+        )?;
+
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let file_config = loader.load_from_file(temp_file.path())?;
+        let config = loader.merge_shell_config(ShellToolConfig::default(), &file_config)?;
+
+        assert_eq!(config.output.truncation_strategy, crate::sah_config::types::TruncationStrategy::WordBoundary);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_truncation_strategy() -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(
+            temp_file,
+            r#"
+[shell.output]
+truncation_strategy = "invalid_strategy"
+"#
+        )?;
+
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let file_config = loader.load_from_file(temp_file.path())?;
+        let result = loader.merge_shell_config(ShellToolConfig::default(), &file_config);
+
+        assert!(result.is_err());
+        if let Err(ConfigurationError::InvalidShellValue { key, reason, .. }) = result {
+            assert_eq!(key, "truncation_strategy");
+            assert!(reason.contains("preserve_structure"));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_invalid_env_values() -> Result<(), Box<dyn std::error::Error>> {
+        use std::env;
+
+        // Test invalid boolean value
+        env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", "maybe");
+        let loader = ConfigurationLoader::new()?.with_validation(false);
+        let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
+        assert!(result.is_err());
+
+        // Test invalid log level
+        env::set_var("SAH_SHELL_AUDIT_LOG_LEVEL", "invalid_level");
+        let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
+        assert!(result.is_err());
+
+        // Test invalid size format
+        env::set_var("SAH_SHELL_OUTPUT_MAX_SIZE", "invalid_size");
+        let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
+        assert!(result.is_err());
+
+        // Clean up
+        env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
+        env::remove_var("SAH_SHELL_AUDIT_LOG_LEVEL");
+        env::remove_var("SAH_SHELL_OUTPUT_MAX_SIZE");
 
         Ok(())
     }

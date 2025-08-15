@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
+use swissarmyhammer::sah_config::loader::ConfigurationLoader;
+use swissarmyhammer::sah_config::types::{ShellToolConfig, parse_size_string};
 
 /// Request structure for shell command execution
 #[derive(Debug, Deserialize)]
@@ -98,6 +100,19 @@ impl Default for OutputLimits {
             max_line_length: 2000,
             enable_streaming: false,
         }
+    }
+}
+
+impl OutputLimits {
+    /// Create OutputLimits from shell tool configuration
+    pub fn from_config(config: &ShellToolConfig) -> Result<Self, String> {
+        let max_output_size = parse_size_string(&config.output.max_output_size)?;
+        
+        Ok(Self {
+            max_output_size,
+            max_line_length: config.output.max_line_length,
+            enable_streaming: false, // Reserved for future use
+        })
     }
 }
 
@@ -922,6 +937,7 @@ async fn execute_shell_command(
     working_directory: Option<PathBuf>,
     timeout_seconds: u64,
     environment: Option<std::collections::HashMap<String, String>>,
+    config: &ShellToolConfig,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
 
@@ -981,8 +997,12 @@ async fn execute_shell_command(
     // Create process guard for automatic cleanup
     let mut process_guard = AsyncProcessGuard::new(child, command.clone());
 
-    // Create output limits configuration
-    let output_limits = OutputLimits::default();
+    // Create output limits configuration from shell config
+    let output_limits = OutputLimits::from_config(config).map_err(|e| {
+        ShellError::SystemError {
+            message: format!("Invalid output configuration: {}", e),
+        }
+    })?;
 
     // Execute with timeout
     let timeout_duration = Duration::from_secs(timeout_seconds);
@@ -1209,6 +1229,17 @@ impl McpTool for ShellExecuteTool {
 
         tracing::debug!("Executing shell command: {:?}", request.command);
 
+        // Load shell configuration
+        let config_loader = ConfigurationLoader::new().map_err(|e| {
+            tracing::error!("Failed to create configuration loader: {}", e);
+            McpError::internal_error(format!("Configuration system error: {}", e), None)
+        })?;
+        
+        let shell_config = config_loader.load_shell_config().map_err(|e| {
+            tracing::error!("Failed to load shell configuration: {}", e);
+            McpError::internal_error(format!("Failed to load shell configuration: {}", e), None)
+        })?;
+
         // Validate command is not empty
         McpValidation::validate_not_empty(&request.command, "shell command")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
@@ -1261,13 +1292,44 @@ impl McpTool for ShellExecuteTool {
 
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);
-        let timeout_seconds = request.timeout.unwrap_or(300) as u64;
+        
+        // Use configured timeout, applying limits and validation
+        let timeout_seconds = if let Some(requested_timeout) = request.timeout {
+            let requested_timeout = requested_timeout as u64;
+            
+            // Ensure timeout is within configured limits
+            if requested_timeout < shell_config.execution.min_timeout {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Timeout {} seconds is below minimum {} seconds", 
+                        requested_timeout, shell_config.execution.min_timeout
+                    ),
+                    None,
+                ));
+            }
+            
+            if requested_timeout > shell_config.execution.max_timeout {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Timeout {} seconds exceeds maximum {} seconds", 
+                        requested_timeout, shell_config.execution.max_timeout
+                    ),
+                    None,
+                ));
+            }
+            
+            requested_timeout
+        } else {
+            // Use configured default timeout
+            shell_config.execution.default_timeout
+        };
 
         match execute_shell_command(
             request.command.clone(),
             working_directory,
             timeout_seconds,
             request.environment,
+            &shell_config,
         )
         .await
         {
