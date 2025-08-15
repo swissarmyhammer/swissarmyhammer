@@ -426,6 +426,7 @@ mod tests {
         let abort_path = ".swissarmyhammer/.abort";
 
         // Create abort file
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
         std::fs::write(abort_path, "concurrent test reason").unwrap();
         assert!(Path::new(abort_path).exists());
 
@@ -501,6 +502,7 @@ mod tests {
 
         // Create abort file with newlines
         let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
         std::fs::write(abort_path, reason_with_newlines).unwrap();
         assert!(Path::new(abort_path).exists());
 

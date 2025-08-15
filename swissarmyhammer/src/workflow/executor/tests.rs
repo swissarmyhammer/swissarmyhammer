@@ -35,6 +35,10 @@ impl IsolatedTestEnvironment {
             original_cwd,
         })
     }
+
+    fn swissarmyhammer_dir(&self) -> std::path::PathBuf {
+        self._home_guard.swissarmyhammer_dir()
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +146,7 @@ async fn test_transition_to_invalid_state() {
 
 #[tokio::test]
 async fn test_max_transition_limit() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
 
     // Create a workflow with infinite loop
@@ -1791,7 +1796,7 @@ async fn test_abort_file_detection_with_newlines() {
 async fn test_abort_file_performance_impact() {
     use std::time::Instant;
 
-    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
 
     // Create a simple fast workflow
@@ -1813,16 +1818,16 @@ async fn test_abort_file_performance_impact() {
     }
     let duration_without_abort = start_without_abort.elapsed();
 
-    // Create abort file
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
-    std::fs::write(".swissarmyhammer/.abort", "Performance test abort").unwrap();
+    // Create abort file in the isolated test environment
+    let abort_file_path = test_env.swissarmyhammer_dir().join(".abort");
+    std::fs::write(&abort_file_path, "Performance test abort").unwrap();
 
     // Time execution with abort file (will fail but we measure time to first check)
     let start_with_abort = Instant::now();
     for _ in 0..10 {
         // Recreate the abort file each time since it gets detected and errors
         std::fs::create_dir_all(".swissarmyhammer").unwrap();
-        std::fs::write(".swissarmyhammer/.abort", "Performance test abort").unwrap();
+        std::fs::write(&abort_file_path, "Performance test abort").unwrap();
         let mut run = executor.start_workflow(workflow.clone()).unwrap();
         let _ = executor.execute_state_with_limit(&mut run, 1000).await;
     }
