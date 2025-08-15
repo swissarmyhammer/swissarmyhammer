@@ -8,7 +8,7 @@ use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
 };
 use crate::workflow::action_parser::ActionParser;
-use crate::workflow::mcp_integration::{WorkflowShellContext, response_processing};
+use crate::workflow::mcp_integration::{response_processing, WorkflowShellContext};
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1118,7 +1118,6 @@ impl ShellAction {
     }
 }
 
-
 /// Validate environment variable names
 /// Environment variable names should start with letter or underscore
 /// and contain only letters, digits, and underscores
@@ -1222,7 +1221,6 @@ pub fn log_command_execution(
 impl VariableSubstitution for ShellAction {}
 
 impl ShellAction {
-
     /// Process enhanced shell execution result and maintain backward compatibility with existing workflow behavior
     async fn process_enhanced_result(
         &self,
@@ -1249,7 +1247,10 @@ impl ShellAction {
         context.insert("exit_code".to_string(), Value::Number(exit_code.into()));
         context.insert("stdout".to_string(), Value::String(stdout.clone()));
         context.insert("stderr".to_string(), Value::String(stderr.clone()));
-        context.insert("duration_ms".to_string(), Value::Number(execution_time_ms.into()));
+        context.insert(
+            "duration_ms".to_string(),
+            Value::Number(execution_time_ms.into()),
+        );
 
         // Set result variable if specified (existing behavior)
         if let Some(result_var) = &self.result_variable {
@@ -1291,7 +1292,9 @@ impl Action for ShellAction {
     async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
         // Substitute variables in command and other parameters
         let resolved_command = self.substitute_string(&self.command, context);
-        let resolved_working_dir = self.working_dir.as_ref()
+        let resolved_working_dir = self
+            .working_dir
+            .as_ref()
             .map(|dir| self.substitute_string(dir, context));
 
         // Security validation (maintain existing behavior)
@@ -1317,27 +1320,38 @@ impl Action for ShellAction {
         }
 
         // Log security-relevant execution
-        log_command_execution(&resolved_command, resolved_working_dir.as_deref(), &resolved_env);
+        log_command_execution(
+            &resolved_command,
+            resolved_working_dir.as_deref(),
+            &resolved_env,
+        );
 
         // Convert timeout from Duration to seconds
         let timeout_secs = self.timeout.map(|d| d.as_secs() as u32);
 
-        tracing::info!("Executing shell command via enhanced executor: {}", resolved_command);
+        tracing::info!(
+            "Executing shell command via enhanced executor: {}",
+            resolved_command
+        );
 
         // Create enhanced shell context
-        let shell_context = WorkflowShellContext::new().await
-            .map_err(|e| ActionError::ExecutionError(format!("Enhanced shell initialization failed: {}", e)))?;
+        let shell_context = WorkflowShellContext::new().await.map_err(|e| {
+            ActionError::ExecutionError(format!("Enhanced shell initialization failed: {}", e))
+        })?;
 
         // Execute via enhanced shell context
-        let result = shell_context.execute_shell_command(
-            resolved_command.clone(),
-            resolved_working_dir,
-            resolved_env,
-            timeout_secs,
-        ).await?;
+        let result = shell_context
+            .execute_shell_command(
+                resolved_command.clone(),
+                resolved_working_dir,
+                resolved_env,
+                timeout_secs,
+            )
+            .await?;
 
         // Process enhanced shell result back to workflow format
-        self.process_enhanced_result(result, &resolved_command, context).await
+        self.process_enhanced_result(result, &resolved_command, context)
+            .await
     }
 
     fn description(&self) -> String {
@@ -2607,8 +2621,7 @@ mod tests {
         use std::time::Duration;
 
         // Create an action with a short timeout (1 second to ensure proper timeout behavior)
-        let action =
-            ShellAction::new("sleep 10".to_string()).with_timeout(Duration::from_secs(1));
+        let action = ShellAction::new("sleep 10".to_string()).with_timeout(Duration::from_secs(1));
         let mut context = HashMap::new();
 
         let result = action.execute(&mut context).await.unwrap();
@@ -2635,12 +2648,14 @@ mod tests {
         // Should be around 1000ms or slightly more (allowing for process cleanup and system overhead)
         // Being more lenient with timing to account for CI environment variations
         assert!(
-            duration_ms >= 800, 
-            "Duration {} ms should be at least 800ms", duration_ms
+            duration_ms >= 800,
+            "Duration {} ms should be at least 800ms",
+            duration_ms
         );
         assert!(
-            duration_ms <= 3000, 
-            "Duration {} ms should not exceed 3000ms", duration_ms
+            duration_ms <= 3000,
+            "Duration {} ms should not exceed 3000ms",
+            duration_ms
         );
 
         // Result should be false for timeout

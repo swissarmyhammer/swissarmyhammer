@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -41,7 +41,6 @@ impl EnhancedShellExecutor {
     pub fn new() -> Self {
         Self::default()
     }
-
 
     /// Execute a shell command with enhanced capabilities
     pub async fn execute_shell_command(
@@ -92,7 +91,8 @@ impl EnhancedShellExecutor {
         // Execute with or without timeout
         let result = if let Some(timeout_duration) = timeout_secs {
             let duration = Duration::from_secs(timeout_duration as u64);
-            self.execute_with_timeout(&mut child, duration, command).await
+            self.execute_with_timeout(&mut child, duration, command)
+                .await
         } else {
             self.execute_without_timeout(&mut child, command).await
         };
@@ -132,15 +132,11 @@ impl EnhancedShellExecutor {
             let stderr_task = self.read_output_with_limit(stderr, self.max_output_size);
 
             // Wait for process and read outputs concurrently
-            let (status_result, stdout_result, stderr_result) = tokio::join!(
-                child.wait(),
-                stdout_task,
-                stderr_task
-            );
+            let (status_result, stdout_result, stderr_result) =
+                tokio::join!(child.wait(), stdout_task, stderr_task);
 
-            let status = status_result.map_err(|e| {
-                ActionError::ExecutionError(format!("Process wait failed: {}", e))
-            })?;
+            let status = status_result
+                .map_err(|e| ActionError::ExecutionError(format!("Process wait failed: {}", e)))?;
 
             let stdout = stdout_result?;
             let stderr = stderr_result?;
@@ -153,8 +149,12 @@ impl EnhancedShellExecutor {
             Ok(result) => result,
             Err(_) => {
                 // Timeout occurred - terminate process
-                tracing::warn!("Command '{}' timed out after {:?}", command, timeout_duration);
-                
+                tracing::warn!(
+                    "Command '{}' timed out after {:?}",
+                    command,
+                    timeout_duration
+                );
+
                 // Kill the process
                 if let Err(e) = child.kill().await {
                     tracing::error!("Failed to kill timed out process: {}", e);
@@ -183,15 +183,11 @@ impl EnhancedShellExecutor {
         let stdout_task = self.read_output_with_limit(stdout, self.max_output_size);
         let stderr_task = self.read_output_with_limit(stderr, self.max_output_size);
 
-        let (status_result, stdout_result, stderr_result) = tokio::join!(
-            child.wait(),
-            stdout_task,
-            stderr_task
-        );
+        let (status_result, stdout_result, stderr_result) =
+            tokio::join!(child.wait(), stdout_task, stderr_task);
 
-        let status = status_result.map_err(|e| {
-            ActionError::ExecutionError(format!("Command execution failed: {}", e))
-        })?;
+        let status = status_result
+            .map_err(|e| ActionError::ExecutionError(format!("Command execution failed: {}", e)))?;
 
         let stdout = stdout_result?;
         let stderr = stderr_result?;
@@ -206,10 +202,12 @@ impl EnhancedShellExecutor {
         reader: impl AsyncReadExt + Unpin,
         max_size: usize,
     ) -> Result<String, ActionError> {
-        let mut buffer = Vec::new();
-        buffer.reserve(std::cmp::min(max_size, 8192)); // Reserve reasonable initial size
+        let mut buffer = Vec::with_capacity(std::cmp::min(max_size, 8192)); // Reserve reasonable initial size
 
-        reader.take(max_size as u64).read_to_end(&mut buffer).await
+        reader
+            .take(max_size as u64)
+            .read_to_end(&mut buffer)
+            .await
             .map_err(|e| ActionError::ExecutionError(format!("Failed to read output: {}", e)))?;
 
         self.safe_string_conversion(&buffer, max_size)
@@ -229,7 +227,11 @@ impl EnhancedShellExecutor {
             return Ok(format!(
                 "[Binary content detected ({} bytes){}]",
                 bytes.len(),
-                if bytes.len() >= max_size { " - truncated" } else { "" }
+                if bytes.len() >= max_size {
+                    " - truncated"
+                } else {
+                    ""
+                }
             ));
         }
 
@@ -298,12 +300,15 @@ impl WorkflowShellContext {
         environment: HashMap<String, String>,
         timeout_secs: Option<u32>,
     ) -> Result<Value, ActionError> {
-        let result = self.executor.execute_shell_command(
-            &command,
-            working_directory.as_deref(),
-            &environment,
-            timeout_secs,
-        ).await?;
+        let result = self
+            .executor
+            .execute_shell_command(
+                &command,
+                working_directory.as_deref(),
+                &environment,
+                timeout_secs,
+            )
+            .await?;
 
         // Convert to JSON format expected by workflow system
         Ok(serde_json::json!({
@@ -334,20 +339,25 @@ mod tests {
     #[tokio::test]
     async fn test_workflow_shell_context_creation() {
         let result = WorkflowShellContext::new().await;
-        assert!(result.is_ok(), "Failed to create WorkflowShellContext: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create WorkflowShellContext: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
     async fn test_enhanced_shell_executor() {
         let executor = EnhancedShellExecutor::new();
-        let result = executor.execute_shell_command(
-            "echo 'test'",
-            None,
-            &HashMap::new(),
-            Some(10),
-        ).await;
+        let result = executor
+            .execute_shell_command("echo 'test'", None, &HashMap::new(), Some(10))
+            .await;
 
-        assert!(result.is_ok(), "Command execution failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Command execution failed: {:?}",
+            result.err()
+        );
         let shell_result = result.unwrap();
         assert_eq!(shell_result.exit_code, 0);
         assert!(shell_result.stdout.contains("test"));
@@ -358,7 +368,7 @@ mod tests {
         let executor = EnhancedShellExecutor::new();
         let binary_data = vec![0u8, 1, 2, 3, 255]; // Contains null byte
         let result = executor.safe_string_conversion(&binary_data, 1024);
-        
+
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Binary content detected"));

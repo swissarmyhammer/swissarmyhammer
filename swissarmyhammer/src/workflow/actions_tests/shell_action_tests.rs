@@ -1373,8 +1373,7 @@ mod timeout_and_process_management_tests {
     #[tokio::test]
     async fn test_timeout_precision() {
         // Test timeout precision with a 1-second timeout
-        let action =
-            ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
+        let action = ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
         let mut context = HashMap::new();
 
         let start = std::time::Instant::now();
@@ -1423,8 +1422,7 @@ mod timeout_and_process_management_tests {
 
     #[tokio::test]
     async fn test_timeout_context_variables() {
-        let action =
-            ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
+        let action = ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
         let mut context = HashMap::new();
 
         let _result = action.execute(&mut context).await.unwrap();

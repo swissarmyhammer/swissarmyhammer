@@ -52,7 +52,7 @@ pub use executor::{
     ExecutionEvent, ExecutionEventType, ExecutorError, ExecutorResult, WorkflowExecutor,
 };
 pub use graph::{GraphError, GraphResult, WorkflowGraphAnalyzer};
-pub use mcp_integration::{WorkflowShellContext, response_processing};
+pub use mcp_integration::{response_processing, WorkflowShellContext};
 pub use metrics::{
     GlobalMetrics, MemoryMetrics, ResourceTrends, RunMetrics, StateExecutionCount, WorkflowMetrics,
     WorkflowSummaryMetrics,
