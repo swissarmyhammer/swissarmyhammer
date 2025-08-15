@@ -63,7 +63,7 @@ fn test_parameter_schema_compliance() {
 #[test]
 fn test_specification_use_case_parameters() {
     let tool = WebFetchTool::new();
-    let schema = tool.schema();
+    let _schema = tool.schema();
     
     // Test that all use case parameters from the specification are supported
     
@@ -101,22 +101,22 @@ fn test_specification_use_case_parameters() {
         (&news_analysis_params, "News and Content Analysis"),
     ] {
         // Verify required URL is present
-        assert!(params["url"].is_string(), "{} should have string URL", description);
+        assert!(params["url"].is_string(), "{description} should have string URL");
         
         // Verify optional parameters are within valid ranges when present
         if let Some(timeout) = params.get("timeout") {
             let timeout_val = timeout.as_u64().unwrap();
-            assert!(timeout_val >= 5 && timeout_val <= 120, 
-                   "{} timeout should be in valid range", description);
+            assert!((5..=120).contains(&timeout_val), 
+                   "{description} timeout should be in valid range");
         }
         
         if let Some(max_length) = params.get("max_content_length") {
             let max_length_val = max_length.as_u64().unwrap();
-            assert!(max_length_val >= 1024 && max_length_val <= 10485760,
-                   "{} max_content_length should be in valid range", description);
+            assert!((1024..=10485760).contains(&max_length_val),
+                   "{description} max_content_length should be in valid range");
         }
         
-        println!("✅ {} use case parameters validated", description);
+        println!("✅ {description} use case parameters validated");
     }
 }
 
