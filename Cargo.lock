@@ -5369,7 +5369,6 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "futures-util",
- "html2md",
  "markdowndown",
  "regex",
  "reqwest 0.12.22",

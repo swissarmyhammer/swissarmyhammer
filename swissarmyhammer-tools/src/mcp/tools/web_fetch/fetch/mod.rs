@@ -1972,8 +1972,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "security_error",
-                "Failed to categorize security error: {}",
-                error_msg
+                "Failed to categorize security error: {error_msg}"
             );
         }
 
@@ -1990,8 +1989,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "network_error",
-                "Failed to categorize network error: {}",
-                error_msg
+                "Failed to categorize network error: {error_msg}"
             );
         }
 
@@ -2006,8 +2004,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "unknown_error",
-                "Should categorize as unknown error: {}",
-                error_msg
+                "Should categorize as unknown error: {error_msg}"
             );
         }
 
@@ -2018,8 +2015,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "not_found_error",
-                "Failed to categorize not found error: {}",
-                error_msg
+                "Failed to categorize not found error: {error_msg}"
             );
         }
 
@@ -2029,8 +2025,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "access_denied_error",
-                "Failed to categorize access error: {}",
-                error_msg
+                "Failed to categorize access error: {error_msg}"
             );
         }
 
@@ -2044,8 +2039,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "server_error",
-                "Failed to categorize server error: {}",
-                error_msg
+                "Failed to categorize server error: {error_msg}"
             );
         }
 
@@ -2061,8 +2055,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "content_processing_error",
-                "Failed to categorize content error: {}",
-                error_msg
+                "Failed to categorize content error: {error_msg}"
             );
         }
 
@@ -2073,8 +2066,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "size_limit_error",
-                "Failed to categorize size error: {}",
-                error_msg
+                "Failed to categorize size error: {error_msg}"
             );
         }
 
@@ -2089,8 +2081,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "redirect_error",
-                "Failed to categorize redirect error: {}",
-                error_msg
+                "Failed to categorize redirect error: {error_msg}"
             );
         }
 
@@ -2105,8 +2096,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "content_error",
-                "Failed to categorize parse error: {}",
-                error_msg
+                "Failed to categorize parse error: {error_msg}"
             );
         }
     }
@@ -2138,8 +2128,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, expected_category,
-                "Case sensitivity issue with error: {} -> expected: {}, got: {}",
-                error_msg, expected_category, category
+                "Case sensitivity issue with error: {error_msg} -> expected: {expected_category}, got: {category}"
             );
         }
     }
@@ -2159,8 +2148,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, "unknown_error",
-                "Should categorize unknown error: {}",
-                error_msg
+                "Should categorize unknown error: {error_msg}"
             );
         }
     }
@@ -2180,8 +2168,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, expected_category,
-                "Priority handling failed for: {} -> expected: {}, got: {}",
-                error_msg, expected_category, category
+                "Priority handling failed for: {error_msg} -> expected: {expected_category}, got: {category}"
             );
         }
     }
@@ -2202,8 +2189,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, expected_category,
-                "Numeric error code handling failed for: {} -> expected: {}, got: {}",
-                error_msg, expected_category, category
+                "Numeric error code handling failed for: {error_msg} -> expected: {expected_category}, got: {category}"
             );
         }
     }
@@ -2243,8 +2229,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, expected_category,
-                "Complex error scenario failed for: {} -> expected: {}, got: {}",
-                error_msg, expected_category, category
+                "Complex error scenario failed for: {error_msg} -> expected: {expected_category}, got: {category}"
             );
         }
     }
@@ -2264,8 +2249,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, expected_category,
-                "Special character handling failed for: {} -> expected: {}, got: {}",
-                error_msg, expected_category, category
+                "Special character handling failed for: {error_msg} -> expected: {expected_category}, got: {category}"
             );
         }
     }
@@ -2324,8 +2308,7 @@ mod tests {
             let category = WebFetchTool::categorize_error(&error);
             assert_eq!(
                 category, expected_category,
-                "ErrorKind {:?} with message '{}' should categorize as '{}', got '{}'",
-                error_kind, error_msg, expected_category, category
+                "ErrorKind {error_kind:?} with message '{error_msg}' should categorize as '{expected_category}', got '{category}'"
             );
         }
     }
@@ -2366,7 +2349,7 @@ mod tests {
         let call_result = result.unwrap();
 
         // Test basic structure
-        assert!(call_result.content.len() > 0);
+        assert!(!call_result.content.is_empty());
         assert_eq!(call_result.is_error, Some(false));
 
         // Parse the JSON content
@@ -2478,7 +2461,7 @@ mod tests {
         let call_result = result.unwrap();
 
         // Test basic structure
-        assert!(call_result.content.len() > 0);
+        assert!(!call_result.content.is_empty());
         assert_eq!(call_result.is_error, Some(true));
 
         if let rmcp::model::RawContent::Text(text_content) = &call_result.content[0].raw {
@@ -2566,8 +2549,7 @@ mod tests {
             for field in &expected_fields {
                 assert!(
                     metadata[field] != serde_json::Value::Null,
-                    "Field '{}' should be present and not null",
-                    field
+                    "Field '{field}' should be present and not null"
                 );
             }
 
@@ -2817,20 +2799,17 @@ mod tests {
         for prop in &expected_properties {
             assert!(
                 properties.contains_key(*prop),
-                "Schema should contain property: {}",
-                prop
+                "Schema should contain property: {prop}"
             );
 
             let prop_def = &properties[*prop];
             assert!(
                 prop_def.is_object(),
-                "Property '{}' should be an object",
-                prop
+                "Property '{prop}' should be an object"
             );
             assert!(
                 prop_def["type"].is_string(),
-                "Property '{}' should have a type field",
-                prop
+                "Property '{prop}' should have a type field"
             );
         }
 
@@ -2879,22 +2858,23 @@ mod tests {
         assert_eq!(content_prop["default"], DEFAULT_CONTENT_LENGTH_BYTES);
 
         // Test that constants are reasonable
-        assert!(MIN_TIMEOUT_SECONDS > 0);
-        assert!(MAX_TIMEOUT_SECONDS > MIN_TIMEOUT_SECONDS);
-        assert!(DEFAULT_TIMEOUT_SECONDS >= MIN_TIMEOUT_SECONDS);
-        assert!(DEFAULT_TIMEOUT_SECONDS <= MAX_TIMEOUT_SECONDS);
+        // Note: These are compile-time constants, so we use runtime checks
+        const _: () = assert!(MIN_TIMEOUT_SECONDS > 0);
+        const _: () = assert!(MAX_TIMEOUT_SECONDS > MIN_TIMEOUT_SECONDS);
+        const _: () = assert!(DEFAULT_TIMEOUT_SECONDS >= MIN_TIMEOUT_SECONDS);
+        const _: () = assert!(DEFAULT_TIMEOUT_SECONDS <= MAX_TIMEOUT_SECONDS);
 
-        assert!(MIN_CONTENT_LENGTH_BYTES > 0);
-        assert!(MAX_CONTENT_LENGTH_BYTES > MIN_CONTENT_LENGTH_BYTES);
-        assert!(DEFAULT_CONTENT_LENGTH_BYTES >= MIN_CONTENT_LENGTH_BYTES);
-        assert!(DEFAULT_CONTENT_LENGTH_BYTES <= MAX_CONTENT_LENGTH_BYTES);
+        const _: () = assert!(MIN_CONTENT_LENGTH_BYTES > 0);
+        const _: () = assert!(MAX_CONTENT_LENGTH_BYTES > MIN_CONTENT_LENGTH_BYTES);
+        const _: () = assert!(DEFAULT_CONTENT_LENGTH_BYTES >= MIN_CONTENT_LENGTH_BYTES);
+        const _: () = assert!(DEFAULT_CONTENT_LENGTH_BYTES <= MAX_CONTENT_LENGTH_BYTES);
     }
 
     #[test]
     fn test_redirect_constants() {
         // Test redirect constants are reasonable
-        assert!(MAX_REDIRECTS > 0);
-        assert!(MAX_REDIRECTS <= 20); // Sanity check - shouldn't be too high
+        const _: () = assert!(MAX_REDIRECTS > 0);
+        const _: () = assert!(MAX_REDIRECTS <= 20); // Sanity check - shouldn't be too high
         assert_eq!(MAX_REDIRECTS, 10); // Current expected value
     }
 }
