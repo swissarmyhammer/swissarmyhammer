@@ -34,7 +34,8 @@ mod visualization_tests;
 pub use actions::{
     parse_action_from_description, parse_action_from_description_with_context, Action, ActionError,
     ActionResult, LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction,
-    SubWorkflowAction, WaitAction,
+    SubWorkflowAction, WaitAction, validate_command, validate_working_directory_security,
+    validate_environment_variables_security, is_valid_env_var_name,
 };
 pub use cache::{
     CacheStats, CelProgramCache, TransitionCache, TransitionPath, WorkflowCache,

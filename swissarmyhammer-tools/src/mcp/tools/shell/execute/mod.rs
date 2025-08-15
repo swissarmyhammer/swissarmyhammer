@@ -544,6 +544,16 @@ impl McpTool for ShellExecuteTool {
         McpValidation::validate_not_empty(&request.command, "shell command")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
 
+        // Apply comprehensive command security validation from workflow system
+        swissarmyhammer::workflow::validate_command(&request.command)
+            .map_err(|e| {
+                tracing::warn!("Command security validation failed: {}", e);
+                McpError::invalid_params(
+                    format!("Command security check failed: {}", e),
+                    None,
+                )
+            })?;
+
         // Validate timeout if provided
         if let Some(timeout) = request.timeout {
             if timeout == 0 || timeout > 1800 {
@@ -554,10 +564,32 @@ impl McpTool for ShellExecuteTool {
             }
         }
 
-        // Validate working directory if provided
+        // Validate working directory if provided with security checks
         if let Some(ref working_dir) = request.working_directory {
             McpValidation::validate_not_empty(working_dir, "working directory")
                 .map_err(|e| McpErrorHandler::handle_error(e, "validate working directory"))?;
+            
+            // Apply security validation from workflow system
+            swissarmyhammer::workflow::validate_working_directory_security(working_dir)
+                .map_err(|e| {
+                    tracing::warn!("Working directory security validation failed: {}", e);
+                    McpError::invalid_params(
+                        format!("Working directory security check failed: {}", e),
+                        None,
+                    )
+                })?;
+        }
+
+        // Validate environment variables if provided with security checks
+        if let Some(ref env_vars) = request.environment {
+            swissarmyhammer::workflow::validate_environment_variables_security(env_vars)
+                .map_err(|e| {
+                    tracing::warn!("Environment variables security validation failed: {}", e);
+                    McpError::invalid_params(
+                        format!("Environment variables security check failed: {}", e),
+                        None,
+                    )
+                })?;
         }
 
         // Execute the shell command using our core execution function
@@ -1217,5 +1249,222 @@ mod tests {
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(true));
+    }
+
+    // Security validation tests for the new functionality
+    #[tokio::test]
+    async fn test_command_injection_security_validation() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Test command injection patterns that should be blocked
+        let dangerous_commands = [
+            "echo hello; rm -rf /",
+            "echo hello && rm file",
+            "echo hello || rm file",  
+            "echo `dangerous`",
+            "echo $(dangerous)",
+        ];
+
+        for cmd in &dangerous_commands {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "command".to_string(),
+                serde_json::Value::String(cmd.to_string()),
+            );
+
+            let result = tool.execute(args, &context).await;
+            assert!(
+                result.is_err(),
+                "Command injection pattern '{}' should be blocked",
+                cmd
+            );
+
+            // Verify the error message contains security-related information
+            if let Err(mcp_error) = result {
+                let error_str = mcp_error.to_string();
+                assert!(
+                    error_str.contains("security") || error_str.contains("unsafe"),
+                    "Error should mention security concern for command: {}",
+                    cmd
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_working_directory_traversal_security_validation() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Test path traversal attempts that should be blocked
+        let dangerous_paths = [
+            "../parent",
+            "path/../parent",
+            "/absolute/../parent",
+        ];
+
+        for path in &dangerous_paths {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "command".to_string(),
+                serde_json::Value::String("echo test".to_string()),
+            );
+            args.insert(
+                "working_directory".to_string(),
+                serde_json::Value::String(path.to_string()),
+            );
+
+            let result = tool.execute(args, &context).await;
+            assert!(
+                result.is_err(),
+                "Path traversal attempt '{}' should be blocked",
+                path
+            );
+
+            // Verify the error message mentions security
+            if let Err(mcp_error) = result {
+                let error_str = mcp_error.to_string();
+                assert!(
+                    error_str.contains("security") || error_str.contains("directory"),
+                    "Error should mention security/directory concern for path: {}",
+                    path
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_environment_variable_security_validation() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Test invalid environment variable names that should be blocked
+        let mut env = std::collections::HashMap::new();
+        env.insert("123INVALID".to_string(), "value".to_string()); // starts with number
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo test".to_string()),
+        );
+        args.insert(
+            "environment".to_string(),
+            serde_json::to_value(&env).unwrap(),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_err(),
+            "Invalid environment variable name should be blocked"
+        );
+
+        // Verify the error message mentions security or environment variables
+        if let Err(mcp_error) = result {
+            let error_str = mcp_error.to_string();
+            assert!(
+                error_str.contains("security") || error_str.contains("environment"),
+                "Error should mention security/environment concern"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_environment_variable_value_too_long() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Test environment variable value that's too long
+        let mut env = std::collections::HashMap::new();
+        env.insert("TEST_VAR".to_string(), "x".repeat(2000)); // exceeds limit
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String("echo test".to_string()),
+        );
+        args.insert(
+            "environment".to_string(),
+            serde_json::to_value(&env).unwrap(),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_err(),
+            "Environment variable value too long should be blocked"
+        );
+
+        // Verify error message mentions the issue
+        if let Err(mcp_error) = result {
+            let error_str = mcp_error.to_string();
+            assert!(
+                error_str.contains("security") || error_str.contains("long") || error_str.contains("length"),
+                "Error should mention length/security concern"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_command_too_long_security_validation() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Test command that's too long
+        let long_command = "echo ".to_string() + &"a".repeat(5000); // exceeds limit
+
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "command".to_string(),
+            serde_json::Value::String(long_command),
+        );
+
+        let result = tool.execute(args, &context).await;
+        assert!(
+            result.is_err(),
+            "Command that's too long should be blocked"
+        );
+
+        // Verify error message mentions the issue
+        if let Err(mcp_error) = result {
+            let error_str = mcp_error.to_string();
+            assert!(
+                error_str.contains("security") || error_str.contains("long") || error_str.contains("length"),
+                "Error should mention length/security concern"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_valid_commands_still_work() {
+        let tool = ShellExecuteTool::new();
+        let context = create_test_context();
+
+        // Test that valid, safe commands still work after adding security validation
+        let valid_commands = [
+            "echo hello world",
+            "ls -la",
+            "pwd",
+        ];
+
+        for cmd in &valid_commands {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "command".to_string(),
+                serde_json::Value::String(cmd.to_string()),
+            );
+
+            let result = tool.execute(args, &context).await;
+            assert!(
+                result.is_ok(),
+                "Valid command '{}' should not be blocked by security validation",
+                cmd
+            );
+
+            if let Ok(call_result) = result {
+                // Exit code might be non-zero for commands like 'ls -la' if directory doesn't exist,
+                // but the tool should still execute successfully (not blocked by security)
+                assert!(call_result.content.len() > 0);
+            }
+        }
     }
 }
