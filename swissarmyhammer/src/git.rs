@@ -1732,31 +1732,40 @@ mod tests {
     fn test_abort_file_contains_detailed_context() {
         let temp_dir = create_test_git_repo().unwrap();
 
-        // Change to temp directory for the test
+        // Save original directory and restore it safely at the end
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        
+        // Use a closure to ensure directory is restored even if test panics
+        let test_result = std::panic::catch_unwind(|| {
+            std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+            let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Create issue branch
-        git_ops.create_work_branch("detailed_issue").unwrap();
+            // Create issue branch
+            git_ops.create_work_branch("detailed_issue").unwrap();
 
-        // Switch back and try to merge to nonexistent branch
-        git_ops.checkout_branch("main").unwrap();
-        let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
-        assert!(result.is_err());
+            // Switch back and try to merge to nonexistent branch
+            git_ops.checkout_branch("main").unwrap();
+            let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
+            assert!(result.is_err());
 
-        // Check abort file contains detailed context (use temp directory path)
-        let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
-        assert!(abort_file.exists());
+            // Check abort file contains detailed context (use temp directory path)
+            let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
+            assert!(abort_file.exists());
 
-        let abort_content = std::fs::read_to_string(&abort_file).unwrap();
-        assert!(abort_content.contains("deleted_branch"));
-        assert!(abort_content.contains("detailed_issue"));
-        assert!(abort_content.contains("Manual intervention required"));
+            let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+            assert!(abort_content.contains("deleted_branch"));
+            assert!(abort_content.contains("detailed_issue"));
+            assert!(abort_content.contains("Manual intervention required"));
+        });
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        // Always try to restore the original directory, ignoring errors
+        let _ = std::env::set_current_dir(&original_dir);
+        
+        // Re-panic if the test failed
+        if let Err(panic_payload) = test_result {
+            std::panic::resume_unwind(panic_payload);
+        }
     }
 
     #[test]
