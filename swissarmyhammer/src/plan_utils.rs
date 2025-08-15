@@ -521,7 +521,7 @@ mod tests {
 
         for content in test_cases {
             let result = validate_specification_content(content, "test.md");
-            assert!(result.is_ok(), "Failed for content: {}", content);
+            assert!(result.is_ok(), "Failed for content: {content}");
         }
     }
 

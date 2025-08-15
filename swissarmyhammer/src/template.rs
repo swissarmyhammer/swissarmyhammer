@@ -1302,12 +1302,12 @@ mod tests {
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let env_var_name = format!("test_issues_directory_{}", unique_id);
+        let env_var_name = format!("test_issues_directory_{unique_id}");
 
         // Set environment variable
         env::set_var(&env_var_name, "/env/issues/path");
 
-        let template = Template::new(&format!("Issues: {{{{ {} }}}}", env_var_name)).unwrap();
+        let template = Template::new(&format!("Issues: {{{{ {env_var_name} }}}}")).unwrap();
         let args = HashMap::new();
 
         let result = template.render_with_config(&args).unwrap();
@@ -1327,12 +1327,12 @@ mod tests {
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let env_var_name = format!("test_precedence_var_{}", unique_id);
+        let env_var_name = format!("test_precedence_var_{unique_id}");
 
         // Set environment variable
         env::set_var(&env_var_name, "/env/path");
 
-        let template = Template::new(&format!("Issues: {{{{ {} }}}}", env_var_name)).unwrap();
+        let template = Template::new(&format!("Issues: {{{{ {env_var_name} }}}}")).unwrap();
         let mut args = HashMap::new();
         args.insert(env_var_name.clone(), "/arg/path".to_string());
 
