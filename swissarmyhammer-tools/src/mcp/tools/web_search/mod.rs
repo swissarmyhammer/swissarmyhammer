@@ -5,11 +5,6 @@
 
 pub mod content_fetcher;
 pub mod duckduckgo_client;
-pub mod enhanced_search;
-pub mod error_recovery;
-pub mod health_checker;
-pub mod instance_discovery;
-pub mod instance_manager;
 pub mod privacy;
 pub mod search;
 pub mod types;
@@ -28,11 +23,9 @@ use crate::mcp::tool_registry::ToolRegistry;
 ///
 /// # Tools Registered
 ///
-/// - `web_search`: Basic web search using DuckDuckGo with optional content fetching
-/// - `enhanced_web_search`: Enhanced web search with comprehensive error handling, circuit breaker protection, and graceful degradation
+/// - `web_search`: Web search using DuckDuckGo with optional content fetching
 pub fn register_web_search_tools(registry: &mut ToolRegistry) {
     registry.register(search::WebSearchTool::new());
-    registry.register(enhanced_search::EnhancedWebSearchTool::new());
 }
 
 #[cfg(test)]
@@ -47,9 +40,8 @@ mod tests {
 
         register_web_search_tools(&mut registry);
 
-        assert_eq!(registry.len(), 2);
+        assert_eq!(registry.len(), 1);
         assert!(registry.get_tool("web_search").is_some());
-        assert!(registry.get_tool("enhanced_web_search").is_some());
     }
 
     #[test]
@@ -78,47 +70,6 @@ mod tests {
 
         let web_search_tool = registry.get_tool("web_search").unwrap();
         let schema = web_search_tool.schema();
-
-        // Verify schema is a valid JSON object
-        assert_eq!(schema["type"], "object");
-
-        // Verify required fields
-        assert!(schema["properties"]["query"].is_object());
-        assert!(schema["required"].is_array());
-        assert!(schema["required"]
-            .as_array()
-            .unwrap()
-            .contains(&serde_json::Value::String("query".to_string())));
-    }
-
-    #[test]
-    fn test_enhanced_web_search_tool_is_properly_named() {
-        let mut registry = ToolRegistry::new();
-        register_web_search_tools(&mut registry);
-
-        let enhanced_tool = registry.get_tool("enhanced_web_search").unwrap();
-        assert_eq!(enhanced_tool.name(), "enhanced_web_search");
-    }
-
-    #[test]
-    fn test_enhanced_web_search_tool_has_description() {
-        let mut registry = ToolRegistry::new();
-        register_web_search_tools(&mut registry);
-
-        let enhanced_tool = registry.get_tool("enhanced_web_search").unwrap();
-        assert!(!enhanced_tool.description().is_empty());
-        assert!(enhanced_tool
-            .description()
-            .contains("comprehensive error handling"));
-    }
-
-    #[test]
-    fn test_enhanced_web_search_tool_has_valid_schema() {
-        let mut registry = ToolRegistry::new();
-        register_web_search_tools(&mut registry);
-
-        let enhanced_tool = registry.get_tool("enhanced_web_search").unwrap();
-        let schema = enhanced_tool.schema();
 
         // Verify schema is a valid JSON object
         assert_eq!(schema["type"], "object");
