@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Privacy configuration for web search operations
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -54,6 +54,18 @@ pub struct PrivacyConfig {
     pub anonymize_content_requests: bool,
     /// Delay in milliseconds between content fetching requests
     pub content_request_delay_ms: u64,
+
+    // Adaptive rate limiting
+    /// Enable adaptive rate limiting that increases delays after CAPTCHA challenges
+    pub enable_adaptive_rate_limiting: bool,
+    /// Initial backoff delay in milliseconds after CAPTCHA detection
+    pub captcha_backoff_initial_ms: u64,
+    /// Maximum backoff delay in milliseconds
+    pub captcha_backoff_max_ms: u64,
+    /// Backoff multiplier for consecutive CAPTCHA challenges
+    pub captcha_backoff_multiplier: f64,
+    /// How long to maintain increased delays after CAPTCHA (in minutes)
+    pub captcha_backoff_duration_mins: u64,
 }
 
 impl Default for PrivacyConfig {
@@ -72,6 +84,11 @@ impl Default for PrivacyConfig {
             avoid_repeat_instances: 3,
             anonymize_content_requests: true,
             content_request_delay_ms: 200,
+            enable_adaptive_rate_limiting: true,
+            captcha_backoff_initial_ms: 1000,  // 1 second initial backoff
+            captcha_backoff_max_ms: 30000,     // 30 second max backoff
+            captcha_backoff_multiplier: 2.0,   // Double delay for each consecutive CAPTCHA
+            captcha_backoff_duration_mins: 10, // Maintain backoff for 10 minutes
         }
     }
 }
@@ -302,6 +319,99 @@ impl InstanceDistributor {
     }
 }
 
+/// Adaptive rate limiter that increases delays after CAPTCHA challenges
+#[derive(Clone)]
+pub struct AdaptiveRateLimiter {
+    config: PrivacyConfig,
+    last_captcha_time: Arc<Mutex<Option<Instant>>>,
+    current_backoff_ms: Arc<Mutex<u64>>,
+    consecutive_captchas: Arc<Mutex<u32>>,
+}
+
+impl AdaptiveRateLimiter {
+    /// Creates a new AdaptiveRateLimiter from config
+    pub fn new(config: PrivacyConfig) -> Self {
+        Self {
+            config,
+            last_captcha_time: Arc::new(Mutex::new(None)),
+            current_backoff_ms: Arc::new(Mutex::new(0)),
+            consecutive_captchas: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// Records a CAPTCHA challenge and adjusts backoff accordingly
+    pub fn record_captcha_challenge(&self) {
+        if !self.config.enable_adaptive_rate_limiting {
+            return;
+        }
+
+        let now = Instant::now();
+        
+        {
+            let mut last_captcha = self.last_captcha_time.lock().unwrap();
+            let mut current_backoff = self.current_backoff_ms.lock().unwrap();
+            let mut consecutive = self.consecutive_captchas.lock().unwrap();
+
+            // Check if this is within the backoff duration of the last CAPTCHA
+            let is_consecutive = if let Some(last_time) = *last_captcha {
+                now.duration_since(last_time).as_secs() < (self.config.captcha_backoff_duration_mins * 60)
+            } else {
+                false
+            };
+
+            if is_consecutive {
+                *consecutive += 1;
+                // Exponential backoff: multiply by multiplier for consecutive CAPTCHAs
+                *current_backoff = (*current_backoff as f64 * self.config.captcha_backoff_multiplier) as u64;
+            } else {
+                *consecutive = 1;
+                *current_backoff = self.config.captcha_backoff_initial_ms;
+            }
+
+            // Cap at maximum backoff
+            *current_backoff = (*current_backoff).min(self.config.captcha_backoff_max_ms);
+            *last_captcha = Some(now);
+
+            tracing::warn!(
+                "CAPTCHA challenge detected. Consecutive: {}, Current backoff: {}ms",
+                *consecutive,
+                *current_backoff
+            );
+        }
+    }
+
+    /// Gets the current additional delay that should be applied
+    pub fn get_additional_delay(&self) -> Duration {
+        if !self.config.enable_adaptive_rate_limiting {
+            return Duration::from_millis(0);
+        }
+
+        let current_backoff = self.current_backoff_ms.lock().unwrap();
+        let last_captcha = self.last_captcha_time.lock().unwrap();
+
+        // Check if we're still within the backoff duration
+        if let Some(last_time) = *last_captcha {
+            let elapsed = Instant::now().duration_since(last_time);
+            let backoff_duration = Duration::from_secs(self.config.captcha_backoff_duration_mins * 60);
+            
+            if elapsed < backoff_duration {
+                return Duration::from_millis(*current_backoff);
+            }
+        }
+
+        Duration::from_millis(0)
+    }
+
+    /// Applies adaptive backoff delay if needed
+    pub async fn apply_adaptive_delay(&self) {
+        let delay = self.get_additional_delay();
+        if delay.as_millis() > 0 {
+            tracing::info!("Applying adaptive rate limit delay: {}ms", delay.as_millis());
+            tokio::time::sleep(delay).await;
+        }
+    }
+}
+
 /// Main privacy manager that coordinates all privacy features
 #[derive(Clone)]
 pub struct PrivacyManager {
@@ -309,6 +419,7 @@ pub struct PrivacyManager {
     privacy_headers: PrivacyHeaders,
     request_jitter: RequestJitter,
     instance_distributor: InstanceDistributor,
+    adaptive_rate_limiter: AdaptiveRateLimiter,
 }
 
 impl PrivacyManager {
@@ -325,6 +436,7 @@ impl PrivacyManager {
             privacy_headers: PrivacyHeaders::new(&config),
             request_jitter: RequestJitter::new(&config),
             instance_distributor: InstanceDistributor::new(&config),
+            adaptive_rate_limiter: AdaptiveRateLimiter::new(config),
         }
     }
 
@@ -340,9 +452,12 @@ impl PrivacyManager {
         self.privacy_headers.apply_privacy_headers(request)
     }
 
-    /// Applies request jitter delay
+    /// Applies request jitter delay and adaptive backoff if needed
     pub async fn apply_jitter(&self) {
-        self.request_jitter.apply_jitter().await
+        // Apply adaptive backoff first (longer delays)
+        self.adaptive_rate_limiter.apply_adaptive_delay().await;
+        // Then apply normal jitter
+        self.request_jitter.apply_jitter().await;
     }
 
     /// Selects a distributed instance from available instances
@@ -354,6 +469,11 @@ impl PrivacyManager {
     /// Records instance usage for distribution tracking
     pub fn record_instance_use(&self, instance_url: &str) {
         self.instance_distributor.record_instance_use(instance_url)
+    }
+
+    /// Records a CAPTCHA challenge for adaptive rate limiting
+    pub fn record_captcha_challenge(&self) {
+        self.adaptive_rate_limiter.record_captcha_challenge();
     }
 }
 
@@ -572,5 +692,60 @@ mod tests {
 
         let user_agent = manager.get_user_agent();
         assert!(user_agent.is_none());
+    }
+
+    #[test]
+    fn test_adaptive_rate_limiter() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: true,
+            captcha_backoff_initial_ms: 1000,
+            captcha_backoff_max_ms: 5000,
+            captcha_backoff_multiplier: 2.0,
+            captcha_backoff_duration_mins: 1, // 1 minute for testing
+            ..Default::default()
+        };
+
+        let limiter = AdaptiveRateLimiter::new(config);
+
+        // Initially no delay
+        let initial_delay = limiter.get_additional_delay();
+        assert_eq!(initial_delay.as_millis(), 0);
+
+        // Record first CAPTCHA
+        limiter.record_captcha_challenge();
+        let first_delay = limiter.get_additional_delay();
+        assert_eq!(first_delay.as_millis(), 1000); // Initial backoff
+
+        // Record second CAPTCHA (should double)
+        limiter.record_captcha_challenge();
+        let second_delay = limiter.get_additional_delay();
+        assert_eq!(second_delay.as_millis(), 2000); // 1000 * 2.0
+
+        // Record third CAPTCHA (should double again)
+        limiter.record_captcha_challenge();
+        let third_delay = limiter.get_additional_delay();
+        assert_eq!(third_delay.as_millis(), 4000); // 2000 * 2.0
+
+        // Record fourth CAPTCHA (should hit max)
+        limiter.record_captcha_challenge();
+        let max_delay = limiter.get_additional_delay();
+        assert_eq!(max_delay.as_millis(), 5000); // Capped at max
+    }
+
+    #[test]
+    fn test_adaptive_rate_limiter_disabled() {
+        let config = PrivacyConfig {
+            enable_adaptive_rate_limiting: false,
+            ..Default::default()
+        };
+
+        let limiter = AdaptiveRateLimiter::new(config);
+        
+        // Record CAPTCHA
+        limiter.record_captcha_challenge();
+        
+        // Should still have no delay when disabled
+        let delay = limiter.get_additional_delay();
+        assert_eq!(delay.as_millis(), 0);
     }
 }

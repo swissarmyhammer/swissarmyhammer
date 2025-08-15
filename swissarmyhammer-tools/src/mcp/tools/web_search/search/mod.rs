@@ -334,7 +334,7 @@ impl McpTool for WebSearchTool {
 
         // Perform search using DuckDuckGo client
         let duckduckgo_client = search_tool.get_duckduckgo_client();
-        let mut results = match duckduckgo_client.search(&request).await {
+        let mut results = match duckduckgo_client.search(&request, &privacy_manager).await {
             Ok(results) => results,
             Err(e) => {
                 let error = WebSearchError {

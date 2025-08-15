@@ -3,7 +3,8 @@
 //! This module provides a client for performing web searches using DuckDuckGo's search API.
 //! It replaces the previous SearXNG implementation with a direct connection to DuckDuckGo.
 
-use crate::mcp::tools::web_search::types::*;
+use crate::mcp::tools::web_search::privacy::PrivacyManager;
+use crate::mcp::tools::web_search::types::{ScoringConfig, *};
 use reqwest::{Client, Error as ReqwestError};
 use std::time::Duration;
 use url::Url;
@@ -12,6 +13,7 @@ use url::Url;
 pub struct DuckDuckGoClient {
     client: Client,
     base_url: String,
+    scoring_config: ScoringConfig,
 }
 
 /// Errors that can occur during DuckDuckGo search operations
@@ -35,17 +37,24 @@ pub enum DuckDuckGoError {
 }
 
 impl DuckDuckGoClient {
-    /// Creates a new DuckDuckGo client
+    /// Creates a new DuckDuckGo client with default scoring configuration
+    /// Note: User-Agent will be set per-request by privacy manager
     pub fn new() -> Self {
+        Self::with_scoring_config(ScoringConfig::default())
+    }
+
+    /// Creates a new DuckDuckGo client with custom scoring configuration
+    pub fn with_scoring_config(scoring_config: ScoringConfig) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+            // Don't set User-Agent here - privacy manager will handle it per-request
             .build()
             .unwrap_or_else(|_| Client::new());
 
         Self {
             client,
             base_url: "https://html.duckduckgo.com".to_string(),
+            scoring_config,
         }
     }
 
@@ -53,6 +62,7 @@ impl DuckDuckGoClient {
     pub async fn search(
         &self,
         request: &WebSearchRequest,
+        privacy_manager: &PrivacyManager,
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
         tracing::debug!("Starting DuckDuckGo search for: '{}'", request.query);
 
@@ -61,19 +71,27 @@ impl DuckDuckGoClient {
 
         tracing::debug!("DuckDuckGo search URL: {}", search_url);
 
-        // Make the request
-        let response = self
-            .client
-            .get(&search_url)
-            .header(
-                "Accept",
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            )
-            .header("Accept-Language", "en-US,en;q=0.5")
-            .header("Accept-Encoding", "gzip, deflate")
-            .header("DNT", "1")
-            .header("Connection", "keep-alive")
-            .header("Upgrade-Insecure-Requests", "1")
+        // Apply request jitter for privacy
+        privacy_manager.apply_jitter().await;
+
+        // Build the request with privacy headers
+        let mut request_builder = self.client.get(&search_url);
+
+        // Apply User-Agent from privacy manager
+        if let Some(user_agent) = privacy_manager.get_user_agent() {
+            request_builder = request_builder.header("User-Agent", user_agent);
+        } else {
+            // Fallback User-Agent if privacy rotation is disabled
+            request_builder = request_builder.header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            );
+        }
+
+        // Apply privacy headers
+        request_builder = privacy_manager.apply_privacy_headers(request_builder);
+
+        let response = request_builder
             .send()
             .await
             .map_err(DuckDuckGoError::Network)?;
@@ -90,6 +108,8 @@ impl DuckDuckGoClient {
 
         // Check for CAPTCHA challenges before attempting to parse results
         if self.is_captcha_challenge(&html_content) {
+            // Record CAPTCHA for adaptive rate limiting
+            privacy_manager.record_captcha_challenge();
             return Err(DuckDuckGoError::CaptchaRequired);
         }
 
@@ -171,86 +191,147 @@ impl DuckDuckGoClient {
         Ok(url.to_string())
     }
 
-    /// Parses HTML content to extract search results
+    /// Parses HTML content to extract search results using proper HTML parser
     fn parse_html_results(
         &self,
         html_content: &str,
         max_results: usize,
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
-        use regex::Regex;
+        use scraper::{Html, Selector};
 
         let mut results = Vec::new();
+        
+        // Parse the HTML document
+        let document = Html::parse_document(html_content);
 
-        // Parse the HTML using regex patterns to extract results
-        // This is a simplified parser - in production you might want to use a proper HTML parser
+        // DuckDuckGo uses several different CSS selectors for results, try them in order
+        let result_selectors = vec![
+            // Main organic results
+            "div[data-testid='web-result']",
+            "div.result",
+            "div[class*='result']",
+            // Alternative result containers
+            "div.web-result",
+            "div[class*='web-result']",
+        ];
 
-        // Pattern to match result containers
-        let result_pattern =
-            Regex::new(r#"(?s)<div[^>]+class="[^"]*result[^"]*"[^>]*>.*?</div>\s*</div>"#)
-                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid regex: {e}")))?;
+        let title_selectors = vec![
+            "h3 a",
+            "a[data-testid='result-title-a']", 
+            "a.result__a",
+            ".result__title a",
+            "a[class*='result__a']",
+        ];
 
-        // Pattern to extract title and URL
-        let title_url_pattern =
-            Regex::new(r#"<a[^>]+href="([^"]+)"[^>]*><span[^>]*>([^<]+)</span></a>"#)
-                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid regex: {e}")))?;
+        let description_selectors = vec![
+            "[data-testid='result-snippet']",
+            ".result__snippet",
+            "a.result__snippet",
+            "[class*='result__snippet']",
+            ".result-snippet",
+        ];
 
-        // Pattern to extract description
-        let description_pattern =
-            Regex::new(r#"<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([^<]+)</a>"#)
-                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid regex: {e}")))?;
+        // Try each result selector until we find results
+        for result_selector_str in &result_selectors {
+            let result_selector = Selector::parse(result_selector_str)
+                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid CSS selector '{}': {}", result_selector_str, e)))?;
+            
+            let result_elements: Vec<_> = document.select(&result_selector).collect();
+            
+            if result_elements.is_empty() {
+                continue; // Try next selector
+            }
 
-        for (index, result_match) in result_pattern.find_iter(html_content).enumerate() {
-            if index >= max_results {
+            for (index, result_element) in result_elements.iter().enumerate() {
+                if index >= max_results {
+                    break;
+                }
+
+                // Extract title and URL using multiple selector strategies
+                let (title, url) = self.extract_title_and_url(result_element, &title_selectors)?;
+                
+                if title.is_empty() || url.is_empty() || !url.starts_with("http") {
+                    continue; // Skip invalid results
+                }
+
+                // Extract description using multiple selector strategies  
+                let description = self.extract_description(result_element, &description_selectors);
+
+                results.push(SearchResult {
+                    title: html_escape::decode_html_entities(&title).to_string(),
+                    url,
+                    description: html_escape::decode_html_entities(&description).to_string(),
+                    score: self.calculate_result_score(index),
+                    engine: "duckduckgo".to_string(),
+                    content: None, // Will be populated by content fetcher if needed
+                });
+            }
+
+            // If we found results with this selector, we're done
+            if !results.is_empty() {
                 break;
             }
-
-            let result_html = result_match.as_str();
-
-            // Extract title and URL
-            let (title, url) = if let Some(captures) = title_url_pattern.captures(result_html) {
-                let url = captures
-                    .get(1)
-                    .map(|m| m.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let title = captures
-                    .get(2)
-                    .map(|m| m.as_str())
-                    .unwrap_or("Untitled")
-                    .to_string();
-                (title, url)
-            } else {
-                continue; // Skip results without valid title/URL
-            };
-
-            // Extract description
-            let description = description_pattern
-                .captures(result_html)
-                .and_then(|captures| captures.get(1))
-                .map(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Validate URL format
-            if url.is_empty() || !url.starts_with("http") {
-                continue; // Skip invalid URLs
-            }
-
-            results.push(SearchResult {
-                title: html_escape::decode_html_entities(&title).to_string(),
-                url,
-                description: html_escape::decode_html_entities(&description).to_string(),
-                score: 1.0 - (index as f64 * 0.05), // Simple scoring based on position
-                engine: "duckduckgo".to_string(),
-                content: None, // Will be populated by content fetcher if needed
-            });
         }
 
         if results.is_empty() {
-            // Try alternative parsing method for different DuckDuckGo layouts
+            // Try fallback regex parsing for edge cases
             self.parse_html_results_alternative(html_content, max_results)
         } else {
             Ok(results)
+        }
+    }
+
+    /// Extracts title and URL from a result element using multiple selector strategies
+    fn extract_title_and_url(&self, element: &scraper::ElementRef, title_selectors: &[&str]) -> Result<(String, String), DuckDuckGoError> {
+        use scraper::Selector;
+
+        for selector_str in title_selectors {
+            let selector = Selector::parse(selector_str)
+                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid title selector '{}': {}", selector_str, e)))?;
+            
+            if let Some(title_element) = element.select(&selector).next() {
+                let url = title_element.value().attr("href").unwrap_or("").to_string();
+                let title = title_element.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                
+                if !title.is_empty() && !url.is_empty() {
+                    return Ok((title, url));
+                }
+            }
+        }
+
+        Ok((String::new(), String::new()))
+    }
+
+    /// Extracts description from a result element using multiple selector strategies
+    fn extract_description(&self, element: &scraper::ElementRef, description_selectors: &[&str]) -> String {
+        use scraper::Selector;
+
+        for selector_str in description_selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(desc_element) = element.select(&selector).next() {
+                    let description = desc_element.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                    if !description.is_empty() {
+                        return description;
+                    }
+                }
+            }
+        }
+
+        String::new()
+    }
+
+    /// Calculates result score based on position using configurable scoring algorithm
+    fn calculate_result_score(&self, index: usize) -> f64 {
+        let config = &self.scoring_config;
+        
+        if config.exponential_decay {
+            // Exponential decay: score = base_score * e^(-decay_rate * index)
+            let score = config.base_score * (-config.decay_rate * index as f64).exp();
+            score.max(config.min_score)
+        } else {
+            // Linear decay: score = base_score - (position_penalty * index)
+            let score = config.base_score - (config.position_penalty * index as f64);
+            score.max(config.min_score)
         }
     }
 
@@ -306,7 +387,7 @@ impl DuckDuckGoClient {
                 title: html_escape::decode_html_entities(&title).to_string(),
                 url,
                 description: html_escape::decode_html_entities(&description).to_string(),
-                score: 1.0 - (index as f64 * 0.05),
+                score: self.calculate_result_score(index),
                 engine: "duckduckgo".to_string(),
                 content: None,
             });
@@ -447,5 +528,46 @@ mod tests {
         // Test with challenge form
         let challenge_html = r#"<form id="challenge-form" action="/anomaly.js">"#;
         assert!(client.is_captcha_challenge(challenge_html));
+    }
+
+    #[test]
+    fn test_scoring_configuration() {
+        // Test default linear scoring
+        let client = DuckDuckGoClient::new();
+        assert_eq!(client.calculate_result_score(0), 1.0); // First result gets full score
+        assert_eq!(client.calculate_result_score(1), 0.95); // Second result gets 95%
+        assert_eq!(client.calculate_result_score(2), 0.90); // Third result gets 90%
+
+        // Test custom linear scoring
+        let custom_config = ScoringConfig {
+            base_score: 1.0,
+            position_penalty: 0.1, // 10% penalty per position
+            min_score: 0.1,
+            exponential_decay: false,
+            decay_rate: 0.0,
+        };
+        let custom_client = DuckDuckGoClient::with_scoring_config(custom_config);
+        assert_eq!(custom_client.calculate_result_score(0), 1.0);
+        assert_eq!(custom_client.calculate_result_score(1), 0.9);
+        assert_eq!(custom_client.calculate_result_score(5), 0.5);
+        assert_eq!(custom_client.calculate_result_score(10), 0.1); // Should hit min_score
+
+        // Test exponential decay
+        let exponential_config = ScoringConfig {
+            base_score: 1.0,
+            position_penalty: 0.0, // Not used for exponential
+            min_score: 0.01,
+            exponential_decay: true,
+            decay_rate: 0.2,
+        };
+        let exp_client = DuckDuckGoClient::with_scoring_config(exponential_config);
+        let score_0 = exp_client.calculate_result_score(0);
+        let score_1 = exp_client.calculate_result_score(1);
+        let score_2 = exp_client.calculate_result_score(2);
+        
+        assert_eq!(score_0, 1.0); // e^0 = 1
+        assert!(score_1 < score_0); // Should decay
+        assert!(score_2 < score_1); // Should decay further
+        assert!(score_1 > 0.8); // Should be approximately e^(-0.2) ≈ 0.819
     }
 }
