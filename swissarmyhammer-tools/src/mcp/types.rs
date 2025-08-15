@@ -123,3 +123,44 @@ pub struct MarkCompleteTodoRequest {
     /// ULID of the todo item to mark as complete
     pub id: String,
 }
+
+/// Request to fetch web content
+///
+/// # Examples
+///
+/// Basic web fetch:
+/// ```ignore
+/// WebFetchRequest {
+///     url: "https://docs.rust-lang.org/book/ch04-01-what-is-ownership.html".to_string(),
+///     timeout: None,
+///     follow_redirects: None,
+///     max_content_length: None,
+///     user_agent: None,
+/// }
+/// ```
+///
+/// Advanced web fetch with custom settings:
+/// ```ignore
+/// WebFetchRequest {
+///     url: "https://api.github.com/docs/rest/repos".to_string(),
+///     timeout: Some(45),
+///     follow_redirects: Some(true),
+///     max_content_length: Some(2097152),
+///     user_agent: Some("SwissArmyHammer-DocProcessor/1.0".to_string()),
+/// }
+/// ```
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WebFetchRequest {
+    /// The URL to fetch content from (must be a valid HTTP/HTTPS URL)
+    pub url: String,
+    /// Request timeout in seconds (optional, defaults to 30 seconds)
+    /// Minimum: 5, Maximum: 120
+    pub timeout: Option<u32>,
+    /// Whether to follow HTTP redirects (optional, defaults to true)
+    pub follow_redirects: Option<bool>,
+    /// Maximum content length in bytes (optional, defaults to 1MB)
+    /// Minimum: 1024, Maximum: 10485760 (10MB)
+    pub max_content_length: Option<u32>,
+    /// Custom User-Agent header (optional, defaults to "SwissArmyHammer-Bot/1.0")
+    pub user_agent: Option<String>,
+}

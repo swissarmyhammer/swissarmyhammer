@@ -43,3 +43,4 @@ pub mod outline;
 pub mod search;
 pub mod shell;
 pub mod todo;
+pub mod web_fetch;
