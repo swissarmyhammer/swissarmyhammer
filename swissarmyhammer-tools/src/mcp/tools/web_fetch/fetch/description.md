@@ -1,6 +1,6 @@
 # Web Fetch Tool
 
-Fetch web content and convert HTML to markdown for AI processing. Returns ranked results based on semantic similarity to the query.
+Fetch web content and convert HTML to markdown for AI processing. Supports comprehensive redirect handling with chain tracking and configurable limits.
 
 ## Parameters
 
@@ -109,10 +109,19 @@ Documentation analysis:
 }
 ```
 
+## Redirect Handling
+
+- **Maximum Redirects**: Enforces 10 redirect limit when `follow_redirects: true`, 0 when `false`
+- **Chain Tracking**: Complete tracking of all redirect steps with URLs and status codes
+- **Relative URL Resolution**: Properly resolves relative redirect locations against base URLs
+- **Status Code Support**: Handles all redirect types (301, 302, 303, 307, 308)
+- **Loop Prevention**: Detects and prevents infinite redirect loops
+- **Response Metadata**: Includes redirect count and chain in successful responses
+
 ## Security Features
 
 - **URL Validation**: Only HTTP/HTTPS URLs accepted
-- **Content-Type Verification**: Validates response content types
+- **Content-Type Verification**: Validates response content types  
 - **Rate Limiting**: Prevents abuse with configurable limits
 - **Size Limits**: Configurable maximum content size to prevent memory issues
 - **Redirect Protection**: Limits redirect chains to prevent infinite loops
