@@ -629,6 +629,9 @@ impl WorkflowExecutor {
             ActionError::RateLimit { message, wait_time } => {
                 format!("Rate limit reached: {message}. Please wait {wait_time:?} before retrying.")
             }
+            ActionError::ShellSecurityError(security_error) => {
+                format!("Shell security violation: {security_error}")
+            }
         }
     }
 

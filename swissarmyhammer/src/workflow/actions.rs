@@ -4,6 +4,7 @@
 //! including Claude integration, variable operations, and control flow actions.
 
 use crate::sah_config;
+use crate::shell_security::{get_validator, log_shell_completion, log_shell_execution, ShellSecurityError};
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
 use serde_json::Value;
@@ -82,6 +83,9 @@ pub enum ActionError {
         /// How long to wait before retrying
         wait_time: Duration,
     },
+    /// Shell security validation error
+    #[error("Shell security error: {0}")]
+    ShellSecurityError(#[from] ShellSecurityError),
 }
 
 /// Result type for action operations
@@ -1162,7 +1166,7 @@ pub fn validate_working_directory(path: &str) -> ActionResult<()> {
     Ok(())
 }
 
-/// Validate shell command for security issues
+/// Validate shell command for security issues using the comprehensive security framework
 pub fn validate_command(command: &str) -> ActionResult<()> {
     // Check for obviously dangerous patterns
     if command.trim().is_empty() {
@@ -1171,221 +1175,48 @@ pub fn validate_command(command: &str) -> ActionResult<()> {
         ));
     }
 
-    // Check command length (prevent extremely long commands)
-    if command.len() > 4096 {
-        return Err(ActionError::ExecutionError(
-            "Shell command too long (maximum 4096 characters)".to_string(),
-        ));
-    }
-
-    // Detect dangerous command patterns
-    validate_dangerous_patterns(command)?;
-
-    // Validate command structure
-    validate_command_structure(command)?;
+    // Use the comprehensive security validator
+    let validator = get_validator();
+    validator.validate_command(command)?;
 
     Ok(())
 }
 
-/// Detect dangerous command patterns as specified in security requirements
-pub fn validate_dangerous_patterns(command: &str) -> ActionResult<()> {
-    let dangerous_patterns = [
-        // System modification commands
-        ("rm -rf", "Recursive file deletion"),
-        ("format", "Disk formatting"),
-        ("fdisk", "Disk partitioning"),
-        ("mkfs", "Filesystem creation"),
-        // Network/security operations
-        ("nc -l", "Network listener"),
-        ("ncat -l", "Network listener"),
-        ("socat", "Network relay"),
-        ("ssh", "Remote shell access"),
-        ("scp", "Remote file copy"),
-        ("rsync", "Remote sync"),
-        // Package management
-        ("apt install", "Package installation"),
-        ("yum install", "Package installation"),
-        ("pip install", "Python package installation"),
-        ("npm install", "Node package installation"),
-        ("cargo install", "Rust package installation"),
-        // Privilege escalation
-        ("sudo", "Privilege escalation"),
-        ("su ", "User switching"),
-        ("chmod +s", "Setuid bit"),
-        ("chown root", "Root ownership change"),
-        // System configuration
-        ("/etc/", "System configuration access"),
-        ("systemctl", "System service control"),
-        ("service ", "Service control"),
-        ("crontab", "Scheduled task modification"),
-        // Dangerous shell features
-        ("|(", "Subshell execution"),
-        ("eval", "Dynamic code execution"),
-        ("exec", "Process replacement"),
-    ];
-
-    let command_lower = command.to_lowercase();
-
-    for (pattern, description) in &dangerous_patterns {
-        if command_lower.contains(pattern) {
-            tracing::warn!(
-                "Potentially dangerous command pattern detected: {} in command: {}",
-                description,
-                command
-            );
-
-            // Log security event
-            log_security_event("DANGEROUS_PATTERN", description, command);
-        }
-    }
-
-    Ok(())
-}
-
-/// Validate command structure to prevent injection
-pub fn validate_command_structure(command: &str) -> ActionResult<()> {
-    // Check for command injection patterns
-    let injection_patterns = [";", "&&", "||", "|", "`", "$(", "\n", "\r", "\0"];
-
-    for pattern in &injection_patterns {
-        if command.contains(pattern) {
-            // Allow some patterns in specific contexts
-            if validate_safe_usage(command, pattern)? {
-                continue;
-            }
-
-            return Err(ActionError::ExecutionError(format!(
-                "Potentially unsafe command pattern '{pattern}' detected"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-/// Check if a potentially dangerous pattern is being used safely
-pub fn validate_safe_usage(command: &str, pattern: &str) -> ActionResult<bool> {
-    match pattern {
-        "|" => {
-            // Allow simple pipes for common operations
-            if command.matches('|').count() == 1 && !command.contains("nc ") {
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        }
-        "&&" | "||" | ";" => {
-            // These are generally unsafe for automated execution
-            Ok(false)
-        }
-        _ => Ok(false),
-    }
-}
+// Legacy security functions removed - now using comprehensive security framework in shell_security module
 
 /// Enhanced working directory validation with security checks
 pub fn validate_working_directory_security(path: &str) -> ActionResult<()> {
     // First run the existing validation
     validate_working_directory(path)?;
 
-    // Prevent access to sensitive system directories
-    let sensitive_dirs = [
-        "/etc",
-        "/sys",
-        "/proc",
-        "/dev",
-        "/boot",
-        "/root",
-        "/var/lib",
-        "/usr/lib",
-        "C:\\Windows",
-        "C:\\Program Files",
-        "C:\\System32",
-    ];
-
-    let path_str = path.to_string().to_lowercase();
-    for sensitive in &sensitive_dirs {
-        if path_str.starts_with(&sensitive.to_lowercase()) {
-            tracing::warn!("Attempting to use sensitive directory: {}", path_str);
-            log_security_event(
-                "SENSITIVE_DIRECTORY",
-                &format!("Access to {sensitive}"),
-                path,
-            );
-        }
-    }
+    // Use the comprehensive security validator for directory access control
+    let validator = get_validator();
+    let path_obj = std::path::Path::new(path);
+    validator.validate_directory_access(path_obj)?;
 
     Ok(())
 }
 
-/// Validate environment variables for security issues
+/// Validate environment variables for security issues using the comprehensive security framework
 pub fn validate_environment_variables_security(env: &HashMap<String, String>) -> ActionResult<()> {
-    // List of sensitive environment variables that shouldn't be overridden
-    let protected_vars = [
-        "PATH",
-        "LD_LIBRARY_PATH",
-        "DYLD_LIBRARY_PATH",
-        "HOME",
-        "USER",
-        "USERNAME",
-        "SHELL",
-        "SSH_AUTH_SOCK",
-        "SSH_AGENT_PID",
-        "SUDO_USER",
-        "SUDO_UID",
-        "SUDO_GID",
-    ];
-
-    for (key, value) in env {
-        // Validate variable name (use existing function)
-        if !is_valid_env_var_name(key) {
-            return Err(ActionError::ExecutionError(format!(
-                "Invalid environment variable name: {key}"
-            )));
-        }
-
-        // Check for protected variables
-        if protected_vars.contains(&key.to_uppercase().as_str()) {
-            tracing::warn!(
-                "Attempting to override protected environment variable: {}",
-                key
-            );
-            log_security_event("PROTECTED_ENV_VAR", &format!("Override of {key}"), "");
-        }
-
-        // Validate variable value length
-        if value.len() > 1024 {
-            return Err(ActionError::ExecutionError(format!(
-                "Environment variable value too long: {key}"
-            )));
-        }
-
-        // Check for injection in environment values
-        if value.contains('\0') || value.contains('\n') {
-            return Err(ActionError::ExecutionError(format!(
-                "Invalid characters in environment variable: {key}"
-            )));
-        }
-    }
+    // Use the comprehensive security validator
+    let validator = get_validator();
+    validator.validate_environment_variables(env)?;
 
     Ok(())
 }
 
-/// Log security-related events for audit purposes
-pub fn log_security_event(event_type: &str, details: &str, command: &str) {
-    tracing::warn!(
-        "Security event: {} - {} - Command: {}",
-        event_type,
-        details,
-        command
-    );
-}
-
-/// Log command execution with security context
+/// Log command execution with comprehensive security audit logging
 pub fn log_command_execution(
     command: &str,
     working_dir: Option<&str>,
     env: &HashMap<String, String>,
 ) {
+    // Use the comprehensive audit logging from the security module
+    let working_dir_path = working_dir.map(std::path::Path::new);
+    log_shell_execution(command, working_dir_path, env);
+    
+    // Also maintain backward compatibility with existing logging
     tracing::info!(
         "Executing shell command: {} (working_dir: {:?}, env_vars: {})",
         command,
@@ -1406,6 +1237,7 @@ impl ShellAction {
     /// Process command output and set context variables
     fn process_command_output(
         &self,
+        command: &str,
         output: std::process::Output,
         duration_ms: u64,
         context: &mut HashMap<String, Value>,
@@ -1415,6 +1247,9 @@ impl ShellAction {
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
+        // Log command completion with comprehensive security audit logging
+        log_shell_completion(command, exit_code, duration_ms);
+        
         tracing::debug!(
             "Command completed: exit_code={}, duration_ms={}",
             exit_code,
@@ -1431,7 +1266,7 @@ impl ShellAction {
 
         // Set result variable if specified
         if let Some(result_var) = &self.result_variable {
-            context.insert(result_var.clone(), Value::String(stdout.clone()));
+            context.insert(result_var.clone(), Value::String(stdout.trim().to_string()));
         }
 
         // Set last action result based on command success
@@ -1445,7 +1280,7 @@ impl ShellAction {
 
         // Return appropriate result - success returns stdout, failure returns false
         if success {
-            Ok(Value::String(stdout))
+            Ok(Value::String(stdout.trim().to_string()))
         } else {
             tracing::info!("Command failed with exit code {}", exit_code);
             Ok(Value::Bool(false)) // Don't fail the workflow, just indicate failure
@@ -1641,7 +1476,7 @@ impl Action for ShellAction {
                 Ok(Ok(output)) => {
                     // Command completed within timeout
                     let duration_ms = start_time.elapsed().as_millis() as u64;
-                    self.process_command_output(output, duration_ms, context)
+                    self.process_command_output(&command, output, duration_ms, context)
                 }
                 Ok(Err(e)) => Err(ActionError::ExecutionError(format!(
                     "Command execution failed: {e}"
@@ -1665,7 +1500,7 @@ impl Action for ShellAction {
             match child.wait_with_output().await {
                 Ok(output) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
-                    self.process_command_output(output, duration_ms, context)
+                    self.process_command_output(&command, output, duration_ms, context)
                 }
                 Err(e) => Err(ActionError::ExecutionError(format!(
                     "Command execution failed: {e}"
@@ -2797,7 +2632,10 @@ mod tests {
         );
 
         // Result should contain stdout
-        assert_eq!(result, context.get("stdout").unwrap().clone());
+        // Result should be trimmed version of stdout for usability
+        let stdout = context.get("stdout").unwrap().as_str().unwrap();
+        let expected_result = Value::String(stdout.trim().to_string());
+        assert_eq!(result, expected_result);
     }
 
     #[tokio::test]
@@ -2856,10 +2694,12 @@ mod tests {
         let command_output = context.get("command_output").unwrap();
         assert_eq!(command_output, &result);
 
-        // Result should be the stdout
+        // Result should be the trimmed stdout
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("test output"));
-        assert_eq!(result, context.get("stdout").unwrap().clone());
+        // Result should be trimmed version of stdout for usability
+        let expected_result = Value::String(stdout.trim().to_string());
+        assert_eq!(result, expected_result);
     }
 
     #[tokio::test]
@@ -3018,7 +2858,10 @@ mod tests {
         assert!(stdout.contains("no timeout test"));
 
         // Result should contain output
-        assert_eq!(result, context.get("stdout").unwrap().clone());
+        // Result should be trimmed version of stdout for usability
+        let stdout = context.get("stdout").unwrap().as_str().unwrap();
+        let expected_result = Value::String(stdout.trim().to_string());
+        assert_eq!(result, expected_result);
     }
 
     #[tokio::test]
@@ -3048,7 +2891,10 @@ mod tests {
         assert!(duration_ms < 1000); // Should complete in less than 1 second
 
         // Result should contain output
-        assert_eq!(result, context.get("stdout").unwrap().clone());
+        // Result should be trimmed version of stdout for usability
+        let stdout = context.get("stdout").unwrap().as_str().unwrap();
+        let expected_result = Value::String(stdout.trim().to_string());
+        assert_eq!(result, expected_result);
     }
 
     #[tokio::test]

@@ -87,6 +87,9 @@ pub mod git;
 /// Security utilities for path validation and resource limits
 pub mod security;
 
+/// Shell command security validation and control system
+pub mod shell_security;
+
 /// File watching functionality for prompt directories
 pub mod file_watcher;
 
