@@ -8,6 +8,7 @@ pub mod content_fetcher;
 pub mod health_checker;
 pub mod instance_discovery;
 pub mod instance_manager;
+pub mod privacy;
 pub mod search;
 pub mod types;
 

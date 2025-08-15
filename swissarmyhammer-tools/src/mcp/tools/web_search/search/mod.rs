@@ -5,6 +5,7 @@
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::instance_manager::{InstanceManager, InstanceManagerConfig};
+use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -14,7 +15,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
-use tracing::warn;
 use url::Url;
 
 /// Structured error types for web search operations
@@ -102,12 +102,13 @@ impl WebSearchTool {
     }
 
     /// Gets or creates an HTTP client with appropriate configuration
+    /// Note: User-Agent will be set per-request by privacy manager
     fn get_client(&mut self) -> &Client {
         if self.client.is_none() {
             self.client = Some(
                 Client::builder()
                     .timeout(Duration::from_secs(30))
-                    .user_agent("SwissArmyHammer/1.0 (Privacy-Focused Web Search)")
+                    // Don't set User-Agent here - privacy manager will handle it per-request
                     .build()
                     .unwrap_or_else(|_| Client::new()),
             );
@@ -261,6 +262,119 @@ impl WebSearchTool {
         config
     }
 
+    /// Loads configuration for privacy features
+    fn load_privacy_config() -> PrivacyConfig {
+        let mut config = PrivacyConfig::default();
+
+        // Try to load from configuration
+        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+            // User-Agent rotation settings
+            if let Some(swissarmyhammer::ConfigValue::Boolean(rotate)) =
+                repo_config.get("web_search.privacy.rotate_user_agents")
+            {
+                config.rotate_user_agents = *rotate;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(randomize)) =
+                repo_config.get("web_search.privacy.randomize_user_agents")
+            {
+                config.randomize_user_agents = *randomize;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Array(agents)) =
+                repo_config.get("web_search.privacy.custom_user_agents")
+            {
+                let custom_agents: Vec<String> = agents
+                    .iter()
+                    .filter_map(|v| {
+                        if let swissarmyhammer::ConfigValue::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !custom_agents.is_empty() {
+                    config.custom_user_agents = Some(custom_agents);
+                }
+            }
+
+            // Request anonymization settings
+            if let Some(swissarmyhammer::ConfigValue::Boolean(enable_dnt)) =
+                repo_config.get("web_search.privacy.enable_dnt")
+            {
+                config.enable_dnt = *enable_dnt;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(strip_referrer)) =
+                repo_config.get("web_search.privacy.strip_referrer")
+            {
+                config.strip_referrer = *strip_referrer;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(disable_cache)) =
+                repo_config.get("web_search.privacy.disable_cache")
+            {
+                config.disable_cache = *disable_cache;
+            }
+
+            // Request timing settings
+            if let Some(swissarmyhammer::ConfigValue::Boolean(enable_jitter)) =
+                repo_config.get("web_search.privacy.enable_request_jitter")
+            {
+                config.enable_request_jitter = *enable_jitter;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Integer(min_delay)) =
+                repo_config.get("web_search.privacy.min_request_delay_ms")
+            {
+                if *min_delay > 0 {
+                    config.min_request_delay_ms = *min_delay as u64;
+                }
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_delay)) =
+                repo_config.get("web_search.privacy.max_request_delay_ms")
+            {
+                if *max_delay > 0 {
+                    config.max_request_delay_ms = *max_delay as u64;
+                }
+            }
+
+            // Instance distribution settings
+            if let Some(swissarmyhammer::ConfigValue::Boolean(distribute)) =
+                repo_config.get("web_search.privacy.distribute_requests")
+            {
+                config.distribute_requests = *distribute;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Integer(avoid_repeat)) =
+                repo_config.get("web_search.privacy.avoid_repeat_instances")
+            {
+                if *avoid_repeat > 0 {
+                    config.avoid_repeat_instances = *avoid_repeat as usize;
+                }
+            }
+
+            // Content fetching privacy settings
+            if let Some(swissarmyhammer::ConfigValue::Boolean(anonymize_content)) =
+                repo_config.get("web_search.privacy.anonymize_content_requests")
+            {
+                config.anonymize_content_requests = *anonymize_content;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Integer(content_delay)) =
+                repo_config.get("web_search.privacy.content_request_delay_ms")
+            {
+                if *content_delay > 0 {
+                    config.content_request_delay_ms = *content_delay as u64;
+                }
+            }
+        }
+
+        config
+    }
+
     /// Parse size string like "2MB" into bytes
     fn parse_size_string(size_str: &str) -> Result<usize, std::num::ParseIntError> {
         let size_str = size_str.to_uppercase();
@@ -280,6 +394,7 @@ impl WebSearchTool {
         &mut self,
         instance: &str,
         request: &WebSearchRequest,
+        privacy_manager: &PrivacyManager,
     ) -> Result<SearXngResponse, WebSearchInternalError> {
         // Validate the instance URL first
         let instance_url =
@@ -356,9 +471,26 @@ impl WebSearchTool {
 
         tracing::debug!("Making search request to: {}", url);
 
-        let response = client
+        // Apply privacy jitter delay before making request
+        privacy_manager.apply_jitter().await;
+
+        // Build request with privacy features
+        let mut request_builder = client
             .get(url)
-            .timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(15));
+
+        // Apply User-Agent from privacy manager
+        if let Some(user_agent) = privacy_manager.get_user_agent() {
+            request_builder = request_builder.header("User-Agent", user_agent);
+        } else {
+            // Fallback User-Agent if privacy rotation is disabled
+            request_builder = request_builder.header("User-Agent", "SwissArmyHammer/1.0 (Privacy-Focused Web Search)");
+        }
+
+        // Apply privacy headers
+        request_builder = privacy_manager.apply_privacy_headers(request_builder);
+
+        let response = request_builder
             .send()
             .await
             .map_err(|e| {
@@ -643,19 +775,40 @@ impl McpTool for WebSearchTool {
         let start_time = Instant::now();
         let mut search_tool = WebSearchTool::new();
 
+        // Load privacy configuration and create privacy manager
+        let privacy_config = Self::load_privacy_config();
+        let privacy_manager = PrivacyManager::new(privacy_config);
+
         // Get instance manager and try instances until one works
         let instance_manager = Self::get_instance_manager().await;
         let max_attempts = 3; // Try up to 3 different instances
         let mut attempted_instances = Vec::new();
         let mut last_error = None;
 
-        for attempt in 0..max_attempts {
-            if let Some(instance) = instance_manager.get_next_instance().await {
-                attempted_instances.push(instance.url.clone());
+        // Use privacy manager to select distributed instances if enabled
+        let available_instances: Vec<String> = instance_manager.get_instances().await
+            .into_iter()
+            .map(|i| i.url)
+            .collect();
 
-                match search_tool.perform_search(&instance.url, &request).await {
+        for _attempt in 0..max_attempts {
+            // First try to get a privacy-distributed instance, fallback to instance manager
+            let instance_url = if let Some(distributed_url) = privacy_manager.select_distributed_instance(&available_instances) {
+                distributed_url
+            } else if let Some(instance) = instance_manager.get_next_instance().await {
+                instance.url.clone()
+            } else {
+                break; // No instances available
+            };
+
+            attempted_instances.push(instance_url.clone());
+
+            match search_tool.perform_search(&instance_url, &request, &privacy_manager).await {
                     Ok(mut searxng_response) => {
                         let search_time = start_time.elapsed();
+
+                        // Record instance usage for privacy distribution
+                        privacy_manager.record_instance_use(&instance_url);
 
                         // Optionally fetch content from each result using the new ContentFetcher
                         let mut content_fetch_stats = None;
@@ -665,7 +818,7 @@ impl McpTool for WebSearchTool {
                             let content_fetcher = ContentFetcher::new(content_config);
 
                             let (processed_results, stats) = content_fetcher
-                                .fetch_search_results(searxng_response.results)
+                                .fetch_search_results_with_privacy(searxng_response.results, &privacy_manager)
                                 .await;
 
                             searxng_response.results = processed_results;
@@ -686,7 +839,7 @@ impl McpTool for WebSearchTool {
                                 language: request.language.unwrap_or_else(|| "en".to_string()),
                                 results_count: request.results_count.unwrap_or(10),
                                 search_time_ms: search_time.as_millis() as u64,
-                                instance_used: instance.url.clone(),
+                                instance_used: instance_url.clone(),
                                 total_results: searxng_response.total_results,
                                 engines_used: searxng_response.engines_used,
                                 content_fetch_stats,
@@ -711,15 +864,15 @@ impl McpTool for WebSearchTool {
                         ));
                     }
                     Err(e) => {
-                        tracing::warn!("Search failed on instance {}: {}", instance.url, e);
+                        tracing::warn!("Search failed on instance {}: {}", instance_url, e);
 
                         // Mark instance as failed for health tracking
-                        instance_manager.mark_instance_failed(&instance.url).await;
+                        instance_manager.mark_instance_failed(&instance_url).await;
 
                         // Check if it's a rate limit error and handle appropriately
                         if e.to_string().contains("rate limit") || e.to_string().contains("429") {
                             instance_manager
-                                .mark_instance_rate_limited(&instance.url, Duration::from_secs(300))
+                                .mark_instance_rate_limited(&instance_url, Duration::from_secs(300))
                                 .await;
                         }
 
@@ -727,11 +880,6 @@ impl McpTool for WebSearchTool {
                         continue;
                     }
                 }
-            } else {
-                // No healthy instances available
-                warn!("No healthy instances available on attempt {}", attempt + 1);
-                break;
-            }
         }
 
         // All instances failed - create structured error
