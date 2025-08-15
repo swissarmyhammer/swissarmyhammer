@@ -329,4 +329,412 @@ mod tests {
             .list_tool_names()
             .contains(&"notify_create".to_string()));
     }
+
+    // ============================================================================
+    // ASYNC EXECUTION TESTS - Following established patterns from other MCP tools
+    // ============================================================================
+
+    use crate::test_utils::create_test_context;
+
+    #[tokio::test]
+    async fn test_execute_success_minimal_message() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Test notification".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(!call_result.content.is_empty());
+        assert!(call_result.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains("Notification sent"));
+        assert!(call_result.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains("Test notification"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_success_with_level_info() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Info level message".to_string()),
+        );
+        arguments.insert(
+            "level".to_string(),
+            serde_json::Value::String("info".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(!call_result.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_execute_success_with_level_warn() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Warning message".to_string()),
+        );
+        arguments.insert(
+            "level".to_string(),
+            serde_json::Value::String("warn".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(call_result.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains("Warning message"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_success_with_level_error() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Error message".to_string()),
+        );
+        arguments.insert(
+            "level".to_string(),
+            serde_json::Value::String("error".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(call_result.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains("Error message"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_success_with_context() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Message with context".to_string()),
+        );
+        arguments.insert(
+            "level".to_string(),
+            serde_json::Value::String("info".to_string()),
+        );
+        arguments.insert(
+            "context".to_string(),
+            json!({"stage": "analysis", "file_count": 42}),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(call_result.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains("Message with context"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_invalid_level_defaults_to_info() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Message with invalid level".to_string()),
+        );
+        arguments.insert(
+            "level".to_string(),
+            serde_json::Value::String("invalid_level".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok()); // Should succeed, defaulting to info level
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_execute_case_insensitive_levels() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let levels = ["INFO", "WARN", "ERROR", "Warn", "Error"];
+
+        for level in levels {
+            let mut arguments = serde_json::Map::new();
+            arguments.insert(
+                "message".to_string(),
+                serde_json::Value::String(format!("Message with {} level", level)),
+            );
+            arguments.insert(
+                "level".to_string(),
+                serde_json::Value::String(level.to_string()),
+            );
+
+            let result = tool.execute(arguments, &context).await;
+            assert!(result.is_ok());
+
+            let call_result = result.unwrap();
+            assert_eq!(call_result.is_error, Some(false));
+        }
+    }
+
+    // ============================================================================
+    // PARAMETER VALIDATION TESTS
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_execute_empty_message_validation_error() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err()); // Should fail validation
+    }
+
+    #[tokio::test]
+    async fn test_execute_whitespace_only_message_validation_error() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("   \n\t   ".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err()); // Should fail validation
+    }
+
+    #[tokio::test]
+    async fn test_execute_missing_message_field_error() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "level".to_string(),
+            serde_json::Value::String("info".to_string()),
+        );
+        // Missing required message field
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_invalid_argument_types() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        // Test invalid message type
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("message".to_string(), serde_json::Value::Number(42.into()));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_invalid_level_type() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Valid message".to_string()),
+        );
+        arguments.insert("level".to_string(), serde_json::Value::Number(42.into()));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_err());
+    }
+
+    // ============================================================================
+    // CONTEXT HANDLING TESTS
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_execute_complex_context_data() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Complex context test".to_string()),
+        );
+        arguments.insert(
+            "context".to_string(),
+            json!({
+                "nested": {
+                    "data": "value",
+                    "numbers": [1, 2, 3],
+                    "boolean": true
+                },
+                "array": ["a", "b", "c"],
+                "unicode": "通知消息 🔔"
+            }),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_execute_empty_context() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String("Message with empty context".to_string()),
+        );
+        arguments.insert("context".to_string(), json!({}));
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    // ============================================================================
+    // EDGE CASE AND UNICODE TESTS
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_execute_unicode_message() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let unicode_message = "通知消息 🔔 with émojis and ñoñ-ASCII characters";
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String(unicode_message.to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        assert!(call_result.content[0]
+            .as_text()
+            .unwrap()
+            .text
+            .contains(unicode_message));
+    }
+
+    #[tokio::test]
+    async fn test_execute_long_message() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let long_message = "x".repeat(10000);
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String(long_message.clone()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_execute_special_characters_in_message() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let special_message = r#"Special chars: {}[]()\"'`~!@#$%^&*-_+=|\\/:;<>,.?"#;
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String(special_message.to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_execute_multiline_message() {
+        let tool = NotifyTool::new();
+        let context = create_test_context().await;
+
+        let multiline_message = "Line 1\nLine 2\nLine 3\n\nLine 5";
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "message".to_string(),
+            serde_json::Value::String(multiline_message.to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+    }
 }
