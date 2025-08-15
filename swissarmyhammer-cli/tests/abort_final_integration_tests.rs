@@ -8,6 +8,16 @@
 //! 3. Stress testing and edge cases
 //! 4. User experience validation
 //! 5. Complete regression testing scenarios
+//!
+//! ## Important Testing Notes
+//!
+//! These tests should be run with single-threaded execution to avoid race conditions:
+//! ```
+//! cargo test --test abort_final_integration_tests -- --test-threads=1
+//! ```
+//!
+//! The tests use temporary directories but may interfere with each other when run
+//! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
 use assert_cmd::Command;
