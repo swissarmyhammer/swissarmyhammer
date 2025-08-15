@@ -4,24 +4,12 @@
 //! logging system. The tool enables LLMs to communicate important information, status updates,
 //! and contextual feedback during workflow execution.
 
+use crate::mcp::notify_types::NotifyRequest;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
-use serde::Deserialize;
-use serde_json::Value as JsonValue;
-
-/// Request structure for creating a notification
-#[derive(Debug, Deserialize)]
-pub struct NotifyCreateRequest {
-    /// The message to notify the user about (required)
-    pub message: String,
-    /// The notification level: "info", "warn", or "error" (default: "info")
-    pub level: Option<String>,
-    /// Optional structured JSON data for the notification
-    pub context: Option<JsonValue>,
-}
 
 /// Tool for sending notification messages to users through the logging system
 #[derive(Default)]
@@ -74,7 +62,7 @@ impl McpTool for NotifyTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(arguments)?;
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(arguments)?;
 
         // Apply rate limiting for notifications
         context
@@ -87,18 +75,24 @@ impl McpTool for NotifyTool {
 
         tracing::debug!("Creating notification: {}", request.message);
 
-        // Validate message is not empty
+        // Validate request using built-in validation
+        request
+            .validate()
+            .map_err(|e| McpError::invalid_params(e, None))?;
+
+        // Additional validation using shared utilities
         McpValidation::validate_not_empty(&request.message, "notification message")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate notification message"))?;
 
-        // Get the notification level, defaulting to "info"
-        let level = request.level.as_deref().unwrap_or("info");
+        // Get the typed notification level
+        let level = request.get_level();
+        let level_str: &str = level.into();
 
         // Get the context, defaulting to empty object
         let notification_context = request.context.unwrap_or_default();
 
         // Send the notification through the tracing system with the "llm_notify" target
-        match level {
+        match level_str {
             "info" => tracing::info!(
                 target: "llm_notify",
                 context = %notification_context,
@@ -136,6 +130,7 @@ impl McpTool for NotifyTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::notify_types::NotifyRequest;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
     use serde_json::json;
 
@@ -179,7 +174,7 @@ mod tests {
             serde_json::Value::String("Test notification message".to_string()),
         );
 
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.message, "Test notification message");
         assert_eq!(request.level, None);
         assert_eq!(request.context, None);
@@ -201,7 +196,7 @@ mod tests {
             json!({"stage": "analysis", "file_count": 42}),
         );
 
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.message, "Test notification message");
         assert_eq!(request.level, Some("warn".to_string()));
         assert_eq!(
@@ -213,7 +208,7 @@ mod tests {
     #[test]
     fn test_parse_missing_message() {
         let args = serde_json::Map::new();
-        let result: Result<NotifyCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<NotifyRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -225,7 +220,7 @@ mod tests {
             serde_json::Value::String("".to_string()),
         );
 
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.message, "");
     }
 
@@ -238,7 +233,7 @@ mod tests {
         );
         args.insert("level".to_string(), serde_json::Value::Number(42.into()));
 
-        let result: Result<NotifyCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<NotifyRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -247,7 +242,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("message".to_string(), serde_json::Value::Number(42.into()));
 
-        let result: Result<NotifyCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<NotifyRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -266,7 +261,7 @@ mod tests {
                 serde_json::Value::String(level.to_string()),
             );
 
-            let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
             assert_eq!(request.level, Some(level.to_string()));
         }
     }
@@ -290,7 +285,7 @@ mod tests {
             }),
         );
 
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert!(request.context.is_some());
         let context = request.context.unwrap();
         assert!(context.is_object());
@@ -307,7 +302,7 @@ mod tests {
             serde_json::Value::String(unicode_message.to_string()),
         );
 
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.message, unicode_message);
     }
 
@@ -320,7 +315,7 @@ mod tests {
             serde_json::Value::String(long_message.clone()),
         );
 
-        let request: NotifyCreateRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        let request: NotifyRequest = BaseToolImpl::parse_arguments(args).unwrap();
         assert_eq!(request.message, long_message);
     }
 
