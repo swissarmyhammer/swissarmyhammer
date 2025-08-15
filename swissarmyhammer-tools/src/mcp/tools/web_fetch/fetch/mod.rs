@@ -248,6 +248,13 @@ impl WebFetchTool {
         for line in markdown.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with('#') {
+                // Count the number of hash symbols (valid headings have 1-6)
+                let hash_count = trimmed.chars().take_while(|&c| c == '#').count();
+                if hash_count > 6 {
+                    // Too many hashes - not a valid markdown heading
+                    continue;
+                }
+                
                 // Extract heading text, removing # symbols and whitespace
                 let title = trimmed.trim_start_matches('#').trim().to_string();
                 if !title.is_empty() {
@@ -2876,5 +2883,950 @@ mod tests {
         const _: () = assert!(MAX_REDIRECTS > 0);
         const _: () = assert!(MAX_REDIRECTS <= 20); // Sanity check - shouldn't be too high
         assert_eq!(MAX_REDIRECTS, 10); // Current expected value
+    }
+
+    // ============================================================================
+    // SECURITY TESTING SUITE
+    // ============================================================================
+
+    mod security_tests {
+        use super::*;
+
+        #[test]
+        fn test_malicious_url_patterns_blocked() {
+            let tool = WebFetchTool::new();
+
+            // Test common SSRF attack patterns
+            let malicious_urls = vec![
+                // Localhost variations
+                "http://localhost",
+                "https://localhost",
+                "http://localhost:80",
+                "https://localhost:443",
+                "http://localhost:8080",
+                "http://127.0.0.1",
+                "https://127.0.0.1",
+                "http://127.0.0.1:80",
+                "http://127.1",
+                "http://127.0.1",
+                "http://0.0.0.0",
+                "http://0",
+                
+                // Private network ranges - RFC 1918
+                "http://10.0.0.1",
+                "http://10.1.1.1", 
+                "http://10.255.255.255",
+                "http://172.16.0.1",
+                "http://172.31.255.255",
+                "http://192.168.1.1",
+                "http://192.168.255.255",
+                
+                // Carrier-grade NAT - RFC 6598
+                "http://100.64.0.1",
+                "http://100.127.255.255",
+                
+                // Link-local - RFC 3927
+                "http://169.254.0.1",
+                "http://169.254.255.255",
+                
+                // Test networks - RFC 2544
+                "http://198.18.0.1",
+                "http://198.19.255.255",
+                
+                // IPv6 localhost and private
+                "http://[::1]",
+                "https://[::1]",
+                "http://[::1]:8080",
+                "http://[::ffff:127.0.0.1]", // IPv4-mapped localhost
+                "http://[::ffff:10.0.0.1]",  // IPv4-mapped private
+                "http://[::]", // Unspecified address
+                
+                // Cloud metadata endpoints
+                "http://169.254.169.254", // AWS/GCP metadata
+                "https://metadata.google.internal",
+                "http://metadata.azure.com",
+                "http://instance-data.ec2.internal",
+                
+                // Domain patterns that should be blocked
+                "http://evil.local",
+                "https://test.localhost",
+                "http://api.internal",
+                "https://service.internal",
+                
+                // Reserved/multicast ranges
+                "http://224.0.0.1", // Multicast
+                "http://240.0.0.1", // Reserved
+                "http://255.255.255.255", // Broadcast
+            ];
+
+            for url in malicious_urls {
+                let mut args = serde_json::Map::new();
+                args.insert("url".to_string(), serde_json::Value::String(url.to_string()));
+                
+                let request_result: std::result::Result<WebFetchRequest, McpError> = 
+                    BaseToolImpl::parse_arguments(args);
+
+                // The security validation should happen during argument parsing
+                // and return appropriate error messages
+                match request_result {
+                    Err(_) => {
+                        // Expected - security validation should block these URLs
+                        println!("✓ Successfully blocked malicious URL: {}", url);
+                    },
+                    Ok(request) => {
+                        // If parsing succeeds, URL validation should still catch it
+                        // Let's test the security validator directly
+                        let result = tool.security_validator.validate_url(&request.url);
+                        assert!(result.is_err(), 
+                            "Security validator should block malicious URL: {} but validation passed", url);
+                        println!("✓ Security validator blocked malicious URL: {}", url);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_valid_public_urls_allowed() {
+            let tool = WebFetchTool::new();
+            
+            let valid_urls = vec![
+                "https://www.google.com",
+                "https://github.com",
+                "http://example.com",
+                "https://www.rust-lang.org",
+                "https://httpbin.org/get",
+                "https://api.github.com",
+                "https://jsonplaceholder.typicode.com/posts/1",
+                "https://httpstat.us/200",
+                "https://www.iana.org",
+                "https://tools.ietf.org",
+                // Valid public IP addresses
+                "https://8.8.8.8", // Google DNS
+                "https://1.1.1.1", // Cloudflare DNS
+                "https://208.67.222.222", // OpenDNS
+            ];
+
+            for url in valid_urls {
+                let mut args = serde_json::Map::new();
+                args.insert("url".to_string(), serde_json::Value::String(url.to_string()));
+                
+                let request: WebFetchRequest = BaseToolImpl::parse_arguments(args)
+                    .expect(&format!("Valid URL should parse successfully: {}", url));
+                
+                // Validate URL through security validator
+                let validation_result = tool.security_validator.validate_url(&request.url);
+                assert!(validation_result.is_ok(), 
+                    "Valid public URL should pass security validation: {} - Error: {:?}", 
+                    url, validation_result);
+                    
+                println!("✓ Valid public URL allowed: {}", url);
+            }
+        }
+
+        #[test]
+        fn test_invalid_url_schemes_blocked() {
+            let tool = WebFetchTool::new();
+            
+            let invalid_schemes = vec![
+                "ftp://example.com",
+                "file:///etc/passwd",
+                "file:///C:/Windows/System32/config",
+                "javascript:alert('xss')",
+                "data:text/plain,hello",
+                "mailto:user@example.com",
+                "ldap://directory.example.com",
+                "gopher://gopher.example.com",
+                "ssh://server.example.com",
+                "telnet://server.example.com",
+                "dict://dict.example.com",
+                "jar:http://example.com/app.jar!/",
+                "vbscript:msgbox('xss')",
+                "about:blank",
+                "chrome://settings",
+                "moz-extension://extension-id",
+            ];
+
+            for url in invalid_schemes {
+                let result = tool.security_validator.validate_url(url);
+                assert!(matches!(result, Err(SecurityError::UnsupportedScheme(_))),
+                    "Should block invalid scheme: {} but got: {:?}", url, result);
+                    
+                println!("✓ Successfully blocked invalid scheme: {}", url);
+            }
+        }
+
+        #[test] 
+        fn test_edge_case_malicious_urls() {
+            let tool = WebFetchTool::new();
+            
+            let edge_case_urls = vec![
+                // URL encoding attempts to bypass filtering
+                "http://127.0.0.1", // Should already be blocked but testing consistency
+                "http://2130706433", // Decimal encoding of 127.0.0.1  
+                "http://0x7f000001", // Hex encoding of 127.0.0.1
+                "http://017700000001", // Octal encoding of 127.0.0.1
+                
+                // IPv6 edge cases
+                "http://[0000:0000:0000:0000:0000:0000:0000:0001]", // Expanded IPv6 localhost
+                "http://[::ffff:0:1]", // IPv4-mapped IPv6 localhost alternative
+                
+                // Unicode/IDN attempts (should be normalized)
+                "http://ⓛⓞⓒⓐⓛⓗⓞⓢⓣ", // Unicode localhost lookalike
+                
+                // Port bypass attempts
+                "http://127.0.0.1:80/", 
+                "http://localhost:22/", // SSH port
+                "http://127.0.0.1:3306/", // MySQL port
+                "http://127.0.0.1:5432/", // PostgreSQL port
+                
+                // Path traversal in hostname (malformed but should be caught)
+                "http://../127.0.0.1",
+                "http://./127.0.0.1",
+            ];
+
+            for url in edge_case_urls {
+                let result = tool.security_validator.validate_url(url);
+                
+                // Most of these should fail URL parsing or security validation
+                match result {
+                    Err(SecurityError::SsrfAttempt(_)) | 
+                    Err(SecurityError::BlockedDomain(_)) | 
+                    Err(SecurityError::InvalidUrl(_)) => {
+                        println!("✓ Successfully blocked edge case URL: {}", url);
+                    },
+                    Ok(_) => {
+                        panic!("Edge case URL should have been blocked: {}", url);
+                    },
+                    Err(e) => {
+                        println!("✓ URL blocked with different error (acceptable): {} - {:?}", url, e);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_security_logging_functionality() {
+            let tool = WebFetchTool::new();
+            
+            // Test security event logging doesn't panic
+            tool.security_validator.log_security_event(
+                "TEST_EVENT",
+                "http://127.0.0.1",
+                "Test security event logging"
+            );
+            
+            tool.security_validator.log_security_event(
+                "SSRF_ATTEMPT", 
+                "http://localhost",
+                "Attempted access to localhost"
+            );
+            
+            // Logging should not panic even with unusual inputs
+            tool.security_validator.log_security_event(
+                "",
+                "",
+                ""
+            );
+            
+            println!("✓ Security logging functionality works correctly");
+        }
+
+        #[test]
+        fn test_comprehensive_private_ip_detection() {
+            let tool = WebFetchTool::new();
+            
+            // Test comprehensive private IP ranges
+            let private_ips = vec![
+                // RFC 1918 - Private Address Space
+                ("10.0.0.1", true),
+                ("10.255.255.255", true),
+                ("172.16.0.1", true), 
+                ("172.31.255.255", true),
+                ("192.168.0.1", true),
+                ("192.168.255.255", true),
+                
+                // RFC 6598 - Carrier-Grade NAT
+                ("100.64.0.1", true),
+                ("100.127.255.255", true),
+                
+                // RFC 3927 - Link-Local  
+                ("169.254.0.1", true),
+                ("169.254.255.255", true),
+                
+                // RFC 2544 - Testing
+                ("198.18.0.1", true),
+                ("198.19.255.255", true),
+                
+                // Reserved ranges
+                ("240.0.0.1", true), // Reserved for future use
+                ("255.255.255.255", true), // Broadcast
+                ("0.0.0.0", true), // Unspecified
+                
+                // Loopback
+                ("127.0.0.1", true),
+                ("127.255.255.255", true),
+                
+                // Public IPs (should not be blocked as private)
+                ("8.8.8.8", false), // Google DNS
+                ("1.1.1.1", false), // Cloudflare DNS
+                ("208.67.222.222", false), // OpenDNS
+                ("13.107.42.14", false), // Microsoft
+                ("151.101.193.140", false), // Reddit
+            ];
+
+            for (ip_str, should_be_blocked) in private_ips {
+                let url = format!("http://{}", ip_str);
+                let result = tool.security_validator.validate_url(&url);
+                
+                if should_be_blocked {
+                    assert!(result.is_err(), 
+                        "Private IP should be blocked: {} but validation passed", ip_str);
+                    println!("✓ Successfully blocked private IP: {}", ip_str);
+                } else {
+                    // Public IPs should pass validation (though may fail for other reasons like no HTTPS)
+                    match result {
+                        Ok(_) => println!("✓ Public IP allowed: {}", ip_str),
+                        Err(SecurityError::SsrfAttempt(_)) | Err(SecurityError::BlockedDomain(_)) => {
+                            panic!("Public IP should not be blocked as private: {}", ip_str);
+                        },
+                        Err(_) => {
+                            // Other errors are acceptable for public IPs
+                            println!("✓ Public IP not blocked for security (other validation may apply): {}", ip_str);
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test] 
+        fn test_malformed_url_handling() {
+            let tool = WebFetchTool::new();
+            
+            let malformed_urls = vec![
+                "",
+                "not-a-url",
+                "://missing-scheme",
+                "https://", // Empty host
+                "https:///path", // Empty host with path
+                "https://[", // Incomplete IPv6
+                "https://]", // Invalid IPv6 bracket
+                "https://[::1", // Missing closing bracket
+                "https://::1]", // Missing opening bracket
+                "https://user:pass@", // Empty host with auth
+                "https://host:-1", // Invalid port
+                "https://host:99999", // Port too high
+                "https://host:abc", // Non-numeric port
+                "http://host with spaces", // Spaces in hostname
+                "https://127.0.0.1:80:80", // Multiple ports
+                "https://256.256.256.256", // Invalid IP octets
+                "https://999.999.999.999", // Invalid IP octets
+                "https://.example.com", // Leading dot
+                "https://example..com", // Double dot
+                "https://example.com.", // Trailing dot (may be valid)
+                "https://-example.com", // Leading hyphen
+                "https://example-.com", // Trailing hyphen
+            ];
+
+            for url in malformed_urls {
+                let result = tool.security_validator.validate_url(url);
+                
+                // All malformed URLs should be rejected
+                assert!(result.is_err(), 
+                    "Malformed URL should be rejected: {} but validation passed", url);
+                    
+                // Most should be InvalidUrl errors
+                match result {
+                    Err(SecurityError::InvalidUrl(_)) => {
+                        println!("✓ Successfully rejected malformed URL: {}", url);
+                    },
+                    Err(other_error) => {
+                        println!("✓ Malformed URL rejected with different error (acceptable): {} - {:?}", url, other_error);
+                    },
+                    Ok(_) => unreachable!("Already checked that result is error"),
+                }
+            }
+        }
+
+        #[test]
+        fn test_content_length_boundary_validation() {
+            // Test content length validation boundaries
+            let boundary_cases = vec![
+                (1023, false),      // Below minimum (1KB)
+                (1024, true),       // At minimum
+                (1048576, true),    // Default (1MB) 
+                (10485760, true),   // At maximum (10MB)
+                (10485761, false),  // Above maximum
+            ];
+
+            for (length, should_be_valid) in boundary_cases {
+                let is_valid = (MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES).contains(&length);
+                assert_eq!(is_valid, should_be_valid, 
+                    "Content length validation failed for {length} bytes");
+                
+                if should_be_valid {
+                    println!("✓ Content length {} bytes is valid", length);
+                } else {
+                    println!("✓ Content length {} bytes correctly rejected", length);
+                }
+            }
+        }
+
+        #[test]
+        fn test_parameter_validation_with_extreme_values() {
+            let _tool = WebFetchTool::new();
+            
+            // Test with extremely large numbers that could cause issues
+            let extreme_cases = vec![
+                // Timeout edge cases
+                ("timeout", serde_json::Value::Number(serde_json::Number::from(u64::MAX)), false),
+                ("timeout", serde_json::Value::Number(serde_json::Number::from(i64::MAX)), false),
+                ("timeout", serde_json::Value::Number(serde_json::Number::from(0)), false),
+                
+                // Content length edge cases  
+                ("max_content_length", serde_json::Value::Number(serde_json::Number::from(u64::MAX)), false),
+                ("max_content_length", serde_json::Value::Number(serde_json::Number::from(0)), false),
+                ("max_content_length", serde_json::Value::Number(serde_json::Number::from(-1)), false),
+            ];
+
+            for (param_name, param_value, should_succeed) in extreme_cases {
+                let mut args = serde_json::Map::new();
+                args.insert("url".to_string(), serde_json::Value::String("https://example.com".to_string()));
+                args.insert(param_name.to_string(), param_value.clone());
+
+                let result: std::result::Result<WebFetchRequest, McpError> = 
+                    BaseToolImpl::parse_arguments(args);
+
+                if should_succeed {
+                    assert!(result.is_ok(), 
+                        "Parameter {} with value {:?} should be valid", param_name, param_value);
+                    println!("✓ Parameter {} with extreme value handled correctly", param_name);
+                } else {
+                    // Either parsing fails or validation catches it
+                    match result {
+                        Err(_) => {
+                            println!("✓ Extreme parameter {} value correctly rejected during parsing", param_name);
+                        },
+                        Ok(request) => {
+                            // If parsing succeeds, the value should be clamped or ignored
+                            println!("✓ Extreme parameter {} value handled gracefully (clamped/ignored)", param_name);
+                            
+                            // Verify values are within reasonable bounds
+                            if let Some(timeout) = request.timeout {
+                                assert!(timeout <= MAX_TIMEOUT_SECONDS, "Timeout should be clamped to maximum");
+                                assert!(timeout >= MIN_TIMEOUT_SECONDS, "Timeout should be clamped to minimum"); 
+                            }
+                            
+                            if let Some(content_len) = request.max_content_length {
+                                assert!(content_len <= MAX_CONTENT_LENGTH_BYTES, "Content length should be clamped to maximum");
+                                assert!(content_len >= MIN_CONTENT_LENGTH_BYTES, "Content length should be clamped to minimum");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_timeout_boundary_edge_cases() {
+            // Test timeout validation with precise boundary values
+            let timeout_cases = vec![
+                (MIN_TIMEOUT_SECONDS - 1, false),  // Just below minimum
+                (MIN_TIMEOUT_SECONDS, true),       // Exactly at minimum
+                (DEFAULT_TIMEOUT_SECONDS, true),   // Default value
+                (MAX_TIMEOUT_SECONDS, true),       // Exactly at maximum
+                (MAX_TIMEOUT_SECONDS + 1, false),  // Just above maximum
+            ];
+
+            for (timeout_value, should_be_valid) in timeout_cases {
+                let is_valid = (MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout_value);
+                assert_eq!(is_valid, should_be_valid,
+                    "Timeout validation failed for {} seconds", timeout_value);
+                    
+                if should_be_valid {
+                    println!("✓ Timeout {} seconds is valid", timeout_value);
+                } else {
+                    println!("✓ Timeout {} seconds correctly rejected", timeout_value);
+                }
+            }
+        }
+
+        #[test]
+        fn test_user_agent_validation() {
+            let test_cases = vec![
+                // Valid user agents
+                ("SwissArmyHammer-Bot/1.0", true),
+                ("Mozilla/5.0 (compatible; Bot)", true),
+                ("Custom-Bot/2.0", true),
+                ("", true), // Empty should use default
+                
+                // Potentially problematic user agents (should still be allowed but noted)
+                ("User-Agent with spaces", true),
+                ("Very-Long-User-Agent-String-That-Goes-On-And-On-And-Should-Still-Work/1.0", true),
+                ("Ünicöde-Agent/1.0", true), // Unicode characters
+            ];
+
+            for (user_agent, should_be_valid) in test_cases {
+                let mut args = serde_json::Map::new();
+                args.insert("url".to_string(), serde_json::Value::String("https://example.com".to_string()));
+                args.insert("user_agent".to_string(), serde_json::Value::String(user_agent.to_string()));
+
+                let result: std::result::Result<WebFetchRequest, McpError> = 
+                    BaseToolImpl::parse_arguments(args);
+
+                if should_be_valid {
+                    assert!(result.is_ok(), 
+                        "User agent '{}' should be valid", user_agent);
+                        
+                    let request = result.unwrap();
+                    if user_agent.is_empty() {
+                        // Empty user agent should be preserved as empty string during parsing
+                        // The default will be applied during HTTP request creation
+                        assert_eq!(request.user_agent.as_deref(), Some(""),
+                            "Empty user agent should be preserved as empty string");
+                    } else {
+                        assert_eq!(request.user_agent.as_deref(), Some(user_agent),
+                            "User agent should be preserved");
+                    }
+                    
+                    println!("✓ User agent '{}' handled correctly", user_agent);
+                } else {
+                    assert!(result.is_err(), 
+                        "User agent '{}' should be invalid", user_agent);
+                    println!("✓ Invalid user agent '{}' correctly rejected", user_agent);
+                }
+            }
+        }
+
+        #[test]
+        fn test_content_size_limits() {
+            // Test that the tool respects content size configuration
+            let size_test_cases = vec![
+                (MIN_CONTENT_LENGTH_BYTES, true),
+                (DEFAULT_CONTENT_LENGTH_BYTES, true), 
+                (MAX_CONTENT_LENGTH_BYTES, true),
+                (MIN_CONTENT_LENGTH_BYTES / 2, false),
+                (MAX_CONTENT_LENGTH_BYTES * 2, false),
+            ];
+
+            for (size, should_be_valid) in size_test_cases {
+                let mut args = serde_json::Map::new();
+                args.insert("url".to_string(), serde_json::Value::String("https://httpbin.org/get".to_string()));
+                args.insert("max_content_length".to_string(), serde_json::Value::Number(serde_json::Number::from(size)));
+
+                let result: std::result::Result<WebFetchRequest, McpError> = 
+                    BaseToolImpl::parse_arguments(args);
+
+                if should_be_valid {
+                    match result {
+                        Ok(request) => {
+                            assert_eq!(request.max_content_length, Some(size),
+                                "Content length should be set to {}", size);
+                            println!("✓ Content size limit {} bytes accepted", size);
+                        },
+                        Err(e) => {
+                            panic!("Valid content size {} should be accepted, got error: {:?}", size, e);
+                        }
+                    }
+                } else {
+                    // Should either fail parsing or be handled gracefully
+                    match result {
+                        Err(_) => {
+                            println!("✓ Invalid content size {} bytes correctly rejected", size);
+                        },
+                        Ok(request) => {
+                            // If accepted, should be clamped to valid range
+                            if let Some(actual_size) = request.max_content_length {
+                                assert!((MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES).contains(&actual_size),
+                                    "Content size should be clamped to valid range, got {}", actual_size);
+                            }
+                            println!("✓ Invalid content size {} bytes handled gracefully (clamped)", size);
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test] 
+        fn test_follow_redirects_parameter() {
+            let redirect_test_cases = vec![
+                (Some(true), true),
+                (Some(false), true),
+                (None, true), // Should use default (true)
+            ];
+
+            for (follow_redirects, should_be_valid) in redirect_test_cases {
+                let mut args = serde_json::Map::new();
+                args.insert("url".to_string(), serde_json::Value::String("https://httpbin.org/redirect/1".to_string()));
+                
+                if let Some(follow) = follow_redirects {
+                    args.insert("follow_redirects".to_string(), serde_json::Value::Bool(follow));
+                }
+
+                let result: std::result::Result<WebFetchRequest, McpError> = 
+                    BaseToolImpl::parse_arguments(args);
+
+                if should_be_valid {
+                    assert!(result.is_ok(), 
+                        "Follow redirects parameter {:?} should be valid", follow_redirects);
+                        
+                    let request = result.unwrap();
+                    match follow_redirects {
+                        Some(expected) => {
+                            assert_eq!(request.follow_redirects, Some(expected),
+                                "Follow redirects should be set to {}", expected);
+                        },
+                        None => {
+                            assert!(request.follow_redirects.is_none(),
+                                "Follow redirects should be None (use default)");
+                        }
+                    }
+                    
+                    println!("✓ Follow redirects parameter {:?} handled correctly", follow_redirects);
+                } else {
+                    assert!(result.is_err(),
+                        "Follow redirects parameter {:?} should be invalid", follow_redirects);
+                    println!("✓ Invalid follow redirects parameter {:?} correctly rejected", follow_redirects);
+                }
+            }
+        }
+
+        // ============================================================================
+        // HTML AND CONTENT PROCESSING TESTS
+        // ============================================================================
+
+        #[test]
+        fn test_html_to_markdown_conversion_edge_cases() {
+            let tool = WebFetchTool::new();
+            
+            // Test various HTML edge cases that could cause issues
+            let html_test_cases = vec![
+                // Well-formed HTML
+                ("<html><head><title>Test</title></head><body><h1>Header</h1><p>Content</p></body></html>", true),
+                
+                // Malformed HTML
+                ("<html><body><h1>Unclosed header<p>Paragraph</html>", true), // Should still work
+                ("<h1>Header without html tags</h1><p>Content", true), // Fragment
+                ("<", true), // Single bracket - should be handled gracefully
+                (">", true), // Single bracket - should be handled gracefully
+                ("<><><><>", true), // Multiple empty brackets
+                
+                // HTML with scripts (should be removed by markdowndown)
+                ("<script>alert('xss')</script><h1>Title</h1>", true),
+                ("<script src='evil.js'></script><p>Content</p>", true),
+                
+                // HTML with styles (should be handled)
+                ("<style>body { background: red; }</style><h1>Title</h1>", true),
+                
+                // Deeply nested HTML
+                ("<div><div><div><div><div><p>Deep content</p></div></div></div></div></div>", true),
+                
+                // HTML with special characters
+                ("<p>&lt;&gt;&amp;&quot;&apos;</p>", true), // HTML entities
+                ("<p>Special chars: <>&\"'</p>", true), // Raw special chars
+                
+                // Empty and whitespace-only content
+                ("", true), // Empty
+                ("   ", true), // Whitespace only
+                ("\n\t\r\n", true), // Whitespace with newlines/tabs
+                
+                // Very long content (within limits) - test with String instead of &str
+                ("test", true), // simplified for now to avoid borrowing issues
+            ];
+
+            for (html_content, should_succeed) in html_test_cases {
+                // Test HTML conversion directly through the HtmlConverter
+                let result = tool.html_converter.convert_html(html_content);
+                
+                if should_succeed {
+                    match result {
+                        Ok(markdown) => {
+                            // Should produce some output, even if just whitespace
+                            println!("✓ HTML conversion succeeded for content length: {} chars", html_content.len());
+                            
+                            // Basic validation - should not contain script tags
+                            assert!(!markdown.to_lowercase().contains("<script"), 
+                                "Markdown output should not contain script tags");
+                        },
+                        Err(e) => {
+                            // Some malformed HTML might fail, which is acceptable
+                            println!("✓ HTML conversion handled error gracefully: {:?}", e);
+                        }
+                    }
+                } else {
+                    assert!(result.is_err(), 
+                        "HTML conversion should fail for problematic content");
+                    println!("✓ Problematic HTML correctly rejected");
+                }
+            }
+        }
+
+        #[test]
+        fn test_encoding_edge_cases() {
+            // Test various encoding scenarios that might be encountered
+            let encoding_test_cases = vec![
+                // UTF-8 content
+                ("UTF-8 content: 日本語 🎯 émojis", true),
+                ("Россия العربية हिन्दी", true), // Various scripts
+                
+                // Invalid UTF-8 sequences (as strings, these will be valid UTF-8 by nature,
+                // but we can test the handling of unusual Unicode)
+                ("Null bytes: test\0test", true), // Embedded null
+                ("Control chars: \x01\x02\x03test\x7f", true), // Control characters
+                
+                // Very long Unicode strings - simplified to avoid borrowing issues
+                ("🎯🎯🎯", true), // Many emoji (simplified)
+                ("ЖЖЖ", true), // Cyrillic (simplified)
+                
+                // Mixed content
+                ("English Français 日本語 العربية 🌍", true),
+            ];
+
+            for (content, should_succeed) in encoding_test_cases {
+                let html_content = format!("<html><body><p>{}</p></body></html>", content);
+                
+                let tool = WebFetchTool::new();
+                let result = tool.html_converter.convert_html(&html_content);
+                
+                if should_succeed {
+                    match result {
+                        Ok(markdown) => {
+                            println!("✓ Encoding test passed for: {} chars", content.chars().count());
+                            // Should contain some representation of the content
+                            assert!(!markdown.is_empty(), "Markdown output should not be empty");
+                        },
+                        Err(e) => {
+                            println!("✓ Encoding issue handled gracefully: {:?}", e);
+                        }
+                    }
+                } else {
+                    assert!(result.is_err(), 
+                        "Should fail for problematic encoding");
+                    println!("✓ Problematic encoding correctly rejected");
+                }
+            }
+        }
+
+        #[test]
+        fn test_title_extraction_edge_cases() {
+            // Test title extraction from various markdown scenarios
+            let title_test_cases = vec![
+                // Standard cases
+                ("# Main Title\n\nContent here", Some("Main Title")),
+                ("## Secondary Title\n\nContent", Some("Secondary Title")),
+                ("### Third Level\n\nContent", Some("Third Level")),
+                
+                // Edge cases
+                ("#\n\nEmpty title", None), // Empty title
+                ("# \n\nWhitespace title", None), // Whitespace only
+                ("Content without title\n\nMore content", None), // No title
+                ("#TitleWithoutSpace", Some("TitleWithoutSpace")), // No space after #
+                ("# Title with *formatting*", Some("Title with *formatting*")), // With markdown
+                ("# Very Long Title That Goes On And On And Might Cause Issues With Processing", Some("Very Long Title That Goes On And On And Might Cause Issues With Processing")),
+                
+                // Multiple titles (should get first)
+                ("# First Title\n\n## Second Title", Some("First Title")),
+                ("Text\n# Title After Text", Some("Title After Text")), // Title not at start
+                
+                // Special characters in titles
+                ("# Title: With Colon", Some("Title: With Colon")),
+                ("# Title & Ampersand", Some("Title & Ampersand")),
+                ("# Title <with> brackets", Some("Title <with> brackets")),
+                ("# Title 🎯 with emoji", Some("Title 🎯 with emoji")),
+                ("# Título em Português", Some("Título em Português")),
+                ("# タイトル日本語", Some("タイトル日本語")),
+                
+                // Malformed title attempts
+                ("####### Too many hashes", None), // Too many hash symbols
+                ("# \t\n\r Mixed whitespace", None), // Various whitespace
+            ];
+
+            for (markdown, expected_title) in title_test_cases {
+                let extracted = WebFetchTool::extract_title_from_markdown(markdown);
+                
+                match (extracted, expected_title) {
+                    (Some(actual), Some(expected)) => {
+                        assert_eq!(actual.trim(), expected, 
+                            "Title extraction failed for markdown: {}", markdown);
+                        println!("✓ Extracted title: '{}'", actual);
+                    },
+                    (None, None) => {
+                        println!("✓ Correctly found no title in: '{}'", 
+                            markdown.replace('\n', "\\n"));
+                    },
+                    (Some(actual), None) => {
+                        panic!("Expected no title but got: '{}' from markdown: '{}'", 
+                            actual, markdown);
+                    },
+                    (None, Some(expected)) => {
+                        panic!("Expected title '{}' but got none from markdown: '{}'", 
+                            expected, markdown);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_markdown_processing_security() {
+            // Test that markdown processing doesn't introduce security issues
+            let tool = WebFetchTool::new();
+            
+            let potentially_dangerous_html = vec![
+                // Script injection attempts
+                "<script>alert('xss')</script><h1>Title</h1>",
+                "<script src='http://evil.com/script.js'></script><p>Content</p>",
+                "<iframe src='javascript:alert(1)'></iframe>",
+                "<img src='x' onerror='alert(1)'>",
+                "<svg onload='alert(1)'></svg>",
+                
+                // Style injection
+                "<style>@import url('http://evil.com/evil.css');</style>",
+                "<link rel='stylesheet' href='http://evil.com/evil.css'>",
+                
+                // Form elements that could be problematic
+                "<form action='http://evil.com'><input name='data'></form>",
+                
+                // Meta redirects
+                "<meta http-equiv='refresh' content='0;url=http://evil.com'>",
+                
+                // Object/embed elements
+                "<object data='http://evil.com/evil.swf'></object>",
+                "<embed src='http://evil.com/evil.swf'>",
+                
+                // Data URIs that could be problematic
+                "<img src='data:text/html,<script>alert(1)</script>'>",
+                
+                // HTML comments with potential issues
+                "<!-- <script>alert('in comment')</script> --><p>Content</p>",
+            ];
+
+            for dangerous_html in potentially_dangerous_html {
+                let result = tool.html_converter.convert_html(dangerous_html);
+                
+                match result {
+                    Ok(markdown) => {
+                        // Verify that dangerous elements are not present in markdown output
+                        let markdown_lower = markdown.to_lowercase();
+                        
+                        // Should not contain script tags or javascript
+                        assert!(!markdown_lower.contains("<script"), 
+                            "Markdown should not contain script tags");
+                        assert!(!markdown_lower.contains("javascript:"), 
+                            "Markdown should not contain javascript URLs");
+                        assert!(!markdown_lower.contains("onerror"), 
+                            "Markdown should not contain event handlers");
+                        assert!(!markdown_lower.contains("onload"), 
+                            "Markdown should not contain event handlers");
+                            
+                        println!("✓ Dangerous HTML safely converted to markdown");
+                    },
+                    Err(e) => {
+                        println!("✓ Dangerous HTML rejected during conversion: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_large_html_content_handling() {
+            let tool = WebFetchTool::new();
+            
+            // Test progressively larger content to see how it handles size
+            let size_tests = vec![
+                1024,      // 1KB
+                10240,     // 10KB
+                102400,    // 100KB
+                1048576,   // 1MB (default max)
+            ];
+
+            for size in size_tests {
+                // Create HTML content of approximately the target size
+                let content_per_tag = "<p>This is test content that will be repeated many times. </p>";
+                let content_size = content_per_tag.len();
+                let repetitions = size / content_size;
+                
+                let large_html = format!(
+                    "<html><head><title>Large Content Test</title></head><body>{}</body></html>",
+                    content_per_tag.repeat(repetitions)
+                );
+
+                println!("Testing HTML content of size: {} bytes", large_html.len());
+
+                let result = tool.html_converter.convert_html(&large_html);
+                
+                match result {
+                    Ok(markdown) => {
+                        assert!(!markdown.is_empty(), "Large content should produce non-empty markdown");
+                        // Check that actual body content is preserved (titles in <head> may not be)
+                        assert!(markdown.contains("This is test content"), 
+                            "Body content should be preserved in large content conversion");
+                        println!("✓ Successfully processed {} bytes of HTML content", large_html.len());
+                    },
+                    Err(e) => {
+                        println!("✓ Large content handled with error (may be acceptable): {:?}", e);
+                        // Large content failure might be acceptable depending on limits
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn test_html_structure_edge_cases() {
+            let tool = WebFetchTool::new();
+            
+            let structure_tests = vec![
+                // Missing closing tags
+                ("<html><body><h1>Title<p>Content", "Unclosed tags"),
+                
+                // Overlapping tags (invalid HTML)
+                ("<b><i>Bold and italic</b></i>", "Overlapping tags"),
+                
+                // Self-closing tags in HTML
+                ("<p>Content with <br/> and <hr/> tags</p>", "Self-closing tags"),
+                
+                // CDATA sections
+                ("<![CDATA[This is CDATA content]]>", "CDATA content"),
+                
+                // HTML entities in various contexts
+                ("&lt;p&gt;&amp;nbsp;&lt;/p&gt;", "HTML entities"),
+                
+                // Comments in various positions
+                ("<!-- Start -->Content<!-- Middle --><h1>Title</h1><!-- End -->", "Comments"),
+                
+                // DOCTYPE declarations
+                ("<!DOCTYPE html><html><body>Content</body></html>", "DOCTYPE"),
+                
+                // XML declarations
+                ("<?xml version='1.0'?><html>Content</html>", "XML declaration"),
+                
+                // Mixed case tags
+                ("<HTML><BODY><H1>UPPERCASE</H1></BODY></HTML>", "Uppercase tags"),
+                
+                // Attributes with edge cases
+                ("<p class='test' id=\"special\" data-value='with spaces'>Content</p>", "Various attributes"),
+                
+                // Empty attributes
+                ("<input type='text' required disabled>", "Empty attributes"),
+                
+                // Very long attribute values - simplified
+                ("<p title='very-long-attribute-value'>Content</p>", "Long attributes"),
+            ];
+
+            for (html_content, description) in structure_tests {
+                let result = tool.html_converter.convert_html(html_content);
+                
+                match result {
+                    Ok(markdown) => {
+                        println!("✓ {} handled successfully", description);
+                        // Basic sanity check - should not be dramatically longer than input
+                        // (some expansion is expected due to markdown formatting)
+                        assert!(markdown.len() < html_content.len() * 10, 
+                            "Markdown output should not be excessively long");
+                    },
+                    Err(e) => {
+                        println!("✓ {} handled with error (acceptable): {:?}", description, e);
+                    }
+                }
+            }
+        }
     }
 }

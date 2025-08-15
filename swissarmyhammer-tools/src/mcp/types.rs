@@ -149,7 +149,7 @@ pub struct MarkCompleteTodoRequest {
 ///     user_agent: Some("SwissArmyHammer-DocProcessor/1.0".to_string()),
 /// }
 /// ```
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, schemars::JsonSchema)]
 pub struct WebFetchRequest {
     /// The URL to fetch content from (must be a valid HTTP/HTTPS URL)
     pub url: String,
@@ -163,4 +163,61 @@ pub struct WebFetchRequest {
     pub max_content_length: Option<u32>,
     /// Custom User-Agent header (optional, defaults to "SwissArmyHammer-Bot/1.0")
     pub user_agent: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for WebFetchRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        
+        #[derive(Deserialize)]
+        struct WebFetchRequestHelper {
+            url: String,
+            timeout: Option<u32>,
+            follow_redirects: Option<bool>,
+            max_content_length: Option<u32>,
+            user_agent: Option<String>,
+        }
+        
+        let helper = WebFetchRequestHelper::deserialize(deserializer)?;
+        
+        // Validate timeout range
+        const MIN_TIMEOUT_SECONDS: u32 = 5;
+        const MAX_TIMEOUT_SECONDS: u32 = 120;
+        
+        let timeout = helper.timeout.map(|timeout| {
+            if timeout < MIN_TIMEOUT_SECONDS || timeout > MAX_TIMEOUT_SECONDS {
+                return Err(Error::custom(format!(
+                    "Timeout must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS} seconds"
+                )));
+            }
+            Ok(timeout)
+        }).transpose()?;
+        
+        // Validate and clamp max_content_length
+        const MIN_CONTENT_LENGTH_BYTES: u32 = 1024;
+        const MAX_CONTENT_LENGTH_BYTES: u32 = 10_485_760;
+        
+        let max_content_length = helper.max_content_length.map(|length| {
+            if length < MIN_CONTENT_LENGTH_BYTES || length > MAX_CONTENT_LENGTH_BYTES {
+                return Err(Error::custom(format!(
+                    "Maximum content length must be between {MIN_CONTENT_LENGTH_BYTES} and {MAX_CONTENT_LENGTH_BYTES} bytes"
+                )));
+            }
+            Ok(length)
+        }).transpose()?;
+        
+        // Keep user_agent as-is for now, validation will handle empty strings
+        let user_agent = helper.user_agent;
+        
+        Ok(WebFetchRequest {
+            url: helper.url,
+            timeout,
+            follow_redirects: helper.follow_redirects,
+            max_content_length,
+            user_agent,
+        })
+    }
 }
