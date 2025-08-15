@@ -278,7 +278,7 @@ mod tests {
                     || error_msg.contains("Could not set lock")
                 {
                     // Expected in test environments without model access or with database conflicts
-                    println!(
+                    tracing::warn!(
                         "⚠️  Search query skipped - semantic search operation failed: {error_msg}"
                     );
                 } else {

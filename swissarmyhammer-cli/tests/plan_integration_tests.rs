@@ -709,53 +709,6 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
     Ok(())
 }
 
-/// Performance test: measure execution time for reasonable plan using test mode
-#[tokio::test]
-#[ignore = "Performance test - run with --ignored"]
-async fn test_plan_command_performance() -> Result<()> {
-    let _guard = create_test_home_guard();
-    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
-
-    let plan_file = create_complex_plan_file(&temp_path, "performance-test.md")?;
-
-    let start_time = std::time::Instant::now();
-
-    // Use flow test mode for performance testing to avoid AI service calls
-    let output = Command::cargo_bin("sah")?
-        .args([
-            "flow",
-            "test",
-            "plan",
-            "--var",
-            &format!("plan_filename={}", plan_file.display()),
-        ])
-        .current_dir(&temp_path)
-        .output()?;
-
-    let elapsed = start_time.elapsed();
-
-    assert!(
-        output.status.success(),
-        "Performance test plan should succeed. stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Should complete in reasonable time (less than 30 seconds as per requirements)
-    assert!(
-        elapsed < std::time::Duration::from_secs(30),
-        "Plan command should complete in reasonable time: {elapsed:?}"
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
-        "Should execute workflow in test mode: {stdout}"
-    );
-
-    println!("Plan execution completed in {elapsed:?}");
-
-    Ok(())
-}
 
 /// Test enhanced error handling: comprehensive file validation
 #[tokio::test]

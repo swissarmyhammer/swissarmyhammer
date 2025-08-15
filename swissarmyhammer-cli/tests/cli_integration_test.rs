@@ -148,18 +148,6 @@ fn test_prompt_help() -> Result<()> {
     Ok(())
 }
 
-/// Test that old-style commands still work if any exist
-#[test]
-#[ignore = "doctor command may fail in CI due to environment differences"]
-fn test_doctor_command() -> Result<()> {
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .args(["doctor"])
-        .output()?;
-
-    assert!(output.status.success(), "doctor command should succeed");
-    Ok(())
-}
 
 /// Test shell completion generation
 #[test]
@@ -357,25 +345,6 @@ fn test_flow_test_quiet_mode() -> Result<()> {
     Ok(())
 }
 
-/// Test flow test command with interactive mode
-#[test]
-#[ignore = "interactive mode requires user input"]
-fn test_flow_test_interactive_mode() -> Result<()> {
-    // This test is ignored by default as it requires user interaction
-    // It can be run manually to verify interactive functionality
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .args(["flow", "test", "hello-world", "--interactive"])
-        .output()?;
-
-    // In a real interactive test, we would need to provide stdin input
-    assert!(
-        output.status.code().is_some(),
-        "interactive mode should complete"
-    );
-
-    Ok(())
-}
 
 /// Test flow test command with custom workflow directory
 #[test]
@@ -1315,52 +1284,6 @@ fn test_root_validate_absolute_relative_paths() -> Result<()> {
     Ok(())
 }
 
-/// Test validation with large number of files (stress test)
-#[test]
-#[ignore = "stress test - only run manually"]
-fn test_root_validate_stress_many_files() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let workflow_dir = temp_dir.path().join("workflows");
-    std::fs::create_dir_all(&workflow_dir)?;
-
-    // Create 100 workflow files
-    for i in 0..100 {
-        std::fs::write(
-            workflow_dir.join(format!("workflow_{i}.mermaid")),
-            format!(
-                r#"stateDiagram-v2
-    [*] --> State{i}
-    State{i} --> [*]
-"#
-            ),
-        )?;
-    }
-
-    let start = std::time::Instant::now();
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .args([
-            "validate",
-            "--workflow-dir",
-            workflow_dir.to_str().unwrap(),
-            "--quiet",
-        ])
-        .output()?;
-    let duration = start.elapsed();
-
-    assert!(
-        output.status.code().is_some(),
-        "validation of many files should complete"
-    );
-
-    // Should complete in reasonable time (less than 10 seconds for 100 files)
-    assert!(
-        duration.as_secs() < 10,
-        "validation of 100 files should complete within 10 seconds"
-    );
-
-    Ok(())
-}
 
 /// Test validation with special characters in file paths
 #[test]

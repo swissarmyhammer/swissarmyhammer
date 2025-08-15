@@ -22,7 +22,7 @@ async fn test_mcp_server_creation() {
     assert!(!info.server_info.version.is_empty());
 
     // Debug print to see what capabilities are returned
-    println!("Server capabilities: {:?}", info.capabilities);
+    tracing::debug!("Server capabilities: {:?}", info.capabilities);
 }
 
 #[tokio::test]
@@ -119,7 +119,7 @@ async fn test_mcp_server_file_watching_integration() {
 
     // Test that file watching requires a peer connection
     // In tests, we can't easily create a real peer, so we skip the file watching test
-    println!("File watching requires a peer connection from MCP client");
+    tracing::debug!("File watching requires a peer connection from MCP client");
 
     // Test manual reload functionality
     let reload_result = server.reload_prompts().await;
@@ -127,10 +127,10 @@ async fn test_mcp_server_file_watching_integration() {
 
     // Test that the server can list prompts (even if empty)
     let prompts = server.list_prompts().await.unwrap();
-    println!("Server has {} prompts loaded", prompts.len());
+    tracing::debug!("Server has {} prompts loaded", prompts.len());
 
     // Notifications are sent via the peer connection when prompts change
-    println!("File watching active - notifications will be sent when prompts change");
+    tracing::debug!("File watching active - notifications will be sent when prompts change");
 }
 
 #[tokio::test]
@@ -146,16 +146,16 @@ async fn test_mcp_server_uses_same_directory_discovery() {
 
     // File watching now requires a peer connection from the MCP client
     // The important thing is that both use get_prompt_directories() method
-    println!(
+    tracing::debug!(
         "File watching would watch {} directories when started with a peer connection",
         resolver_dirs.len()
     );
 
     // The fix ensures both use get_prompt_directories() method
     // This test verifies the API consistency
-    println!("PromptResolver found {} directories", resolver_dirs.len());
+    tracing::debug!("PromptResolver found {} directories", resolver_dirs.len());
     for dir in resolver_dirs {
-        println!("  - {dir:?}");
+        tracing::debug!("  - {dir:?}");
     }
 }
 
@@ -179,7 +179,7 @@ async fn test_mcp_server_graceful_error_for_missing_prompt() {
     assert!(result.is_err(), "Should return error for missing prompt");
 
     let error_msg = result.unwrap_err().to_string();
-    println!("Error for missing prompt: {error_msg}");
+    tracing::debug!("Error for missing prompt: {error_msg}");
 
     // Should contain helpful message about prompt not being available
     assert!(

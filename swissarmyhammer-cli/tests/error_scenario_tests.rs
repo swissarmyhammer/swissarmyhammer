@@ -5,22 +5,21 @@
 
 use anyhow::Result;
 use assert_cmd::Command;
+use swissarmyhammer::test_utils::IsolatedTestHome;
 use tempfile::TempDir;
 
 mod test_utils;
 use test_utils::setup_git_repo;
 
-/// Setup function for error scenario testing
-fn setup_error_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
+/// Setup function for error scenario testing using IsolatedTestHome
+fn setup_error_test_environment() -> Result<(IsolatedTestHome, TempDir, std::path::PathBuf)> {
+    let home_guard = IsolatedTestHome::new();
     let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path().to_path_buf();
+    let work_dir = temp_dir.path().to_path_buf();
 
-    // Create basic directory structure
-    let issues_dir = temp_path.join("issues");
+    // Create basic directory structure in temporary directory
+    let issues_dir = work_dir.join("issues");
     std::fs::create_dir_all(&issues_dir)?;
-
-    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
-    std::fs::create_dir_all(&swissarmyhammer_dir)?;
 
     // Create a sample issue for testing
     std::fs::write(
@@ -31,15 +30,15 @@ This issue exists for error scenario testing.
 "#,
     )?;
 
-    setup_git_repo(&temp_path)?;
+    setup_git_repo(&work_dir)?;
 
-    Ok((temp_dir, temp_path))
+    Ok((home_guard, temp_dir, work_dir))
 }
 
 /// Test invalid issue operations
 #[test]
 fn test_invalid_issue_operations() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test showing non-existent issue
     let output = Command::cargo_bin("sah")?
@@ -105,7 +104,7 @@ fn test_invalid_issue_operations() -> Result<()> {
 /// Test invalid memo operations
 #[test]
 fn test_invalid_memo_operations() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test getting memo with invalid ID
     let output = Command::cargo_bin("sah")?
@@ -179,9 +178,8 @@ fn test_invalid_memo_operations() -> Result<()> {
 
 /// Test search error conditions (fast version - no ML model operations)
 #[test]
-#[ignore] // This test is ignored to avoid running it in normal test suites
 fn test_search_error_conditions() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test help command works for search - this is fast and doesn't trigger ML model downloads
     let help_output = Command::cargo_bin("sah")?
@@ -245,7 +243,7 @@ fn test_search_error_conditions() -> Result<()> {
 /// Test invalid command line arguments
 #[test]
 fn test_invalid_command_arguments() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test completely invalid command
     Command::cargo_bin("sah")?
@@ -289,7 +287,7 @@ fn test_invalid_command_arguments() -> Result<()> {
 /// Test storage backend errors
 #[test]
 fn test_storage_backend_errors() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Create a file where issues directory should be to cause storage errors
     let issues_path = temp_path.join("issues");
@@ -318,7 +316,8 @@ fn test_storage_backend_errors() -> Result<()> {
 /// Test git-related errors
 #[test]
 fn test_git_related_errors() -> Result<()> {
-    let temp_dir = TempDir::new()?;
+    // Create a separate temporary directory without git for this test
+    let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
 
     // Create directory structure without git repository
@@ -352,7 +351,7 @@ fn test_git_related_errors() -> Result<()> {
 /// Test concurrent operation errors
 #[test]
 fn test_concurrent_operation_errors() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // This is a basic test - true concurrency errors are hard to reproduce reliably
     // Test multiple rapid operations on the same resource
@@ -397,7 +396,7 @@ fn test_concurrent_operation_errors() -> Result<()> {
 /// Test resource exhaustion scenarios
 #[test]
 fn test_resource_exhaustion() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test with very large content (potential memory issues)
     let large_content = "A".repeat(1_000_000); // 1MB of content
@@ -430,7 +429,7 @@ fn test_resource_exhaustion() -> Result<()> {
 /// Test malformed input handling
 #[test]
 fn test_malformed_input_handling() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test with special characters in issue names
     let special_names = vec![
@@ -477,7 +476,7 @@ fn test_malformed_input_handling() -> Result<()> {
 /// Test timeout scenarios
 #[test]
 fn test_timeout_scenarios() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test operations with very short timeouts
     // Note: This is primarily for operations that might hang
@@ -511,7 +510,7 @@ fn test_timeout_scenarios() -> Result<()> {
 /// Test exit code consistency
 #[test]
 fn test_exit_code_consistency() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test that similar error conditions produce consistent exit codes
     let error_commands = vec![
@@ -545,7 +544,7 @@ fn test_exit_code_consistency() -> Result<()> {
 /// Test error message internationalization/localization readiness
 #[test]
 fn test_error_message_consistency() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_error_test_environment()?;
+    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test that error messages are consistent and informative
     let output = Command::cargo_bin("sah")?

@@ -1096,12 +1096,49 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Test depends on dirs::home_dir() behavior which varies by platform"]
     fn test_workflow_resolver_user_workflows() {
-        // This test is ignored because dirs::home_dir() doesn't respect
-        // the HOME environment variable on all platforms (e.g., macOS).
-        // The functionality is tested indirectly through other tests
-        // that use the actual file system layout.
+        use crate::test_utils::IsolatedTestHome;
+        use std::fs;
+        
+        let _env = IsolatedTestHome::new();
+        let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
+        let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
+        fs::create_dir_all(&user_workflows_dir).unwrap();
+
+        // Create a test workflow file in user workflows directory
+        let workflow_file = user_workflows_dir.join("user_workflow.md");
+        let workflow_content = r"---
+name: User Test Workflow
+description: A user workflow for testing
+---
+
+# User Test Workflow
+
+```mermaid
+stateDiagram-v2
+    [*] --> Processing
+    Processing --> [*]
+```
+        ";
+        fs::write(&workflow_file, workflow_content).unwrap();
+
+        let mut resolver = WorkflowResolver::new();
+        let mut storage = MemoryWorkflowStorage::new();
+
+        resolver.load_all_workflows(&mut storage).unwrap();
+
+        // Check that the user workflow was loaded
+        let workflows = storage.list_workflows().unwrap();
+        let workflow = workflows
+            .iter()
+            .find(|w| w.name.as_str() == "user_workflow")
+            .expect("Could not find user_workflow in loaded workflows");
+
+        assert_eq!(workflow.name.as_str(), "user_workflow");
+        assert_eq!(
+            resolver.workflow_sources.get(&workflow.name),
+            Some(&FileSource::User)
+        );
     }
 
     #[test]
@@ -1156,7 +1193,7 @@ stateDiagram-v2
         let workflows = storage.list_workflows().unwrap();
         assert!(!workflows.is_empty(), "No workflows were loaded");
 
-        // Find the workflow we created
+        // Find the workflow we created - the name is derived from the file name, not the metadata
         let workflow = workflows
             .iter()
             .find(|w| w.name.as_str() == "local_workflow")
@@ -1170,25 +1207,21 @@ stateDiagram-v2
     }
 
     #[test]
-    #[ignore = "Test depends on dirs::home_dir() behavior which varies by platform"]
     fn test_workflow_resolver_precedence() {
+        use crate::test_utils::IsolatedTestHome;
         use std::fs;
         use tempfile::TempDir;
 
-        // Create a completely isolated temporary directory for this test
-        let temp_dir = TempDir::new().unwrap();
-        let test_home = temp_dir.path();
-
-        // Set HOME to our temporary directory
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", test_home);
+        let _env = IsolatedTestHome::new();
+        let test_home = PathBuf::from(std::env::var("HOME").unwrap());
 
         // Create user workflow directory
         let user_workflows_dir = test_home.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
-        // Create local workflow directory in a project subdirectory
-        let project_dir = test_home.join("project");
+        // Create a temporary project directory for local workflows
+        let temp_project = TempDir::new().unwrap();
+        let project_dir = temp_project.path();
         let local_workflows_dir = project_dir.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
@@ -1219,21 +1252,14 @@ stateDiagram-v2
         let mut storage = MemoryWorkflowStorage::new();
 
         // Change to project directory
-        let original_dir = std::env::current_dir().ok();
+        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&project_dir).unwrap();
 
         // Load all workflows (user first, then local to test precedence)
         resolver.load_all_workflows(&mut storage).unwrap();
 
-        // Restore original directory if it still exists
-        if let Some(dir) = original_dir {
-            let _ = std::env::set_current_dir(dir);
-        }
-
-        // Restore original HOME if it was set
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        }
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
 
         // Check that at least one workflow was loaded
         let workflows = storage.list_workflows().unwrap();

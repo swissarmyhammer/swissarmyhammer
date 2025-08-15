@@ -552,16 +552,3 @@ fn test_custom_regression_suite() -> Result<()> {
     Ok(())
 }
 
-/// Generate baseline test suite file for use in CI
-#[test]
-#[ignore = "Only run when explicitly generating baseline"]
-fn generate_baseline_suite_file() -> Result<()> {
-    let suite = RegressionTestSuite::create_baseline_suite();
-    let output_path = PathBuf::from("regression_baseline.yaml");
-    suite.save_to_file(&output_path)?;
-    println!(
-        "Generated baseline regression test suite: {}",
-        output_path.display()
-    );
-    Ok(())
-}

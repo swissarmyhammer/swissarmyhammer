@@ -282,7 +282,7 @@ fn add(a: i32, b: i32) -> i32 {
                     || error_msg.contains("No such file or directory")
                 {
                     // Expected in test environments without model access
-                    println!(
+                    tracing::warn!(
                         "⚠️  Search indexing skipped - model initialization failed: {error_msg}"
                     );
                 } else {
