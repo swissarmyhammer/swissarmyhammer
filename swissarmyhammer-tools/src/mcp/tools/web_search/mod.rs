@@ -1,10 +1,10 @@
 //! Web search tools for MCP operations
 //!
-//! This module provides web search tools that enable LLMs to perform web searches using SearXNG
-//! metasearch engines. The tools provide privacy-respecting search capabilities with automatic
-//! result fetching and content processing.
+//! This module provides web search tools that enable LLMs to perform web searches using DuckDuckGo.
+//! The tools provide privacy-respecting search capabilities with automatic result fetching and content processing.
 
 pub mod content_fetcher;
+pub mod duckduckgo_client;
 pub mod enhanced_search;
 pub mod error_recovery;
 pub mod health_checker;
@@ -19,7 +19,7 @@ use crate::mcp::tool_registry::ToolRegistry;
 /// Register all web search-related tools with the registry
 ///
 /// This function registers web search tools with the provided registry.
-/// The tools expose web search functionality that uses SearXNG for privacy-respecting
+/// The tools expose web search functionality that uses DuckDuckGo for privacy-respecting
 /// search operations with optional content fetching.
 ///
 /// # Arguments
@@ -28,7 +28,7 @@ use crate::mcp::tool_registry::ToolRegistry;
 ///
 /// # Tools Registered
 ///
-/// - `web_search`: Basic web search using SearXNG with optional content fetching
+/// - `web_search`: Basic web search using DuckDuckGo with optional content fetching
 /// - `enhanced_web_search`: Enhanced web search with comprehensive error handling, circuit breaker protection, and graceful degradation
 pub fn register_web_search_tools(registry: &mut ToolRegistry) {
     registry.register(search::WebSearchTool::new());

@@ -251,7 +251,7 @@ pub struct SearchMetadata {
     /// Time taken for search operation in milliseconds
     pub search_time_ms: u64,
 
-    /// SearXNG instance that was used
+    /// Search service instance that was used
     pub instance_used: String,
 
     /// Total number of results found by search engines
@@ -286,7 +286,7 @@ pub struct WebSearchError {
     /// Detailed error message
     pub error_details: String,
 
-    /// SearXNG instances that were attempted
+    /// Search service instances that were attempted
     pub attempted_instances: Vec<String>,
 
     /// Recommended retry delay in seconds
@@ -368,7 +368,7 @@ mod tests {
                 language: "en".to_string(),
                 results_count: 0,
                 search_time_ms: 100,
-                instance_used: "https://search.example.org".to_string(),
+                instance_used: "https://duckduckgo.com".to_string(),
                 total_results: 0,
                 engines_used: vec![],
                 content_fetch_stats: None,

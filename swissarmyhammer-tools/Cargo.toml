@@ -46,6 +46,7 @@ thiserror = "1.0"
 reqwest = { workspace = true }
 html2text = { workspace = true }
 html2md = "0.2"
+html-escape = "0.2"
 futures-util = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
