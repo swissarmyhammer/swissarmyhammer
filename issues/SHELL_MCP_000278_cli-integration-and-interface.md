@@ -285,3 +285,193 @@ sah shell -t 60 "top -b -n 1"
 - Maintain security controls even in CLI mode
 - Support both interactive and scripting use cases
 - Ensure exit codes properly reflect command execution status
+## Proposed Solution
+
+Based on my analysis of the existing codebase, I will implement the CLI integration by following the established patterns:
+
+### Implementation Steps
+
+1. **Register Shell Tools in MCP Integration** (`swissarmyhammer-cli/src/mcp_integration.rs`):
+   - Add shell tool registration to the `create_tool_registry()` function
+   - Import `register_shell_tools` from swissarmyhammer-tools
+
+2. **Add Shell Command to CLI Definition** (`swissarmyhammer-cli/src/cli.rs`):
+   - Add `Shell` variant to `Commands` enum
+   - Create `ShellCommands` enum with `Execute` subcommand
+   - Define comprehensive CLI parameters matching the MCP tool schema:
+     - `command` (required): Shell command string
+     - `working_directory` (-C, --directory): Optional working directory
+     - `timeout` (-t, --timeout): Timeout in seconds (default 300, max 1800)
+     - `environment` (-e, --env): Environment variables as KEY=VALUE pairs
+     - `format` (--format): Output format (human, json, yaml)
+     - `show_metadata` (--show-metadata): Include execution metadata
+     - `quiet` (-q, --quiet): Suppress command output
+
+3. **Create Shell CLI Handler Module** (`swissarmyhammer-cli/src/shell.rs`):
+   - Implement `handle_shell_command()` function following existing patterns
+   - Parse environment variables from CLI arguments
+   - Build MCP tool arguments using `CliToolContext`
+   - Execute shell command via `shell_execute` MCP tool
+   - Format and display results with appropriate output handling
+   - Handle timeouts and errors gracefully
+   - Provide exit codes that reflect command execution status
+
+4. **Add Shell Command Registration** (`swissarmyhammer-cli/src/main.rs`):
+   - Add shell module import
+   - Add shell command handling to main dispatcher
+   - Use existing `run_shell` async function pattern
+
+5. **Implement Output Formatting**:
+   - Human-readable format: Display stdout/stderr directly with metadata if requested
+   - JSON format: Return complete execution result as formatted JSON
+   - YAML format: Return execution result as YAML
+   - Handle binary output detection and formatting
+   - Show truncation warnings when output exceeds limits
+
+6. **Environment Variable Parsing**:
+   - Parse `KEY=VALUE` format from CLI arguments
+   - Validate environment variable names and values
+   - Apply security validation through existing workflow security functions
+   - Handle parsing errors with helpful messages
+
+7. **Exit Code Management**:
+   - Return shell command exit code for human format
+   - Return 0 for successful tool execution in JSON/YAML formats
+   - Handle timeout errors appropriately
+   - Use CLI exit code constants (EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR)
+
+### Key Design Decisions
+
+- **Reuse Existing MCP Tool**: Leverage the comprehensive `shell_execute` MCP tool rather than duplicating logic
+- **Follow CLI Patterns**: Use the same argument parsing, MCP integration, and error handling patterns as existing commands (issue, memo, search)
+- **Security Integration**: Apply the same security validation that the MCP tool uses
+- **Output Consistency**: Provide both human-readable and machine-readable output formats like other CLI commands
+- **Exit Code Semantics**: Mirror the shell command's exit code for intuitive CLI usage
+
+### Benefits
+
+- **No Code Duplication**: CLI directly uses the battle-tested MCP tool implementation
+- **Consistent Security**: Same security controls apply whether using CLI or MCP
+- **Unified Maintenance**: Updates to shell execution logic automatically benefit both interfaces
+- **Rich Feature Set**: CLI inherits all MCP tool features (timeout, environment, security, output handling)
+## Implementation Status: ✅ COMPLETE
+
+The CLI integration for shell command execution has been successfully implemented and thoroughly tested. All requirements have been met.
+
+### ✅ Completed Features
+
+#### 1. **Shell Tool Registration** (`swissarmyhammer-cli/src/mcp_integration.rs`)
+- ✅ Added `register_shell_tools` import
+- ✅ Integrated shell tools into the CLI tool registry
+
+#### 2. **CLI Command Definition** (`swissarmyhammer-cli/src/cli.rs`)
+- ✅ Added `Shell` variant to `Commands` enum with comprehensive help text
+- ✅ Created `ShellCommands` enum with `Execute` subcommand
+- ✅ Defined `ShellOutputFormat` enum (human, json, yaml)
+- ✅ Implemented all CLI parameters matching MCP tool schema:
+  - `command` (required): Shell command string
+  - `working_directory` (-C, --directory): Optional working directory
+  - `timeout` (-t, --timeout): Timeout in seconds (default 300, max 1800)
+  - `environment` (-e, --env): Environment variables as KEY=VALUE pairs
+  - `format` (--format): Output format (human, json, yaml)
+  - `show_metadata` (--show-metadata): Include execution metadata
+  - `quiet` (-q, --quiet): Suppress command output
+
+#### 3. **Shell CLI Handler** (`swissarmyhammer-cli/src/shell.rs`)
+- ✅ Created comprehensive shell command handler
+- ✅ Implemented environment variable parsing with proper validation
+- ✅ Built MCP tool arguments using `CliToolContext`
+- ✅ Created custom JSON extraction for shell responses (`extract_shell_json_response`)
+- ✅ Implemented all three output formats (human, json, yaml)
+- ✅ Added comprehensive timeout handling
+- ✅ Proper exit code management (reflects shell command exit codes)
+- ✅ Security validation through existing workflow security functions
+- ✅ Added 6 unit tests for environment variable parsing
+
+#### 4. **Main CLI Integration** (`swissarmyhammer-cli/src/main.rs`)
+- ✅ Added shell module import
+- ✅ Added shell command handling to main dispatcher
+- ✅ Implemented `run_shell` function following existing patterns
+
+#### 5. **Advanced Output Handling**
+- ✅ **Human Format**: Direct stdout/stderr display with optional metadata
+- ✅ **JSON Format**: Complete execution result as formatted JSON
+- ✅ **YAML Format**: Complete execution result as YAML
+- ✅ **Timeout Support**: Special handling for timeout responses across all formats
+- ✅ **Binary Output**: Detection and safe formatting
+- ✅ **Output Truncation**: Warnings when output exceeds limits
+- ✅ **Quiet Mode**: Suppresses command output while preserving metadata
+
+#### 6. **Error Handling and Security**
+- ✅ Distinguishes between tool errors and shell command failures
+- ✅ Security validation prevents dangerous commands
+- ✅ Proper exit codes (shell command exit code in human format, tool success in JSON/YAML)
+- ✅ Comprehensive timeout handling with partial output capture
+- ✅ Environment variable validation and parsing
+
+### ✅ Testing Results
+
+All functionality has been thoroughly tested and verified:
+
+#### Manual Testing Completed
+- ✅ Basic command execution: `echo 'Hello, World!'`
+- ✅ Command with metadata: `--show-metadata`
+- ✅ All output formats: `--format human|json|yaml`
+- ✅ Environment variables: `-e KEY=value`
+- ✅ Working directory: `-C /tmp`
+- ✅ Command failures: `ls /nonexistent` (proper exit code handling)
+- ✅ Security validation: Commands with dangerous patterns blocked
+- ✅ Timeout handling: `sleep 3` with `-t 1` (proper timeout response)
+- ✅ Quiet mode: `--quiet` (output suppressed, metadata preserved)
+
+#### Unit Tests
+- ✅ 6 unit tests for environment variable parsing
+- ✅ All existing CLI tests continue to pass
+- ✅ No regressions in existing functionality
+
+### ✅ Key Implementation Highlights
+
+#### **Custom Timeout Handling**
+The implementation correctly handles the special timeout response format from the MCP tool:
+- First content item: Plain text timeout message
+- Second content item: JSON timeout metadata
+- Proper parsing and display across all output formats
+
+#### **Sophisticated Error Handling**
+- **Tool Errors**: Security validation, invalid parameters → Exit code 2
+- **Shell Command Failures**: Non-zero exit codes → Exit with shell's exit code
+- **Timeouts**: Commands that exceed timeout → Exit code 1
+
+#### **Environment Variable Parsing**
+- Supports `KEY=VALUE` format with equals signs in values
+- Proper validation of variable names
+- Clear error messages for invalid formats
+
+#### **Security Integration**
+- Leverages existing SwissArmyHammer security validation
+- Same security controls apply whether using CLI or MCP
+- Commands like `rm -rf /` and injection patterns are blocked
+
+### ✅ Command Examples Working
+
+```bash
+# Basic execution
+sah shell execute "echo 'Hello, World!'"
+
+# With working directory and timeout
+sah shell execute "pwd" -C /tmp -t 60
+
+# With environment variables
+sah shell execute "echo \$MY_VAR" -e MY_VAR=value -e DEBUG=true
+
+# JSON output with metadata
+sah shell execute "uname -a" --format json --show-metadata
+
+# Quiet mode (no output, metadata only)
+sah shell execute "echo test" --quiet --show-metadata
+
+# Timeout handling
+sah shell execute "sleep 5" -t 2  # Times out after 2 seconds
+```
+
+All examples execute correctly with expected behavior and proper exit codes.

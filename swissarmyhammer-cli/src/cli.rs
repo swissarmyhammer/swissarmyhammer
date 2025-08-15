@@ -481,6 +481,64 @@ Examples:
         #[command(subcommand)]
         subcommand: ConfigCommands,
     },
+    /// Execute shell commands with timeout and output capture
+    #[command(long_about = "
+Execute shell commands with comprehensive timeout controls and output capture.
+Provides direct command-line access to the shell execution capabilities while 
+following established CLI patterns and user experience guidelines.
+
+Basic usage:
+  swissarmyhammer shell \"echo 'Hello, World!'\"         # Simple command execution
+  swissarmyhammer shell \"ls -la\" -C /tmp               # Execute in specific directory
+  swissarmyhammer shell \"cargo build\" -t 600           # Set timeout and environment
+  swissarmyhammer shell \"uname -a\" --show-metadata     # Show execution metadata
+  swissarmyhammer shell \"git status\" -q --format json  # Quiet mode with JSON output
+
+Command execution:
+  <COMMAND>                                    # Shell command to execute (required)
+  -C, --directory <DIR>                        # Working directory for execution
+  -t, --timeout <SECONDS>                      # Timeout in seconds (default: 300, max: 1800)
+  -e, --env <KEY=VALUE>                        # Set environment variables
+  --format <FORMAT>                            # Output format: human, json, yaml (default: human)
+  --show-metadata                              # Include execution metadata
+  -q, --quiet                                  # Suppress command output, show only results
+
+Security:
+  Commands are validated for basic safety patterns. Dangerous commands
+  like 'rm -rf /' are blocked by default. Directory access may be restricted
+  based on configuration.
+  
+Timeouts:
+  Default timeout is 5 minutes (300 seconds). Maximum timeout is 30 minutes
+  (1800 seconds). Commands are terminated cleanly on timeout.
+
+Exit codes:
+  The shell command's exit code is returned when using human format.
+  For JSON/YAML formats, the tool exit code reflects execution success.
+
+Examples:
+  # Basic command execution
+  swissarmyhammer shell \"echo 'Hello, World!'\"
+  
+  # Execute in specific directory with timeout
+  swissarmyhammer shell \"cargo test\" -C /project -t 600
+  
+  # Set environment variables
+  swissarmyhammer shell \"echo \\$MY_VAR\" -e MY_VAR=value -e DEBUG=true
+  
+  # Show execution metadata
+  swissarmyhammer shell \"uname -a\" --show-metadata
+  
+  # Quiet mode with JSON output for automation
+  swissarmyhammer shell \"git status --porcelain\" -q --format json
+  
+  # Build with custom environment
+  swissarmyhammer shell \"./build.sh\" -e RUST_LOG=debug -e BUILD_ENV=production -t 900
+")]
+    Shell {
+        #[command(subcommand)]
+        subcommand: ShellCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1024,6 +1082,47 @@ pub enum ConfigCommands {
         #[arg(short, long, value_enum, default_value = "table")]
         format: OutputFormat,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ShellCommands {
+    /// Execute a shell command
+    Execute {
+        /// Shell command to execute
+        #[arg(value_name = "COMMAND")]
+        command: String,
+
+        /// Working directory for command execution
+        #[arg(short = 'C', long = "directory", value_name = "DIR")]
+        working_directory: Option<std::path::PathBuf>,
+
+        /// Command timeout in seconds (default: 300, max: 1800)
+        #[arg(short = 't', long = "timeout", value_name = "SECONDS", default_value = "300")]
+        timeout: u64,
+
+        /// Set environment variables (KEY=VALUE format)
+        #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+        environment: Vec<String>,
+
+        /// Output format
+        #[arg(long, value_enum, default_value = "human")]
+        format: ShellOutputFormat,
+
+        /// Show execution metadata
+        #[arg(long)]
+        show_metadata: bool,
+
+        /// Quiet mode - suppress command output, show only results
+        #[arg(short = 'q', long)]
+        quiet: bool,
+    },
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+pub enum ShellOutputFormat {
+    Human,
+    Json,
+    Yaml,
 }
 
 impl Cli {

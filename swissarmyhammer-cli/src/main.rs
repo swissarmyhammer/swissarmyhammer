@@ -14,6 +14,7 @@ mod memo;
 // prompt_loader module removed - using SDK's PromptResolver directly
 mod prompt;
 mod search;
+mod shell;
 mod signal_handler;
 mod test;
 mod validate;
@@ -165,6 +166,10 @@ async fn main() {
         Some(Commands::Implement) => {
             tracing::info!("Running implement command");
             run_implement().await
+        }
+        Some(Commands::Shell { subcommand }) => {
+            tracing::info!("Running shell command");
+            run_shell(subcommand).await
         }
         None => {
             // This case is handled early above for performance
@@ -507,6 +512,18 @@ async fn run_implement() -> i32 {
                 return EXIT_ERROR;
             }
             tracing::error!("Implement workflow error: {}", e);
+            EXIT_WARNING
+        }
+    }
+}
+
+async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
+    use shell;
+
+    match shell::handle_shell_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            tracing::error!("Shell error: {}", e);
             EXIT_WARNING
         }
     }
