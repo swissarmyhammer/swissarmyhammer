@@ -414,7 +414,7 @@ impl PromptAction {
         context: &mut HashMap<String, Value>,
     ) -> ActionResult<Value> {
         tracing::info!("Executing prompt '{}'", self.prompt_name);
-        
+
         // First, render the prompt using swissarmyhammer
         let rendered_prompt = self.render_prompt_with_swissarmyhammer(context).await?;
 
@@ -2578,11 +2578,10 @@ mod tests {
                 ExecutorError::Abort(reason) => {
                     assert!(
                         reason.contains("Test abort error"),
-                        "Abort reason should contain expected message: {}",
-                        reason
+                        "Abort reason should contain expected message: {reason}"
                     );
                 }
-                _ => panic!("Expected ExecutorError::Abort, got: {:?}", executor_error),
+                _ => panic!("Expected ExecutorError::Abort, got: {executor_error:?}"),
             },
             Ok(_) => panic!("Expected abort error but workflow completed successfully"),
         }

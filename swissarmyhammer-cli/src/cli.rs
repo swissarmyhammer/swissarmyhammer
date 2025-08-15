@@ -331,6 +331,77 @@ Examples:
         #[command(subcommand)]
         subcommand: SearchCommands,
     },
+    /// Plan a specific specification file
+    #[command(long_about = "
+Execute planning workflow for a specific specification file.
+Takes a path to a markdown specification file and generates step-by-step implementation issues.
+
+USAGE:
+  swissarmyhammer plan <PLAN_FILENAME>
+
+The planning workflow will:
+• Read and analyze the specified plan file
+• Review existing issues to avoid conflicts
+• Generate numbered issue files in the ./issues directory  
+• Create incremental, focused implementation steps
+• Use existing memos and codebase context for better planning
+
+FILE REQUIREMENTS:
+The plan file should be:
+• A valid markdown file (.md extension recommended)
+• Readable and contain meaningful content
+• Focused on a specific feature or component
+• Well-structured with clear goals and requirements
+
+OUTPUT:
+Creates numbered issue files in ./issues/ directory with format:
+• PLANNAME_000001_step-description.md
+• PLANNAME_000002_step-description.md
+• etc.
+
+EXAMPLES:
+  # Plan a new feature from specification directory
+  swissarmyhammer plan ./specification/user-authentication.md
+  
+  # Plan using absolute path
+  swissarmyhammer plan /home/user/projects/plans/database-migration.md
+  
+  # Plan a quick enhancement
+  swissarmyhammer plan ./docs/bug-fixes.md
+  
+  # Plan with verbose output for debugging
+  swissarmyhammer --verbose plan ./specification/api-redesign.md
+
+TIPS:
+• Keep plan files focused - break large features into multiple plans
+• Review generated issues before implementation
+• Use descriptive filenames that reflect the planned work
+• Check existing issues directory to understand numbering
+• Plan files work best when they include clear goals and acceptance criteria
+
+TROUBLESHOOTING:
+If planning fails:
+• Verify file exists and is readable: ls -la <plan_file>
+• Check issues directory permissions: ls -ld ./issues
+• Ensure adequate disk space for issue file creation
+• Try with --debug flag for detailed execution information
+• Review file content for proper markdown formatting
+
+For more information, see: swissarmyhammer --help
+")]
+    Plan {
+        /// Path to the plan file to process
+        #[arg(help = "Path to the markdown plan file (relative or absolute)")]
+        #[arg(long_help = "
+Path to the specification file to plan. Can be:
+• Relative path: ./specification/feature.md
+• Absolute path: /full/path/to/plan.md  
+• Simple filename: my-plan.md (in current directory)
+
+The file should be a readable markdown file containing
+the specification or requirements to be planned.")]
+        plan_filename: String,
+    },
     /// Configuration management commands
     #[command(long_about = "
 Manage sah.toml configuration files with comprehensive CLI commands for validation, inspection, and debugging.
@@ -1964,6 +2035,234 @@ mod tests {
             }
         } else {
             panic!("Expected Search command");
+        }
+    }
+
+    #[test]
+    fn test_plan_command() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "./specification/new-feature.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "./specification/new-feature.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_plan_command_with_absolute_path() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "/path/to/custom-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "/path/to/custom-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_basic() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "specification/plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "specification/plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_relative_path() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "./plans/feature.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "./plans/feature.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_missing_parameter() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan"]);
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn test_cli_plan_command_help() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "--help"]);
+        assert!(result.is_err()); // Help exits with error but that's expected
+
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_verbose_flag() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--verbose", "plan", "test-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "test-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_debug_flag() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--debug", "plan", "debug-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.debug);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "debug-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_quiet_flag() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--quiet", "plan", "quiet-plan.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.quiet);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "quiet-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_file_with_spaces() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "plan with spaces.md"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan with spaces.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_complex_path() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "plan",
+            "./specifications/features/advanced-feature-plan.md",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(
+                plan_filename,
+                "./specifications/features/advanced-feature-plan.md"
+            );
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_multiple_flags() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "--verbose",
+            "--debug",
+            "plan",
+            "multi-flag-plan.md",
+        ]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        assert!(cli.debug);
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "multi-flag-plan.md");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_flag_after_subcommand() {
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "plan",
+            "after-flag-plan.md",
+            "--verbose",
+        ]);
+        // This should fail because --verbose is a global flag and must come before the subcommand
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_plan_command_long_path() {
+        let long_path = "./very/long/nested/directory/structure/with/many/levels/plan-file.md";
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", long_path]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, long_path);
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_with_extension_variations() {
+        // Test different file extensions
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "plan", "plan.markdown"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan.markdown");
+        } else {
+            panic!("Expected Plan command");
+        }
+    }
+
+    #[test]
+    fn test_cli_plan_command_no_extension() {
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "plan", "plan-file-without-extension"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        if let Some(Commands::Plan { plan_filename }) = cli.command {
+            assert_eq!(plan_filename, "plan-file-without-extension");
+        } else {
+            panic!("Expected Plan command");
         }
     }
 }

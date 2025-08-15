@@ -155,7 +155,11 @@ impl GitOperations {
 
         // Handle existing branch: switch to it
         if self.branch_exists(&branch_name)? {
-            tracing::info!("Switching to existing issue branch '{}' from '{}'", branch_name, current_branch);
+            tracing::info!(
+                "Switching to existing issue branch '{}' from '{}'",
+                branch_name,
+                current_branch
+            );
             self.checkout_branch(&branch_name)?;
             // Store the source branch information for existing branches too
             let _ = self.store_issue_source_branch(issue_name, &current_branch);
@@ -163,7 +167,11 @@ impl GitOperations {
         }
 
         // Handle new branch: create and switch
-        tracing::info!("Creating new issue branch '{}' from '{}'", branch_name, current_branch);
+        tracing::info!(
+            "Creating new issue branch '{}' from '{}'",
+            branch_name,
+            current_branch
+        );
         self.create_and_checkout_branch(&branch_name)?;
 
         // Store the source branch information for the newly created issue branch
@@ -423,13 +431,12 @@ impl GitOperations {
 
         // If no reflog entry found, create abort file and return error
         create_abort_file(&self.work_dir, &format!(
-            "Cannot determine merge target for issue '{}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally",
-            issue_name
+            "Cannot determine merge target for issue '{issue_name}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally"
         ))?;
 
         Err(SwissArmyHammerError::git_operation_failed(
             "determine merge target",
-            &format!("no reflog entry found for issue branch '{}'", branch_name)
+            &format!("no reflog entry found for issue branch '{branch_name}'"),
         ))
     }
 
@@ -1571,7 +1578,7 @@ mod tests {
         // This is the correct behavior - we shouldn't guess at merge targets
         let result = git_ops.merge_issue_branch_auto("test_issue");
         assert!(result.is_err());
-        
+
         // Verify abort file was created with appropriate message
         let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
         assert!(abort_file.exists());
@@ -1725,31 +1732,40 @@ mod tests {
     fn test_abort_file_contains_detailed_context() {
         let temp_dir = create_test_git_repo().unwrap();
 
-        // Change to temp directory for the test
+        // Save original directory and restore it safely at the end
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        // Use a closure to ensure directory is restored even if test panics
+        let test_result = std::panic::catch_unwind(|| {
+            std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        // Create issue branch
-        git_ops.create_work_branch("detailed_issue").unwrap();
+            let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Switch back and try to merge to nonexistent branch
-        git_ops.checkout_branch("main").unwrap();
-        let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
-        assert!(result.is_err());
+            // Create issue branch
+            git_ops.create_work_branch("detailed_issue").unwrap();
 
-        // Check abort file contains detailed context (use temp directory path)
-        let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
-        assert!(abort_file.exists());
+            // Switch back and try to merge to nonexistent branch
+            git_ops.checkout_branch("main").unwrap();
+            let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
+            assert!(result.is_err());
 
-        let abort_content = std::fs::read_to_string(&abort_file).unwrap();
-        assert!(abort_content.contains("deleted_branch"));
-        assert!(abort_content.contains("detailed_issue"));
-        assert!(abort_content.contains("Manual intervention required"));
+            // Check abort file contains detailed context (use temp directory path)
+            let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
+            assert!(abort_file.exists());
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+            let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+            assert!(abort_content.contains("deleted_branch"));
+            assert!(abort_content.contains("detailed_issue"));
+            assert!(abort_content.contains("Manual intervention required"));
+        });
+
+        // Always try to restore the original directory, ignoring errors
+        let _ = std::env::set_current_dir(&original_dir);
+
+        // Re-panic if the test failed
+        if let Err(panic_payload) = test_result {
+            std::panic::resume_unwind(panic_payload);
+        }
     }
 
     #[test]

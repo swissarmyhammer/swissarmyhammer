@@ -84,7 +84,7 @@ impl McpTool for MergeIssueTool {
                     }
                     Err(e) => {
                         let error_msg =
-                            format!("Failed to get current branch for merge validation: {}", e);
+                            format!("Failed to get current branch for merge validation: {e}");
                         tracing::error!("{}", error_msg);
 
                         // Create abort file to signal workflow termination
@@ -155,8 +155,12 @@ impl McpTool for MergeIssueTool {
                 match ops.merge_issue_branch_auto(&issue_name) {
                     Ok(target_branch) => {
                         let source_branch = Self::format_issue_branch_name(&issue_name);
-                        tracing::info!("Successfully merged issue branch '{}' to target branch '{}'", source_branch, target_branch);
-                        
+                        tracing::info!(
+                            "Successfully merged issue branch '{}' to target branch '{}'",
+                            source_branch,
+                            target_branch
+                        );
+
                         let mut success_message = format!(
                             "Merged work branch for issue {issue_name} to {target_branch} (determined by git merge-base)"
                         );
@@ -179,8 +183,7 @@ impl McpTool for MergeIssueTool {
                             }
                             Err(e) => {
                                 let error_msg = format!(
-                                    "Failed to get commit info after merge of issue '{}': {}",
-                                    issue_name, e
+                                    "Failed to get commit info after merge of issue '{issue_name}': {e}"
                                 );
                                 tracing::error!("{}", error_msg);
 

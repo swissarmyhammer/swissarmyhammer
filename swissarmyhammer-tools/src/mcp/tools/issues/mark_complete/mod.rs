@@ -61,7 +61,7 @@ impl McpTool for MarkCompleteIssueTool {
             Ok(issue) => {
                 tracing::info!("Successfully marked issue '{}' as complete", issue.name);
                 Ok(create_mark_complete_response(&issue))
-            },
+            }
             Err(e) => Err(McpErrorHandler::handle_error(e, "mark issue complete")),
         }
     }

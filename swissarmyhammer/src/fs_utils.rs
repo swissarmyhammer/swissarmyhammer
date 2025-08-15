@@ -353,6 +353,96 @@ impl FileSystemUtils {
     pub fn fs(&self) -> &dyn FileSystem {
         &*self.fs
     }
+
+    /// Validate that a file path exists, is readable, and is a file (not directory)
+    ///
+    /// This function performs comprehensive validation of file paths for plan commands
+    /// and other operations that require valid file inputs.
+    ///
+    /// # Arguments
+    /// * `path_str` - The file path to validate (can be relative or absolute)
+    ///
+    /// # Returns
+    /// * `Ok(PathBuf)` - Canonicalized path if validation succeeds
+    /// * `Err(SwissArmyHammerError)` - Detailed error with suggestion if validation fails
+    ///
+    /// # Error Types
+    /// * `FileNotFound` - File doesn't exist
+    /// * `NotAFile` - Path points to a directory
+    /// * `PermissionDenied` - File exists but cannot be read
+    /// * `InvalidFilePath` - Path format is invalid
+    pub fn validate_file_path(&self, path_str: &str) -> Result<PathBuf> {
+        // Handle empty or whitespace-only paths
+        if path_str.trim().is_empty() {
+            return Err(SwissArmyHammerError::invalid_file_path(
+                path_str,
+                "File path cannot be empty",
+            ));
+        }
+
+        let path = Path::new(path_str);
+
+        // Check if path exists
+        if !self.fs.exists(path) {
+            return Err(SwissArmyHammerError::file_not_found(
+                path_str,
+                "Check the file path and ensure the file exists",
+            ));
+        }
+
+        // Check if it's actually a file (not a directory)
+        if !self.fs.is_file(path) {
+            if self.fs.is_dir(path) {
+                return Err(SwissArmyHammerError::not_a_file(
+                    path_str,
+                    "Path points to a directory, not a file. Specify a file path instead",
+                ));
+            } else {
+                // Path exists but is neither file nor directory (symlink, device file, etc.)
+                return Err(SwissArmyHammerError::not_a_file(
+                    path_str,
+                    "Path does not point to a regular file",
+                ));
+            }
+        }
+
+        // Check readability by attempting to read the file
+        match self.fs.read_to_string(path) {
+            Ok(_) => {
+                // File is readable, return the path (canonicalized if needed)
+                match path.canonicalize() {
+                    Ok(canonical_path) => Ok(canonical_path),
+                    Err(_) => {
+                        // If canonicalization fails, return the original path
+                        // This can happen in some test environments
+                        Ok(path.to_path_buf())
+                    }
+                }
+            }
+            Err(e) => {
+                // Extract the underlying IO error for better error reporting
+                match e {
+                    SwissArmyHammerError::Io(io_err) => {
+                        let error_msg = io_err.to_string();
+                        let suggestion = match io_err.kind() {
+                            std::io::ErrorKind::PermissionDenied => {
+                                "Check file permissions and ensure you have read access"
+                            }
+                            std::io::ErrorKind::InvalidData => {
+                                "File may be corrupted or contain invalid UTF-8 data"
+                            }
+                            _ => "Ensure the file is accessible and readable",
+                        };
+
+                        Err(SwissArmyHammerError::permission_denied(
+                            path_str, &error_msg, suggestion,
+                        ))
+                    }
+                    _ => Err(e),
+                }
+            }
+        }
+    }
 }
 
 impl Default for FileSystemUtils {
@@ -550,5 +640,273 @@ pub mod tests {
         assert_eq!(FilePermissions::OwnerReadWrite.as_mode(), 0o600);
         assert_eq!(FilePermissions::OwnerReadWriteGroupRead.as_mode(), 0o640);
         assert_eq!(FilePermissions::Standard.as_mode(), 0o644);
+    }
+
+    #[test]
+    fn test_validate_file_path_success() {
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs.clone());
+
+        // Set up a valid file
+        let path = Path::new("valid_plan.md");
+        let content = "# Test Plan\nThis is a test plan";
+
+        mock_fs
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), content.to_string());
+
+        // Validation should succeed
+        let result = utils.validate_file_path("valid_plan.md");
+        assert!(result.is_ok());
+        let validated_path = result.unwrap();
+        assert_eq!(validated_path.file_name().unwrap(), "valid_plan.md");
+    }
+
+    #[test]
+    fn test_validate_file_path_empty() {
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs);
+
+        // Empty path should fail
+        let result = utils.validate_file_path("");
+        assert!(result.is_err());
+
+        if let Err(SwissArmyHammerError::InvalidFilePath { path, suggestion }) = result {
+            assert_eq!(path, "");
+            assert!(suggestion.contains("cannot be empty"));
+        } else {
+            panic!("Expected InvalidFilePath error");
+        }
+
+        // Whitespace-only path should fail
+        let result = utils.validate_file_path("   ");
+        assert!(result.is_err());
+
+        if let Err(SwissArmyHammerError::InvalidFilePath { path, suggestion }) = result {
+            assert_eq!(path, "   ");
+            assert!(suggestion.contains("cannot be empty"));
+        } else {
+            panic!("Expected InvalidFilePath error");
+        }
+    }
+
+    #[test]
+    fn test_validate_file_path_not_found() {
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs);
+
+        // Non-existent file should fail
+        let result = utils.validate_file_path("nonexistent.md");
+        assert!(result.is_err());
+
+        if let Err(SwissArmyHammerError::FileNotFound { path, suggestion }) = result {
+            assert_eq!(path, "nonexistent.md");
+            assert!(suggestion.contains("Check the file path"));
+        } else {
+            panic!("Expected FileNotFound error");
+        }
+    }
+
+    #[test]
+    fn test_validate_file_path_is_directory() {
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs.clone());
+
+        // Set up a directory
+        let dir_path = Path::new("test_directory");
+        mock_fs.dirs.lock().unwrap().insert(dir_path.to_path_buf());
+
+        // Directory path should fail
+        let result = utils.validate_file_path("test_directory");
+        assert!(result.is_err());
+
+        if let Err(SwissArmyHammerError::NotAFile { path, suggestion }) = result {
+            assert_eq!(path, "test_directory");
+            assert!(suggestion.contains("directory"));
+            assert!(suggestion.contains("Specify a file path"));
+        } else {
+            panic!("Expected NotAFile error");
+        }
+    }
+
+    #[test]
+    fn test_validate_file_path_permission_denied() {
+        // Create a mock file system that simulates permission denied
+        struct PermissionDeniedMockFS;
+        impl FileSystem for PermissionDeniedMockFS {
+            fn read_to_string(&self, _path: &Path) -> Result<String> {
+                Err(SwissArmyHammerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Permission denied",
+                )))
+            }
+
+            fn exists(&self, _path: &Path) -> bool {
+                true
+            }
+            fn is_file(&self, _path: &Path) -> bool {
+                true
+            }
+            fn is_dir(&self, _path: &Path) -> bool {
+                false
+            }
+
+            // Other methods not needed for this test
+            fn write(&self, _path: &Path, _content: &str) -> Result<()> {
+                Ok(())
+            }
+            fn write_with_permissions(
+                &self,
+                _path: &Path,
+                _content: &str,
+                _permissions: FilePermissions,
+            ) -> Result<()> {
+                Ok(())
+            }
+            fn create_dir_all(&self, _path: &Path) -> Result<()> {
+                Ok(())
+            }
+            fn create_dir_all_with_permissions(
+                &self,
+                _path: &Path,
+                _permissions: FilePermissions,
+            ) -> Result<()> {
+                Ok(())
+            }
+            fn read_dir(&self, _path: &Path) -> Result<Vec<PathBuf>> {
+                Ok(vec![])
+            }
+            fn remove_file(&self, _path: &Path) -> Result<()> {
+                Ok(())
+            }
+            fn set_permissions(&self, _path: &Path, _permissions: FilePermissions) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let mock_fs = Arc::new(PermissionDeniedMockFS);
+        let utils = FileSystemUtils::with_fs(mock_fs);
+
+        let result = utils.validate_file_path("restricted_file.md");
+        assert!(result.is_err());
+
+        if let Err(SwissArmyHammerError::PermissionDenied {
+            path,
+            error,
+            suggestion,
+        }) = result
+        {
+            assert_eq!(path, "restricted_file.md");
+            assert!(error.contains("Permission denied"));
+            assert!(suggestion.contains("permissions"));
+        } else {
+            panic!("Expected PermissionDenied error, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_validate_file_path_invalid_data() {
+        // Create a mock file system that simulates invalid data error
+        struct InvalidDataMockFS;
+        impl FileSystem for InvalidDataMockFS {
+            fn read_to_string(&self, _path: &Path) -> Result<String> {
+                Err(SwissArmyHammerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8",
+                )))
+            }
+
+            fn exists(&self, _path: &Path) -> bool {
+                true
+            }
+            fn is_file(&self, _path: &Path) -> bool {
+                true
+            }
+            fn is_dir(&self, _path: &Path) -> bool {
+                false
+            }
+
+            // Other methods not needed for this test
+            fn write(&self, _path: &Path, _content: &str) -> Result<()> {
+                Ok(())
+            }
+            fn write_with_permissions(
+                &self,
+                _path: &Path,
+                _content: &str,
+                _permissions: FilePermissions,
+            ) -> Result<()> {
+                Ok(())
+            }
+            fn create_dir_all(&self, _path: &Path) -> Result<()> {
+                Ok(())
+            }
+            fn create_dir_all_with_permissions(
+                &self,
+                _path: &Path,
+                _permissions: FilePermissions,
+            ) -> Result<()> {
+                Ok(())
+            }
+            fn read_dir(&self, _path: &Path) -> Result<Vec<PathBuf>> {
+                Ok(vec![])
+            }
+            fn remove_file(&self, _path: &Path) -> Result<()> {
+                Ok(())
+            }
+            fn set_permissions(&self, _path: &Path, _permissions: FilePermissions) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let mock_fs = Arc::new(InvalidDataMockFS);
+        let utils = FileSystemUtils::with_fs(mock_fs);
+
+        let result = utils.validate_file_path("corrupted_file.md");
+        assert!(result.is_err());
+
+        if let Err(SwissArmyHammerError::PermissionDenied {
+            path,
+            error,
+            suggestion,
+        }) = result
+        {
+            assert_eq!(path, "corrupted_file.md");
+            assert!(error.contains("Invalid UTF-8"));
+            assert!(suggestion.contains("corrupted"));
+        } else {
+            panic!("Expected PermissionDenied error for invalid data, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_validate_file_path_relative_and_absolute() {
+        let mock_fs = Arc::new(MockFileSystem::new());
+        let utils = FileSystemUtils::with_fs(mock_fs.clone());
+
+        // Set up files with different path styles
+        let relative_path = Path::new("./plans/test.md");
+        let absolute_path = Path::new("/home/user/plans/test.md");
+        let content = "# Test Plan Content";
+
+        mock_fs
+            .files
+            .lock()
+            .unwrap()
+            .insert(relative_path.to_path_buf(), content.to_string());
+        mock_fs
+            .files
+            .lock()
+            .unwrap()
+            .insert(absolute_path.to_path_buf(), content.to_string());
+
+        // Both should validate successfully
+        let result1 = utils.validate_file_path("./plans/test.md");
+        assert!(result1.is_ok());
+
+        let result2 = utils.validate_file_path("/home/user/plans/test.md");
+        assert!(result2.is_ok());
     }
 }

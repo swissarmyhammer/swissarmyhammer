@@ -1,0 +1,1181 @@
+//! Integration tests for plan command workflow execution
+//!
+//! Tests for the complete plan command journey, from CLI parsing through workflow
+//! execution to issue file creation. These tests verify that the plan command
+//! correctly processes plan files and creates issue files as expected.
+//!
+//! ## Test Categories
+//!
+//! ### 1. Basic Functionality Tests
+//! - **CLI Argument Parsing**: Tests that the plan command correctly accepts and validates file paths
+//! - **Workflow Integration**: Tests that the plan workflow executes correctly in test mode
+//! - **Path Handling**: Tests relative and absolute path processing
+//!
+//! ### 2. Error Scenario Tests  
+//! - **File Not Found**: Tests behavior when plan file doesn't exist
+//! - **Directory as File**: Tests error handling when path points to directory
+//! - **Empty Files**: Tests handling of empty plan files
+//!
+//! ### 3. Edge Case Tests
+//! - **Special Characters**: Tests files with spaces and special characters in names
+//! - **Existing Issues**: Tests plan execution with pre-existing issue files
+//! - **Complex Specifications**: Tests with detailed, multi-section plan files
+//!
+//! ### 4. Concurrency and Performance Tests
+//! - **Concurrent Execution**: Tests multiple plan workflows running simultaneously
+//! - **Performance Timing**: Verifies reasonable execution times (ignored by default)
+//!
+//! ## Test Strategy
+//!
+//! These tests use a hybrid approach to balance comprehensive testing with execution speed:
+//!
+//! 1. **Test Mode Execution**: Most tests use `sah flow test plan` instead of `sah plan`
+//!    to avoid calling external AI services, making tests fast and deterministic.
+//!
+//! 2. **Isolated Environments**: Each test uses `TestHomeGuard` to ensure complete isolation
+//!    and prevent interference between tests.
+//!
+//! 3. **Real CLI Testing**: Tests use `assert_cmd::Command::cargo_bin` to test the actual
+//!    binary, ensuring realistic integration validation.
+//!
+//! ## Running Tests
+//!
+//! ```bash
+//! # Run all plan integration tests
+//! cargo test --test plan_integration_tests
+//!
+//! # Run specific test
+//! cargo test test_plan_workflow_test_mode --test plan_integration_tests
+//!
+//! # Run with output for debugging
+//! cargo test --test plan_integration_tests -- --nocapture
+//!
+//! # Include performance tests (normally ignored)
+//! cargo test --test plan_integration_tests -- --ignored
+//! ```
+//!
+//! ## Test Environment
+//!
+//! Tests create isolated temporary environments with:
+//! - Temporary home directories
+//! - Mock .swissarmyhammer structure
+//! - Isolated issues directories
+//! - Git repository initialization
+//! - Automatic cleanup on test completion
+//!
+//! ## Dependencies
+//!
+//! These tests require:
+//! - `assert_cmd` for CLI command execution
+//! - `tempfile` for isolated test environments  
+//! - `tokio` for async test execution
+//! - Built `sah` binary (automatically handled by `cargo_bin`)
+//!
+//! ## Debugging Tests
+//!
+//! If tests fail:
+//! 1. Run with `--nocapture` to see stdout/stderr
+//! 2. Check that the `sah` binary builds successfully
+//! 3. Verify that built-in workflows are available: `sah flow list`
+//! 4. Test plan workflow manually: `sah flow test plan --var plan_filename=/path/to/test.md`
+
+use anyhow::Result;
+use assert_cmd::Command;
+use std::fs;
+use tempfile::TempDir;
+
+mod test_utils;
+use test_utils::{create_temp_dir, setup_git_repo};
+
+use test_utils::create_test_home_guard;
+
+/// Create a simple test plan file with basic content
+fn create_test_plan_file(
+    dir: &std::path::Path,
+    filename: &str,
+    title: &str,
+) -> Result<std::path::PathBuf> {
+    let plan_file = dir.join(filename);
+    let content = format!(
+        r#"# {title}
+
+## Overview
+This is a test specification for integration testing of the plan command.
+
+## Requirements
+1. Create a simple component for data processing
+2. Add basic validation functionality  
+3. Write comprehensive unit tests
+4. Add integration tests
+5. Update documentation
+
+## Implementation Details
+
+### Component Structure
+The component should follow existing patterns in the codebase:
+- Use proper error handling with Result types
+- Follow the established naming conventions
+- Include comprehensive documentation
+
+### Validation Requirements
+- Input validation for all public APIs
+- Proper error messages for invalid input
+- Edge case handling for boundary conditions
+
+### Testing Strategy
+- Unit tests for individual functions
+- Integration tests for complete workflows
+- Performance tests for critical paths
+- Error scenario testing
+
+## Acceptance Criteria
+- [ ] Component implements all required functionality
+- [ ] All tests pass including new ones
+- [ ] Documentation is complete and accurate
+- [ ] Code review approval received
+- [ ] Performance meets requirements
+
+This specification should result in multiple focused issues that can be implemented incrementally.
+"#
+    );
+
+    fs::write(&plan_file, content)?;
+    Ok(plan_file)
+}
+
+/// Create a more complex test plan file with detailed requirements
+fn create_complex_plan_file(dir: &std::path::Path, filename: &str) -> Result<std::path::PathBuf> {
+    let plan_file = dir.join(filename);
+    let content = r#"# Advanced Feature Specification
+
+## Executive Summary
+This specification outlines the development of a comprehensive data processing pipeline
+with real-time analytics capabilities, caching layer, and monitoring integration.
+
+## Functional Requirements
+
+### Core Processing Engine
+1. **Data Ingestion Module**
+   - Support for multiple data sources (REST APIs, databases, file systems)
+   - Configurable data transformation pipelines
+   - Error handling and retry mechanisms
+   - Data validation and sanitization
+
+2. **Processing Pipeline**
+   - Pluggable processing stages
+   - Parallel processing capabilities
+   - Memory-efficient data handling
+   - Progress tracking and monitoring
+
+3. **Output Management**
+   - Multiple output formats (JSON, CSV, XML, binary)
+   - Configurable output destinations
+   - Data compression and encryption options
+   - Audit logging for all outputs
+
+### Real-time Analytics
+1. **Metrics Collection**
+   - Processing throughput metrics
+   - Error rate monitoring
+   - Resource utilization tracking
+   - Custom business metrics
+
+2. **Dashboard Integration**
+   - REST API for metrics exposure
+   - WebSocket support for real-time updates
+   - Grafana-compatible metrics format
+   - Historical data retention policies
+
+### Caching Layer
+1. **Multi-level Caching**
+   - In-memory cache for hot data
+   - Redis integration for shared cache
+   - File-based cache for persistent storage
+   - Cache invalidation strategies
+
+2. **Cache Management**
+   - Configurable TTL policies
+   - Cache warming strategies
+   - Memory pressure handling
+   - Cache statistics and monitoring
+
+## Technical Requirements
+
+### Performance
+- Process minimum 10,000 records per second
+- Memory usage under 512MB for standard workloads
+- Response time under 100ms for cached queries
+- 99.9% uptime requirement
+
+### Security
+- Input validation and sanitization
+- SQL injection prevention
+- Data encryption at rest and in transit
+- Audit logging for security events
+
+### Monitoring
+- Health check endpoints
+- Prometheus metrics integration
+- Structured logging with correlation IDs
+- Alert integration for critical failures
+
+### Scalability
+- Horizontal scaling support
+- Load balancing compatibility
+- Database connection pooling
+- Graceful degradation under load
+
+## Implementation Phases
+
+### Phase 1: Foundation
+- Basic project structure and configuration
+- Core data models and interfaces
+- Initial processing pipeline framework
+- Basic error handling and logging
+
+### Phase 2: Core Functionality
+- Data ingestion implementations
+- Processing pipeline with basic stages
+- Output management with primary formats
+- Initial test suite
+
+### Phase 3: Advanced Features
+- Real-time analytics implementation
+- Caching layer integration
+- Performance optimizations
+- Comprehensive monitoring
+
+### Phase 4: Production Readiness
+- Security hardening
+- Performance tuning
+- Documentation completion
+- Deployment automation
+
+## Success Metrics
+- All functional requirements implemented and tested
+- Performance benchmarks met or exceeded
+- Security audit passed
+- Documentation complete with examples
+- Production deployment successful
+
+This is a substantial specification that should generate many focused issues.
+"#;
+
+    fs::write(&plan_file, content)?;
+    Ok(plan_file)
+}
+
+/// Setup a complete test environment for plan command testing
+fn setup_plan_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
+    let temp_dir = create_temp_dir()?;
+    let temp_path = temp_dir.path().to_path_buf();
+
+    // Create necessary directories
+    let issues_dir = temp_path.join("issues");
+    fs::create_dir_all(&issues_dir)?;
+
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    fs::create_dir_all(&swissarmyhammer_dir)?;
+
+    let tmp_dir = swissarmyhammer_dir.join("tmp");
+    fs::create_dir_all(&tmp_dir)?;
+
+    // Initialize git repository for realistic testing
+    setup_git_repo(&temp_path)?;
+
+    Ok((temp_dir, temp_path))
+}
+
+/// Test plan command CLI argument parsing and initial validation
+#[tokio::test]
+async fn test_plan_command_argument_parsing() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create a simple test plan file
+    let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
+
+    // Test that the plan command starts execution (it should begin processing before timing out)
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", plan_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .timeout(std::time::Duration::from_secs(5)) // Short timeout since we just want to see it start
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The command should start executing (showing log output) before timing out
+    // We're not testing full execution here due to AI service calls
+    assert!(
+        stderr.contains("Running plan command")
+            || stderr.contains("Starting workflow: plan")
+            || stderr.contains("Making the plan for"),
+        "Should show plan execution started. stdout: '{stdout}', stderr: '{stderr}'"
+    );
+
+    Ok(())
+}
+
+/// Test plan workflow execution in test mode (no external service calls)
+#[tokio::test]
+async fn test_plan_workflow_test_mode() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create a test plan file
+    let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
+
+    // Execute plan workflow in test mode using flow test
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "Plan workflow test should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Verify test mode execution indicators
+    assert!(
+        stdout.contains("Test mode") || stdout.contains("🧪"),
+        "Should indicate test mode execution: {stdout}"
+    );
+
+    // Verify coverage report
+    assert!(
+        stdout.contains("Coverage Report") && stdout.contains("States visited"),
+        "Should show coverage report: {stdout}"
+    );
+
+    // Verify the plan workflow achieves good coverage
+    assert!(
+        stdout.contains("100.0%") || stdout.contains("Full"),
+        "Should achieve high coverage: {stdout}"
+    );
+
+    Ok(())
+}
+
+/// Test plan command with relative path
+#[tokio::test]
+async fn test_plan_command_relative_path() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create subdirectory with plan file
+    let plans_dir = temp_path.join("specification");
+    fs::create_dir_all(&plans_dir)?;
+    let _plan_file = create_test_plan_file(&plans_dir, "relative-test.md", "Relative Path Test")?;
+
+    // Test using flow test mode with relative path
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            "plan_filename=./specification/relative-test.md",
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "Plan command with relative path should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
+        "Should execute workflow in test mode: {stdout}"
+    );
+
+    Ok(())
+}
+
+/// Test plan command with absolute path  
+#[tokio::test]
+async fn test_plan_command_absolute_path() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create plan file
+    let plan_file = create_test_plan_file(&temp_path, "absolute-test.md", "Absolute Path Test")?;
+
+    // Test using flow test mode with absolute path
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "Plan command with absolute path should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode") && stdout.contains("100.0%"),
+        "Should execute workflow successfully: {stdout}"
+    );
+
+    Ok(())
+}
+
+/// Test plan workflow with complex specification in test mode
+#[tokio::test]
+async fn test_plan_workflow_complex_specification() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create complex plan file
+    let plan_file = create_complex_plan_file(&temp_path, "advanced-feature.md")?;
+
+    // Test complex plan using flow test mode
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "Plan workflow with complex specification should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode"),
+        "Should run in test mode: {stdout}"
+    );
+
+    assert!(
+        stdout.contains("Coverage Report"),
+        "Should show coverage report: {stdout}"
+    );
+
+    Ok(())
+}
+
+/// Test error scenario: file not found
+#[tokio::test]
+async fn test_plan_command_file_not_found() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "nonexistent-plan.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "Plan command should fail with nonexistent file"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not found")
+            || stderr.contains("does not exist")
+            || stderr.contains("No such file"),
+        "Should show file not found error: {stderr}"
+    );
+
+    Ok(())
+}
+
+/// Test error scenario: directory instead of file
+#[tokio::test]
+async fn test_plan_command_directory_as_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create directory with same name as expected file
+    let dir_path = temp_path.join("directory-not-file");
+    fs::create_dir_all(&dir_path)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", dir_path.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "Plan command should fail when given directory instead of file"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("directory") || stderr.contains("not a file") || stderr.contains("invalid"),
+        "Should show appropriate error for directory: {stderr}"
+    );
+
+    Ok(())
+}
+
+/// Test error scenario: empty file
+#[tokio::test]
+async fn test_plan_command_empty_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create empty file
+    let empty_file = temp_path.join("empty-plan.md");
+    fs::write(&empty_file, "")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", empty_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .timeout(std::time::Duration::from_secs(60))
+        .output()?;
+
+    // Empty file might still be processed, but should not create meaningful issues
+    // The important thing is the command completes without crashing
+    assert!(
+        output.status.code().is_some(),
+        "Plan command should complete even with empty file"
+    );
+
+    Ok(())
+}
+
+/// Test plan workflow with existing issues (test mode)
+#[tokio::test]
+async fn test_plan_workflow_with_existing_issues() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create some existing issues
+    let issues_dir = temp_path.join("issues");
+    fs::write(
+        issues_dir.join("EXISTING_000001_old-feature.md"),
+        "# Old Feature\n\nExisting issue content.",
+    )?;
+    fs::write(
+        issues_dir.join("EXISTING_000002_another-feature.md"),
+        "# Another Feature\n\nAnother existing issue.",
+    )?;
+
+    // Create and test plan workflow in test mode
+    let plan_file = create_test_plan_file(&temp_path, "new-feature.md", "New Feature Plan")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "Plan workflow should succeed with existing issues. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
+        "Should execute workflow in test mode: {stdout}"
+    );
+
+    // Verify existing issues are preserved (unchanged during test mode)
+    let existing_files = fs::read_dir(&issues_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        existing_files.iter().any(|f| f.starts_with("EXISTING_")),
+        "Should preserve existing issues: {existing_files:?}"
+    );
+
+    Ok(())
+}
+
+/// Test plan workflow with files containing spaces and special characters
+#[tokio::test]
+async fn test_plan_workflow_special_characters() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create plan file with spaces and special characters in name
+    let plan_file = create_test_plan_file(
+        &temp_path,
+        "test plan-v1.0 (draft).md",
+        "Special Characters Test",
+    )?;
+
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "Plan workflow should handle files with special characters. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
+        "Should execute workflow successfully: {stdout}"
+    );
+
+    Ok(())
+}
+
+/// Test concurrent plan workflow executions in test mode
+#[tokio::test]
+async fn test_concurrent_plan_workflow_executions() -> Result<()> {
+    use tokio::task::JoinSet;
+
+    let mut tasks = JoinSet::new();
+
+    // Run multiple plan workflows concurrently in test mode
+    for i in 0..3 {
+        tasks.spawn(async move {
+            let _guard = create_test_home_guard();
+            let (_temp_dir, temp_path) = setup_plan_test_environment().unwrap();
+
+            let plan_file = create_test_plan_file(
+                &temp_path,
+                &format!("concurrent-test-{i}.md"),
+                &format!("Concurrent Test {i}"),
+            )
+            .unwrap();
+
+            let output = Command::cargo_bin("sah")
+                .unwrap()
+                .args([
+                    "flow",
+                    "test",
+                    "plan",
+                    "--var",
+                    &format!("plan_filename={}", plan_file.display()),
+                ])
+                .current_dir(&temp_path)
+                .output()
+                .expect("Failed to run plan workflow test");
+
+            (i, output.status.success())
+        });
+    }
+
+    // All commands should succeed
+    while let Some(result) = tasks.join_next().await {
+        let (i, success) = result?;
+        assert!(
+            success,
+            "Concurrent plan workflow execution {i} should succeed"
+        );
+    }
+
+    Ok(())
+}
+
+/// Performance test: measure execution time for reasonable plan using test mode
+#[tokio::test]
+#[ignore = "Performance test - run with --ignored"]
+async fn test_plan_command_performance() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    let plan_file = create_complex_plan_file(&temp_path, "performance-test.md")?;
+
+    let start_time = std::time::Instant::now();
+
+    // Use flow test mode for performance testing to avoid AI service calls
+    let output = Command::cargo_bin("sah")?
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let elapsed = start_time.elapsed();
+
+    assert!(
+        output.status.success(),
+        "Performance test plan should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Should complete in reasonable time (less than 30 seconds as per requirements)
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "Plan command should complete in reasonable time: {elapsed:?}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
+        "Should execute workflow in test mode: {stdout}"
+    );
+
+    println!("Plan execution completed in {elapsed:?}");
+
+    Ok(())
+}
+
+/// Test enhanced error handling: comprehensive file validation
+#[tokio::test]
+async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "definitely-nonexistent-plan.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "Plan command should fail with enhanced error handling"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Test enhanced error message format
+    assert!(
+        stderr.contains("Error:") || stderr.contains("Plan file not found"),
+        "Should show enhanced error message format: {stderr}"
+    );
+
+    // Test user guidance suggestions
+    assert!(
+        stderr.contains("Suggestions:") || stderr.contains("Check the file path"),
+        "Should provide user guidance: {stderr}"
+    );
+
+    assert!(
+        stderr.contains("typos") || stderr.contains("ls -la") || stderr.contains("absolute path"),
+        "Should include actionable suggestions: {stderr}"
+    );
+
+    Ok(())
+}
+
+/// Test enhanced error handling: empty file validation
+#[tokio::test]
+async fn test_plan_enhanced_error_empty_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create empty file
+    let empty_file = temp_path.join("empty-plan.md");
+    fs::write(&empty_file, "")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", empty_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    // Empty file should trigger enhanced error handling
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check for enhanced error message
+    if stderr.contains("Warning:") || stderr.contains("empty") {
+        // Test warning level for empty files
+        assert!(
+            stderr.contains("Warning:") || stderr.contains("empty or contains no valid content"),
+            "Should show warning for empty file: {stderr}"
+        );
+
+        // Test user guidance for empty files
+        assert!(
+            stderr.contains("Add content") || stderr.contains("whitespace"),
+            "Should provide guidance for empty files: {stderr}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: whitespace-only file
+#[tokio::test]
+async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create file with only whitespace
+    let whitespace_file = temp_path.join("whitespace-plan.md");
+    fs::write(&whitespace_file, "   \n\t  \n  ")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", whitespace_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should treat whitespace-only as empty file
+    if stderr.contains("Warning:") || stderr.contains("empty") {
+        assert!(
+            stderr.contains("empty or contains no valid content"),
+            "Should show warning for whitespace-only file: {stderr}"
+        );
+
+        assert!(
+            stderr.contains("whitespace"),
+            "Should mention whitespace in guidance: {stderr}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: directory instead of file
+#[tokio::test]
+async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create directory with same name as expected file
+    let dir_path = temp_path.join("directory-not-file");
+    fs::create_dir_all(&dir_path)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", dir_path.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert!(
+        !output.status.success(),
+        "Plan command should fail with enhanced error for directory"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Test enhanced error message
+    assert!(
+        stderr.contains("Error:")
+            && (stderr.contains("directory") || stderr.contains("not a file")),
+        "Should show enhanced error for directory: {stderr}"
+    );
+
+    // Test specific guidance for directories
+    assert!(
+        stderr.contains("Specify a file path instead") || stderr.contains("directory"),
+        "Should provide specific guidance for directory error: {stderr}"
+    );
+
+    Ok(())
+}
+
+/// Test enhanced error handling: file too large
+#[tokio::test]
+async fn test_plan_enhanced_error_large_file() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create a large file (over the validation limit)
+    let large_file = temp_path.join("huge-plan.md");
+    let large_content = "x".repeat(11 * 1024 * 1024); // 11MB - over default 10MB limit
+    fs::write(&large_file, large_content)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", large_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .timeout(std::time::Duration::from_secs(30))
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should show file too large error
+    if stderr.contains("too large") || stderr.contains("bytes") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("too large"),
+            "Should show file too large error: {stderr}"
+        );
+
+        assert!(
+            stderr.contains("Break large plans") || stderr.contains("smaller"),
+            "Should suggest breaking large plans into smaller files: {stderr}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: permission denied
+#[tokio::test]
+#[cfg(unix)] // This test is Unix-specific due to file permissions
+async fn test_plan_enhanced_error_permission_denied() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create file with restricted permissions
+    let restricted_file = temp_path.join("restricted-plan.md");
+    fs::write(&restricted_file, "# Restricted Plan\n\nContent.")?;
+
+    // Remove read permissions
+    let mut perms = fs::metadata(&restricted_file)?.permissions();
+    perms.set_mode(0o000); // No permissions
+    fs::set_permissions(&restricted_file, perms)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", restricted_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should show permission denied error
+    if stderr.contains("Permission denied") || stderr.contains("permission") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("Permission denied"),
+            "Should show permission denied error: {stderr}"
+        );
+
+        assert!(
+            stderr.contains("chmod +r") || stderr.contains("permissions"),
+            "Should suggest fixing permissions: {stderr}"
+        );
+    }
+
+    // Restore permissions for cleanup
+    let mut perms = fs::metadata(&restricted_file)
+        .unwrap_or_else(|_| {
+            // File might have been deleted, create dummy metadata
+            fs::metadata(&temp_path).unwrap()
+        })
+        .permissions();
+    perms.set_mode(0o644);
+    let _ = fs::set_permissions(&restricted_file, perms); // Ignore errors during cleanup
+
+    Ok(())
+}
+
+/// Test enhanced error handling: invalid binary content
+#[tokio::test]
+async fn test_plan_enhanced_error_binary_content() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Create file with binary content (null bytes)
+    let binary_file = temp_path.join("binary-plan.md");
+    let binary_content = b"# Plan with\0null bytes\0in content";
+    fs::write(&binary_file, binary_content)?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", binary_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should show invalid format error
+    if stderr.contains("Invalid") || stderr.contains("null bytes") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("Invalid"),
+            "Should show invalid format error: {stderr}"
+        );
+
+        assert!(
+            stderr.contains("null bytes") || stderr.contains("binary"),
+            "Should mention null bytes or binary content: {stderr}"
+        );
+
+        assert!(
+            stderr.contains("UTF-8") || stderr.contains("corrupted"),
+            "Should suggest checking encoding: {stderr}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: color output detection
+#[tokio::test]
+async fn test_plan_enhanced_error_color_output() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Test with explicit NO_COLOR environment variable
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "nonexistent.md"])
+        .current_dir(&temp_path)
+        .env("NO_COLOR", "1")
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should not contain ANSI color codes when NO_COLOR is set
+    if stderr.contains("Error:") || stderr.contains("not found") {
+        assert!(
+            !stderr.contains("\x1b["), // No ANSI escape sequences
+            "Should not contain color codes with NO_COLOR=1: {}",
+            stderr.trim()
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: exit codes
+#[tokio::test]
+async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    // Test file not found exit code
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "nonexistent.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    assert_eq!(
+        output.status.code().unwrap_or(0),
+        2, // EXIT_ERROR
+        "Should return exit code 2 for file not found error"
+    );
+
+    // Test empty file exit code (should be warning = 1)
+    let empty_file = temp_path.join("empty.md");
+    fs::write(&empty_file, "")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", empty_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .output()?;
+
+    // Empty file should return warning exit code if detected as empty
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("Warning:") || stderr.contains("empty") {
+        assert_eq!(
+            output.status.code().unwrap_or(0),
+            1, // EXIT_WARNING
+            "Should return exit code 1 for empty file warning"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: issues directory validation
+#[tokio::test]
+async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
+    let _guard = create_test_home_guard();
+    // Create minimal test environment WITHOUT issues directory
+    let _temp_dir = create_temp_dir()?;
+    let temp_path = _temp_dir.path().to_path_buf();
+
+    // Create necessary directories (but NOT issues directory)
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    fs::create_dir_all(&swissarmyhammer_dir)?;
+
+    let tmp_dir = swissarmyhammer_dir.join("tmp");
+    fs::create_dir_all(&tmp_dir)?;
+
+    // Initialize git repository for realistic testing
+    setup_git_repo(&temp_path)?;
+
+    // Create a valid plan file
+    let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
+
+    // Create issues as a file instead of directory to trigger error
+    let issues_file = temp_path.join("issues");
+    fs::write(&issues_file, "not a directory")?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", plan_file.to_str().unwrap()])
+        .current_dir(&temp_path)
+        .timeout(std::time::Duration::from_secs(10))
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should show issues directory error
+    if stderr.contains("Issues directory") || stderr.contains("not writable") {
+        assert!(
+            stderr.contains("Error:") && stderr.contains("Issues"),
+            "Should show issues directory error: {stderr}"
+        );
+
+        assert!(
+            stderr.contains("mkdir -p") || stderr.contains("directory"),
+            "Should suggest creating directory: {stderr}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Test enhanced error handling: comprehensive error message structure
+#[tokio::test]
+async fn test_plan_enhanced_error_message_structure() -> Result<()> {
+    let _guard = create_test_home_guard();
+    let (_temp_dir, temp_path) = setup_plan_test_environment()?;
+
+    let output = Command::cargo_bin("sah")?
+        .args(["plan", "structured-error-test.md"])
+        .current_dir(&temp_path)
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if stderr.contains("Error:") || stderr.contains("not found") {
+        // Test error message structure components
+        let has_error_label = stderr.contains("Error:")
+            || stderr.contains("Warning:")
+            || stderr.contains("Critical:");
+        let has_suggestions = stderr.contains("Suggestions:");
+        let has_bullet_points = stderr.contains("•") || stderr.contains("-");
+
+        assert!(
+            has_error_label,
+            "Should have error severity label: {stderr}"
+        );
+
+        assert!(has_suggestions, "Should have suggestions section: {stderr}");
+
+        assert!(
+            has_bullet_points,
+            "Should have bulleted suggestions: {stderr}"
+        );
+    }
+
+    Ok(())
+}

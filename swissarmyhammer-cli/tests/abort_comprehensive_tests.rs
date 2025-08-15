@@ -52,7 +52,7 @@ fn assert_abort_error_handling(output: &Output) {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("Actual stderr: {}", stderr);
+    println!("Actual stderr: {stderr}");
 
     // For now, we expect workflow not found errors since our test workflows
     // aren't in the proper directories. The abort detection may happen at a higher level
@@ -133,7 +133,7 @@ fn test_prompt_command_with_abort_file() -> Result<()> {
     // detect the abort file if the system is properly integrated
     // For now, just verify the command can run with abort file present
     // This may succeed or fail depending on internal workflow usage
-    println!("Prompt test output: {:?}", output);
+    println!("Prompt test output: {output:?}");
     Ok(())
 }
 
@@ -156,7 +156,7 @@ fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
 
         // These commands should succeed as they don't involve workflow execution
         if !output.status.success() {
-            println!("Command failed: {:?}", command_args);
+            println!("Command failed: {command_args:?}");
             println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
             println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
         }
@@ -211,7 +211,7 @@ transitions:
     // Check that unicode is preserved in error message
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Unicode might be in the error message depending on how it's propagated
-    println!("Unicode abort stderr: {}", stderr);
+    println!("Unicode abort stderr: {stderr}");
     Ok(())
 }
 
@@ -496,13 +496,10 @@ transitions:
                     );
                 } else {
                     // Might succeed if abort file was cleaned up by another instance
-                    println!(
-                        "Thread {} succeeded (abort file may have been cleaned up)",
-                        i
-                    );
+                    println!("Thread {i} succeeded (abort file may have been cleaned up)");
                 }
             }
-            Err(e) => panic!("Thread {} failed to execute command: {}", i, e),
+            Err(e) => panic!("Thread {i} failed to execute command: {e}"),
         }
     }
 

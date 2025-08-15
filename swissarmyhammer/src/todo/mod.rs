@@ -234,14 +234,14 @@ pub struct MarkCompleteTodoRequest {
 /// otherwise in the current working directory.
 pub fn get_todo_directory() -> Result<PathBuf> {
     let base_dir = directory_utils::find_repository_or_current_directory().map_err(|e| {
-        SwissArmyHammerError::Other(format!("Failed to determine base directory: {}", e))
+        SwissArmyHammerError::Other(format!("Failed to determine base directory: {e}"))
     })?;
 
     let todo_dir = base_dir.join(".swissarmyhammer").join("todo");
 
     // Ensure directory exists
     fs::create_dir_all(&todo_dir).map_err(|e| {
-        SwissArmyHammerError::Other(format!("Failed to create todo directory: {}", e))
+        SwissArmyHammerError::Other(format!("Failed to create todo directory: {e}"))
     })?;
 
     Ok(todo_dir)
@@ -272,7 +272,7 @@ pub fn validate_todo_list_name(name: &str) -> Result<()> {
 pub fn get_todo_list_path(todo_list: &str) -> Result<PathBuf> {
     validate_todo_list_name(todo_list)?;
     let todo_dir = get_todo_directory()?;
-    Ok(todo_dir.join(format!("{}.todo.yaml", todo_list)))
+    Ok(todo_dir.join(format!("{todo_list}.todo.yaml")))
 }
 
 #[cfg(test)]

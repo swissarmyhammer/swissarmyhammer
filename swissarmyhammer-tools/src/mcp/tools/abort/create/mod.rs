@@ -77,7 +77,7 @@ impl McpTool for AbortCreateTool {
 
         // Create the abort file using shared utility (will panic if it fails)
         create_abort_file_current_dir(&request.reason);
-        
+
         tracing::info!("Created abort file with reason: {}", request.reason);
         Ok(BaseToolImpl::create_success_response(format!(
             "Abort file created with reason: {}",

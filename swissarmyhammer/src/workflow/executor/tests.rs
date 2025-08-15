@@ -28,7 +28,7 @@ impl IsolatedTestEnvironment {
         let home_guard = IsolatedTestHome::new();
         let temp_dir = tempfile::TempDir::new()?;
         std::env::set_current_dir(temp_dir.path())?;
-        
+
         Ok(Self {
             _home_guard: home_guard,
             _temp_dir: temp_dir,
@@ -1790,7 +1790,7 @@ async fn test_abort_file_detection_with_newlines() {
 #[tokio::test]
 async fn test_abort_file_performance_impact() {
     use std::time::Instant;
-    
+
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
 
@@ -1832,9 +1832,7 @@ async fn test_abort_file_performance_impact() {
     let max_acceptable_overhead = duration_without_abort * 10;
     assert!(
         duration_with_abort < max_acceptable_overhead,
-        "Abort checking overhead too high: {:?} vs {:?}",
-        duration_with_abort,
-        duration_without_abort
+        "Abort checking overhead too high: {duration_with_abort:?} vs {duration_without_abort:?}"
     );
 }
 

@@ -110,6 +110,9 @@ pub use file_loader::FileSource;
 /// File system utilities and abstractions
 pub use fs_utils::{FilePermissions, FileSystem, FileSystemUtils};
 
+/// Plan command utilities
+pub mod plan_utils;
+
 /// Plugin system types for extending functionality
 pub use plugins::{CustomLiquidFilter, PluginRegistry, SwissArmyHammerPlugin};
 
