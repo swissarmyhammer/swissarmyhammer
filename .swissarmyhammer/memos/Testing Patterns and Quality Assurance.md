@@ -1,15 +1,17 @@
 # SwissArmyHammer Testing Patterns and Quality Assurance
 
+**IMPORTANT** when integration testing the command line, DO NOT use `sah`, instead use `cargo run --`
+
 ## Testing Architecture
 
-**Multi-Level Testing Strategy**
+### Multi-Level Testing Strategy
 - **Unit Tests**: Inline `#[cfg(test)]` modules within source files
 - **Integration Tests**: External test files in `/tests/` directories  
 - **End-to-End Tests**: Complete workflow testing with real processes
 - **Property Tests**: Fuzz-like testing with `proptest` crate
 - **Performance Tests**: Benchmarking with `criterion` crate
 
-**Test Organization Hierarchy**
+### Test Organization Hierarchy
 ```
 workspace/
 ├── tests/                      # Workspace-level integration tests

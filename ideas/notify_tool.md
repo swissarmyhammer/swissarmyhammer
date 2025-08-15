@@ -148,16 +148,7 @@ When running CLI commands, notifications appear in the terminal output stream, p
 
 ## Configuration and Filtering
 
-### Tracing Configuration
-Users can control notification visibility through tracing configuration:
 
-```toml
-[tracing]
-targets = [
-  { name = "llm_notify", level = "info" },
-  { name = "llm_notify::warn", level = "warn" }
-]
-```
 
 ### Context Filtering
 The optional `context` parameter allows filtering notifications by category:
@@ -203,14 +194,7 @@ The optional `context` parameter allows filtering notifications by category:
 - Consider rate limiting for chatty LLMs
 
 ### Security
-- Validate notification content to prevent log injection
-- Sanitize any user data included in notifications
-- Respect logging configuration and user privacy settings
-
-### Usability
-- Messages should be concise and actionable
-- Use consistent formatting and terminology
-- Avoid notification spam - be selective about what's worth notifying
+- None
 
 ## Testing Strategy
 

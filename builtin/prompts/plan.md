@@ -35,6 +35,7 @@ Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_ste
 - Each step must be incremental progress, ensuring no big jumps in complexity at any stage
 - DO make sure that each step builds on the previous prompts, and ends with wiring things together
 - DO NOT leave hanging or orphaned code that isn't integrated into a previous step
+- DO NOT plan security features unless specifically asked
 {% if plan_filename %}
 - Each issue you create that is a step in the plan should include the phrase "Refer to {{ plan_filename }}"
 {% else %}
