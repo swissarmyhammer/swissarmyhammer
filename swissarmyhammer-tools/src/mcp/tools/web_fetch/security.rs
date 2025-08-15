@@ -132,7 +132,10 @@ impl SecurityValidator {
         let host_lower = host.to_lowercase();
         for pattern in &self.policy.blocked_patterns {
             if host_lower.contains(pattern) {
-                warn!("Blocked domain pattern: {} matches {} for URL: {}", pattern, host, url);
+                warn!(
+                    "Blocked domain pattern: {} matches {} for URL: {}",
+                    pattern, host, url
+                );
                 return Err(SecurityError::BlockedDomain(format!(
                     "Domain '{host}' matches blocked pattern '{pattern}'"
                 )));
@@ -153,9 +156,11 @@ impl SecurityValidator {
         }
 
         // Also check if URL has an explicit IP
-        if let Some(ip) = url.socket_addrs(|| None).ok().and_then(|addrs| {
-            addrs.first().map(|addr| addr.ip())
-        }) {
+        if let Some(ip) = url
+            .socket_addrs(|| None)
+            .ok()
+            .and_then(|addrs| addrs.first().map(|addr| addr.ip()))
+        {
             self.check_ip_restrictions(&ip, url)?;
         }
 
@@ -251,7 +256,10 @@ impl SecurityValidator {
 
         // Check IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
         if let Some(ipv4) = ip.to_ipv4_mapped() {
-            warn!("Detected IPv4-mapped IPv6 address: {} (IPv4: {}) for URL: {}", ip, ipv4, url);
+            warn!(
+                "Detected IPv4-mapped IPv6 address: {} (IPv4: {}) for URL: {}",
+                ip, ipv4, url
+            );
             // Apply the same IPv4 restrictions to the mapped address
             return self.check_ipv4_restrictions(&ipv4, url);
         }
@@ -263,7 +271,7 @@ impl SecurityValidator {
     /// More comprehensive than the standard library's is_private()
     fn is_private_ipv4(&self, ip: &Ipv4Addr) -> bool {
         let octets = ip.octets();
-        
+
         // Standard private ranges
         if ip.is_private() {
             return true;
@@ -297,7 +305,7 @@ impl SecurityValidator {
             details = details,
             "Security event detected in web fetch"
         );
-        
+
         // In a production system, this would integrate with security monitoring
         // For now, we rely on structured logging
         info!(
@@ -320,7 +328,7 @@ mod tests {
     #[test]
     fn test_valid_urls() {
         let validator = SecurityValidator::new();
-        
+
         let valid_urls = [
             "https://example.com",
             "http://public-site.org",
@@ -331,8 +339,7 @@ mod tests {
         for url_str in &valid_urls {
             assert!(
                 validator.validate_url(url_str).is_ok(),
-                "Should allow valid URL: {}",
-                url_str
+                "Should allow valid URL: {url_str}"
             );
         }
     }
@@ -340,7 +347,7 @@ mod tests {
     #[test]
     fn test_invalid_schemes() {
         let validator = SecurityValidator::new();
-        
+
         let invalid_schemes = [
             "ftp://example.com",
             "file:///etc/passwd",
@@ -355,8 +362,7 @@ mod tests {
                     validator.validate_url(url_str),
                     Err(SecurityError::UnsupportedScheme(_))
                 ),
-                "Should block invalid scheme: {}",
-                url_str
+                "Should block invalid scheme: {url_str}"
             );
         }
     }
@@ -364,7 +370,7 @@ mod tests {
     #[test]
     fn test_blocked_domains() {
         let validator = SecurityValidator::new();
-        
+
         let blocked_domains = [
             "http://localhost",
             "https://127.0.0.1",
@@ -380,8 +386,7 @@ mod tests {
                     validator.validate_url(url_str),
                     Err(SecurityError::BlockedDomain(_)) | Err(SecurityError::SsrfAttempt(_))
                 ),
-                "Should block domain: {}",
-                url_str
+                "Should block domain: {url_str}"
             );
         }
     }
@@ -389,14 +394,14 @@ mod tests {
     #[test]
     fn test_private_ip_detection() {
         let validator = SecurityValidator::new();
-        
+
         let private_ips = [
             "http://10.0.0.1",
-            "https://172.16.0.1", 
+            "https://172.16.0.1",
             "http://192.168.1.1",
-            "https://100.64.0.1",    // Carrier-grade NAT
-            "http://169.254.0.1",    // Link-local
-            "https://198.18.0.1",    // Test network
+            "https://100.64.0.1", // Carrier-grade NAT
+            "http://169.254.0.1", // Link-local
+            "https://198.18.0.1", // Test network
         ];
 
         for url_str in &private_ips {
@@ -405,8 +410,7 @@ mod tests {
                     validator.validate_url(url_str),
                     Err(SecurityError::SsrfAttempt(_))
                 ),
-                "Should block private IP: {}",
-                url_str
+                "Should block private IP: {url_str}"
             );
         }
     }
@@ -414,11 +418,11 @@ mod tests {
     #[test]
     fn test_ipv6_restrictions() {
         let validator = SecurityValidator::new();
-        
+
         let blocked_ipv6 = [
-            "http://[::1]",              // Localhost
+            "http://[::1]",               // Localhost
             "https://[::ffff:127.0.0.1]", // IPv4-mapped localhost
-            "http://[::]",               // Unspecified
+            "http://[::]",                // Unspecified
         ];
 
         for url_str in &blocked_ipv6 {
@@ -427,8 +431,7 @@ mod tests {
                     validator.validate_url(url_str),
                     Err(SecurityError::SsrfAttempt(_))
                 ),
-                "Should block IPv6: {}",
-                url_str
+                "Should block IPv6: {url_str}"
             );
         }
     }
@@ -442,18 +445,18 @@ mod tests {
             block_localhost: false,   // Allow localhost
             block_multicast: true,
         };
-        
+
         let validator = SecurityValidator::with_policy(policy);
-        
+
         // Should allow localhost now
         assert!(validator.validate_url("http://localhost").is_ok());
-        
+
         // Should block custom domain
         assert!(matches!(
             validator.validate_url("https://evil.com"),
             Err(SecurityError::BlockedDomain(_))
         ));
-        
+
         // Should block pattern
         assert!(matches!(
             validator.validate_url("https://test.badpattern.example"),
@@ -464,19 +467,19 @@ mod tests {
     #[test]
     fn test_security_logging() {
         let validator = SecurityValidator::new();
-        
+
         // This test mainly ensures the logging function doesn't panic
         validator.log_security_event(
-            "SSRF_ATTEMPT", 
-            "http://127.0.0.1", 
-            "Attempted access to localhost"
+            "SSRF_ATTEMPT",
+            "http://127.0.0.1",
+            "Attempted access to localhost",
         );
     }
 
     #[test]
     fn test_edge_case_urls() {
         let validator = SecurityValidator::new();
-        
+
         // Test malformed URLs
         let malformed = [
             "",
@@ -491,8 +494,7 @@ mod tests {
                     validator.validate_url(url_str),
                     Err(SecurityError::InvalidUrl(_))
                 ),
-                "Should reject malformed URL: {}",
-                url_str
+                "Should reject malformed URL: {url_str}"
             );
         }
     }
@@ -500,18 +502,18 @@ mod tests {
     #[test]
     fn test_comprehensive_private_ip_ranges() {
         let validator = SecurityValidator::new();
-        
+
         // Test comprehensive private IP detection
         let test_cases = [
-            ("10.0.0.1", true),        // RFC 1918
-            ("172.16.0.1", true),      // RFC 1918 
-            ("192.168.1.1", true),     // RFC 1918
-            ("100.64.0.1", true),      // RFC 6598 (Carrier-grade NAT)
-            ("169.254.0.1", true),     // RFC 3927 (Link-local)
-            ("198.18.0.1", true),      // RFC 2544 (Testing)
-            ("240.0.0.1", true),       // Reserved
-            ("8.8.8.8", false),        // Public DNS
-            ("1.1.1.1", false),        // Public DNS
+            ("10.0.0.1", true),    // RFC 1918
+            ("172.16.0.1", true),  // RFC 1918
+            ("192.168.1.1", true), // RFC 1918
+            ("100.64.0.1", true),  // RFC 6598 (Carrier-grade NAT)
+            ("169.254.0.1", true), // RFC 3927 (Link-local)
+            ("198.18.0.1", true),  // RFC 2544 (Testing)
+            ("240.0.0.1", true),   // Reserved
+            ("8.8.8.8", false),    // Public DNS
+            ("1.1.1.1", false),    // Public DNS
         ];
 
         for (ip_str, should_be_private) in test_cases {
@@ -519,8 +521,7 @@ mod tests {
             assert_eq!(
                 validator.is_private_ipv4(&ip),
                 should_be_private,
-                "IP {} private detection failed",
-                ip_str
+                "IP {ip_str} private detection failed"
             );
         }
     }
