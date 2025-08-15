@@ -142,6 +142,82 @@ pub struct SearchResultContent {
 
     /// Summary of the content
     pub summary: String,
+
+    /// Key points extracted from the content
+    #[serde(default)]
+    pub key_points: Vec<String>,
+
+    /// Code blocks found in the content
+    #[serde(default)]
+    pub code_blocks: Vec<CodeBlock>,
+
+    /// Metadata extracted from the content
+    #[serde(default)]
+    pub metadata: ContentMetadata,
+}
+
+/// Code block extracted from content
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CodeBlock {
+    /// Programming language (if detected)
+    pub language: Option<String>,
+
+    /// The code content
+    pub code: String,
+
+    /// Line number where the code block starts (if available)
+    pub start_line: Option<usize>,
+}
+
+/// Content type classification
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentType {
+    /// Article or blog post
+    Article,
+    /// Documentation
+    Documentation,
+    /// News article
+    News,
+    /// Academic or research paper
+    Academic,
+    /// Tutorial or how-to guide
+    Tutorial,
+    /// Reference material
+    Reference,
+    /// Forum post or discussion
+    Forum,
+    /// Product or service page
+    Product,
+    /// Unknown or other content type
+    #[default]
+    Other,
+}
+
+/// Metadata extracted from content
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct ContentMetadata {
+    /// Page title (if different from search result title)
+    pub title: Option<String>,
+
+    /// Author information
+    pub author: Option<String>,
+
+    /// Published date
+    pub published_date: Option<String>,
+
+    /// Content type classification
+    pub content_type: ContentType,
+
+    /// Language of the content
+    pub language: Option<String>,
+
+    /// Reading time estimate in minutes
+    pub reading_time_minutes: Option<u32>,
+
+    /// Tags or topics identified in the content
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Statistics for content fetching operations

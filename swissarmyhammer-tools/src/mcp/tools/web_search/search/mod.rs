@@ -3,10 +3,10 @@
 //! This module provides the WebSearchTool for performing web searches through the MCP protocol.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::web_search::content_fetcher::{ContentFetcher, ContentFetchConfig};
 use crate::mcp::tools::web_search::instance_manager::{InstanceManager, InstanceManagerConfig};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
-use html2text::from_read;
 use reqwest::Client;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
@@ -28,8 +28,6 @@ enum WebSearchInternalError {
     InstanceError { message: String, instance: String, status_code: Option<u16> },
     /// Failed to parse response from SearXNG
     ParseError { message: String, instance: String },
-    /// Content fetching failed for a specific URL
-    ContentFetchError { message: String, url: String },
     /// All instances failed, no fallback available
     AllInstancesFailed { attempted_instances: Vec<String>, last_error: String },
 }
@@ -56,9 +54,6 @@ impl std::fmt::Display for WebSearchInternalError {
             }
             WebSearchInternalError::ParseError { message, instance } => {
                 write!(f, "Failed to parse response from '{instance}': {message}")
-            }
-            WebSearchInternalError::ContentFetchError { message, url } => {
-                write!(f, "Failed to fetch content from '{url}': {message}")
             }
             WebSearchInternalError::AllInstancesFailed { attempted_instances, last_error } => {
                 write!(
@@ -153,6 +148,100 @@ impl WebSearchTool {
         }
         
         config
+    }
+
+    /// Loads configuration for content fetching
+    fn load_content_fetch_config() -> ContentFetchConfig {
+        let mut config = ContentFetchConfig::default();
+        
+        // Try to load from configuration
+        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+            // Concurrent processing settings
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_concurrent)) = 
+                repo_config.get("web_search.content_fetching.max_concurrent_fetches") {
+                if *max_concurrent > 0 {
+                    config.max_concurrent_fetches = *max_concurrent as usize;
+                }
+            }
+            
+            // Timeout settings
+            if let Some(swissarmyhammer::ConfigValue::Integer(timeout)) = 
+                repo_config.get("web_search.content_fetching.content_fetch_timeout") {
+                if *timeout > 0 {
+                    config.fetch_timeout = Duration::from_secs(*timeout as u64);
+                }
+            }
+            
+            // Content size limit
+            if let Some(swissarmyhammer::ConfigValue::String(size_str)) = 
+                repo_config.get("web_search.content_fetching.max_content_size") {
+                if let Ok(size) = Self::parse_size_string(size_str) {
+                    config.max_content_size = size;
+                }
+            }
+            
+            // Rate limiting settings
+            if let Some(swissarmyhammer::ConfigValue::Integer(delay)) = 
+                repo_config.get("web_search.content_fetching.default_domain_delay") {
+                if *delay > 0 {
+                    config.default_domain_delay = Duration::from_millis(*delay as u64);
+                }
+            }
+            
+            // Content quality settings
+            if let Some(swissarmyhammer::ConfigValue::Integer(min_length)) = 
+                repo_config.get("web_search.content_fetching.min_content_length") {
+                if *min_length > 0 {
+                    config.quality_config.min_content_length = *min_length as usize;
+                }
+            }
+            
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_length)) = 
+                repo_config.get("web_search.content_fetching.max_content_length") {
+                if *max_length > 0 {
+                    config.quality_config.max_content_length = *max_length as usize;
+                }
+            }
+            
+            // Processing settings
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_summary)) = 
+                repo_config.get("web_search.content_fetching.max_summary_length") {
+                if *max_summary > 0 {
+                    config.processing_config.max_summary_length = *max_summary as usize;
+                }
+            }
+            
+            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_code)) = 
+                repo_config.get("web_search.content_fetching.extract_code_blocks") {
+                config.processing_config.extract_code_blocks = *extract_code;
+            }
+            
+            if let Some(swissarmyhammer::ConfigValue::Boolean(generate_summaries)) = 
+                repo_config.get("web_search.content_fetching.generate_summaries") {
+                config.processing_config.generate_summaries = *generate_summaries;
+            }
+            
+            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_metadata)) = 
+                repo_config.get("web_search.content_fetching.extract_metadata") {
+                config.processing_config.extract_metadata = *extract_metadata;
+            }
+        }
+        
+        config
+    }
+
+    /// Parse size string like "2MB" into bytes
+    fn parse_size_string(size_str: &str) -> Result<usize, std::num::ParseIntError> {
+        let size_str = size_str.to_uppercase();
+        if let Some(stripped) = size_str.strip_suffix("MB") {
+            Ok(stripped.parse::<usize>()? * 1024 * 1024)
+        } else if let Some(stripped) = size_str.strip_suffix("KB") {
+            Ok(stripped.parse::<usize>()? * 1024)
+        } else if let Some(stripped) = size_str.strip_suffix("GB") {
+            Ok(stripped.parse::<usize>()? * 1024 * 1024 * 1024)
+        } else {
+            size_str.parse()
+        }
     }
 
     /// Performs a search using a SearXNG instance with comprehensive parameter support
@@ -460,79 +549,6 @@ impl WebSearchTool {
         Ok(())
     }
 
-    /// Fetches content from a URL and converts it to markdown
-    async fn fetch_content(
-        &mut self,
-        url: &str,
-    ) -> Result<SearchResultContent, WebSearchInternalError> {
-        // Validate URL first
-        let _parsed_url = Url::parse(url).map_err(|e| WebSearchInternalError::ContentFetchError {
-            message: format!("Invalid URL format: {e}"),
-            url: url.to_string(),
-        })?;
-
-        let client = self.get_client();
-        let start_time = Instant::now();
-
-        // Perform content fetch with proper error handling
-        let response = client
-            .get(url)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    WebSearchInternalError::ContentFetchError {
-                        message: "Request timeout (10 seconds)".to_string(),
-                        url: url.to_string(),
-                    }
-                } else if e.is_connect() {
-                    WebSearchInternalError::ContentFetchError {
-                        message: format!("Connection failed: {e}"),
-                        url: url.to_string(),
-                    }
-                } else {
-                    WebSearchInternalError::ContentFetchError {
-                        message: format!("Network error: {e}"),
-                        url: url.to_string(),
-                    }
-                }
-            })?;
-
-        if !response.status().is_success() {
-            return Err(WebSearchInternalError::ContentFetchError {
-                message: format!("HTTP error {}: {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Unknown")),
-                url: url.to_string(),
-            });
-        }
-
-        let html = response.text().await.map_err(|e| WebSearchInternalError::ContentFetchError {
-            message: format!("Failed to read response body: {e}"),
-            url: url.to_string(),
-        })?;
-        let fetch_time = start_time.elapsed();
-
-        // Convert HTML to text using html2text for proper formatting
-        let text = from_read(html.as_bytes(), 80); // 80 character line width
-
-        let word_count = text.split_whitespace().count();
-        let summary = if word_count > 50 {
-            text.split_whitespace()
-                .take(50)
-                .collect::<Vec<_>>()
-                .join(" ")
-                + "..."
-        } else {
-            text.clone()
-        };
-
-        Ok(SearchResultContent {
-            markdown: text,
-            word_count,
-            fetch_time_ms: fetch_time.as_millis() as u64,
-            summary,
-        })
-    }
 }
 
 /// Response from SearXNG API
@@ -596,36 +612,24 @@ impl McpTool for WebSearchTool {
                     Ok(mut searxng_response) => {
                         let search_time = start_time.elapsed();
 
-                        // Optionally fetch content from each result
+                        // Optionally fetch content from each result using the new ContentFetcher
                         let mut content_fetch_stats = None;
 
                         if request.fetch_content.unwrap_or(true) {
-                            let content_start = Instant::now();
-                            let mut successful = 0;
-                            let mut failed = 0;
+                            let content_config = Self::load_content_fetch_config();
+                            let content_fetcher = ContentFetcher::new(content_config);
+                            
+                            let (processed_results, stats) = content_fetcher
+                                .fetch_search_results(searxng_response.results)
+                                .await;
 
-                            for result in &mut searxng_response.results {
-                                match search_tool.fetch_content(&result.url).await {
-                                    Ok(content) => {
-                                        result.content = Some(content);
-                                        successful += 1;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to fetch content from {}: {}",
-                                            result.url,
-                                            e
-                                        );
-                                        failed += 1;
-                                    }
-                                }
-                            }
-
+                            searxng_response.results = processed_results;
+                            
                             content_fetch_stats = Some(ContentFetchStats {
-                                attempted: searxng_response.results.len(),
-                                successful,
-                                failed,
-                                total_time_ms: content_start.elapsed().as_millis() as u64,
+                                attempted: stats.attempted,
+                                successful: stats.successful,
+                                failed: stats.failed,
+                                total_time_ms: stats.total_time_ms,
                             });
                         }
 
