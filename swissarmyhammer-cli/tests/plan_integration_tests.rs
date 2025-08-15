@@ -1169,10 +1169,7 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
             "Should have error severity label: {stderr}"
         );
 
-        assert!(
-            has_suggestions,
-            "Should have suggestions section: {stderr}"
-        );
+        assert!(has_suggestions, "Should have suggestions section: {stderr}");
 
         assert!(
             has_bullet_points,

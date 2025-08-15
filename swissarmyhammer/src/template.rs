@@ -1248,7 +1248,7 @@ mod tests {
     fn test_well_known_variables_issues_directory() {
         use std::env;
 
-        // Save original environment variable state if it exists  
+        // Save original environment variable state if it exists
         let original_env_var = env::var("issues_directory").ok();
 
         // Temporarily remove environment variable to test well-known variable behavior
@@ -1298,7 +1298,7 @@ mod tests {
     fn test_well_known_variables_can_be_overridden_by_env() {
         use std::env;
         use std::sync::atomic::{AtomicU64, Ordering};
-        
+
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -1323,7 +1323,7 @@ mod tests {
     fn test_well_known_variables_precedence() {
         use std::env;
         use std::sync::atomic::{AtomicU64, Ordering};
-        
+
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);

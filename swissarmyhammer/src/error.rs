@@ -548,6 +548,33 @@ pub enum PlanCommandError {
         /// The underlying IO error
         source: std::io::Error,
     },
+
+    /// Specification file has insufficient content
+    #[error("Specification file has insufficient content: {path} ({length} characters)")]
+    InsufficientContent {
+        /// The path of the specification file
+        path: String,
+        /// The length of the content in characters
+        length: usize,
+    },
+
+    /// Specification file has no headers
+    #[error("Specification file has no headers: {path}\nSuggestion: {suggestion}")]
+    NoHeaders {
+        /// The path of the specification file
+        path: String,
+        /// Suggestion for fixing the issue
+        suggestion: String,
+    },
+
+    /// Specification file may not be suitable for planning
+    #[error("Specification file may not be suitable for planning: {path}\nReason: {reason}")]
+    UnsuitableForPlanning {
+        /// The path of the specification file
+        path: String,
+        /// The reason why the file may not be suitable
+        reason: String,
+    },
 }
 
 /// Error severity levels for user-facing error messages
@@ -665,6 +692,40 @@ impl PlanCommandError {
                     • Try running with --debug for more details"
                 )
             }
+            PlanCommandError::InsufficientContent { path, length } => {
+                format!(
+                    "The specification file '{path}' is too short ({length} characters) to be a meaningful specification.\n\
+                    \n\
+                    Suggestions:\n\
+                    • Add more detail to your specification\n\
+                    • Include sections like overview, requirements, or goals\n\
+                    • Provide context and background information\n\
+                    • Consider what information would help someone implement this plan"
+                )
+            }
+            PlanCommandError::NoHeaders { path, suggestion } => {
+                format!(
+                    "The specification file '{path}' lacks markdown structure.\n\
+                    \n\
+                    Suggestions:\n\
+                    • {suggestion}\n\
+                    • Use # for main sections, ## for subsections\n\
+                    • Example structure: # Overview, ## Requirements, ## Implementation\n\
+                    • Well-structured documents are easier to process and understand"
+                )
+            }
+            PlanCommandError::UnsuitableForPlanning { path, reason } => {
+                format!(
+                    "The specification file '{path}' may not work well with the planning workflow.\n\
+                    Reason: {reason}\n\
+                    \n\
+                    Suggestions:\n\
+                    • Consider adding an overview or goal section\n\
+                    • Include requirements or feature descriptions\n\
+                    • Add background context for better planning\n\
+                    • Review the specification format guidelines"
+                )
+            }
         }
     }
 
@@ -679,6 +740,9 @@ impl PlanCommandError {
             PlanCommandError::EmptyPlanFile { .. } => ErrorSeverity::Warning,
             PlanCommandError::FileTooLarge { .. } => ErrorSeverity::Error,
             PlanCommandError::IssuesDirectoryNotWritable { .. } => ErrorSeverity::Error,
+            PlanCommandError::InsufficientContent { .. } => ErrorSeverity::Warning,
+            PlanCommandError::NoHeaders { .. } => ErrorSeverity::Warning,
+            PlanCommandError::UnsuitableForPlanning { .. } => ErrorSeverity::Warning,
         }
     }
 
@@ -1160,5 +1224,113 @@ mod tests {
         assert_eq!(ErrorSeverity::Critical, ErrorSeverity::Critical);
         assert_ne!(ErrorSeverity::Warning, ErrorSeverity::Error);
         assert_ne!(ErrorSeverity::Error, ErrorSeverity::Critical);
+    }
+
+    #[test]
+    fn test_plan_command_error_insufficient_content() {
+        let error = PlanCommandError::InsufficientContent {
+            path: "short.md".to_string(),
+            length: 25,
+        };
+
+        // Test error message
+        let msg = error.to_string();
+        assert!(
+            msg.contains("Specification file has insufficient content: short.md (25 characters)")
+        );
+
+        // Test severity - should be warning to allow processing with feedback
+        assert_eq!(error.severity(), ErrorSeverity::Warning);
+
+        // Test user guidance
+        let guidance = error.user_guidance();
+        assert!(guidance.contains("too short (25 characters)"));
+        assert!(guidance.contains("Add more detail to your specification"));
+        assert!(guidance.contains("Include sections like overview"));
+    }
+
+    #[test]
+    fn test_plan_command_error_no_headers() {
+        let error = PlanCommandError::NoHeaders {
+            path: "no-headers.md".to_string(),
+            suggestion: "Add markdown headers (# ## ###) to structure your specification"
+                .to_string(),
+        };
+
+        // Test error message
+        let msg = error.to_string();
+        assert!(msg.contains("Specification file has no headers: no-headers.md"));
+        assert!(msg.contains("Add markdown headers"));
+
+        // Test severity - should be warning
+        assert_eq!(error.severity(), ErrorSeverity::Warning);
+
+        // Test user guidance
+        let guidance = error.user_guidance();
+        assert!(guidance.contains("lacks markdown structure"));
+        assert!(guidance.contains("Use # for main sections"));
+        assert!(guidance.contains("## for subsections"));
+    }
+
+    #[test]
+    fn test_plan_command_error_unsuitable_for_planning() {
+        let error = PlanCommandError::UnsuitableForPlanning {
+            path: "unclear.md".to_string(),
+            reason: "Missing overview and requirements sections".to_string(),
+        };
+
+        // Test error message
+        let msg = error.to_string();
+        assert!(msg.contains("Specification file may not be suitable for planning: unclear.md"));
+        assert!(msg.contains("Missing overview and requirements sections"));
+
+        // Test severity - should be warning
+        assert_eq!(error.severity(), ErrorSeverity::Warning);
+
+        // Test user guidance
+        let guidance = error.user_guidance();
+        assert!(guidance.contains("may not work well with the planning workflow"));
+        assert!(guidance.contains("Consider adding an overview or goal section"));
+        assert!(guidance.contains("Include requirements or feature descriptions"));
+    }
+
+    #[test]
+    fn test_plan_command_error_new_types_display_with_color() {
+        let error = PlanCommandError::InsufficientContent {
+            path: "test.md".to_string(),
+            length: 50,
+        };
+
+        // Test with color - should show warning color
+        let display_color = error.display_to_user(true);
+        assert!(display_color.contains("\x1b[33mWarning:\x1b[0m")); // Yellow "Warning:"
+        assert!(display_color.contains("insufficient content"));
+
+        // Test without color
+        let display_no_color = error.display_to_user(false);
+        assert!(display_no_color.contains("Warning:"));
+        assert!(!display_no_color.contains("\x1b[")); // No escape sequences
+    }
+
+    #[test]
+    fn test_plan_command_error_severity_consistency() {
+        // Test that all new specification validation errors are warnings
+        let insufficient_content = PlanCommandError::InsufficientContent {
+            path: "test.md".to_string(),
+            length: 10,
+        };
+        assert_eq!(insufficient_content.severity(), ErrorSeverity::Warning);
+
+        let no_headers = PlanCommandError::NoHeaders {
+            path: "test.md".to_string(),
+            suggestion: "Add headers".to_string(),
+        };
+        assert_eq!(no_headers.severity(), ErrorSeverity::Warning);
+
+        let unsuitable = PlanCommandError::UnsuitableForPlanning {
+            path: "test.md".to_string(),
+            reason: "Test reason".to_string(),
+        };
+        assert_eq!(unsuitable.severity(), ErrorSeverity::Warning);
     }
 }
