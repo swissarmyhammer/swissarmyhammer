@@ -396,9 +396,11 @@ async fn run_plan(plan_filename: String) -> i32 {
     }
 
     // Create a FlowSubcommand::Run with the validated plan_filename variable
+    let plan_var = format!("plan_filename={}", validated_file.path.display());
+    
     let subcommand = FlowSubcommand::Run {
         workflow: "plan".to_string(),
-        vars: vec![format!("plan_filename={}", validated_file.path.display())],
+        vars: vec![plan_var],
         set: Vec::new(),
         interactive: false,
         dry_run: false,

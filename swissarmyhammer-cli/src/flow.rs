@@ -279,13 +279,16 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     })?;
 
     // Set initial variables
-    run.context.extend(variables);
+    run.context.extend(variables.clone());
 
-    // Store set variables in context for liquid template rendering
-    if !set_variables.is_empty() {
+    // Store both regular variables and set variables in context for liquid template rendering
+    let mut template_vars = variables;
+    template_vars.extend(set_variables);
+    
+    if !template_vars.is_empty() {
         run.context.insert(
             "_template_vars".to_string(),
-            serde_json::to_value(set_variables)?,
+            serde_json::to_value(template_vars)?,
         );
     }
 
