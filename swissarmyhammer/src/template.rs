@@ -1248,7 +1248,7 @@ mod tests {
     fn test_well_known_variables_issues_directory() {
         use std::env;
 
-        // Save original environment variable state if it exists  
+        // Save original environment variable state if it exists
         let original_env_var = env::var("issues_directory").ok();
 
         // Temporarily remove environment variable to test well-known variable behavior
@@ -1298,16 +1298,16 @@ mod tests {
     fn test_well_known_variables_can_be_overridden_by_env() {
         use std::env;
         use std::sync::atomic::{AtomicU64, Ordering};
-        
+
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let env_var_name = format!("test_issues_directory_{}", unique_id);
+        let env_var_name = format!("test_issues_directory_{unique_id}");
 
         // Set environment variable
         env::set_var(&env_var_name, "/env/issues/path");
 
-        let template = Template::new(&format!("Issues: {{{{ {} }}}}", env_var_name)).unwrap();
+        let template = Template::new(&format!("Issues: {{{{ {env_var_name} }}}}")).unwrap();
         let args = HashMap::new();
 
         let result = template.render_with_config(&args).unwrap();
@@ -1323,16 +1323,16 @@ mod tests {
     fn test_well_known_variables_precedence() {
         use std::env;
         use std::sync::atomic::{AtomicU64, Ordering};
-        
+
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let env_var_name = format!("test_precedence_var_{}", unique_id);
+        let env_var_name = format!("test_precedence_var_{unique_id}");
 
         // Set environment variable
         env::set_var(&env_var_name, "/env/path");
 
-        let template = Template::new(&format!("Issues: {{{{ {} }}}}", env_var_name)).unwrap();
+        let template = Template::new(&format!("Issues: {{{{ {env_var_name} }}}}")).unwrap();
         let mut args = HashMap::new();
         args.insert(env_var_name.clone(), "/arg/path".to_string());
 

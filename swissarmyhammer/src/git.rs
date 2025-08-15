@@ -1734,7 +1734,7 @@ mod tests {
 
         // Save original directory and restore it safely at the end
         let original_dir = std::env::current_dir().unwrap();
-        
+
         // Use a closure to ensure directory is restored even if test panics
         let test_result = std::panic::catch_unwind(|| {
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -1761,7 +1761,7 @@ mod tests {
 
         // Always try to restore the original directory, ignoring errors
         let _ = std::env::set_current_dir(&original_dir);
-        
+
         // Re-panic if the test failed
         if let Err(panic_payload) = test_result {
             std::panic::resume_unwind(panic_payload);

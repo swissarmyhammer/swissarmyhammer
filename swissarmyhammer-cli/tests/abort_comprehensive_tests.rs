@@ -496,9 +496,7 @@ transitions:
                     );
                 } else {
                     // Might succeed if abort file was cleaned up by another instance
-                    println!(
-                        "Thread {i} succeeded (abort file may have been cleaned up)"
-                    );
+                    println!("Thread {i} succeeded (abort file may have been cleaned up)");
                 }
             }
             Err(e) => panic!("Thread {i} failed to execute command: {e}"),
