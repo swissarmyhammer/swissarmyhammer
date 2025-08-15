@@ -475,42 +475,40 @@ impl WebSearchTool {
         privacy_manager.apply_jitter().await;
 
         // Build request with privacy features
-        let mut request_builder = client
-            .get(url)
-            .timeout(Duration::from_secs(15));
+        let mut request_builder = client.get(url).timeout(Duration::from_secs(15));
 
         // Apply User-Agent from privacy manager
         if let Some(user_agent) = privacy_manager.get_user_agent() {
             request_builder = request_builder.header("User-Agent", user_agent);
         } else {
             // Fallback User-Agent if privacy rotation is disabled
-            request_builder = request_builder.header("User-Agent", "SwissArmyHammer/1.0 (Privacy-Focused Web Search)");
+            request_builder = request_builder.header(
+                "User-Agent",
+                "SwissArmyHammer/1.0 (Privacy-Focused Web Search)",
+            );
         }
 
         // Apply privacy headers
         request_builder = privacy_manager.apply_privacy_headers(request_builder);
 
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    WebSearchInternalError::NetworkError {
-                        message: "Request timeout (15 seconds)".to_string(),
-                        instance: instance.to_string(),
-                    }
-                } else if e.is_connect() {
-                    WebSearchInternalError::NetworkError {
-                        message: format!("Connection failed: {e}"),
-                        instance: instance.to_string(),
-                    }
-                } else {
-                    WebSearchInternalError::NetworkError {
-                        message: format!("Network error: {e}"),
-                        instance: instance.to_string(),
-                    }
+        let response = request_builder.send().await.map_err(|e| {
+            if e.is_timeout() {
+                WebSearchInternalError::NetworkError {
+                    message: "Request timeout (15 seconds)".to_string(),
+                    instance: instance.to_string(),
                 }
-            })?;
+            } else if e.is_connect() {
+                WebSearchInternalError::NetworkError {
+                    message: format!("Connection failed: {e}"),
+                    instance: instance.to_string(),
+                }
+            } else {
+                WebSearchInternalError::NetworkError {
+                    message: format!("Network error: {e}"),
+                    instance: instance.to_string(),
+                }
+            }
+        })?;
 
         if !response.status().is_success() {
             return Err(WebSearchInternalError::InstanceError {
@@ -786,14 +784,18 @@ impl McpTool for WebSearchTool {
         let mut last_error = None;
 
         // Use privacy manager to select distributed instances if enabled
-        let available_instances: Vec<String> = instance_manager.get_instances().await
+        let available_instances: Vec<String> = instance_manager
+            .get_instances()
+            .await
             .into_iter()
             .map(|i| i.url)
             .collect();
 
         for _attempt in 0..max_attempts {
             // First try to get a privacy-distributed instance, fallback to instance manager
-            let instance_url = if let Some(distributed_url) = privacy_manager.select_distributed_instance(&available_instances) {
+            let instance_url = if let Some(distributed_url) =
+                privacy_manager.select_distributed_instance(&available_instances)
+            {
                 distributed_url
             } else if let Some(instance) = instance_manager.get_next_instance().await {
                 instance.url.clone()
@@ -803,83 +805,89 @@ impl McpTool for WebSearchTool {
 
             attempted_instances.push(instance_url.clone());
 
-            match search_tool.perform_search(&instance_url, &request, &privacy_manager).await {
-                    Ok(mut searxng_response) => {
-                        let search_time = start_time.elapsed();
+            match search_tool
+                .perform_search(&instance_url, &request, &privacy_manager)
+                .await
+            {
+                Ok(mut searxng_response) => {
+                    let search_time = start_time.elapsed();
 
-                        // Record instance usage for privacy distribution
-                        privacy_manager.record_instance_use(&instance_url);
+                    // Record instance usage for privacy distribution
+                    privacy_manager.record_instance_use(&instance_url);
 
-                        // Optionally fetch content from each result using the new ContentFetcher
-                        let mut content_fetch_stats = None;
+                    // Optionally fetch content from each result using the new ContentFetcher
+                    let mut content_fetch_stats = None;
 
-                        if request.fetch_content.unwrap_or(true) {
-                            let content_config = Self::load_content_fetch_config();
-                            let content_fetcher = ContentFetcher::new(content_config);
+                    if request.fetch_content.unwrap_or(true) {
+                        let content_config = Self::load_content_fetch_config();
+                        let content_fetcher = ContentFetcher::new(content_config);
 
-                            let (processed_results, stats) = content_fetcher
-                                .fetch_search_results_with_privacy(searxng_response.results, &privacy_manager)
-                                .await;
+                        let (processed_results, stats) = content_fetcher
+                            .fetch_search_results_with_privacy(
+                                searxng_response.results,
+                                &privacy_manager,
+                            )
+                            .await;
 
-                            searxng_response.results = processed_results;
+                        searxng_response.results = processed_results;
 
-                            content_fetch_stats = Some(ContentFetchStats {
-                                attempted: stats.attempted,
-                                successful: stats.successful,
-                                failed: stats.failed,
-                                total_time_ms: stats.total_time_ms,
-                            });
-                        }
-
-                        let response = WebSearchResponse {
-                            results: searxng_response.results,
-                            metadata: SearchMetadata {
-                                query: request.query.clone(),
-                                category: request.category.unwrap_or_default(),
-                                language: request.language.unwrap_or_else(|| "en".to_string()),
-                                results_count: request.results_count.unwrap_or(10),
-                                search_time_ms: search_time.as_millis() as u64,
-                                instance_used: instance_url.clone(),
-                                total_results: searxng_response.total_results,
-                                engines_used: searxng_response.engines_used,
-                                content_fetch_stats,
-                                fetch_content: request.fetch_content.unwrap_or(true),
-                            },
-                        };
-
-                        tracing::info!(
-                            "Web search completed: found {} results for '{}' in {:?}",
-                            response.results.len(),
-                            response.metadata.query,
-                            search_time
-                        );
-
-                        return Ok(BaseToolImpl::create_success_response(
-                            serde_json::to_string_pretty(&response).map_err(|e| {
-                                McpError::internal_error(
-                                    format!("Failed to serialize response: {e}"),
-                                    None,
-                                )
-                            })?,
-                        ));
+                        content_fetch_stats = Some(ContentFetchStats {
+                            attempted: stats.attempted,
+                            successful: stats.successful,
+                            failed: stats.failed,
+                            total_time_ms: stats.total_time_ms,
+                        });
                     }
-                    Err(e) => {
-                        tracing::warn!("Search failed on instance {}: {}", instance_url, e);
 
-                        // Mark instance as failed for health tracking
-                        instance_manager.mark_instance_failed(&instance_url).await;
+                    let response = WebSearchResponse {
+                        results: searxng_response.results,
+                        metadata: SearchMetadata {
+                            query: request.query.clone(),
+                            category: request.category.unwrap_or_default(),
+                            language: request.language.unwrap_or_else(|| "en".to_string()),
+                            results_count: request.results_count.unwrap_or(10),
+                            search_time_ms: search_time.as_millis() as u64,
+                            instance_used: instance_url.clone(),
+                            total_results: searxng_response.total_results,
+                            engines_used: searxng_response.engines_used,
+                            content_fetch_stats,
+                            fetch_content: request.fetch_content.unwrap_or(true),
+                        },
+                    };
 
-                        // Check if it's a rate limit error and handle appropriately
-                        if e.to_string().contains("rate limit") || e.to_string().contains("429") {
-                            instance_manager
-                                .mark_instance_rate_limited(&instance_url, Duration::from_secs(300))
-                                .await;
-                        }
+                    tracing::info!(
+                        "Web search completed: found {} results for '{}' in {:?}",
+                        response.results.len(),
+                        response.metadata.query,
+                        search_time
+                    );
 
-                        last_error = Some(e.to_string());
-                        continue;
-                    }
+                    return Ok(BaseToolImpl::create_success_response(
+                        serde_json::to_string_pretty(&response).map_err(|e| {
+                            McpError::internal_error(
+                                format!("Failed to serialize response: {e}"),
+                                None,
+                            )
+                        })?,
+                    ));
                 }
+                Err(e) => {
+                    tracing::warn!("Search failed on instance {}: {}", instance_url, e);
+
+                    // Mark instance as failed for health tracking
+                    instance_manager.mark_instance_failed(&instance_url).await;
+
+                    // Check if it's a rate limit error and handle appropriately
+                    if e.to_string().contains("rate limit") || e.to_string().contains("429") {
+                        instance_manager
+                            .mark_instance_rate_limited(&instance_url, Duration::from_secs(300))
+                            .await;
+                    }
+
+                    last_error = Some(e.to_string());
+                    continue;
+                }
+            }
         }
 
         // All instances failed - create structured error

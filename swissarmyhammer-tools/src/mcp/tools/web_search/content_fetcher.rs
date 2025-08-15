@@ -255,7 +255,9 @@ impl ContentFetcher {
                 let privacy_manager = privacy_manager.clone(); // PrivacyManager needs to implement Clone
                 tokio::spawn(async move {
                     let _permit = semaphore.acquire().await.unwrap();
-                    fetcher.fetch_single_result_with_privacy(result, &privacy_manager).await
+                    fetcher
+                        .fetch_single_result_with_privacy(result, &privacy_manager)
+                        .await
                 })
             })
             .collect::<Vec<_>>();
@@ -381,7 +383,10 @@ impl ContentFetcher {
             request_builder = request_builder.header("User-Agent", user_agent);
         } else {
             // Fallback User-Agent if privacy rotation is disabled
-            request_builder = request_builder.header("User-Agent", "SwissArmyHammer/1.0 (Privacy-Focused Content Fetcher)");
+            request_builder = request_builder.header(
+                "User-Agent",
+                "SwissArmyHammer/1.0 (Privacy-Focused Content Fetcher)",
+            );
         }
 
         // Apply privacy headers
@@ -1012,7 +1017,6 @@ impl ContentFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_content_fetcher_creation() {
