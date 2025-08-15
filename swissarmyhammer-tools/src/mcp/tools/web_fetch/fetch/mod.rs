@@ -51,8 +51,6 @@ pub struct RedirectInfo {
 pub struct WebFetchTool {
     /// Security validator for URL and domain validation
     security_validator: SecurityValidator,
-    /// HTML converter for converting HTML to markdown
-    html_converter: HtmlConverter,
     /// Shared HTTP client with connection pooling for optimal performance
     http_client: reqwest::Client,
 }
@@ -68,19 +66,10 @@ impl WebFetchTool {
     pub fn new() -> Self {
         Self {
             security_validator: SecurityValidator::new(),
-            html_converter: Self::create_optimized_html_converter(),
             http_client: Self::create_optimized_http_client(),
         }
     }
 
-    /// Creates an optimized HTML converter with performance-tuned settings
-    fn create_optimized_html_converter() -> HtmlConverter {
-        // Note: Since HtmlConverter::new() doesn't take a config parameter,
-        // we'll use the default converter. In a real implementation, this would
-        // configure the converter with optimal settings for performance.
-        // The performance optimizations are instead handled in our conversion method.
-        HtmlConverter::new()
-    }
 
     /// Creates an optimized HTTP client with connection pooling and performance settings
     fn create_optimized_http_client() -> reqwest::Client {
@@ -285,8 +274,7 @@ impl WebFetchTool {
             // Check size limit before extending vector
             if total_bytes > max_length {
                 return Err(format!(
-                    "Content too large: {} bytes exceeds limit of {} bytes",
-                    total_bytes, max_length
+                    "Content too large: {total_bytes} bytes exceeds limit of {max_length} bytes"
                 )
                 .into());
             }
@@ -336,8 +324,9 @@ impl WebFetchTool {
                     "HTML content too large for optimal conversion: {} bytes, using fallback",
                     content.len()
                 );
-                return Ok(format!("```html\n{}\n\n[Content truncated for performance - original length: {} characters]\n```", 
-                    &content[..10000], content.len()));
+                let content_truncated = &content[..10000];
+                let content_len = content.len();
+                return Ok(format!("```html\n{content_truncated}\n\n[Content truncated for performance - original length: {content_len} characters]\n```"));
             }
 
             // For HTML content, use optimized conversion with timeout protection
@@ -385,9 +374,9 @@ impl WebFetchTool {
                 }
                 Err(_) => {
                     tracing::warn!("HTML conversion timed out after 30s, using fallback");
-                    Ok(format!("```html\n{}\n\n[Conversion timed out - original length: {} characters]\n```",
-                        if content.len() > 1000 { &content[..1000] } else { content },
-                        content.len()))
+                    let content_snippet = if content.len() > 1000 { &content[..1000] } else { content };
+                    let content_len = content.len();
+                    Ok(format!("```html\n{content_snippet}\n\n[Conversion timed out - original length: {content_len} characters]\n```"))
                 }
             }
         } else {
@@ -400,7 +389,7 @@ impl WebFetchTool {
                     content.len()
                 )
             } else {
-                format!("```\n{}\n```", content)
+                format!("```\n{content}\n```")
             };
             Ok(result)
         }
@@ -515,7 +504,7 @@ impl McpTool for WebFetchTool {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": format!("Request timeout in seconds (optional, defaults to {} seconds)", DEFAULT_TIMEOUT_SECONDS),
+                    "description": format!("Request timeout in seconds (optional, defaults to {DEFAULT_TIMEOUT_SECONDS} seconds)"),
                     "minimum": MIN_TIMEOUT_SECONDS,
                     "maximum": MAX_TIMEOUT_SECONDS,
                     "default": DEFAULT_TIMEOUT_SECONDS
@@ -527,7 +516,7 @@ impl McpTool for WebFetchTool {
                 },
                 "max_content_length": {
                     "type": "integer",
-                    "description": format!("Maximum content length in bytes (optional, defaults to {} bytes)", DEFAULT_CONTENT_LENGTH_BYTES),
+                    "description": format!("Maximum content length in bytes (optional, defaults to {DEFAULT_CONTENT_LENGTH_BYTES} bytes)"),
                     "minimum": MIN_CONTENT_LENGTH_BYTES,
                     "maximum": MAX_CONTENT_LENGTH_BYTES,
                     "default": DEFAULT_CONTENT_LENGTH_BYTES
@@ -839,7 +828,7 @@ impl WebFetchTool {
         let response = serde_json::json!({
             "content": [{
                 "type": "text",
-                "text": format!("Failed to fetch content: {}", error)
+                "text": format!("Failed to fetch content: {error}")
             }],
             "is_error": true,
             "metadata": metadata
@@ -1908,7 +1897,8 @@ mod tests {
     #[test]
     fn test_very_long_parameters() {
         // Test very long URL
-        let long_url = format!("https://example.com/{}", "a".repeat(2000));
+        let repeated_a = "a".repeat(2000);
+        let long_url = format!("https://example.com/{repeated_a}");
         let mut args = serde_json::Map::new();
         args.insert(
             "url".to_string(),
@@ -1920,7 +1910,8 @@ mod tests {
         assert_eq!(request.url, long_url);
 
         // Test very long user agent
-        let long_user_agent = format!("VeryLongBot/{}", "x".repeat(1000));
+        let repeated_x = "x".repeat(1000);
+        let long_user_agent = format!("VeryLongBot/{repeated_x}");
         let mut args = serde_json::Map::new();
         args.insert(
             "url".to_string(),
@@ -2658,7 +2649,7 @@ mod tests {
             assert!(metadata["word_count"].is_number());
             assert!(metadata["headers"].is_object());
         } else {
-            assert!(false, "Expected text content in response");
+            panic!("Expected text content in response");
         }
     }
 
@@ -3257,7 +3248,7 @@ mod tests {
                 match request_result {
                     Err(_) => {
                         // Expected - security validation should block these URLs
-                        println!("✓ Successfully blocked malicious URL: {}", url);
+                        println!("✓ Successfully blocked malicious URL: {url}");
                     }
                     Ok(request) => {
                         // If parsing succeeds, URL validation should still catch it
@@ -3265,7 +3256,7 @@ mod tests {
                         let result = tool.security_validator.validate_url(&request.url);
                         assert!(result.is_err(),
                             "Security validator should block malicious URL: {} but validation passed", url);
-                        println!("✓ Security validator blocked malicious URL: {}", url);
+                        println!("✓ Security validator blocked malicious URL: {url}");
                     }
                 }
             }
@@ -3300,7 +3291,7 @@ mod tests {
                 );
 
                 let request: WebFetchRequest = BaseToolImpl::parse_arguments(args)
-                    .expect(&format!("Valid URL should parse successfully: {}", url));
+                    .unwrap_or_else(|_| panic!("Valid URL should parse successfully: {url}"));
 
                 // Validate URL through security validator
                 let validation_result = tool.security_validator.validate_url(&request.url);
@@ -3311,7 +3302,7 @@ mod tests {
                     validation_result
                 );
 
-                println!("✓ Valid public URL allowed: {}", url);
+                println!("✓ Valid public URL allowed: {url}");
             }
         }
 
@@ -3347,7 +3338,7 @@ mod tests {
                     result
                 );
 
-                println!("✓ Successfully blocked invalid scheme: {}", url);
+                println!("✓ Successfully blocked invalid scheme: {url}");
             }
         }
 
@@ -3387,7 +3378,7 @@ mod tests {
                         println!("✓ Successfully blocked edge case URL: {}", url);
                     }
                     Ok(_) => {
-                        assert!(false, "Edge case URL should have been blocked: {}", url);
+                        panic!("Edge case URL should have been blocked: {url}");
                     }
                     Err(e) => {
                         println!(
@@ -3460,7 +3451,7 @@ mod tests {
             ];
 
             for (ip_str, should_be_blocked) in private_ips {
-                let url = format!("http://{}", ip_str);
+                let url = format!("http://{ip_str}");
                 let result = tool.security_validator.validate_url(&url);
 
                 if should_be_blocked {
@@ -3917,7 +3908,7 @@ mod tests {
 
         #[test]
         fn test_html_to_markdown_conversion_edge_cases() {
-            let tool = WebFetchTool::new();
+            let _tool = WebFetchTool::new();
 
             // Test various HTML edge cases that could cause issues
             let html_test_cases = vec![
@@ -3956,7 +3947,8 @@ mod tests {
 
             for (html_content, should_succeed) in html_test_cases {
                 // Test HTML conversion directly through the HtmlConverter
-                let result = tool.html_converter.convert_html(html_content);
+                let converter = HtmlConverter::new();
+                let result = converter.convert_html(html_content);
 
                 if should_succeed {
                     match result {
@@ -4007,10 +3999,11 @@ mod tests {
             ];
 
             for (content, should_succeed) in encoding_test_cases {
-                let html_content = format!("<html><body><p>{}</p></body></html>", content);
+                let html_content = format!("<html><body><p>{content}</p></body></html>");
 
-                let tool = WebFetchTool::new();
-                let result = tool.html_converter.convert_html(&html_content);
+                let _tool = WebFetchTool::new();
+                let converter = HtmlConverter::new();
+                let result = converter.convert_html(&html_content);
 
                 if should_succeed {
                     match result {
@@ -4107,7 +4100,7 @@ mod tests {
         #[test]
         fn test_markdown_processing_security() {
             // Test that markdown processing doesn't introduce security issues
-            let tool = WebFetchTool::new();
+            let _tool = WebFetchTool::new();
 
             let potentially_dangerous_html = vec![
                 // Script injection attempts
@@ -4133,7 +4126,8 @@ mod tests {
             ];
 
             for dangerous_html in potentially_dangerous_html {
-                let result = tool.html_converter.convert_html(dangerous_html);
+                let converter = HtmlConverter::new();
+                let result = converter.convert_html(dangerous_html);
 
                 match result {
                     Ok(markdown) => {
@@ -4169,7 +4163,7 @@ mod tests {
 
         #[test]
         fn test_large_html_content_handling() {
-            let tool = WebFetchTool::new();
+            let _tool = WebFetchTool::new();
 
             // Test progressively larger content to see how it handles size
             let size_tests = vec![
@@ -4193,7 +4187,8 @@ mod tests {
 
                 println!("Testing HTML content of size: {} bytes", large_html.len());
 
-                let result = tool.html_converter.convert_html(&large_html);
+                let converter = HtmlConverter::new();
+                let result = converter.convert_html(&large_html);
 
                 match result {
                     Ok(markdown) => {
@@ -4224,7 +4219,7 @@ mod tests {
 
         #[test]
         fn test_html_structure_edge_cases() {
-            let tool = WebFetchTool::new();
+            let _tool = WebFetchTool::new();
 
             let structure_tests = vec![
                 // Missing closing tags
@@ -4275,7 +4270,8 @@ mod tests {
             ];
 
             for (html_content, description) in structure_tests {
-                let result = tool.html_converter.convert_html(html_content);
+                let converter = HtmlConverter::new();
+                let result = converter.convert_html(html_content);
 
                 match result {
                     Ok(markdown) => {
@@ -4424,7 +4420,7 @@ mod tests {
             // Simulate processing a large redirect chain
             let redirect_steps: Vec<RedirectStep> = (0..20)
                 .map(|i| RedirectStep {
-                    url: format!("https://example.com/step{}", i),
+                    url: format!("https://example.com/step{i}"),
                     status_code: if i < 19 { 301 } else { 200 },
                 })
                 .collect();
@@ -4439,7 +4435,11 @@ mod tests {
             let formatted_chain: Vec<String> = redirect_info
                 .redirect_chain
                 .iter()
-                .map(|step| format!("{} -> {}", step.url, step.status_code))
+                .map(|step| {
+                    let url = &step.url;
+                    let status_code = step.status_code;
+                    format!("{url} -> {status_code}")
+                })
                 .collect();
 
             let duration = start.elapsed();
@@ -4459,7 +4459,7 @@ mod tests {
             // Test metadata construction for large responses
             let content = "word ".repeat(100000); // 500KB of content
             let headers: std::collections::HashMap<String, String> = (0..50)
-                .map(|i| (format!("header-{}", i), format!("value-{}", i)))
+                .map(|i| (format!("header-{i}"), format!("value-{i}")))
                 .collect();
 
             let redirect_info = RedirectInfo {
