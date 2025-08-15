@@ -319,7 +319,7 @@ impl InstanceManager {
         let fallback_urls = [
             // Try a mix of lesser-known but stable instances
             "https://searx.be",
-            "https://search.nerdvpn.de", 
+            "https://search.nerdvpn.de",
             "https://searx.thefloatinglab.world",
             "https://sx.catgirl.cloud",
             "https://search.charliewhiskey.net",

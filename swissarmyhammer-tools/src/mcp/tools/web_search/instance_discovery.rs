@@ -124,14 +124,11 @@ struct InstanceInfo {
     // HTTP grade information
     http: Option<HttpInfo>,
     // Timing information with search performance
-    timing: Option<TimingInfo>, 
-    // Network information
-    network: Option<NetworkInfo>,
+    timing: Option<TimingInfo>,
     // Uptime statistics
     uptime: Option<UptimeInfo>,
     // Version and generator info
     generator: Option<String>,
-    version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,11 +151,6 @@ struct SearchTimingInfo {
 #[derive(Debug, Deserialize)]
 struct AllTimingInfo {
     median: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct NetworkInfo {
-    asn_privacy: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,7 +296,13 @@ impl InstanceDiscovery {
     }
 
     /// Checks if an instance meets our quality criteria
-    fn meets_quality_criteria(&self, grade: &str, uptime: f32, response_time: u64, success_percentage: f64) -> bool {
+    fn meets_quality_criteria(
+        &self,
+        grade: &str,
+        uptime: f32,
+        response_time: u64,
+        success_percentage: f64,
+    ) -> bool {
         // Only accept A+, A, and B grade instances
         let acceptable_grades = ["A+", "A", "B"];
         if !acceptable_grades.contains(&grade) {
@@ -470,7 +468,7 @@ mod tests {
         // Should pass - A+ grade, good uptime, fast response, good success rate
         assert!(discovery.meets_quality_criteria("A+", 98.5, 1200, 95.0));
 
-        // Should pass - A grade, minimum uptime, acceptable response time, decent success rate  
+        // Should pass - A grade, minimum uptime, acceptable response time, decent success rate
         assert!(discovery.meets_quality_criteria("A", 80.0, 10000, 70.0));
 
         // Should pass - B grade, good stats
@@ -513,8 +511,6 @@ mod tests {
                     uptime_year: Some(98.5),
                 }),
                 generator: Some("searxng".to_string()),
-                network: None,
-                version: None,
             },
         );
 
@@ -537,8 +533,6 @@ mod tests {
                     uptime_year: Some(92.0),
                 }),
                 generator: Some("searxng".to_string()),
-                network: None,
-                version: None,
             },
         );
 
@@ -561,8 +555,6 @@ mod tests {
                     uptime_year: Some(60.0),
                 }),
                 generator: Some("searxng".to_string()),
-                network: None,
-                version: None,
             },
         );
 
@@ -585,8 +577,6 @@ mod tests {
                     uptime_year: Some(98.0),
                 }),
                 generator: None, // No generator info
-                network: None,
-                version: None,
             },
         );
 
@@ -609,8 +599,6 @@ mod tests {
                     uptime_year: Some(98.0),
                 }),
                 generator: Some("searxng".to_string()),
-                network: None,
-                version: None,
             },
         );
 

@@ -74,11 +74,11 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
             // Convert safe_search from integer to enum variant string (capitalized)
             let safe_search_level = match safe_search {
                 0 => "Off",
-                1 => "Moderate", 
+                1 => "Moderate",
                 2 => "Strict",
                 _ => "Moderate", // Default to Moderate for invalid values
             };
-            
+
             let mut args_vec = vec![
                 ("query", json!(query)),
                 ("results_count", json!(results)),
@@ -91,7 +91,7 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
             let category_variant = match category.as_str() {
                 "general" => "general",
                 "images" => "images",
-                "videos" => "videos", 
+                "videos" => "videos",
                 "news" => "news",
                 "map" => "map",
                 "music" => "music",
@@ -100,7 +100,7 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
                 "files" => "files",
                 _ => "general", // Default to general for unknown categories
             };
-            
+
             // Add category to arguments (always include it)
             args_vec.push(("category", json!(category_variant)));
 
@@ -108,11 +108,11 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
             if !time_range.is_empty() {
                 let time_range_variant = match time_range.as_str() {
                     "day" => "day",
-                    "week" => "week", 
+                    "week" => "week",
                     "month" => "month",
                     "year" => "year",
                     "all" | "" => "", // All time range is represented as empty string
-                    _ => "", // Default to empty string (all time) for unknown values
+                    _ => "",          // Default to empty string (all time) for unknown values
                 };
                 args_vec.push(("time_range", json!(time_range_variant)));
             }
