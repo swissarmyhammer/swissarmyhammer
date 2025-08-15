@@ -3,13 +3,20 @@ title: Do Code Review
 description: Code up the code review
 ---
 
+## Goal
+
+You job is to code up the needed changes in the code review.
 
 {% render "principals" %}
 {% render "coding_standards" %}
 
+## Rules
+
+{% render "workflow_guards" %}
+
 ## Process
 
-{% render "issue/on_worktree" %}
+{% render "issue/assert_on_worktree" %}
 {% render "todo", todo_file: "./CODE_REVIEW.md" %}
 - Use Test Driven Development and implement your improvements
 - DO NOT commit to git
