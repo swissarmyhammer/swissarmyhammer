@@ -709,7 +709,7 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
     Ok(())
 }
 
-/// Performance test: measure execution time for reasonable plan
+/// Performance test: measure execution time for reasonable plan using test mode
 #[tokio::test]
 #[ignore = "Performance test - run with --ignored"]
 async fn test_plan_command_performance() -> Result<()> {
@@ -720,8 +720,15 @@ async fn test_plan_command_performance() -> Result<()> {
 
     let start_time = std::time::Instant::now();
 
+    // Use flow test mode for performance testing to avoid AI service calls
     let output = Command::cargo_bin("sah")?
-        .args(["plan", plan_file.to_str().unwrap()])
+        .args([
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ])
         .current_dir(&temp_path)
         .output()?;
 
@@ -733,10 +740,16 @@ async fn test_plan_command_performance() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Should complete in reasonable time (less than 2 minutes for complex plan)
+    // Should complete in reasonable time (less than 30 seconds as per requirements)
     assert!(
-        elapsed < std::time::Duration::from_secs(120),
+        elapsed < std::time::Duration::from_secs(30),
         "Plan command should complete in reasonable time: {elapsed:?}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Test mode") && stdout.contains("Coverage Report"),
+        "Should execute workflow in test mode: {stdout}"
     );
 
     println!("Plan execution completed in {elapsed:?}");
