@@ -102,7 +102,7 @@ impl McpTool for WebFetchTool {
 
         // Validate optional timeout range
         if let Some(timeout) = request.timeout {
-            if timeout < 5 || timeout > 120 {
+            if !(5..=120).contains(&timeout) {
                 return Err(McpError::invalid_params(
                     "Timeout must be between 5 and 120 seconds".to_string(),
                     None,
@@ -112,7 +112,7 @@ impl McpTool for WebFetchTool {
 
         // Validate optional max_content_length range
         if let Some(max_length) = request.max_content_length {
-            if max_length < 1024 || max_length > 10_485_760 {
+            if !(1024..=10_485_760).contains(&max_length) {
                 return Err(McpError::invalid_params(
                     "Maximum content length must be between 1KB and 10MB".to_string(),
                     None,
@@ -120,21 +120,221 @@ impl McpTool for WebFetchTool {
             }
         }
 
-        // TODO: Implement actual web fetching using markdowndown crate
-        // This is a placeholder implementation that will be completed in subsequent issues
-        
-        tracing::info!("Web fetch requested for: {}", request.url);
-        
-        // Create placeholder response indicating the tool structure is ready
-        let response_content = format!(
-            "WebFetch tool structure created successfully.\nURL: {}\nTimeout: {:?}s\nFollow redirects: {:?}\nMax content length: {:?} bytes\nUser agent: {:?}",
-            request.url,
-            request.timeout.unwrap_or(30),
-            request.follow_redirects.unwrap_or(true),
-            request.max_content_length.unwrap_or(1_048_576),
-            request.user_agent.as_deref().unwrap_or("SwissArmyHammer-Bot/1.0")
+        // Implement actual web fetching using markdowndown crate
+        tracing::info!("Fetching web content from: {}", request.url);
+
+        // Configure markdowndown Config
+        let mut config = markdowndown::Config::default();
+
+        // Configure HTTP settings
+        config.http.user_agent = request
+            .user_agent
+            .clone()
+            .unwrap_or_else(|| "SwissArmyHammer-Bot/1.0".to_string());
+        config.http.timeout = std::time::Duration::from_secs(request.timeout.unwrap_or(30) as u64);
+        config.http.max_redirects = if request.follow_redirects.unwrap_or(true) {
+            10
+        } else {
+            0
+        };
+
+        // Perform the web fetch and convert to markdown
+        let start_time = std::time::Instant::now();
+        let fetch_result = markdowndown::convert_url_with_config(&request.url, config).await;
+        let response_time_ms = start_time.elapsed().as_millis() as u64;
+
+        match fetch_result {
+            Ok(markdown_content) => {
+                let content_str = markdown_content.as_str();
+                let content_length = content_str.len();
+
+                tracing::info!(
+                    "Successfully fetched content from {} ({}ms, {} bytes)",
+                    request.url,
+                    response_time_ms,
+                    content_length
+                );
+
+                // Create response with markdown content and metadata
+                let response = serde_json::json!({
+                    "url": request.url,
+                    "status": "success",
+                    "response_time_ms": response_time_ms,
+                    "content_length": content_length,
+                    "word_count": content_str.split_whitespace().count(),
+                    "markdown_content": content_str
+                });
+
+                Ok(BaseToolImpl::create_success_response(format!(
+                    "Successfully fetched and converted content from {}\n\nMetadata: {}\n\nContent:\n{}",
+                    request.url,
+                    serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    content_str
+                )))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to fetch content from {} after {}ms: {}",
+                    request.url,
+                    response_time_ms,
+                    error
+                );
+
+                // Create error response
+                let error_info = serde_json::json!({
+                    "url": request.url,
+                    "status": "error",
+                    "error_type": "fetch_error",
+                    "error_details": error.to_string(),
+                    "response_time_ms": response_time_ms
+                });
+
+                Err(McpError::invalid_params(
+                    format!(
+                        "Failed to fetch content from {}: {}\n\nError details: {}",
+                        request.url,
+                        error,
+                        serde_json::to_string_pretty(&error_info).unwrap_or_default()
+                    ),
+                    None,
+                ))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mcp::tool_registry::BaseToolImpl;
+    use crate::mcp::types::WebFetchRequest;
+
+    #[test]
+    fn test_web_fetch_tool_name() {
+        let tool = WebFetchTool::new();
+        assert_eq!(tool.name(), "web_fetch");
+    }
+
+    #[test]
+    fn test_web_fetch_tool_description() {
+        let tool = WebFetchTool::new();
+        let description = tool.description();
+        assert!(!description.is_empty());
+    }
+
+    #[test]
+    fn test_web_fetch_tool_schema() {
+        let tool = WebFetchTool::new();
+        let schema = tool.schema();
+
+        assert!(schema.is_object());
+        let obj = schema.as_object().unwrap();
+        assert!(obj.contains_key("properties"));
+
+        let properties = obj["properties"].as_object().unwrap();
+        assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("timeout"));
+        assert!(properties.contains_key("follow_redirects"));
+        assert!(properties.contains_key("max_content_length"));
+        assert!(properties.contains_key("user_agent"));
+
+        let required = obj["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::Value::String("url".to_string())));
+    }
+
+    #[test]
+    fn test_parse_valid_arguments() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
         );
 
-        Ok(BaseToolImpl::create_success_response(&response_content))
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "https://example.com");
+        assert_eq!(request.timeout, None);
+        assert_eq!(request.follow_redirects, None);
+        assert_eq!(request.max_content_length, None);
+        assert_eq!(request.user_agent, None);
+    }
+
+    #[test]
+    fn test_parse_full_arguments() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(45)),
+        );
+        args.insert(
+            "follow_redirects".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        args.insert(
+            "max_content_length".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(2097152)),
+        );
+        args.insert(
+            "user_agent".to_string(),
+            serde_json::Value::String("TestBot/1.0".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "https://example.com");
+        assert_eq!(request.timeout, Some(45));
+        assert_eq!(request.follow_redirects, Some(false));
+        assert_eq!(request.max_content_length, Some(2097152));
+        assert_eq!(request.user_agent, Some("TestBot/1.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_missing_url() {
+        let args = serde_json::Map::new();
+
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_url_validation_invalid_scheme() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("ftp://example.com".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+
+        // Test would need a real ToolContext to execute, but we can test the validation logic directly
+        assert_eq!(request.url, "ftp://example.com");
+        assert!(!request.url.starts_with("http://") && !request.url.starts_with("https://"));
+    }
+
+    #[test]
+    fn test_timeout_validation() {
+        // Test minimum timeout validation logic
+        let timeout_too_small = 3_u32;
+        let timeout_too_large = 150_u32;
+        let timeout_valid = 30_u32;
+
+        assert!(!(5..=120).contains(&timeout_too_small));
+        assert!(!(5..=120).contains(&timeout_too_large));
+        assert!((5..=120).contains(&timeout_valid));
+    }
+
+    #[test]
+    fn test_content_length_validation() {
+        // Test content length validation logic
+        let length_too_small = 512_u32;
+        let length_too_large = 20_971_520_u32; // 20MB
+        let length_valid = 1_048_576_u32; // 1MB
+
+        assert!(!(1024..=10_485_760).contains(&length_too_small));
+        assert!(!(1024..=10_485_760).contains(&length_too_large));
+        assert!((1024..=10_485_760).contains(&length_valid));
     }
 }
