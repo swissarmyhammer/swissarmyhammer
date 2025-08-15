@@ -7,7 +7,9 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use serde_json::Map;
 use std::sync::Arc;
-use swissarmyhammer_tools::{register_issue_tools, register_memo_tools, register_search_tools, register_shell_tools};
+use swissarmyhammer_tools::{
+    register_issue_tools, register_memo_tools, register_search_tools, register_shell_tools,
+};
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
 

@@ -349,13 +349,13 @@ impl ShellSecurityValidator {
             r"<\s*/dev/[^/\s]+", // Input redirection from devices
             r"exec\s*\([^)]*\)", // Exec function calls
             r">\s*&[3-9]",       // File descriptor redirection to higher numbers (potential attack)
-            r"<\s*&[3-9]",       // File descriptor redirection from higher numbers (potential attack)
-            r"<\s*\([^)]*\)",    // Process substitution input <(command)
-            r">\s*\([^)]*\)",    // Process substitution output >(command)
-            r"<<\s*[A-Za-z_]",   // Here-document start (<<EOF, <<END)
-            r"<<-\s*[A-Za-z_]",  // Here-document with tab stripping (<<-EOF)
-            r"\{\{.*\}\}",       // Brace expansion (potential code injection)
-            r"\*\{.*\}",         // Glob brace expansion
+            r"<\s*&[3-9]", // File descriptor redirection from higher numbers (potential attack)
+            r"<\s*\([^)]*\)", // Process substitution input <(command)
+            r">\s*\([^)]*\)", // Process substitution output >(command)
+            r"<<\s*[A-Za-z_]", // Here-document start (<<EOF, <<END)
+            r"<<-\s*[A-Za-z_]", // Here-document with tab stripping (<<-EOF)
+            r"\{\{.*\}\}", // Brace expansion (potential code injection)
+            r"\*\{.*\}",   // Glob brace expansion
         ];
 
         let mut compiled = Vec::new();

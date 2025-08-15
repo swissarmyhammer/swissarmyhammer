@@ -9,6 +9,17 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::process;
 
+/// Configuration for shell command execution
+struct ShellExecuteConfig {
+    command: String,
+    working_directory: Option<std::path::PathBuf>,
+    timeout: u64,
+    environment_args: Vec<String>,
+    format: ShellOutputFormat,
+    show_metadata: bool,
+    quiet: bool,
+}
+
 /// Handle shell CLI commands by delegating to MCP tools
 pub async fn handle_shell_command(
     command: ShellCommands,
@@ -25,17 +36,16 @@ pub async fn handle_shell_command(
             show_metadata,
             quiet,
         } => {
-            execute_shell_command(
-                &context,
+            let config = ShellExecuteConfig {
                 command,
                 working_directory,
                 timeout,
-                environment,
+                environment_args: environment,
                 format,
                 show_metadata,
                 quiet,
-            )
-            .await?;
+            };
+            execute_shell_command(&context, config).await?;
         }
     }
 
@@ -45,29 +55,26 @@ pub async fn handle_shell_command(
 /// Execute a shell command via the MCP shell tool
 async fn execute_shell_command(
     context: &CliToolContext,
-    command: String,
-    working_directory: Option<std::path::PathBuf>,
-    timeout: u64,
-    environment_args: Vec<String>,
-    format: ShellOutputFormat,
-    show_metadata: bool,
-    quiet: bool,
+    config: ShellExecuteConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Parse environment variables from CLI arguments
-    let environment = if environment_args.is_empty() {
+    let environment = if config.environment_args.is_empty() {
         None
     } else {
-        Some(parse_environment_variables(&environment_args)?)
+        Some(parse_environment_variables(&config.environment_args)?)
     };
 
     // Build MCP tool arguments
     let args = context.create_arguments(vec![
-        ("command", json!(command)),
+        ("command", json!(config.command)),
         (
             "working_directory",
-            json!(working_directory.as_ref().map(|d| d.display().to_string())),
+            json!(config
+                .working_directory
+                .as_ref()
+                .map(|d| d.display().to_string())),
         ),
-        ("timeout", json!(timeout)),
+        ("timeout", json!(config.timeout)),
         ("environment", json!(environment)),
     ]);
 
@@ -75,7 +82,7 @@ async fn execute_shell_command(
     let result = context.execute_tool("shell_execute", args).await?;
 
     // Display results based on format
-    display_shell_results(result, format, show_metadata, quiet).await
+    display_shell_results(result, config.format, config.show_metadata, config.quiet).await
 }
 
 /// Parse environment variables from CLI arguments
@@ -172,7 +179,7 @@ fn display_human_format(
     // For shell commands, we need to distinguish between:
     // 1. Tool execution errors (true errors - e.g., invalid params, security issues)
     // 2. Shell command failures (commands that run but return non-zero exit codes)
-    
+
     // Try to extract JSON response - for shell commands, we expect JSON even for failed commands
     let json_response = match extract_shell_json_response(&result) {
         Ok(data) => data,
@@ -186,16 +193,36 @@ fn display_human_format(
     // Check if this is timeout metadata (different structure)
     let is_timeout = json_response.get("timeout_seconds").is_some();
 
-    let (exit_code, stdout, stderr, execution_time_ms, command, working_directory, output_truncated, binary_output_detected) = if is_timeout {
+    let (
+        exit_code,
+        stdout,
+        stderr,
+        execution_time_ms,
+        command,
+        working_directory,
+        output_truncated,
+        binary_output_detected,
+    ) = if is_timeout {
         // Handle timeout metadata structure
         let timeout_seconds = json_response["timeout_seconds"].as_u64().unwrap_or(0);
         let partial_stdout = json_response["partial_stdout"].as_str().unwrap_or("");
         let partial_stderr = json_response["partial_stderr"].as_str().unwrap_or("");
         let cmd = json_response["command"].as_str().unwrap_or("unknown");
-        let work_dir = json_response["working_directory"].as_str().unwrap_or("unknown");
+        let work_dir = json_response["working_directory"]
+            .as_str()
+            .unwrap_or("unknown");
 
         // For timeouts, we simulate the structure
-        (-1, partial_stdout, partial_stderr, timeout_seconds * 1000, cmd, work_dir, false, false)
+        (
+            -1,
+            partial_stdout,
+            partial_stderr,
+            timeout_seconds * 1000,
+            cmd,
+            work_dir,
+            false,
+            false,
+        )
     } else {
         // Handle normal execution result structure
         let exit_code = json_response["exit_code"].as_i64().unwrap_or(-1);
@@ -203,11 +230,24 @@ fn display_human_format(
         let stderr = json_response["stderr"].as_str().unwrap_or("");
         let execution_time_ms = json_response["execution_time_ms"].as_u64().unwrap_or(0);
         let command = json_response["command"].as_str().unwrap_or("unknown");
-        let working_directory = json_response["working_directory"].as_str().unwrap_or("unknown");
+        let working_directory = json_response["working_directory"]
+            .as_str()
+            .unwrap_or("unknown");
         let output_truncated = json_response["output_truncated"].as_bool().unwrap_or(false);
-        let binary_output_detected = json_response["binary_output_detected"].as_bool().unwrap_or(false);
+        let binary_output_detected = json_response["binary_output_detected"]
+            .as_bool()
+            .unwrap_or(false);
 
-        (exit_code, stdout, stderr, execution_time_ms, command, working_directory, output_truncated, binary_output_detected)
+        (
+            exit_code,
+            stdout,
+            stderr,
+            execution_time_ms,
+            command,
+            working_directory,
+            output_truncated,
+            binary_output_detected,
+        )
     };
 
     // Display command output unless quiet mode is enabled
@@ -226,11 +266,14 @@ fn display_human_format(
         eprintln!("=== Execution Metadata ===");
         eprintln!("Command: {}", command);
         eprintln!("Working Directory: {}", working_directory);
-        
+
         if is_timeout {
             let timeout_seconds = json_response["timeout_seconds"].as_u64().unwrap_or(0);
             eprintln!("Status: Timed out after {} seconds", timeout_seconds);
-            eprintln!("Partial Output: {} bytes captured", stdout.len() + stderr.len());
+            eprintln!(
+                "Partial Output: {} bytes captured",
+                stdout.len() + stderr.len()
+            );
         } else {
             eprintln!("Exit Code: {}", exit_code);
             eprintln!("Execution Time: {}ms", execution_time_ms);
@@ -258,7 +301,9 @@ fn display_human_format(
 }
 
 /// Display results in JSON format
-fn display_json_format(result: rmcp::model::CallToolResult) -> Result<(), Box<dyn std::error::Error>> {
+fn display_json_format(
+    result: rmcp::model::CallToolResult,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Try to extract JSON response - for shell commands, we expect JSON even for failed commands
     match extract_shell_json_response(&result) {
         Ok(json_response) => {
@@ -280,7 +325,9 @@ fn display_json_format(result: rmcp::model::CallToolResult) -> Result<(), Box<dy
 }
 
 /// Display results in YAML format
-fn display_yaml_format(result: rmcp::model::CallToolResult) -> Result<(), Box<dyn std::error::Error>> {
+fn display_yaml_format(
+    result: rmcp::model::CallToolResult,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Try to extract JSON response - for shell commands, we expect JSON even for failed commands
     match extract_shell_json_response(&result) {
         Ok(json_response) => {

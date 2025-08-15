@@ -1097,7 +1097,12 @@ pub enum ShellCommands {
         working_directory: Option<std::path::PathBuf>,
 
         /// Command timeout in seconds (default: 300, max: 1800)
-        #[arg(short = 't', long = "timeout", value_name = "SECONDS", default_value = "300")]
+        #[arg(
+            short = 't',
+            long = "timeout",
+            value_name = "SECONDS",
+            default_value = "300"
+        )]
         timeout: u64,
 
         /// Set environment variables (KEY=VALUE format)
