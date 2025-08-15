@@ -33,9 +33,7 @@ use std::error::Error;
 /// };
 /// handle_web_search_command(command).await?;
 /// ```
-pub async fn handle_web_search_command(
-    command: WebSearchCommands,
-) -> Result<(), Box<dyn Error>> {
+pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(), Box<dyn Error>> {
     let context = CliToolContext::new().await?;
 
     match command {
@@ -55,22 +53,21 @@ pub async fn handle_web_search_command(
             }
 
             if query.len() > 500 {
-                return Err(format!(
-                    "Search query is {} characters, maximum is 500",
-                    query.len()
-                ).into());
+                return Err(
+                    format!("Search query is {} characters, maximum is 500", query.len()).into(),
+                );
             }
 
             if results == 0 || results > 50 {
-                return Err(format!(
-                    "Results count must be between 1 and 50, got {results}"
-                ).into());
+                return Err(
+                    format!("Results count must be between 1 and 50, got {results}").into(),
+                );
             }
 
             if safe_search > 2 {
-                return Err(format!(
-                    "Safe search level must be 0, 1, or 2, got {safe_search}"
-                ).into());
+                return Err(
+                    format!("Safe search level must be 0, 1, or 2, got {safe_search}").into(),
+                );
             }
 
             // Create arguments for MCP tool
@@ -129,6 +126,7 @@ pub async fn handle_web_search_command(
 /// # Returns
 ///
 /// * `Result<(), Box<dyn Error>>` - Success or error result
+#[allow(clippy::uninlined_format_args)]
 fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dyn Error>> {
     // Extract the content from MCP response
     let content = result["content"]
@@ -151,7 +149,12 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             metadata["instance_used"].as_str(),
         ) {
             println!("🔍 Search Results for: \"{query}\"");
-            println!("📊 Found {} results in {}ms using {}", results.len(), search_time, instance);
+            println!(
+                "📊 Found {} results in {}ms using {}",
+                results.len(),
+                search_time,
+                instance
+            );
 
             if let Some(engines) = metadata["engines_used"].as_array() {
                 let engine_names: Vec<String> = engines
@@ -189,12 +192,33 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             .min(80); // Cap at 80 characters
 
         // Print table header
-        println!("┌{:─<width$}┬{:─<8}┬{:─<12}┬{:─<desc_width$}┐", 
-                 "", "", "", "", width = max_title_width + 2, desc_width = max_desc_width + 2);
-        println!("│{:^width$}│{:^8}│{:^12}│{:^desc_width$}│", 
-                 "Title", "Score", "Engine", "Description", width = max_title_width + 2, desc_width = max_desc_width + 2);
-        println!("├{:─<width$}┼{:─<8}┼{:─<12}┼{:─<desc_width$}┤", 
-                 "", "", "", "", width = max_title_width + 2, desc_width = max_desc_width + 2);
+        println!(
+            "┌{:─<width$}┬{:─<8}┬{:─<12}┬{:─<desc_width$}┐",
+            "",
+            "",
+            "",
+            "",
+            width = max_title_width + 2,
+            desc_width = max_desc_width + 2
+        );
+        println!(
+            "│{:^width$}│{:^8}│{:^12}│{:^desc_width$}│",
+            "Title",
+            "Score",
+            "Engine",
+            "Description",
+            width = max_title_width + 2,
+            desc_width = max_desc_width + 2
+        );
+        println!(
+            "├{:─<width$}┼{:─<8}┼{:─<12}┼{:─<desc_width$}┤",
+            "",
+            "",
+            "",
+            "",
+            width = max_title_width + 2,
+            desc_width = max_desc_width + 2
+        );
 
         // Print each result
         for (index, result_item) in results.iter().enumerate() {
@@ -217,20 +241,24 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
                 description.to_string()
             };
 
-            println!("│ {:width$} │ {:>6.2} │ {:^10} │ {:desc_width$} │",
-                     truncated_title,
-                     score,
-                     engine,
-                     truncated_desc,
-                     width = max_title_width,
-                     desc_width = max_desc_width);
+            println!(
+                "│ {:width$} │ {:>6.2} │ {:^10} │ {:desc_width$} │",
+                truncated_title,
+                score,
+                engine,
+                truncated_desc,
+                width = max_title_width,
+                desc_width = max_desc_width
+            );
 
             // Show URL on next line
-            println!("│ {:width$} │        │            │ {:desc_width$} │",
-                     format!("🔗 {}", url),
-                     "",
-                     width = max_title_width,
-                     desc_width = max_desc_width);
+            println!(
+                "│ {:width$} │        │            │ {:desc_width$} │",
+                format!("🔗 {}", url),
+                "",
+                width = max_title_width,
+                desc_width = max_desc_width
+            );
 
             // Show content info if available
             if let Some(content_info) = result_item["content"].as_object() {
@@ -244,24 +272,40 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
                         summary.to_string()
                     };
 
-                    println!("│ {:width$} │        │            │ {:desc_width$} │",
-                             format!("📄 {} words", word_count),
-                             content_summary,
-                             width = max_title_width,
-                             desc_width = max_desc_width);
+                    println!(
+                        "│ {:width$} │        │            │ {:desc_width$} │",
+                        format!("📄 {} words", word_count),
+                        content_summary,
+                        width = max_title_width,
+                        desc_width = max_desc_width
+                    );
                 }
             }
 
             // Add separator line between results (except for last result)
             if index < results.len() - 1 {
-                println!("├{:─<width$}┼{:─<8}┼{:─<12}┼{:─<desc_width$}┤", 
-                         "", "", "", "", width = max_title_width + 2, desc_width = max_desc_width + 2);
+                println!(
+                    "├{:─<width$}┼{:─<8}┼{:─<12}┼{:─<desc_width$}┤",
+                    "",
+                    "",
+                    "",
+                    "",
+                    width = max_title_width + 2,
+                    desc_width = max_desc_width + 2
+                );
             }
         }
 
         // Print table footer
-        println!("└{:─<width$}┴{:─<8}┴{:─<12}┴{:─<desc_width$}┘", 
-                 "", "", "", "", width = max_title_width + 2, desc_width = max_desc_width + 2);
+        println!(
+            "└{:─<width$}┴{:─<8}┴{:─<12}┴{:─<desc_width$}┘",
+            "",
+            "",
+            "",
+            "",
+            width = max_title_width + 2,
+            desc_width = max_desc_width + 2
+        );
 
         // Display content fetch statistics if available
         if let Some(fetch_stats) = metadata["content_fetch_stats"].as_object() {
@@ -278,10 +322,9 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
                 println!("   • Total time: {total_time}ms");
             }
         }
-
     } else {
         // Fallback: just print the content as text
-        println!("{}", content);
+        println!("{content}");
     }
 
     Ok(())
@@ -394,6 +437,9 @@ mod tests {
 
         let result = handle_web_search_command(command).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be 0, 1, or 2"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be 0, 1, or 2"));
     }
 }

@@ -44,14 +44,14 @@ impl HealthChecker {
     }
 
     /// Performs a health check on a single instance
-    /// 
+    ///
     /// This performs a lightweight check by making a simple GET request to the instance
     /// and measuring response time. It doesn't perform a full search to avoid overloading instances.
     pub async fn check_instance_health(&self, instance: &SearxInstance) -> HealthStatus {
         debug!("Checking health of instance: {}", instance.url);
-        
+
         let start_time = Instant::now();
-        
+
         // Construct health check URL - just check if the instance responds
         let health_url = match Url::parse(&instance.url) {
             Ok(mut url) => {
@@ -63,16 +63,13 @@ impl HealthChecker {
                 return HealthStatus {
                     is_healthy: false,
                     response_time: Duration::from_secs(0),
-                    error: Some(format!("Invalid URL: {}", e)),
+                    error: Some(format!("Invalid URL: {e}")),
                 };
             }
         };
 
         // Perform the health check with timeout
-        let result = timeout(
-            self.check_timeout,
-            self.http_client.get(health_url).send(),
-        ).await;
+        let result = timeout(self.check_timeout, self.http_client.get(health_url).send()).await;
 
         let response_time = start_time.elapsed();
 
@@ -125,7 +122,7 @@ impl HealthChecker {
                     HealthStatus {
                         is_healthy: false,
                         response_time,
-                        error: Some(format!("Network error: {}", e)),
+                        error: Some(format!("Network error: {e}")),
                     }
                 }
             }
@@ -142,47 +139,50 @@ impl HealthChecker {
     }
 
     /// Performs health checks on multiple instances concurrently
-    /// 
+    ///
     /// This method updates the health status of all provided instances in-place.
     /// It uses concurrent execution but limits the number of concurrent checks
     /// to avoid overwhelming the network or instances.
     pub async fn bulk_health_check(&self, instances: &mut [SearxInstance]) {
-        debug!("Starting bulk health check for {} instances", instances.len());
-        
+        debug!(
+            "Starting bulk health check for {} instances",
+            instances.len()
+        );
+
         if instances.is_empty() {
             return;
         }
 
         let start_time = Instant::now();
-        
+
         // Use semaphore to limit concurrent checks
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5)); // Max 5 concurrent
-        
+
         // Create futures for all health checks
         let mut check_futures = Vec::new();
-        
+
         for (index, instance) in instances.iter().enumerate() {
             let instance_clone = instance.clone();
             let checker = &self;
             let permit = semaphore.clone();
-            
+
             let future = async move {
                 let _permit = permit.acquire().await.unwrap();
                 let health = checker.check_instance_health(&instance_clone).await;
                 (index, health)
             };
-            
+
             check_futures.push(future);
         }
-        
+
         // Execute all checks concurrently
         let results = future::join_all(check_futures).await;
-        
+
         // Update instances with health check results
         let mut healthy_count = 0;
         for (index, health_status) in results {
             let instance = &mut instances[index];
-            
+
             if health_status.is_healthy {
                 instance.mark_healthy(health_status.response_time);
                 healthy_count += 1;
@@ -193,7 +193,7 @@ impl HealthChecker {
                 }
             }
         }
-        
+
         let total_time = start_time.elapsed();
         debug!(
             "Bulk health check completed: {}/{} healthy in {:?}",
@@ -204,15 +204,15 @@ impl HealthChecker {
     }
 
     /// Performs a search-based health check on an instance
-    /// 
+    ///
     /// This is a more thorough check that actually performs a minimal search
     /// to ensure the instance's search functionality is working. Use sparingly
     /// to avoid overloading instances.
     pub async fn check_search_functionality(&self, instance: &SearxInstance) -> HealthStatus {
         debug!("Checking search functionality for: {}", instance.url);
-        
+
         let start_time = Instant::now();
-        
+
         // Construct search URL with minimal query
         let search_url = match Url::parse(&instance.url) {
             Ok(mut url) => {
@@ -227,15 +227,12 @@ impl HealthChecker {
                 return HealthStatus {
                     is_healthy: false,
                     response_time: Duration::from_secs(0),
-                    error: Some(format!("Invalid URL: {}", e)),
+                    error: Some(format!("Invalid URL: {e}")),
                 };
             }
         };
 
-        let result = timeout(
-            self.check_timeout,
-            self.http_client.get(search_url).send(),
-        ).await;
+        let result = timeout(self.check_timeout, self.http_client.get(search_url).send()).await;
 
         let response_time = start_time.elapsed();
 
@@ -254,7 +251,10 @@ impl HealthChecker {
                                     error: None,
                                 }
                             } else {
-                                warn!("Search response missing expected structure for {}", instance.url);
+                                warn!(
+                                    "Search response missing expected structure for {}",
+                                    instance.url
+                                );
                                 HealthStatus {
                                     is_healthy: false,
                                     response_time,
@@ -263,7 +263,10 @@ impl HealthChecker {
                             }
                         }
                         Err(e) => {
-                            warn!("Failed to parse search response for {}: {}", instance.url, e);
+                            warn!(
+                                "Failed to parse search response for {}: {}",
+                                instance.url, e
+                            );
                             HealthStatus {
                                 is_healthy: false,
                                 response_time,
@@ -285,11 +288,14 @@ impl HealthChecker {
                 }
             }
             Ok(Err(e)) => {
-                warn!("Search functionality check error for {}: {}", instance.url, e);
+                warn!(
+                    "Search functionality check error for {}: {}",
+                    instance.url, e
+                );
                 HealthStatus {
                     is_healthy: false,
                     response_time,
-                    error: Some(format!("Request error: {}", e)),
+                    error: Some(format!("Request error: {e}")),
                 }
             }
             Err(_) => {
@@ -332,15 +338,10 @@ mod tests {
     #[tokio::test]
     async fn test_check_instance_health_invalid_url() {
         let checker = HealthChecker::new();
-        let instance = SearxInstance::new(
-            "not-a-url".to_string(),
-            "A+".to_string(),
-            95.0,
-            1000,
-        );
-        
+        let instance = SearxInstance::new("not-a-url".to_string(), "A+".to_string(), 95.0, 1000);
+
         let health = checker.check_instance_health(&instance).await;
-        
+
         assert!(!health.is_healthy);
         assert!(health.error.is_some());
         assert!(health.error.unwrap().contains("Invalid URL"));
@@ -350,10 +351,10 @@ mod tests {
     async fn test_bulk_health_check_empty() {
         let checker = HealthChecker::new();
         let mut instances: Vec<SearxInstance> = vec![];
-        
+
         // Should not panic with empty slice
         checker.bulk_health_check(&mut instances).await;
-        
+
         assert!(instances.is_empty());
     }
 
@@ -374,9 +375,9 @@ mod tests {
                 1000,
             ),
         ];
-        
+
         checker.bulk_health_check(&mut instances).await;
-        
+
         // At least verify the function completes without panic
         // Actual network results may vary in test environment
         assert_eq!(instances.len(), 2);
@@ -385,15 +386,10 @@ mod tests {
     #[tokio::test]
     async fn test_check_search_functionality_invalid_url() {
         let checker = HealthChecker::new();
-        let instance = SearxInstance::new(
-            "invalid-url".to_string(),
-            "A+".to_string(),
-            95.0,
-            1000,
-        );
-        
+        let instance = SearxInstance::new("invalid-url".to_string(), "A+".to_string(), 95.0, 1000);
+
         let health = checker.check_search_functionality(&instance).await;
-        
+
         assert!(!health.is_healthy);
         assert!(health.error.is_some());
         assert!(health.error.unwrap().contains("Invalid URL"));
@@ -416,9 +412,9 @@ mod tests {
             95.0,
             1000,
         );
-        
+
         let health = checker.check_instance_health(&instance).await;
-        
+
         // httpbin should respond successfully
         assert!(health.is_healthy);
         assert!(health.response_time > Duration::from_millis(0));

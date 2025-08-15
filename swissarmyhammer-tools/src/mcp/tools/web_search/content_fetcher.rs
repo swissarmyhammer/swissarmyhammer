@@ -5,7 +5,7 @@
 //! and concurrent processing support.
 
 use crate::mcp::tools::web_search::types::{
-    SearchResult, SearchResultContent, CodeBlock, ContentMetadata, ContentType
+    CodeBlock, ContentMetadata, ContentType, SearchResult, SearchResultContent,
 };
 use dashmap::DashMap;
 use html2md;
@@ -20,26 +20,56 @@ use url::Url;
 /// Error types for content fetching operations
 #[derive(Debug, thiserror::Error)]
 pub enum ContentFetchError {
+    /// HTTP error response from server
     #[error("HTTP error {status}: {message}")]
-    HttpError { status: u16, message: String },
-    
+    HttpError {
+        /// HTTP status code
+        status: u16,
+        /// Error message
+        message: String,
+    },
+
+    /// Network connection or communication error
     #[error("Network error: {message}")]
-    NetworkError { message: String },
-    
+    NetworkError {
+        /// Error message describing the network issue
+        message: String,
+    },
+
+    /// Error during content processing
     #[error("Content processing error: {message}")]
-    ProcessingError { message: String },
-    
+    ProcessingError {
+        /// Error message describing the processing issue
+        message: String,
+    },
+
+    /// Rate limiting exceeded for a domain
     #[error("Rate limit exceeded for domain: {domain}")]
-    RateLimited { domain: String },
-    
+    RateLimited {
+        /// Domain that has been rate limited
+        domain: String,
+    },
+
+    /// Content failed quality assessment
     #[error("Content quality check failed: {reason}")]
-    QualityCheckFailed { reason: String },
-    
+    QualityCheckFailed {
+        /// Reason for quality check failure
+        reason: String,
+    },
+
+    /// Request timeout
     #[error("Timeout after {seconds}s")]
-    Timeout { seconds: u64 },
-    
+    Timeout {
+        /// Number of seconds before timeout
+        seconds: u64,
+    },
+
+    /// Invalid URL format
     #[error("Invalid URL: {url}")]
-    InvalidUrl { url: String },
+    InvalidUrl {
+        /// The invalid URL string
+        url: String,
+    },
 }
 
 /// Configuration for content fetching operations
@@ -145,11 +175,17 @@ struct RateLimitState {
 /// Statistics for content fetching operations
 #[derive(Debug, Clone)]
 pub struct ContentFetchStats {
+    /// Number of URLs attempted to fetch
     pub attempted: usize,
+    /// Number of URLs successfully fetched
     pub successful: usize,
+    /// Number of URLs that failed to fetch
     pub failed: usize,
+    /// Total time taken for all fetch operations in milliseconds
     pub total_time_ms: u64,
+    /// Number of URLs that were rate limited
     pub rate_limited: usize,
+    /// Number of URLs that were filtered due to quality issues
     pub quality_filtered: usize,
 }
 
@@ -259,45 +295,51 @@ impl ContentFetcher {
     }
 
     /// Fetch content from a single search result
-    async fn fetch_single_result(&self, mut result: SearchResult) -> Result<SearchResult, ContentFetchError> {
+    async fn fetch_single_result(
+        &self,
+        mut result: SearchResult,
+    ) -> Result<SearchResult, ContentFetchError> {
         let domain = self.extract_domain(&result.url)?;
-        
+
         // Apply rate limiting
         self.wait_for_domain(&domain).await?;
 
         let start_time = Instant::now();
 
         // Fetch content
-        let response = self.client
-            .get(&result.url)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    ContentFetchError::Timeout { 
-                        seconds: self.config.fetch_timeout.as_secs() 
-                    }
-                } else if e.is_connect() {
-                    ContentFetchError::NetworkError { 
-                        message: format!("Connection failed: {e}") 
-                    }
-                } else {
-                    ContentFetchError::NetworkError { 
-                        message: format!("Network error: {e}") 
-                    }
+        let response = self.client.get(&result.url).send().await.map_err(|e| {
+            if e.is_timeout() {
+                ContentFetchError::Timeout {
+                    seconds: self.config.fetch_timeout.as_secs(),
                 }
-            })?;
+            } else if e.is_connect() {
+                ContentFetchError::NetworkError {
+                    message: format!("Connection failed: {e}"),
+                }
+            } else {
+                ContentFetchError::NetworkError {
+                    message: format!("Network error: {e}"),
+                }
+            }
+        })?;
 
         if !response.status().is_success() {
             return Err(ContentFetchError::HttpError {
                 status: response.status().as_u16(),
-                message: response.status().canonical_reason().unwrap_or("Unknown").to_string(),
+                message: response
+                    .status()
+                    .canonical_reason()
+                    .unwrap_or("Unknown")
+                    .to_string(),
             });
         }
 
-        let html = response.text().await.map_err(|e| ContentFetchError::NetworkError {
-            message: format!("Failed to read response body: {e}"),
-        })?;
+        let html = response
+            .text()
+            .await
+            .map_err(|e| ContentFetchError::NetworkError {
+                message: format!("Failed to read response body: {e}"),
+            })?;
 
         // Check content size
         if html.len() > self.config.max_content_size {
@@ -365,7 +407,8 @@ impl ContentFetcher {
             url: url.to_string(),
         })?;
 
-        parsed_url.host_str()
+        parsed_url
+            .host_str()
             .map(|host| host.to_string())
             .ok_or_else(|| ContentFetchError::InvalidUrl {
                 url: url.to_string(),
@@ -392,7 +435,10 @@ impl ContentFetcher {
                     domain: domain.to_string(),
                 });
             }
-            debug!("Rate limiting domain {}: waiting {:?}", domain, wait_duration);
+            debug!(
+                "Rate limiting domain {}: waiting {:?}",
+                domain, wait_duration
+            );
             tokio::time::sleep(wait_duration).await;
         }
 
@@ -402,13 +448,13 @@ impl ContentFetcher {
     /// Update domain tracking after successful request
     fn update_domain_tracking(&self, domain: &str) {
         let now = Instant::now();
-        
+
         self.domain_trackers
             .entry(domain.to_string())
             .and_modify(|state| {
                 state.last_request = now;
                 state.consecutive_requests += 1;
-                
+
                 // Increase delay for frequent requests to same domain
                 if state.consecutive_requests > 5 {
                     state.delay = (state.delay * 2).min(self.config.max_domain_delay);
@@ -427,8 +473,10 @@ impl ContentFetcher {
 
         // Check content length
         if word_count < config.min_content_length || word_count > config.max_content_length {
-            debug!("Content failed length check: {} words (min: {}, max: {})", 
-                   word_count, config.min_content_length, config.max_content_length);
+            debug!(
+                "Content failed length check: {} words (min: {}, max: {})",
+                word_count, config.min_content_length, config.max_content_length
+            );
             return false;
         }
 
@@ -456,7 +504,7 @@ impl ContentFetcher {
     /// Generate summary for content
     fn generate_summary(&self, content: &str) -> String {
         let max_length = self.config.processing_config.max_summary_length;
-        
+
         if content.len() <= max_length {
             return content.to_string();
         }
@@ -470,11 +518,11 @@ impl ContentFetcher {
             if sentence.is_empty() {
                 continue;
             }
-            
+
             if summary.len() + sentence.len() + 2 > max_length {
                 break;
             }
-            
+
             if !summary.is_empty() {
                 summary.push_str(". ");
             }
@@ -508,21 +556,32 @@ impl ContentFetcher {
         for cap in numbered_regex.captures_iter(content) {
             if let Some(point) = cap.get(1) {
                 let point = point.as_str().trim();
-                if point.len() > 10 && point.len() < 200 && !key_points.contains(&point.to_string()) {
+                if point.len() > 10 && point.len() < 200 && !key_points.contains(&point.to_string())
+                {
                     key_points.push(point.to_string());
                 }
             }
         }
 
         // Look for sentences that start with strong indicator words
-        let indicator_words = ["Key", "Important", "Note", "Remember", "Conclusion", "Summary"];
+        let indicator_words = [
+            "Key",
+            "Important",
+            "Note",
+            "Remember",
+            "Conclusion",
+            "Summary",
+        ];
         let lines: Vec<&str> = content.lines().collect();
-        
+
         for line in lines {
             let line = line.trim();
             for &indicator in &indicator_words {
-                if line.starts_with(indicator) && line.len() > 20 && line.len() < 200
-                    && !key_points.iter().any(|p| p.contains(line)) {
+                if line.starts_with(indicator)
+                    && line.len() > 20
+                    && line.len() < 200
+                    && !key_points.iter().any(|p| p.contains(line))
+                {
                     key_points.push(line.to_string());
                 }
             }
@@ -539,11 +598,14 @@ impl ContentFetcher {
 
         // Match fenced code blocks with optional language specification
         let code_regex = Regex::new(r"(?ms)^```(\w+)?\n?(.*?)^```").unwrap();
-        
+
         for cap in code_regex.captures_iter(content) {
             let language = cap.get(1).map(|m| m.as_str().to_string());
-            let code = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
-            
+            let code = cap
+                .get(2)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+
             if !code.is_empty() && code.len() > 5 {
                 code_blocks.push(CodeBlock {
                     language,
@@ -578,7 +640,7 @@ impl ContentFetcher {
     /// Extract metadata from content and search result
     fn extract_metadata(&self, content: &str, result: &SearchResult) -> ContentMetadata {
         let word_count = content.split_whitespace().count();
-        
+
         // Estimate reading time (average 200 words per minute)
         let reading_time_minutes = if word_count > 0 {
             Some(((word_count as f64 / 200.0).ceil() as u32).max(1))
@@ -596,7 +658,7 @@ impl ContentFetcher {
 
         ContentMetadata {
             title,
-            author: None, // Could be enhanced with author extraction
+            author: None,         // Could be enhanced with author extraction
             published_date: None, // Could be enhanced with date extraction
             content_type,
             language,
@@ -614,7 +676,7 @@ impl ContentFetcher {
         if url_lower.contains("/docs/") || url_lower.contains("/documentation/") {
             return ContentType::Documentation;
         }
-        
+
         if url_lower.contains("/news/") || url_lower.contains("/blog/") {
             return ContentType::News;
         }
@@ -662,21 +724,24 @@ impl ContentFetcher {
     /// Basic language detection (very simple heuristics)
     fn detect_language(&self, content: &str) -> Option<String> {
         let content_lower = content.to_lowercase();
-        
+
         // Simple keyword-based detection for major languages
         let common_words_en = ["the", "and", "for", "are", "but", "not", "you", "all"];
         let common_words_es = ["que", "para", "con", "por", "los", "las", "del"];
         let common_words_fr = ["que", "pour", "avec", "par", "les", "des", "une"];
 
-        let en_score = common_words_en.iter()
+        let en_score = common_words_en
+            .iter()
             .filter(|&&word| content_lower.contains(word))
             .count();
-        
-        let es_score = common_words_es.iter()
+
+        let es_score = common_words_es
+            .iter()
             .filter(|&&word| content_lower.contains(word))
             .count();
-            
-        let fr_score = common_words_fr.iter()
+
+        let fr_score = common_words_fr
+            .iter()
             .filter(|&&word| content_lower.contains(word))
             .count();
 
@@ -697,9 +762,25 @@ impl ContentFetcher {
 
         // Look for common tech keywords
         let tech_keywords = [
-            "rust", "python", "javascript", "typescript", "react", "vue", "angular",
-            "docker", "kubernetes", "aws", "database", "api", "rest", "graphql",
-            "machine learning", "ai", "blockchain", "security", "testing"
+            "rust",
+            "python",
+            "javascript",
+            "typescript",
+            "react",
+            "vue",
+            "angular",
+            "docker",
+            "kubernetes",
+            "aws",
+            "database",
+            "api",
+            "rest",
+            "graphql",
+            "machine learning",
+            "ai",
+            "blockchain",
+            "security",
+            "testing",
         ];
 
         let content_lower = content.to_lowercase();
@@ -739,16 +820,6 @@ impl ContentFetcher {
 mod tests {
     use super::*;
 
-    fn create_test_result(url: &str) -> SearchResult {
-        SearchResult {
-            title: "Test Result".to_string(),
-            url: url.to_string(),
-            description: "Test description".to_string(),
-            score: 0.8,
-            engine: "test".to_string(),
-            content: None,
-        }
-    }
 
     #[test]
     fn test_content_fetcher_creation() {
@@ -760,13 +831,15 @@ mod tests {
     #[test]
     fn test_extract_domain() {
         let fetcher = ContentFetcher::with_defaults();
-        
+
         let domain = fetcher.extract_domain("https://example.com/path").unwrap();
         assert_eq!(domain, "example.com");
-        
-        let domain = fetcher.extract_domain("http://subdomain.example.com").unwrap();
+
+        let domain = fetcher
+            .extract_domain("http://subdomain.example.com")
+            .unwrap();
         assert_eq!(domain, "subdomain.example.com");
-        
+
         let result = fetcher.extract_domain("invalid-url");
         assert!(result.is_err());
     }
@@ -774,33 +847,37 @@ mod tests {
     #[test]
     fn test_quality_assessment() {
         let fetcher = ContentFetcher::with_defaults();
-        
+
         // Good content - need enough words to meet the 100 word minimum
         let good_content = "This is a high quality article with meaningful content and useful information for readers. ".repeat(10);
         assert!(fetcher.is_quality_content(&good_content, good_content.split_whitespace().count()));
-        
+
         // Too short
         let short_content = "Short content";
-        assert!(!fetcher.is_quality_content(&short_content, short_content.split_whitespace().count()));
-        
+        assert!(
+            !fetcher.is_quality_content(short_content, short_content.split_whitespace().count())
+        );
+
         // Contains spam
         let spam_content = "This article contains advertisement content. ".repeat(20);
         assert!(!fetcher.is_quality_content(&spam_content, spam_content.split_whitespace().count()));
-        
+
         // Contains paywall
-        let paywall_content = "Great content but you need to subscribe to continue reading. ".repeat(20);
-        assert!(!fetcher.is_quality_content(&paywall_content, paywall_content.split_whitespace().count()));
+        let paywall_content =
+            "Great content but you need to subscribe to continue reading. ".repeat(20);
+        assert!(!fetcher
+            .is_quality_content(&paywall_content, paywall_content.split_whitespace().count()));
     }
 
     #[test]
     fn test_summary_generation() {
         let fetcher = ContentFetcher::with_defaults();
-        
+
         let content = "First sentence. Second sentence. Third sentence.";
         let summary = fetcher.generate_summary(content);
         assert!(summary.contains("First sentence"));
         assert!(summary.ends_with('.'));
-        
+
         // Test with content shorter than max length
         let short_content = "Short content without periods";
         let short_summary = fetcher.generate_summary(short_content);
@@ -810,11 +887,11 @@ mod tests {
     #[test]
     fn test_domain_tracking() {
         let fetcher = ContentFetcher::with_defaults();
-        
+
         // First request should set up tracking
         fetcher.update_domain_tracking("example.com");
         assert!(fetcher.domain_trackers.contains_key("example.com"));
-        
+
         // Subsequent requests should increment counter
         fetcher.update_domain_tracking("example.com");
         let state = fetcher.domain_trackers.get("example.com").unwrap();
@@ -827,7 +904,7 @@ mod tests {
         assert_eq!(config.max_concurrent_fetches, 5);
         assert_eq!(config.fetch_timeout, Duration::from_secs(45));
         assert_eq!(config.max_content_size, 2 * 1024 * 1024);
-        
+
         let quality_config = ContentQualityConfig::default();
         assert_eq!(quality_config.min_content_length, 100);
         assert_eq!(quality_config.max_content_length, 50_000);

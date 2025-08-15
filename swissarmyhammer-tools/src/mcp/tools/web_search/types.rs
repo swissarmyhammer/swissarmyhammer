@@ -31,7 +31,6 @@ pub enum SearchCategory {
     Files,
 }
 
-
 /// Safe search level
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default)]
 pub enum SafeSearchLevel {
@@ -43,7 +42,6 @@ pub enum SafeSearchLevel {
     /// Strict safe search filtering
     Strict = 2,
 }
-
 
 /// Time range filter for search results
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -62,7 +60,6 @@ pub enum TimeRange {
     /// Search results from the last year
     Year,
 }
-
 
 /// Request structure for web search operations
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

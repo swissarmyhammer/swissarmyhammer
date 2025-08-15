@@ -3,7 +3,7 @@
 //! This module provides the WebSearchTool for performing web searches through the MCP protocol.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use crate::mcp::tools::web_search::content_fetcher::{ContentFetcher, ContentFetchConfig};
+use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::instance_manager::{InstanceManager, InstanceManagerConfig};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
@@ -21,15 +21,25 @@ use url::Url;
 #[derive(Debug)]
 enum WebSearchInternalError {
     /// Invalid or malformed request parameters
-    InvalidRequest { message: String, parameter: Option<String> },
+    InvalidRequest {
+        message: String,
+        parameter: Option<String>,
+    },
     /// Network or connectivity issues
     NetworkError { message: String, instance: String },
     /// SearXNG instance returned an error response
-    InstanceError { message: String, instance: String, status_code: Option<u16> },
+    InstanceError {
+        message: String,
+        instance: String,
+        status_code: Option<u16>,
+    },
     /// Failed to parse response from SearXNG
     ParseError { message: String, instance: String },
     /// All instances failed, no fallback available
-    AllInstancesFailed { attempted_instances: Vec<String>, last_error: String },
+    AllInstancesFailed {
+        attempted_instances: Vec<String>,
+        last_error: String,
+    },
 }
 
 impl std::fmt::Display for WebSearchInternalError {
@@ -45,7 +55,11 @@ impl std::fmt::Display for WebSearchInternalError {
             WebSearchInternalError::NetworkError { message, instance } => {
                 write!(f, "Network error for instance '{instance}': {message}")
             }
-            WebSearchInternalError::InstanceError { message, instance, status_code } => {
+            WebSearchInternalError::InstanceError {
+                message,
+                instance,
+                status_code,
+            } => {
                 if let Some(code) = status_code {
                     write!(f, "Instance '{instance}' returned error {code} : {message}")
                 } else {
@@ -55,7 +69,10 @@ impl std::fmt::Display for WebSearchInternalError {
             WebSearchInternalError::ParseError { message, instance } => {
                 write!(f, "Failed to parse response from '{instance}': {message}")
             }
-            WebSearchInternalError::AllInstancesFailed { attempted_instances, last_error } => {
+            WebSearchInternalError::AllInstancesFailed {
+                attempted_instances,
+                last_error,
+            } => {
                 write!(
                     f,
                     "All {} instances failed. Last error: {}",
@@ -113,120 +130,134 @@ impl WebSearchTool {
     /// Loads configuration for the instance manager
     fn load_instance_manager_config() -> InstanceManagerConfig {
         let mut config = InstanceManagerConfig::default();
-        
+
         // Try to load from configuration
         if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
             // Discovery settings
-            if let Some(swissarmyhammer::ConfigValue::Boolean(enabled)) = 
-                repo_config.get("web_search.discovery.enabled") {
+            if let Some(swissarmyhammer::ConfigValue::Boolean(enabled)) =
+                repo_config.get("web_search.discovery.enabled")
+            {
                 config.discovery_enabled = *enabled;
             }
-            
+
             // Discovery refresh interval
-            if let Some(swissarmyhammer::ConfigValue::Integer(interval)) = 
-                repo_config.get("web_search.discovery.refresh_interval_seconds") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(interval)) =
+                repo_config.get("web_search.discovery.refresh_interval_seconds")
+            {
                 if *interval > 0 {
                     config.discovery_refresh_interval = Duration::from_secs(*interval as u64);
                 }
             }
-            
+
             // Health check interval
-            if let Some(swissarmyhammer::ConfigValue::Integer(interval)) = 
-                repo_config.get("web_search.discovery.health_check_interval_seconds") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(interval)) =
+                repo_config.get("web_search.discovery.health_check_interval_seconds")
+            {
                 if *interval > 0 {
                     config.health_check_interval = Duration::from_secs(*interval as u64);
                 }
             }
-            
+
             // Max consecutive failures
-            if let Some(swissarmyhammer::ConfigValue::Integer(failures)) = 
-                repo_config.get("web_search.discovery.max_consecutive_failures") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(failures)) =
+                repo_config.get("web_search.discovery.max_consecutive_failures")
+            {
                 if *failures > 0 {
                     config.max_consecutive_failures = *failures as u32;
                 }
             }
         }
-        
+
         config
     }
 
     /// Loads configuration for content fetching
     fn load_content_fetch_config() -> ContentFetchConfig {
         let mut config = ContentFetchConfig::default();
-        
+
         // Try to load from configuration
         if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
             // Concurrent processing settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_concurrent)) = 
-                repo_config.get("web_search.content_fetching.max_concurrent_fetches") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_concurrent)) =
+                repo_config.get("web_search.content_fetching.max_concurrent_fetches")
+            {
                 if *max_concurrent > 0 {
                     config.max_concurrent_fetches = *max_concurrent as usize;
                 }
             }
-            
+
             // Timeout settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(timeout)) = 
-                repo_config.get("web_search.content_fetching.content_fetch_timeout") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(timeout)) =
+                repo_config.get("web_search.content_fetching.content_fetch_timeout")
+            {
                 if *timeout > 0 {
                     config.fetch_timeout = Duration::from_secs(*timeout as u64);
                 }
             }
-            
+
             // Content size limit
-            if let Some(swissarmyhammer::ConfigValue::String(size_str)) = 
-                repo_config.get("web_search.content_fetching.max_content_size") {
+            if let Some(swissarmyhammer::ConfigValue::String(size_str)) =
+                repo_config.get("web_search.content_fetching.max_content_size")
+            {
                 if let Ok(size) = Self::parse_size_string(size_str) {
                     config.max_content_size = size;
                 }
             }
-            
+
             // Rate limiting settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(delay)) = 
-                repo_config.get("web_search.content_fetching.default_domain_delay") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(delay)) =
+                repo_config.get("web_search.content_fetching.default_domain_delay")
+            {
                 if *delay > 0 {
                     config.default_domain_delay = Duration::from_millis(*delay as u64);
                 }
             }
-            
+
             // Content quality settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(min_length)) = 
-                repo_config.get("web_search.content_fetching.min_content_length") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(min_length)) =
+                repo_config.get("web_search.content_fetching.min_content_length")
+            {
                 if *min_length > 0 {
                     config.quality_config.min_content_length = *min_length as usize;
                 }
             }
-            
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_length)) = 
-                repo_config.get("web_search.content_fetching.max_content_length") {
+
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_length)) =
+                repo_config.get("web_search.content_fetching.max_content_length")
+            {
                 if *max_length > 0 {
                     config.quality_config.max_content_length = *max_length as usize;
                 }
             }
-            
+
             // Processing settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_summary)) = 
-                repo_config.get("web_search.content_fetching.max_summary_length") {
+            if let Some(swissarmyhammer::ConfigValue::Integer(max_summary)) =
+                repo_config.get("web_search.content_fetching.max_summary_length")
+            {
                 if *max_summary > 0 {
                     config.processing_config.max_summary_length = *max_summary as usize;
                 }
             }
-            
-            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_code)) = 
-                repo_config.get("web_search.content_fetching.extract_code_blocks") {
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_code)) =
+                repo_config.get("web_search.content_fetching.extract_code_blocks")
+            {
                 config.processing_config.extract_code_blocks = *extract_code;
             }
-            
-            if let Some(swissarmyhammer::ConfigValue::Boolean(generate_summaries)) = 
-                repo_config.get("web_search.content_fetching.generate_summaries") {
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(generate_summaries)) =
+                repo_config.get("web_search.content_fetching.generate_summaries")
+            {
                 config.processing_config.generate_summaries = *generate_summaries;
             }
-            
-            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_metadata)) = 
-                repo_config.get("web_search.content_fetching.extract_metadata") {
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_metadata)) =
+                repo_config.get("web_search.content_fetching.extract_metadata")
+            {
                 config.processing_config.extract_metadata = *extract_metadata;
             }
         }
-        
+
         config
     }
 
@@ -251,10 +282,11 @@ impl WebSearchTool {
         request: &WebSearchRequest,
     ) -> Result<SearXngResponse, WebSearchInternalError> {
         // Validate the instance URL first
-        let instance_url = Url::parse(instance).map_err(|e| WebSearchInternalError::InvalidRequest {
-            message: format!("Invalid SearXNG instance URL '{instance}': {e}"),
-            parameter: Some("instance_url".to_string()),
-        })?;
+        let instance_url =
+            Url::parse(instance).map_err(|e| WebSearchInternalError::InvalidRequest {
+                message: format!("Invalid SearXNG instance URL '{instance}': {e}"),
+                parameter: Some("instance_url".to_string()),
+            })?;
 
         // Validate search query
         if request.query.trim().is_empty() {
@@ -274,15 +306,20 @@ impl WebSearchTool {
         let client = self.get_client();
 
         // Construct search URL
-        let mut url = instance_url.join("search").map_err(|e| WebSearchInternalError::InvalidRequest {
-            message: format!("Failed to construct search URL for instance '{instance}': {e}"),
-            parameter: Some("instance_url".to_string()),
-        })?;
+        let mut url =
+            instance_url
+                .join("search")
+                .map_err(|e| WebSearchInternalError::InvalidRequest {
+                    message: format!(
+                        "Failed to construct search URL for instance '{instance}': {e}"
+                    ),
+                    parameter: Some("instance_url".to_string()),
+                })?;
 
         // Build query parameters systematically
         {
             let mut query_pairs = url.query_pairs_mut();
-            
+
             // Required parameters
             query_pairs
                 .append_pair("q", &request.query)
@@ -351,10 +388,14 @@ impl WebSearchTool {
             });
         }
 
-        let json: Value = response.json().await.map_err(|e| WebSearchInternalError::ParseError {
-            message: format!("Failed to parse JSON response: {e}"),
-            instance: instance.to_string(),
-        })?;
+        let json: Value =
+            response
+                .json()
+                .await
+                .map_err(|e| WebSearchInternalError::ParseError {
+                    message: format!("Failed to parse JSON response: {e}"),
+                    instance: instance.to_string(),
+                })?;
 
         // Validate response structure
         if json.is_null() || !json.is_object() {
@@ -371,18 +412,17 @@ impl WebSearchTool {
 
         if let Some(results_array) = results_array {
             let max_results = request.results_count.unwrap_or(10);
-            
+
             for (index, result_json) in results_array.iter().enumerate() {
                 if index >= max_results {
                     break;
                 }
 
                 // Extract required fields with validation
-                let title = result_json["title"].as_str()
-                    .unwrap_or_else(|| {
-                        tracing::warn!("Missing or invalid title in search result {}", index);
-                        "Untitled"
-                    });
+                let title = result_json["title"].as_str().unwrap_or_else(|| {
+                    tracing::warn!("Missing or invalid title in search result {}", index);
+                    "Untitled"
+                });
 
                 let url = match result_json["url"].as_str() {
                     Some(url) if !url.is_empty() => url,
@@ -398,12 +438,14 @@ impl WebSearchTool {
                     continue; // Skip results with invalid URLs
                 }
 
-                let description = result_json["content"].as_str()
+                let description = result_json["content"]
+                    .as_str()
                     .or_else(|| result_json["description"].as_str()) // Try alternate field name
                     .unwrap_or("")
                     .to_string();
 
-                let engine = result_json["engine"].as_str()
+                let engine = result_json["engine"]
+                    .as_str()
                     .unwrap_or("unknown")
                     .to_string();
 
@@ -411,7 +453,8 @@ impl WebSearchTool {
                 engines_set.insert(engine.clone());
 
                 // Extract score if available (some SearXNG instances provide it)
-                let score = result_json["score"].as_f64()
+                let score = result_json["score"]
+                    .as_f64()
                     .unwrap_or(1.0) // Default score when not provided
                     .clamp(0.0, 1.0); // Clamp between 0 and 1
 
@@ -454,7 +497,7 @@ impl WebSearchTool {
         match category {
             SearchCategory::General => "general",
             SearchCategory::Images => "images",
-            SearchCategory::Videos => "videos", 
+            SearchCategory::Videos => "videos",
             SearchCategory::News => "news",
             SearchCategory::Map => "map",
             SearchCategory::Music => "music",
@@ -484,7 +527,7 @@ impl WebSearchTool {
                 parameter: Some("language".to_string()),
             }
         })?;
-        
+
         if !re.is_match(language) {
             return Err(WebSearchInternalError::InvalidRequest {
                 message: format!(
@@ -493,7 +536,7 @@ impl WebSearchTool {
                 parameter: Some("language".to_string()),
             });
         }
-        
+
         Ok(())
     }
 
@@ -509,7 +552,10 @@ impl WebSearchTool {
 
         if request.query.len() > 500 {
             return Err(WebSearchInternalError::InvalidRequest {
-                message: format!("Search query is {} characters, maximum is 500", request.query.len()),
+                message: format!(
+                    "Search query is {} characters, maximum is 500",
+                    request.query.len()
+                ),
                 parameter: Some("query".to_string()),
             });
         }
@@ -548,7 +594,6 @@ impl WebSearchTool {
 
         Ok(())
     }
-
 }
 
 /// Response from SearXNG API
@@ -607,7 +652,7 @@ impl McpTool for WebSearchTool {
         for attempt in 0..max_attempts {
             if let Some(instance) = instance_manager.get_next_instance().await {
                 attempted_instances.push(instance.url.clone());
-                
+
                 match search_tool.perform_search(&instance.url, &request).await {
                     Ok(mut searxng_response) => {
                         let search_time = start_time.elapsed();
@@ -618,13 +663,13 @@ impl McpTool for WebSearchTool {
                         if request.fetch_content.unwrap_or(true) {
                             let content_config = Self::load_content_fetch_config();
                             let content_fetcher = ContentFetcher::new(content_config);
-                            
+
                             let (processed_results, stats) = content_fetcher
                                 .fetch_search_results(searxng_response.results)
                                 .await;
 
                             searxng_response.results = processed_results;
-                            
+
                             content_fetch_stats = Some(ContentFetchStats {
                                 attempted: stats.attempted,
                                 successful: stats.successful,
@@ -667,15 +712,17 @@ impl McpTool for WebSearchTool {
                     }
                     Err(e) => {
                         tracing::warn!("Search failed on instance {}: {}", instance.url, e);
-                        
+
                         // Mark instance as failed for health tracking
                         instance_manager.mark_instance_failed(&instance.url).await;
-                        
+
                         // Check if it's a rate limit error and handle appropriately
                         if e.to_string().contains("rate limit") || e.to_string().contains("429") {
-                            instance_manager.mark_instance_rate_limited(&instance.url, Duration::from_secs(300)).await;
+                            instance_manager
+                                .mark_instance_rate_limited(&instance.url, Duration::from_secs(300))
+                                .await;
                         }
-                        
+
                         last_error = Some(e.to_string());
                         continue;
                     }
@@ -761,7 +808,7 @@ mod tests {
     #[test]
     fn test_load_instance_manager_config() {
         let config = WebSearchTool::load_instance_manager_config();
-        
+
         // Should have default values when no config is present
         assert!(config.discovery_enabled);
         assert_eq!(config.discovery_refresh_interval, Duration::from_secs(3600));
@@ -790,24 +837,60 @@ mod tests {
 
     #[test]
     fn test_category_to_string() {
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::General), "general");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::Images), "images");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::Videos), "videos");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::News), "news");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::Map), "map");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::Music), "music");
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::General),
+            "general"
+        );
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::Images),
+            "images"
+        );
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::Videos),
+            "videos"
+        );
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::News),
+            "news"
+        );
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::Map),
+            "map"
+        );
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::Music),
+            "music"
+        );
         assert_eq!(WebSearchTool::category_to_string(&SearchCategory::It), "it");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::Science), "science");
-        assert_eq!(WebSearchTool::category_to_string(&SearchCategory::Files), "files");
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::Science),
+            "science"
+        );
+        assert_eq!(
+            WebSearchTool::category_to_string(&SearchCategory::Files),
+            "files"
+        );
     }
 
     #[test]
     fn test_time_range_to_string() {
         assert_eq!(WebSearchTool::time_range_to_string(&TimeRange::All), None);
-        assert_eq!(WebSearchTool::time_range_to_string(&TimeRange::Day), Some("day"));
-        assert_eq!(WebSearchTool::time_range_to_string(&TimeRange::Week), Some("week"));
-        assert_eq!(WebSearchTool::time_range_to_string(&TimeRange::Month), Some("month"));
-        assert_eq!(WebSearchTool::time_range_to_string(&TimeRange::Year), Some("year"));
+        assert_eq!(
+            WebSearchTool::time_range_to_string(&TimeRange::Day),
+            Some("day")
+        );
+        assert_eq!(
+            WebSearchTool::time_range_to_string(&TimeRange::Week),
+            Some("week")
+        );
+        assert_eq!(
+            WebSearchTool::time_range_to_string(&TimeRange::Month),
+            Some("month")
+        );
+        assert_eq!(
+            WebSearchTool::time_range_to_string(&TimeRange::Year),
+            Some("year")
+        );
     }
 
     #[test]
@@ -888,7 +971,10 @@ mod tests {
         };
         let result = WebSearchTool::validate_request(&request);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid language code"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid language code"));
     }
 
     #[test]
@@ -904,7 +990,10 @@ mod tests {
         };
         let result = WebSearchTool::validate_request(&request);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be at least 1"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be at least 1"));
 
         let request_high = WebSearchRequest {
             query: "test".to_string(),
@@ -917,7 +1006,10 @@ mod tests {
         };
         let result_high = WebSearchTool::validate_request(&request_high);
         assert!(result_high.is_err());
-        assert!(result_high.unwrap_err().to_string().contains("maximum is 50"));
+        assert!(result_high
+            .unwrap_err()
+            .to_string()
+            .contains("maximum is 50"));
     }
 
     #[test]
@@ -926,12 +1018,18 @@ mod tests {
             message: "Test error".to_string(),
             parameter: Some("test_param".to_string()),
         };
-        assert_eq!(error.to_string(), "Invalid parameter 'test_param': Test error");
+        assert_eq!(
+            error.to_string(),
+            "Invalid parameter 'test_param': Test error"
+        );
 
         let error2 = WebSearchInternalError::NetworkError {
             message: "Connection failed".to_string(),
             instance: "https://example.com".to_string(),
         };
-        assert_eq!(error2.to_string(), "Network error for instance 'https://example.com': Connection failed");
+        assert_eq!(
+            error2.to_string(),
+            "Network error for instance 'https://example.com': Connection failed"
+        );
     }
 }
