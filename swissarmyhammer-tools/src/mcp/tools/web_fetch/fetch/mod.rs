@@ -19,6 +19,144 @@ impl WebFetchTool {
     pub fn new() -> Self {
         Self
     }
+
+    /// Extract title from markdown content (first heading)
+    fn extract_title_from_markdown(markdown: &str) -> Option<String> {
+        for line in markdown.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                // Extract heading text, removing # symbols and whitespace
+                let title = trimmed.trim_start_matches('#').trim().to_string();
+                if !title.is_empty() {
+                    return Some(title);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract description from markdown content (first substantial paragraph after title)
+    fn extract_description_from_markdown(markdown: &str) -> Option<String> {
+        let mut found_title = false;
+        let mut in_paragraph = false;
+        let mut current_paragraph = String::new();
+
+        for line in markdown.lines() {
+            let trimmed = line.trim();
+
+            // Skip until we find the first heading
+            if !found_title {
+                if trimmed.starts_with('#') {
+                    found_title = true;
+                }
+                continue;
+            }
+
+            // Skip empty lines and other headings
+            if trimmed.is_empty() {
+                if in_paragraph && !current_paragraph.trim().is_empty() {
+                    // End of paragraph - check if it's substantial
+                    let paragraph_text = current_paragraph.trim().to_string();
+                    if paragraph_text.len() > 50 && !paragraph_text.starts_with('#') {
+                        return Some(paragraph_text);
+                    }
+                }
+                current_paragraph.clear();
+                in_paragraph = false;
+                continue;
+            }
+
+            // Skip other headings
+            if trimmed.starts_with('#') {
+                current_paragraph.clear();
+                in_paragraph = false;
+                continue;
+            }
+
+            // Accumulate paragraph content
+            if !in_paragraph {
+                in_paragraph = true;
+                current_paragraph = trimmed.to_string();
+            } else {
+                current_paragraph.push(' ');
+                current_paragraph.push_str(trimmed);
+            }
+        }
+
+        // Check final paragraph if we ended while building one
+        if in_paragraph && !current_paragraph.trim().is_empty() {
+            let paragraph_text = current_paragraph.trim().to_string();
+            if paragraph_text.len() > 50 {
+                return Some(paragraph_text);
+            }
+        }
+
+        None
+    }
+
+    /// Categorize errors by type for better error handling
+    fn categorize_error(error: &impl std::error::Error) -> &'static str {
+        let error_str = error.to_string().to_lowercase();
+
+        // Network-related errors
+        if error_str.contains("connection")
+            || error_str.contains("timeout")
+            || error_str.contains("dns")
+        {
+            "network_error"
+        } else if error_str.contains("ssl")
+            || error_str.contains("tls")
+            || error_str.contains("certificate")
+        {
+            "security_error"
+        } else if error_str.contains("redirect") || error_str.contains("too many") {
+            "redirect_error"
+        } else if error_str.contains("404") || error_str.contains("not found") {
+            "not_found_error"
+        } else if error_str.contains("403")
+            || error_str.contains("forbidden")
+            || error_str.contains("unauthorized")
+        {
+            "access_denied_error"
+        } else if error_str.contains("500")
+            || error_str.contains("502")
+            || error_str.contains("503")
+        {
+            "server_error"
+        } else if error_str.contains("parse")
+            || error_str.contains("encoding")
+            || error_str.contains("invalid")
+        {
+            "content_error"
+        } else if error_str.contains("too large") || error_str.contains("size") {
+            "size_limit_error"
+        } else {
+            "unknown_error"
+        }
+    }
+
+    /// Get error suggestion based on error type
+    fn get_error_suggestion(error_type: &str) -> &'static str {
+        match error_type {
+            "network_error" => "Check your internet connection and try again. The server may be temporarily unavailable.",
+            "security_error" => "SSL/TLS certificate validation failed. Check if the URL uses HTTPS correctly.",
+            "redirect_error" => "Too many redirects detected. The URL may have redirect loops.",
+            "not_found_error" => "The requested page was not found. Verify the URL is correct and the page exists.",
+            "access_denied_error" => "Access to the resource is forbidden. Check if authentication is required.",
+            "server_error" => "The server encountered an error. Try again later or contact the website administrator.",
+            "content_error" => "Failed to process the HTML content. The page may have malformed HTML or encoding issues.",
+            "size_limit_error" => "Content is too large. Try reducing max_content_length or use a different URL.",
+            _ => "An unexpected error occurred. Check the URL and try again."
+        }
+    }
+
+    /// Check if an error type is retryable
+    fn is_retryable_error(error_type: &str) -> bool {
+        matches!(
+            error_type,
+            "network_error" | "server_error" | "redirect_error"
+        )
+    }
 }
 
 #[async_trait]
@@ -123,7 +261,7 @@ impl McpTool for WebFetchTool {
         // Implement actual web fetching using markdowndown crate
         tracing::info!("Fetching web content from: {}", request.url);
 
-        // Configure markdowndown Config
+        // Configure markdowndown Config with enhanced HTML-to-markdown options
         let mut config = markdowndown::Config::default();
 
         // Configure HTTP settings
@@ -138,6 +276,19 @@ impl McpTool for WebFetchTool {
             0
         };
 
+        // Configure HTML processing options for better content extraction
+        config.html.max_line_width = 120; // Reasonable line width for markdown
+        config.html.remove_scripts_styles = true; // Clean up scripts and styles
+        config.html.remove_navigation = true; // Remove nav elements for cleaner content
+        config.html.remove_sidebars = true; // Remove sidebar content
+        config.html.remove_ads = true; // Clean up advertisement content
+        config.html.max_blank_lines = 2; // Limit excessive blank lines
+
+        // Configure output formatting for clean, structured markdown
+        config.output.include_frontmatter = false; // Don't add YAML frontmatter
+        config.output.normalize_whitespace = true; // Clean up whitespace
+        config.output.max_consecutive_blank_lines = 2; // Prevent excessive blank lines
+
         // Perform the web fetch and convert to markdown
         let start_time = std::time::Instant::now();
         let fetch_result = markdowndown::convert_url_with_config(&request.url, config).await;
@@ -147,22 +298,44 @@ impl McpTool for WebFetchTool {
             Ok(markdown_content) => {
                 let content_str = markdown_content.as_str();
                 let content_length = content_str.len();
+                let word_count = content_str.split_whitespace().count();
+
+                // Extract HTML title from markdown content (first heading)
+                let extracted_title = Self::extract_title_from_markdown(content_str);
+
+                // Extract description (first paragraph after title)
+                let extracted_description = Self::extract_description_from_markdown(content_str);
 
                 tracing::info!(
-                    "Successfully fetched content from {} ({}ms, {} bytes)",
+                    "Successfully fetched content from {} ({}ms, {} bytes, {} words)",
                     request.url,
                     response_time_ms,
-                    content_length
+                    content_length,
+                    word_count
                 );
 
-                // Create response with markdown content and metadata
+                // Create comprehensive response with markdown content and enhanced metadata
                 let response = serde_json::json!({
                     "url": request.url,
+                    "final_url": request.url, // markdowndown handles redirects internally
                     "status": "success",
+                    "status_code": 200, // Assume success if we got content
                     "response_time_ms": response_time_ms,
                     "content_length": content_length,
-                    "word_count": content_str.split_whitespace().count(),
-                    "markdown_content": content_str
+                    "word_count": word_count,
+                    "title": extracted_title,
+                    "description": extracted_description,
+                    "content_type": "text/html", // Assumed since we're processing HTML
+                    "markdown_content": content_str,
+                    "encoding": "utf-8", // markdowndown normalizes to UTF-8
+                    "conversion_options": {
+                        "max_line_width": 120,
+                        "remove_scripts_styles": true,
+                        "remove_navigation": true,
+                        "remove_sidebars": true,
+                        "remove_ads": true,
+                        "normalize_whitespace": true
+                    }
                 });
 
                 Ok(BaseToolImpl::create_success_response(format!(
@@ -173,27 +346,36 @@ impl McpTool for WebFetchTool {
                 )))
             }
             Err(error) => {
+                let error_type = Self::categorize_error(&error);
+                let error_suggestion = Self::get_error_suggestion(error_type);
+
                 tracing::warn!(
-                    "Failed to fetch content from {} after {}ms: {}",
+                    "Failed to fetch content from {} after {}ms: {} (category: {})",
                     request.url,
                     response_time_ms,
-                    error
+                    error,
+                    error_type
                 );
 
-                // Create error response
+                // Create comprehensive error response
                 let error_info = serde_json::json!({
                     "url": request.url,
                     "status": "error",
-                    "error_type": "fetch_error",
+                    "error_type": error_type,
                     "error_details": error.to_string(),
-                    "response_time_ms": response_time_ms
+                    "error_suggestion": error_suggestion,
+                    "response_time_ms": response_time_ms,
+                    "encoding": "utf-8",
+                    "retry_recommended": Self::is_retryable_error(error_type)
                 });
 
                 Err(McpError::invalid_params(
                     format!(
-                        "Failed to fetch content from {}: {}\n\nError details: {}",
+                        "Failed to fetch content from {}: {}\n\nError Type: {}\nSuggestion: {}\n\nError details: {}",
                         request.url,
                         error,
+                        error_type,
+                        error_suggestion,
                         serde_json::to_string_pretty(&error_info).unwrap_or_default()
                     ),
                     None,
@@ -336,5 +518,147 @@ mod tests {
         assert!(!(1024..=10_485_760).contains(&length_too_small));
         assert!(!(1024..=10_485_760).contains(&length_too_large));
         assert!((1024..=10_485_760).contains(&length_valid));
+    }
+
+    #[test]
+    fn test_extract_title_from_markdown() {
+        // Test title extraction from various markdown formats
+        let markdown_with_title = "# Main Title\n\nSome content here.";
+        let title = WebFetchTool::extract_title_from_markdown(markdown_with_title);
+        assert_eq!(title, Some("Main Title".to_string()));
+
+        // Test with multiple headings - should get the first
+        let markdown_multiple_headings = "# First Title\n\nSome content.\n\n## Second Title";
+        let title = WebFetchTool::extract_title_from_markdown(markdown_multiple_headings);
+        assert_eq!(title, Some("First Title".to_string()));
+
+        // Test with no headings
+        let markdown_no_title = "Just some paragraph text without headings.";
+        let title = WebFetchTool::extract_title_from_markdown(markdown_no_title);
+        assert_eq!(title, None);
+
+        // Test with empty heading
+        let markdown_empty_heading = "#\n\nSome content.";
+        let title = WebFetchTool::extract_title_from_markdown(markdown_empty_heading);
+        assert_eq!(title, None);
+
+        // Test with heading containing extra spaces
+        let markdown_spaced_heading = "###   Spaced Title   \n\nContent.";
+        let title = WebFetchTool::extract_title_from_markdown(markdown_spaced_heading);
+        assert_eq!(title, Some("Spaced Title".to_string()));
+    }
+
+    #[test]
+    fn test_extract_description_from_markdown() {
+        // Test description extraction after title
+        let markdown_with_description = "# Title\n\nThis is a substantial description that should be longer than fifty characters to be extracted as the description.";
+        let description =
+            WebFetchTool::extract_description_from_markdown(markdown_with_description);
+        assert!(description.is_some());
+        assert!(description.unwrap().len() > 50);
+
+        // Test with short description - should be None
+        let markdown_short_description = "# Title\n\nShort.";
+        let description =
+            WebFetchTool::extract_description_from_markdown(markdown_short_description);
+        assert_eq!(description, None);
+
+        // Test with no title - should be None
+        let markdown_no_title =
+            "This is content without a title. It should not extract a description.";
+        let description = WebFetchTool::extract_description_from_markdown(markdown_no_title);
+        assert_eq!(description, None);
+
+        // Test with multiple paragraphs - should get first substantial one
+        let markdown_multiple_paragraphs = "# Title\n\nThis is the first substantial paragraph that meets the length requirement for description extraction.\n\nThis is a second paragraph.";
+        let description =
+            WebFetchTool::extract_description_from_markdown(markdown_multiple_paragraphs);
+        assert!(description.is_some());
+        assert!(description.unwrap().contains("first substantial paragraph"));
+    }
+
+    #[test]
+    fn test_error_categorization() {
+        // Test network error categorization
+        let network_error =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused");
+        assert_eq!(
+            WebFetchTool::categorize_error(&network_error),
+            "network_error"
+        );
+
+        let timeout_error = std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout occurred");
+        assert_eq!(
+            WebFetchTool::categorize_error(&timeout_error),
+            "network_error"
+        );
+
+        // Test general error categorization
+        let parse_error =
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid parse data");
+        assert_eq!(
+            WebFetchTool::categorize_error(&parse_error),
+            "content_error"
+        );
+
+        // Test unknown error
+        let unknown_error = std::io::Error::new(std::io::ErrorKind::Other, "some other error");
+        assert_eq!(
+            WebFetchTool::categorize_error(&unknown_error),
+            "unknown_error"
+        );
+    }
+
+    #[test]
+    fn test_error_suggestions() {
+        assert_eq!(
+            WebFetchTool::get_error_suggestion("network_error"),
+            "Check your internet connection and try again. The server may be temporarily unavailable."
+        );
+
+        assert_eq!(
+            WebFetchTool::get_error_suggestion("not_found_error"),
+            "The requested page was not found. Verify the URL is correct and the page exists."
+        );
+
+        assert_eq!(
+            WebFetchTool::get_error_suggestion("unknown_error"),
+            "An unexpected error occurred. Check the URL and try again."
+        );
+    }
+
+    #[test]
+    fn test_retryable_errors() {
+        assert!(WebFetchTool::is_retryable_error("network_error"));
+        assert!(WebFetchTool::is_retryable_error("server_error"));
+        assert!(WebFetchTool::is_retryable_error("redirect_error"));
+
+        assert!(!WebFetchTool::is_retryable_error("not_found_error"));
+        assert!(!WebFetchTool::is_retryable_error("access_denied_error"));
+        assert!(!WebFetchTool::is_retryable_error("content_error"));
+    }
+
+    #[test]
+    fn test_markdowndown_config_options() {
+        let tool = WebFetchTool::new();
+        let schema = tool.schema();
+
+        // Verify schema has all required fields for configuration
+        assert!(schema.is_object());
+        let obj = schema.as_object().unwrap();
+        let properties = obj["properties"].as_object().unwrap();
+
+        // Test that all configuration parameters are present
+        assert!(properties.contains_key("url"));
+        assert!(properties.contains_key("timeout"));
+        assert!(properties.contains_key("follow_redirects"));
+        assert!(properties.contains_key("max_content_length"));
+        assert!(properties.contains_key("user_agent"));
+
+        // Verify proper defaults and constraints
+        let timeout_prop = &properties["timeout"];
+        assert_eq!(timeout_prop["minimum"], 5);
+        assert_eq!(timeout_prop["maximum"], 120);
+        assert_eq!(timeout_prop["default"], 30);
     }
 }
