@@ -68,11 +68,16 @@ impl WebFetchTool {
         };
 
         loop {
-            tracing::debug!("Fetching URL: {} (redirect #{}/{})", current_url, redirect_count, max_redirects);
-            
+            tracing::debug!(
+                "Fetching URL: {} (redirect #{}/{})",
+                current_url,
+                redirect_count,
+                max_redirects
+            );
+
             let response = client.get(&current_url).send().await?;
             let status_code = response.status().as_u16();
-            
+
             // Add current step to redirect chain
             redirect_chain.push(RedirectStep {
                 url: current_url.clone(),
@@ -80,9 +85,12 @@ impl WebFetchTool {
             });
 
             // Check if this is a redirect
-            if status_code >= 300 && status_code < 400 {
+            if (300..400).contains(&status_code) {
                 if redirect_count >= max_redirects {
-                    return Err(format!("Too many redirects ({}). Maximum allowed: {}", redirect_count, max_redirects).into());
+                    return Err(format!(
+                        "Too many redirects ({redirect_count}). Maximum allowed: {max_redirects}"
+                    )
+                    .into());
                 }
 
                 // Get redirect location
@@ -93,13 +101,14 @@ impl WebFetchTool {
                     .ok_or("Redirect response missing Location header")?;
 
                 // Handle relative URLs
-                let redirect_url = if location.starts_with("http://") || location.starts_with("https://") {
-                    location.to_string()
-                } else {
-                    // Parse base URL and resolve relative redirect
-                    let base_url = reqwest::Url::parse(&current_url)?;
-                    base_url.join(location)?.to_string()
-                };
+                let redirect_url =
+                    if location.starts_with("http://") || location.starts_with("https://") {
+                        location.to_string()
+                    } else {
+                        // Parse base URL and resolve relative redirect
+                        let base_url = reqwest::Url::parse(&current_url)?;
+                        base_url.join(location)?.to_string()
+                    };
 
                 current_url = redirect_url;
                 redirect_count += 1;
@@ -108,7 +117,9 @@ impl WebFetchTool {
 
             // Not a redirect - check if successful
             if !response.status().is_success() {
-                return Err(format!("HTTP error: {} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or("Unknown")).into());
+                let status_code = response.status().as_u16();
+                let reason = response.status().canonical_reason().unwrap_or("Unknown");
+                return Err(format!("HTTP error: {status_code} {reason}").into());
             }
 
             // Get final content
@@ -120,11 +131,15 @@ impl WebFetchTool {
                 .to_string();
 
             let body = response.text().await?;
-            
+
             // Check content length limits
             if let Some(max_length) = request.max_content_length {
                 if body.len() > max_length as usize {
-                    return Err(format!("Content too large: {} bytes exceeds limit of {} bytes", body.len(), max_length).into());
+                    let body_len = body.len();
+                    return Err(format!(
+                        "Content too large: {body_len} bytes exceeds limit of {max_length} bytes"
+                    )
+                    .into());
                 }
             }
 
@@ -133,7 +148,7 @@ impl WebFetchTool {
                 html2md::parse_html(&body)
             } else {
                 // For non-HTML content, return as-is wrapped in code block
-                format!("```\n{}\n```", body)
+                format!("```\n{body}\n```")
             };
 
             let redirect_info = RedirectInfo {
@@ -386,9 +401,11 @@ impl McpTool for WebFetchTool {
 
         // Implement web fetching with redirect tracking
         tracing::info!("Fetching web content from: {}", request.url);
-        
+
         let start_time = std::time::Instant::now();
-        let fetch_result = self.fetch_with_redirect_tracking(&request.url, &request).await;
+        let fetch_result = self
+            .fetch_with_redirect_tracking(&request.url, &request)
+            .await;
         let response_time_ms = start_time.elapsed().as_millis() as u64;
 
         match fetch_result {
@@ -412,9 +429,14 @@ impl McpTool for WebFetchTool {
                 );
 
                 // Create redirect chain formatted as per specification
-                let redirect_chain_formatted: Vec<String> = redirect_info.redirect_chain
+                let redirect_chain_formatted: Vec<String> = redirect_info
+                    .redirect_chain
                     .iter()
-                    .map(|step| format!("{} -> {}", step.url, step.status_code))
+                    .map(|step| {
+                        let url = &step.url;
+                        let status_code = step.status_code;
+                        format!("{url} -> {status_code}")
+                    })
                     .collect();
 
                 // Create comprehensive response with markdown content and redirect metadata
@@ -435,31 +457,31 @@ impl McpTool for WebFetchTool {
 
                 // Add redirect information if redirects occurred
                 if redirect_info.redirect_count > 0 {
-                    response["redirect_count"] = serde_json::Value::Number(serde_json::Number::from(redirect_info.redirect_count));
+                    response["redirect_count"] = serde_json::Value::Number(
+                        serde_json::Number::from(redirect_info.redirect_count),
+                    );
                     response["redirect_chain"] = serde_json::Value::Array(
                         redirect_chain_formatted
                             .into_iter()
                             .map(serde_json::Value::String)
-                            .collect()
+                            .collect(),
                     );
                 }
 
                 let success_message = if redirect_info.redirect_count > 0 {
+                    let url = &request.url;
+                    let redirect_count = redirect_info.redirect_count;
+                    let redirect_s = if redirect_count == 1 { "" } else { "s" };
+                    let final_url = &redirect_info.final_url;
+                    let metadata = serde_json::to_string_pretty(&response).unwrap_or_default();
                     format!(
-                        "Successfully fetched and converted content from {} (followed {} redirect{})\nFinal URL: {}\n\nMetadata: {}\n\nContent:\n{}",
-                        request.url,
-                        redirect_info.redirect_count,
-                        if redirect_info.redirect_count == 1 { "" } else { "s" },
-                        redirect_info.final_url,
-                        serde_json::to_string_pretty(&response).unwrap_or_default(),
-                        content_str
+                        "Successfully fetched and converted content from {url} (followed {redirect_count} redirect{redirect_s})\nFinal URL: {final_url}\n\nMetadata: {metadata}\n\nContent:\n{content_str}"
                     )
                 } else {
+                    let url = &request.url;
+                    let metadata = serde_json::to_string_pretty(&response).unwrap_or_default();
                     format!(
-                        "Successfully fetched and converted content from {}\n\nMetadata: {}\n\nContent:\n{}",
-                        request.url,
-                        serde_json::to_string_pretty(&response).unwrap_or_default(),
-                        content_str
+                        "Successfully fetched and converted content from {url}\n\nMetadata: {metadata}\n\nContent:\n{content_str}"
                     )
                 };
 
@@ -489,14 +511,11 @@ impl McpTool for WebFetchTool {
                     "retry_recommended": Self::is_retryable_error(error_type)
                 });
 
+                let url = &request.url;
+                let error_details = serde_json::to_string_pretty(&error_info).unwrap_or_default();
                 Err(McpError::invalid_params(
                     format!(
-                        "Failed to fetch content from {}: {}\n\nError Type: {}\nSuggestion: {}\n\nError details: {}",
-                        request.url,
-                        error,
-                        error_type,
-                        error_suggestion,
-                        serde_json::to_string_pretty(&error_info).unwrap_or_default()
+                        "Failed to fetch content from {url}: {error}\n\nError Type: {error_type}\nSuggestion: {error_suggestion}\n\nError details: {error_details}"
                     ),
                     None,
                 ))
@@ -1024,7 +1043,7 @@ mod tests {
         assert_eq!(boundary_request.follow_redirects, Some(true));
     }
 
-    #[test] 
+    #[test]
     fn test_redirect_step_creation() {
         let step = RedirectStep {
             url: "https://example.com".to_string(),
@@ -1042,17 +1061,17 @@ mod tests {
                 status_code: 301,
             },
             RedirectStep {
-                url: "https://example.com/new".to_string(), 
+                url: "https://example.com/new".to_string(),
                 status_code: 200,
             },
         ];
-        
+
         let redirect_info = RedirectInfo {
             redirect_count: 1,
             redirect_chain: redirect_chain.clone(),
             final_url: "https://example.com/new".to_string(),
         };
-        
+
         assert_eq!(redirect_info.redirect_count, 1);
         assert_eq!(redirect_info.redirect_chain.len(), 2);
         assert_eq!(redirect_info.final_url, "https://example.com/new");
@@ -1076,12 +1095,16 @@ mod tests {
                 status_code: 200,
             },
         ];
-        
+
         let formatted: Vec<String> = redirect_chain
             .iter()
-            .map(|step| format!("{} -> {}", step.url, step.status_code))
+            .map(|step| {
+                let url = &step.url;
+                let status_code = step.status_code;
+                format!("{url} -> {status_code}")
+            })
             .collect();
-            
+
         assert_eq!(formatted.len(), 3);
         assert_eq!(formatted[0], "https://example.com/step1 -> 301");
         assert_eq!(formatted[1], "https://example.com/step2 -> 302");
@@ -1092,16 +1115,24 @@ mod tests {
     fn test_redirect_status_code_categorization() {
         // Test different redirect status codes
         let redirect_codes = [301, 302, 303, 307, 308];
-        
+
         for code in redirect_codes {
-            assert!(code >= 300 && code < 400, "Status code {} should be in 3xx range", code);
+            assert!(
+                (300..400).contains(&code),
+                "Status code {} should be in 3xx range",
+                code
+            );
         }
-        
+
         // Test non-redirect codes
         let non_redirect_codes = [200, 404, 500];
-        
+
         for code in non_redirect_codes {
-            assert!(!(code >= 300 && code < 400), "Status code {} should not be in 3xx range", code);
+            assert!(
+                !(300..400).contains(&code),
+                "Status code {} should not be in 3xx range",
+                code
+            );
         }
     }
 
@@ -1110,10 +1141,10 @@ mod tests {
         // Test that max redirects logic is correct
         let follow_redirects_true = true;
         let follow_redirects_false = false;
-        
+
         let max_redirects_when_following = if follow_redirects_true { 10 } else { 0 };
         let max_redirects_when_not_following = if follow_redirects_false { 10 } else { 0 };
-        
+
         assert_eq!(max_redirects_when_following, 10);
         assert_eq!(max_redirects_when_not_following, 0);
     }
@@ -1125,24 +1156,24 @@ mod tests {
         let one_redirect = 1;
         let multiple_redirects = 3;
         let max_redirects = 10;
-        
+
         assert!(no_redirects <= max_redirects);
         assert!(one_redirect <= max_redirects);
         assert!(multiple_redirects <= max_redirects);
         assert!(max_redirects <= max_redirects);
-        
+
         let too_many_redirects = 11;
         assert!(too_many_redirects > max_redirects);
     }
 
-    #[test] 
+    #[test]
     fn test_url_parsing_for_redirects() {
         // Test absolute URL detection
         let absolute_http = "http://example.com";
         let absolute_https = "https://example.com";
         let relative_path = "/path/to/resource";
         let relative_query = "?query=param";
-        
+
         assert!(absolute_http.starts_with("http://") || absolute_http.starts_with("https://"));
         assert!(absolute_https.starts_with("http://") || absolute_https.starts_with("https://"));
         assert!(!(relative_path.starts_with("http://") || relative_path.starts_with("https://")));
@@ -1153,13 +1184,10 @@ mod tests {
     fn test_redirect_error_message_formatting() {
         let redirect_count = 11;
         let max_redirects = 10;
-        
-        let error_message = format!(
-            "Too many redirects ({}). Maximum allowed: {}", 
-            redirect_count, 
-            max_redirects
-        );
-        
+
+        let error_message =
+            format!("Too many redirects ({redirect_count}). Maximum allowed: {max_redirects}");
+
         assert!(error_message.contains("Too many redirects"));
         assert!(error_message.contains("11"));
         assert!(error_message.contains("10"));
@@ -1169,58 +1197,61 @@ mod tests {
     fn test_response_metadata_redirect_fields() {
         // Test that redirect response contains required fields
         let redirect_count = 2;
-        let redirect_chain = vec!["https://example.com/old -> 301", "https://example.com/new -> 200"];
-        
+        let redirect_chain = [
+            "https://example.com/old -> 301",
+            "https://example.com/new -> 200",
+        ];
+
         let mut response = serde_json::json!({
             "url": "https://example.com/old",
             "final_url": "https://example.com/new",
             "status": "success"
         });
-        
+
         // Simulate adding redirect information
         if redirect_count > 0 {
-            response["redirect_count"] = serde_json::Value::Number(serde_json::Number::from(redirect_count));
+            response["redirect_count"] =
+                serde_json::Value::Number(serde_json::Number::from(redirect_count));
             response["redirect_chain"] = serde_json::Value::Array(
                 redirect_chain
                     .into_iter()
                     .map(|s| serde_json::Value::String(s.to_string()))
-                    .collect()
+                    .collect(),
             );
         }
-        
-        assert_eq!(response["redirect_count"], serde_json::Value::Number(serde_json::Number::from(2)));
+
+        assert_eq!(
+            response["redirect_count"],
+            serde_json::Value::Number(serde_json::Number::from(2))
+        );
         assert!(response["redirect_chain"].is_array());
-        
+
         let chain_array = response["redirect_chain"].as_array().unwrap();
         assert_eq!(chain_array.len(), 2);
         assert_eq!(chain_array[0], "https://example.com/old -> 301");
         assert_eq!(chain_array[1], "https://example.com/new -> 200");
     }
 
-    #[test] 
+    #[test]
     fn test_success_message_formatting() {
         // Test success message with no redirects
         let url = "https://example.com";
+        let metadata = "{}";
+        let content = "content";
         let no_redirect_message = format!(
-            "Successfully fetched and converted content from {}\n\nMetadata: {}\n\nContent:\n{}",
-            url,
-            "{}",
-            "content"
+            "Successfully fetched and converted content from {url}\n\nMetadata: {metadata}\n\nContent:\n{content}"
         );
         assert!(no_redirect_message.contains("Successfully fetched"));
         assert!(no_redirect_message.contains(url));
-        
+
         // Test success message with redirects
         let redirect_count = 2;
         let final_url = "https://example.com/final";
+        let redirect_s = if redirect_count == 1 { "" } else { "s" };
+        let metadata2 = "{}";
+        let content2 = "content";
         let redirect_message = format!(
-            "Successfully fetched and converted content from {} (followed {} redirect{})\nFinal URL: {}\n\nMetadata: {}\n\nContent:\n{}",
-            url,
-            redirect_count,
-            if redirect_count == 1 { "" } else { "s" },
-            final_url,
-            "{}",
-            "content"
+            "Successfully fetched and converted content from {url} (followed {redirect_count} redirect{redirect_s})\nFinal URL: {final_url}\n\nMetadata: {metadata2}\n\nContent:\n{content2}"
         );
         assert!(redirect_message.contains("followed 2 redirects"));
         assert!(redirect_message.contains("Final URL:"));
