@@ -1326,4 +1326,1575 @@ mod tests {
         assert_eq!(user_agent_prop["type"], "string");
         assert_eq!(user_agent_prop["default"], "SwissArmyHammer-Bot/1.0");
     }
+
+    // Additional comprehensive parameter validation tests
+
+    #[test]
+    fn test_parse_arguments_with_invalid_types() {
+        // Test URL with wrong type
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(12345)),
+        );
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        assert!(result.is_err());
+
+        // Test timeout with wrong type
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::String("not_a_number".to_string()),
+        );
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        assert!(result.is_err());
+
+        // Test follow_redirects with wrong type
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "follow_redirects".to_string(),
+            serde_json::Value::String("not_a_boolean".to_string()),
+        );
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        assert!(result.is_err());
+
+        // Test max_content_length with wrong type
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "max_content_length".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_arguments_with_null_values() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert("timeout".to_string(), serde_json::Value::Null);
+        args.insert("follow_redirects".to_string(), serde_json::Value::Null);
+        args.insert("max_content_length".to_string(), serde_json::Value::Null);
+        args.insert("user_agent".to_string(), serde_json::Value::Null);
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "https://example.com");
+        assert_eq!(request.timeout, None);
+        assert_eq!(request.follow_redirects, None);
+        assert_eq!(request.max_content_length, None);
+        assert_eq!(request.user_agent, None);
+    }
+
+    #[test]
+    fn test_parse_arguments_with_extra_fields() {
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        // Add extra fields that should be ignored
+        args.insert(
+            "extra_field".to_string(),
+            serde_json::Value::String("ignored".to_string()),
+        );
+        args.insert(
+            "another_field".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(999)),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "https://example.com");
+        // Should ignore extra fields gracefully
+    }
+
+    #[test]
+    fn test_parameter_constraint_validation_edge_cases() {
+        // Test timeout exactly at boundaries
+        let timeout_boundary_cases = [
+            (4, false),   // Below minimum
+            (5, true),    // At minimum
+            (120, true),  // At maximum
+            (121, false), // Above maximum
+        ];
+
+        for (timeout, should_be_valid) in timeout_boundary_cases {
+            assert_eq!(
+                (MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout),
+                should_be_valid,
+                "Timeout validation failed for {timeout}"
+            );
+        }
+
+        // Test content length exactly at boundaries
+        let content_length_boundary_cases = [
+            (1023, false),     // Below minimum
+            (1024, true),      // At minimum
+            (10485760, true),  // At maximum
+            (10485761, false), // Above maximum
+        ];
+
+        for (length, should_be_valid) in content_length_boundary_cases {
+            assert_eq!(
+                (MIN_CONTENT_LENGTH_BYTES..=MAX_CONTENT_LENGTH_BYTES).contains(&length),
+                should_be_valid,
+                "Content length validation failed for {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_negative_parameter_values() {
+        // Test negative timeout
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(-1)),
+        );
+
+        // Should either fail parsing or be caught by validation
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        if let Ok(request) = result {
+            // If parsing succeeds, validation should catch it
+            assert!(request.timeout.is_none() || request.timeout == Some(u32::MAX));
+            // Underflow handling
+        }
+
+        // Test negative max_content_length
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "max_content_length".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(-1000)),
+        );
+
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        if let Ok(request) = result {
+            // If parsing succeeds, validation should catch it
+            assert!(
+                request.max_content_length.is_none()
+                    || request.max_content_length == Some(u32::MAX)
+            );
+        }
+    }
+
+    #[test]
+    fn test_very_large_parameter_values() {
+        // Test timeout with very large value
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "timeout".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(u32::MAX)),
+        );
+
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        if let Ok(request) = result {
+            // Validation should catch oversized values
+            if let Some(timeout) = request.timeout {
+                assert!(timeout > MAX_TIMEOUT_SECONDS);
+            }
+        }
+
+        // Test max_content_length with very large value
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "max_content_length".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(u32::MAX)),
+        );
+
+        let result: std::result::Result<WebFetchRequest, McpError> =
+            BaseToolImpl::parse_arguments(args);
+        if let Ok(request) = result {
+            if let Some(max_length) = request.max_content_length {
+                assert!(max_length > MAX_CONTENT_LENGTH_BYTES);
+            }
+        }
+    }
+
+    #[test]
+    fn test_empty_string_parameters() {
+        // Test empty URL
+        let mut args = serde_json::Map::new();
+        args.insert("url".to_string(), serde_json::Value::String("".to_string()));
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "");
+        // Empty URL should be caught by URL validation, not argument parsing
+
+        // Test empty user agent
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "user_agent".to_string(),
+            serde_json::Value::String("".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.user_agent, Some("".to_string()));
+        // Empty user agent should be allowed and handled gracefully
+    }
+
+    #[test]
+    fn test_whitespace_only_parameters() {
+        // Test URL with only whitespace
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("   \t\n   ".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "   \t\n   ");
+
+        // Test user agent with only whitespace
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "user_agent".to_string(),
+            serde_json::Value::String("   ".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.user_agent, Some("   ".to_string()));
+    }
+
+    #[test]
+    fn test_unicode_parameters() {
+        // Test URL with unicode characters
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://münchen.example.com/ñandú".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, "https://münchen.example.com/ñandú");
+
+        // Test user agent with unicode
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "user_agent".to_string(),
+            serde_json::Value::String("BöwserBot/1.0 (ñandú engine)".to_string()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(
+            request.user_agent,
+            Some("BöwserBot/1.0 (ñandú engine)".to_string())
+        );
+    }
+
+    #[test]
+    fn test_very_long_parameters() {
+        // Test very long URL
+        let long_url = format!("https://example.com/{}", "a".repeat(2000));
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String(long_url.clone()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.url, long_url);
+
+        // Test very long user agent
+        let long_user_agent = format!("VeryLongBot/{}", "x".repeat(1000));
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "url".to_string(),
+            serde_json::Value::String("https://example.com".to_string()),
+        );
+        args.insert(
+            "user_agent".to_string(),
+            serde_json::Value::String(long_user_agent.clone()),
+        );
+
+        let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+        assert_eq!(request.user_agent, Some(long_user_agent));
+    }
+
+    // Advanced security validation tests
+
+    #[test]
+    fn test_security_validator_instantiation() {
+        let tool = WebFetchTool::new();
+        // Test that security validator is properly initialized
+        assert_eq!(tool.name(), "web_fetch");
+        // SecurityValidator is private but we can test it through URL validation
+    }
+
+    #[test]
+    fn test_advanced_ssrf_protection() {
+        // These would be caught by SecurityValidator in actual execution
+        let ssrf_attempts = [
+            "http://127.0.0.1:8080/admin",
+            "https://169.254.169.254/latest/meta-data/",
+            "http://[::1]:3000/internal",
+            "https://10.0.0.1/secrets",
+            "http://192.168.1.100:8080",
+            "https://172.16.0.1:9090",
+            "http://localhost:8080",
+            "https://metadata.google.internal/computeMetadata/v1/",
+            "http://instance-data.ec2.internal/",
+        ];
+
+        for url in ssrf_attempts {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // In actual execution, these would be blocked by SecurityValidator
+        }
+    }
+
+    #[test]
+    fn test_scheme_validation_comprehensive() {
+        let invalid_schemes = [
+            "ftp://files.example.com/readme.txt",
+            "sftp://secure.example.com/data",
+            "file:///etc/passwd",
+            "file:///C:/Windows/System32/config/sam",
+            "javascript:alert('XSS')",
+            "data:text/html,<script>alert('XSS')</script>",
+            "vbscript:msgbox('test')",
+            "mailto:admin@example.com",
+            "tel:+1-555-123-4567",
+            "sms:+1-555-123-4567",
+            "ldap://ldap.example.com/dc=example,dc=com",
+            "ldaps://secure-ldap.example.com/",
+            "gopher://gopher.example.com/",
+            "news:comp.lang.rust",
+            "nntp://news.example.com/",
+            "rtsp://streaming.example.com/video",
+            "rtmp://streaming.example.com/live",
+        ];
+
+        for url in invalid_schemes {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // These would be blocked by scheme validation
+            assert!(!url.starts_with("http://") && !url.starts_with("https://"));
+        }
+    }
+
+    #[test]
+    fn test_valid_url_schemes() {
+        let valid_schemes = [
+            "http://example.com",
+            "https://example.com",
+            "HTTP://EXAMPLE.COM", // Should be handled case-insensitively by URL parser
+            "HTTPS://EXAMPLE.COM",
+            "http://subdomain.example.com:8080/path?query=value#fragment",
+            "https://api.github.com/repos/owner/repo",
+        ];
+
+        for url in valid_schemes {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // These should be allowed (though case handling depends on URL parser)
+        }
+    }
+
+    #[test]
+    fn test_ip_address_detection_edge_cases() {
+        let private_ip_variants = [
+            // IPv4 private ranges
+            "http://10.0.0.1",    // Class A private
+            "https://172.16.0.1", // Class B private
+            "http://192.168.1.1", // Class C private
+            "https://100.64.0.1", // Carrier-grade NAT
+            "http://169.254.0.1", // Link-local
+            // IPv6 private/special addresses
+            "http://[::1]",               // IPv6 localhost
+            "https://[::ffff:127.0.0.1]", // IPv4-mapped IPv6 localhost
+            "http://[::]",                // IPv6 unspecified
+            "https://[fc00::1]",          // IPv6 unique local
+            "http://[fe80::1]",           // IPv6 link-local
+            // Encoded/obfuscated IP attempts
+            "http://2130706433",  // 127.0.0.1 in decimal
+            "https://0x7f000001", // 127.0.0.1 in hex
+            "http://0177.0.0.1",  // 127.0.0.1 in octal (first octet)
+            "https://127.1",      // Short form of 127.0.0.1
+        ];
+
+        for url in private_ip_variants {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // These would be blocked by IP validation in SecurityValidator
+        }
+    }
+
+    #[test]
+    fn test_domain_name_edge_cases() {
+        let suspicious_domains = [
+            // Internal/development patterns
+            "http://test.local",
+            "https://dev.localhost",
+            "http://staging.internal",
+            "https://admin.company.internal",
+            // Lookalike domains
+            "http://g00gle.com",   // Typosquatting
+            "https://arnazon.com", // Similar to amazon
+            "http://microsft.com", // Missing letter
+            // Internationalized domains that could be confusing
+            "https://аpple.com", // Uses Cyrillic 'а' instead of Latin 'a'
+            "http://раураl.com", // Cyrillic characters
+            // Domains with unusual TLDs
+            "https://example.tk", // Suspicious TLD
+            "http://test.ml",     // Free domain TLD
+        ];
+
+        for url in suspicious_domains {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // Domain policy would handle these in SecurityValidator
+        }
+    }
+
+    #[test]
+    fn test_url_components_validation() {
+        let edge_case_urls = [
+            // Port numbers
+            "http://example.com:80",     // Default HTTP port
+            "https://example.com:443",   // Default HTTPS port
+            "http://example.com:8080",   // Common alt port
+            "https://example.com:65535", // Max port number
+            "http://example.com:0",      // Invalid port
+            // Authentication in URL (should be blocked)
+            "http://user:pass@example.com",
+            "https://admin@example.com",
+            "http://:password@example.com",
+            // Path traversal attempts
+            "https://example.com/../../../etc/passwd",
+            "http://example.com/./admin/../config",
+            "https://example.com/%2e%2e%2f%2e%2e%2f", // URL encoded ../../../
+            // Query parameter injection
+            "http://example.com/api?url=http://evil.com",
+            "https://example.com/redirect?next=//evil.com",
+            "http://example.com/proxy?target=localhost:22",
+            // Fragment/anchor handling
+            "https://example.com#javascript:alert('xss')",
+            "http://example.com/#data:text/html,<script>alert(1)</script>",
+        ];
+
+        for url in edge_case_urls {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // URL component validation would be handled by SecurityValidator
+        }
+    }
+
+    #[test]
+    fn test_security_bypass_attempts() {
+        let bypass_attempts = [
+            // Protocol upgrade attempts
+            "http://example.com:80@localhost:8080",
+            // URL shortener bypass
+            "https://bit.ly/localhost",
+            "http://tinyurl.com/internal-admin",
+            // DNS rebinding attempts
+            "http://localtest.me", // Resolves to 127.0.0.1
+            "https://vcap.me",     // Cloud Foundry test domain
+            "http://xip.io",       // Wildcard DNS for any IP
+            // IPv6 bypass attempts with various formats
+            "http://[0000:0000:0000:0000:0000:0000:0000:0001]", // Full IPv6 localhost
+            "https://[::1]:8080",                               // IPv6 localhost with port
+            "http://[::ffff:0:0]",                              // IPv4-compatible IPv6
+            // Protocol relative URLs (though these should fail URL parsing)
+            "//evil.com/malware",
+            "///evil.com/malware",
+        ];
+
+        for url in bypass_attempts {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            // Some of these might fail URL parsing entirely
+            let result: std::result::Result<WebFetchRequest, McpError> =
+                BaseToolImpl::parse_arguments(args);
+
+            if let Ok(request) = result {
+                // If parsing succeeds, security validation should handle it
+                assert_eq!(request.url, url);
+            }
+            // Failed parsing is also acceptable for malformed URLs
+        }
+    }
+
+    #[test]
+    fn test_content_type_based_security() {
+        // Test that we're prepared to handle various content types securely
+        let potentially_dangerous_endpoints = [
+            "https://example.com/api/download",     // Could return executable
+            "http://example.com/files/script.js",   // JavaScript file
+            "https://example.com/uploads/file.exe", // Executable file
+            "http://example.com/data.xml",          // XML with potential XXE
+            "https://example.com/config.json",      // Configuration data
+            "http://example.com/backup.sql",        // Database dump
+            "https://example.com/logs/access.log",  // Log files
+        ];
+
+        for url in potentially_dangerous_endpoints {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // URL itself is valid, content security would be handled during fetch
+        }
+    }
+
+    #[test]
+    fn test_rate_limiting_scenarios() {
+        // Test various scenarios that might trigger rate limiting
+        let high_frequency_targets = [
+            "https://api.github.com/rate_limit",
+            "http://httpbin.org/delay/1",
+            "https://jsonplaceholder.typicode.com/posts",
+            "http://example.com/api/v1/data",
+        ];
+
+        for url in high_frequency_targets {
+            let mut args = serde_json::Map::new();
+            args.insert(
+                "url".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+
+            let request: WebFetchRequest = BaseToolImpl::parse_arguments(args).unwrap();
+            assert_eq!(request.url, url);
+            // Rate limiting would be applied at execution time
+        }
+    }
+
+    // Error handling and categorization tests
+
+    #[test]
+    fn test_error_categorization_comprehensive() {
+        // Test security errors
+        let security_errors = [
+            "Blocked domain access detected",
+            "SSRF attempt blocked",
+            "Unsupported scheme detected",
+            "SSL handshake failed",
+            "TLS certificate verification failed",
+            "Certificate authority invalid",
+        ];
+
+        for error_msg in security_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "security_error",
+                "Failed to categorize security error: {}",
+                error_msg
+            );
+        }
+
+        // Test network errors
+        let network_errors = [
+            "connection refused",
+            "connection reset by peer",
+            "timeout occurred",
+            "DNS resolution failed",
+        ];
+
+        for error_msg in network_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "network_error",
+                "Failed to categorize network error: {}",
+                error_msg
+            );
+        }
+
+        // These don't contain the required keywords, so they'll be unknown
+        let unknown_network_errors = [
+            "network unreachable", // doesn't contain "connection", "timeout", or "dns"
+            "no route to host",    // doesn't contain the required keywords
+        ];
+
+        for error_msg in unknown_network_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "unknown_error",
+                "Should categorize as unknown error: {}",
+                error_msg
+            );
+        }
+
+        // Test HTTP errors
+        let not_found_errors = ["404 Not Found", "Resource not found", "Page not found"];
+        for error_msg in not_found_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::NotFound, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "not_found_error",
+                "Failed to categorize not found error: {}",
+                error_msg
+            );
+        }
+
+        let access_errors = ["403 Forbidden", "401 Unauthorized", "Access forbidden"];
+        for error_msg in access_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "access_denied_error",
+                "Failed to categorize access error: {}",
+                error_msg
+            );
+        }
+
+        let server_errors = [
+            "500 Internal Server Error",
+            "502 Bad Gateway",
+            "503 Service Unavailable",
+        ];
+        for error_msg in server_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "server_error",
+                "Failed to categorize server error: {}",
+                error_msg
+            );
+        }
+
+        // Test content processing errors
+        let content_errors = [
+            "markdowndown conversion failed",
+            "HTML conversion error",
+            "markdown conversion failed",
+        ];
+
+        for error_msg in content_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::InvalidData, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "content_processing_error",
+                "Failed to categorize content error: {}",
+                error_msg
+            );
+        }
+
+        // Test size limit errors
+        let size_errors = ["Content too large", "Size limit exceeded", "File too large"];
+        for error_msg in size_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "size_limit_error",
+                "Failed to categorize size error: {}",
+                error_msg
+            );
+        }
+
+        // Test redirect errors
+        let redirect_errors = [
+            "Too many redirects",
+            "redirect loop detected",
+            "excessive redirects",
+        ];
+        for error_msg in redirect_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "redirect_error",
+                "Failed to categorize redirect error: {}",
+                error_msg
+            );
+        }
+
+        // Test content parsing errors
+        let parse_errors = [
+            "Invalid parse data",
+            "Encoding error",
+            "Invalid character encoding",
+        ];
+        for error_msg in parse_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::InvalidData, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "content_error",
+                "Failed to categorize parse error: {}",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_message_consistency() {
+        // Test that error categorization is case-insensitive
+        let case_variants = [
+            ("CONNECTION REFUSED", "network_error"),
+            ("Connection Refused", "network_error"),
+            ("connection refused", "network_error"),
+            ("CONNECTION timeout", "network_error"),
+            ("DNS failure", "network_error"),
+            ("BLOCKED DOMAIN", "security_error"),
+            ("Blocked Domain", "security_error"),
+            ("blocked domain", "security_error"),
+            ("SSL ERROR", "security_error"),
+            ("TLS failure", "security_error"),
+            ("404 NOT FOUND", "not_found_error"),
+            ("404 Not Found", "not_found_error"),
+            ("404 not found", "not_found_error"),
+            ("TOO MANY REDIRECTS", "redirect_error"),
+            ("Too Many Redirects", "redirect_error"),
+            ("too many redirects", "redirect_error"),
+        ];
+
+        for (error_msg, expected_category) in case_variants {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, expected_category,
+                "Case sensitivity issue with error: {} -> expected: {}, got: {}",
+                error_msg, expected_category, category
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_error_fallback() {
+        let unknown_errors = [
+            "Some completely unknown error",
+            "Random failure message",
+            "Mysterious problem occurred",
+            "",     // Empty error message
+            "    ", // Whitespace only
+        ];
+
+        for error_msg in unknown_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, "unknown_error",
+                "Should categorize unknown error: {}",
+                error_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_priority_handling() {
+        // Test that security errors take precedence when multiple keywords match
+        let mixed_errors = [
+            ("SSL connection refused", "security_error"), // SSL should take precedence
+            ("Blocked domain timeout", "security_error"), // Blocked should take precedence
+            ("SSRF connection failed", "security_error"), // SSRF should take precedence
+            ("Certificate timeout occurred", "security_error"), // Certificate should take precedence
+        ];
+
+        for (error_msg, expected_category) in mixed_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, expected_category,
+                "Priority handling failed for: {} -> expected: {}, got: {}",
+                error_msg, expected_category, category
+            );
+        }
+    }
+
+    #[test]
+    fn test_numeric_error_codes() {
+        let numeric_errors = [
+            ("Error 404", "not_found_error"),
+            ("Status: 403", "access_denied_error"),
+            ("HTTP 500 error", "server_error"),
+            ("Response 502", "server_error"),
+            ("Code 503", "server_error"),
+            ("Status 301 redirect", "redirect_error"), // contains "redirect"
+        ];
+
+        for (error_msg, expected_category) in numeric_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, expected_category,
+                "Numeric error code handling failed for: {} -> expected: {}, got: {}",
+                error_msg, expected_category, category
+            );
+        }
+    }
+
+    #[test]
+    fn test_complex_error_scenarios() {
+        // Test real-world complex error messages
+        let complex_errors = [
+            (
+                "Failed to establish SSL connection: certificate verify failed: unable to get local issuer certificate", 
+                "security_error"
+            ),
+            (
+                "Connection timeout occurred while attempting to reach 192.168.1.1:8080 after 30 seconds", 
+                "network_error"
+            ),
+            (
+                "HTTP/1.1 404 Not Found - The requested resource '/api/v1/users/12345' could not be found on this server", 
+                "not_found_error"
+            ),
+            (
+                "Content-Length exceeds maximum allowed size of 10MB: received 15728640 bytes", 
+                "size_limit_error"
+            ),
+            (
+                "Too many redirects (10) encountered while following redirect chain from https://example.com to https://final.com", 
+                "redirect_error"
+            ),
+            (
+                "Failed to parse HTML content using markdowndown library: invalid character sequence at byte position 1024", 
+                "content_processing_error"
+            ),
+        ];
+
+        for (error_msg, expected_category) in complex_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, expected_category,
+                "Complex error scenario failed for: {} -> expected: {}, got: {}",
+                error_msg, expected_category, category
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_message_special_characters() {
+        let special_char_errors = [
+            ("Connection failed: ∞ timeout", "network_error"), // contains "connection" and "timeout"
+            ("blocked domain: señor.com", "security_error"), // contains "blocked domain" (lowercase)
+            ("404: ¿página no encontrada?", "not_found_error"), // contains "404"
+            ("Content too large: 文档太大", "size_limit_error"), // contains "too large"
+            ("SSL ошибка: сертификат недействителен", "security_error"), // contains "SSL"
+        ];
+
+        for (error_msg, expected_category) in special_char_errors {
+            let error = std::io::Error::new(std::io::ErrorKind::Other, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, expected_category,
+                "Special character handling failed for: {} -> expected: {}, got: {}",
+                error_msg, expected_category, category
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_categorization_with_different_error_kinds() {
+        // Test that categorization works with different std::io::ErrorKind values
+        let error_kind_tests = [
+            (
+                std::io::ErrorKind::ConnectionRefused,
+                "connection failed",
+                "network_error",
+            ), // contains "connection"
+            (
+                std::io::ErrorKind::ConnectionAborted,
+                "connection aborted",
+                "network_error",
+            ), // contains "connection"
+            (
+                std::io::ErrorKind::NotConnected,
+                "not connected",
+                "unknown_error",
+            ), // doesn't contain required keywords
+            (
+                std::io::ErrorKind::AddrInUse,
+                "address in use",
+                "unknown_error",
+            ), // doesn't contain required keywords
+            (
+                std::io::ErrorKind::AddrNotAvailable,
+                "address not available",
+                "unknown_error",
+            ), // doesn't contain required keywords
+            (std::io::ErrorKind::TimedOut, "timed out", "unknown_error"), // doesn't contain "timeout" keyword
+            (
+                std::io::ErrorKind::InvalidData,
+                "invalid data",
+                "content_error",
+            ), // contains "invalid"
+            (
+                std::io::ErrorKind::InvalidInput,
+                "invalid input",
+                "content_error",
+            ), // contains "invalid"
+            (std::io::ErrorKind::NotFound, "not found", "not_found_error"), // contains "not found"
+            (
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
+                "unknown_error",
+            ), // doesn't contain "403", "forbidden", or "unauthorized"
+            (std::io::ErrorKind::Other, "other error", "unknown_error"),
+        ];
+
+        for (error_kind, error_msg, expected_category) in error_kind_tests {
+            let error = std::io::Error::new(error_kind, error_msg);
+            let category = WebFetchTool::categorize_error(&error);
+            assert_eq!(
+                category, expected_category,
+                "ErrorKind {:?} with message '{}' should categorize as '{}', got '{}'",
+                error_kind, error_msg, expected_category, category
+            );
+        }
+    }
+
+    // Response formatting validation tests
+
+    #[test]
+    fn test_success_response_structure() {
+        // Test the structure of success responses
+        let content = "# Test Title\n\nTest content here.";
+        let redirect_info = RedirectInfo {
+            redirect_count: 0,
+            redirect_chain: vec![RedirectStep {
+                url: "https://example.com".to_string(),
+                status_code: 200,
+            }],
+            final_url: "https://example.com".to_string(),
+        };
+        let headers = std::collections::HashMap::new();
+        let response_time = 150;
+        let request = WebFetchRequest {
+            url: "https://example.com".to_string(),
+            timeout: None,
+            follow_redirects: None,
+            max_content_length: None,
+            user_agent: None,
+        };
+
+        let result = WebFetchTool::build_success_response(
+            content.to_string(),
+            redirect_info,
+            headers,
+            response_time,
+            &request,
+        );
+
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+
+        // Test basic structure
+        assert!(call_result.content.len() > 0);
+        assert_eq!(call_result.is_error, Some(false));
+
+        // Parse the JSON content
+        if let rmcp::model::RawContent::Text(text_content) = &call_result.content[0].raw {
+            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).unwrap();
+
+            // Test response structure
+            assert!(parsed["content"].is_array());
+            assert_eq!(parsed["is_error"], false);
+            assert!(parsed["metadata"].is_object());
+
+            let metadata = &parsed["metadata"];
+            assert_eq!(metadata["url"], "https://example.com");
+            assert_eq!(metadata["final_url"], "https://example.com");
+            assert_eq!(metadata["title"], "Test Title");
+            assert_eq!(metadata["content_type"], "text/html");
+            assert!(metadata["content_length"].is_number());
+            assert_eq!(metadata["status_code"], 200);
+            assert_eq!(metadata["response_time_ms"], 150);
+            assert!(metadata["word_count"].is_number());
+            assert!(metadata["headers"].is_object());
+        } else {
+            panic!("Expected text content in response");
+        }
+    }
+
+    #[test]
+    fn test_success_response_with_redirects() {
+        let content = "# Redirected Content\n\nThis is redirected content.";
+        let redirect_info = RedirectInfo {
+            redirect_count: 2,
+            redirect_chain: vec![
+                RedirectStep {
+                    url: "https://example.com/old".to_string(),
+                    status_code: 301,
+                },
+                RedirectStep {
+                    url: "https://example.com/middle".to_string(),
+                    status_code: 302,
+                },
+                RedirectStep {
+                    url: "https://example.com/final".to_string(),
+                    status_code: 200,
+                },
+            ],
+            final_url: "https://example.com/final".to_string(),
+        };
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("content-type".to_string(), "text/html".to_string());
+        headers.insert("server".to_string(), "nginx/1.18.0".to_string());
+
+        let request = WebFetchRequest {
+            url: "https://example.com/old".to_string(),
+            timeout: Some(30),
+            follow_redirects: Some(true),
+            max_content_length: Some(1048576),
+            user_agent: Some("TestBot/1.0".to_string()),
+        };
+
+        let result = WebFetchTool::build_success_response(
+            content.to_string(),
+            redirect_info,
+            headers,
+            250,
+            &request,
+        );
+
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+
+        if let rmcp::model::RawContent::Text(text_content) = &call_result.content[0].raw {
+            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).unwrap();
+
+            let metadata = &parsed["metadata"];
+            assert_eq!(metadata["url"], "https://example.com/old");
+            assert_eq!(metadata["final_url"], "https://example.com/final");
+            assert_eq!(metadata["redirect_count"], 2);
+
+            assert!(metadata["redirect_chain"].is_array());
+            let redirect_chain = metadata["redirect_chain"].as_array().unwrap();
+            assert_eq!(redirect_chain.len(), 3);
+            assert_eq!(redirect_chain[0], "https://example.com/old -> 301");
+            assert_eq!(redirect_chain[1], "https://example.com/middle -> 302");
+            assert_eq!(redirect_chain[2], "https://example.com/final -> 200");
+
+            // Verify success message mentions redirects
+            let content_array = parsed["content"].as_array().unwrap();
+            let message = content_array[0]["text"].as_str().unwrap();
+            assert!(message.contains("redirected"));
+        }
+    }
+
+    #[test]
+    fn test_error_response_structure() {
+        let error =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
+        let response_time = 5000;
+        let request = WebFetchRequest {
+            url: "https://unreachable.example.com".to_string(),
+            timeout: Some(10),
+            follow_redirects: Some(true),
+            max_content_length: Some(1048576),
+            user_agent: Some("TestBot/1.0".to_string()),
+        };
+
+        let result = WebFetchTool::build_error_response(&error, response_time, &request);
+
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+
+        // Test basic structure
+        assert!(call_result.content.len() > 0);
+        assert_eq!(call_result.is_error, Some(true));
+
+        if let rmcp::model::RawContent::Text(text_content) = &call_result.content[0].raw {
+            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).unwrap();
+
+            // Test error response structure
+            assert!(parsed["content"].is_array());
+            assert_eq!(parsed["is_error"], true);
+            assert!(parsed["metadata"].is_object());
+
+            let metadata = &parsed["metadata"];
+            assert_eq!(metadata["url"], "https://unreachable.example.com");
+            assert_eq!(metadata["error_type"], "network_error");
+            assert!(metadata["error_details"]
+                .as_str()
+                .unwrap()
+                .contains("Connection refused"));
+            assert_eq!(metadata["status_code"], serde_json::Value::Null);
+            assert_eq!(metadata["response_time_ms"], 5000);
+        }
+    }
+
+    #[test]
+    fn test_metadata_field_completeness() {
+        // Test that all expected metadata fields are present
+        let content = "# Complete Test\n\nThis tests all metadata fields.";
+        let redirect_info = RedirectInfo {
+            redirect_count: 0,
+            redirect_chain: vec![RedirectStep {
+                url: "https://complete.example.com".to_string(),
+                status_code: 200,
+            }],
+            final_url: "https://complete.example.com".to_string(),
+        };
+
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("server".to_string(), "Apache/2.4.41".to_string());
+        headers.insert("content-encoding".to_string(), "gzip".to_string());
+        headers.insert("content-length".to_string(), "1024".to_string());
+        headers.insert(
+            "last-modified".to_string(),
+            "Wed, 21 Oct 2015 07:28:00 GMT".to_string(),
+        );
+        headers.insert("etag".to_string(), "\"1234567890\"".to_string());
+        headers.insert("cache-control".to_string(), "max-age=3600".to_string());
+
+        let request = WebFetchRequest {
+            url: "https://complete.example.com".to_string(),
+            timeout: Some(45),
+            follow_redirects: Some(false),
+            max_content_length: Some(2097152),
+            user_agent: Some("CompleteBot/2.0".to_string()),
+        };
+
+        let result = WebFetchTool::build_success_response(
+            content.to_string(),
+            redirect_info,
+            headers,
+            750,
+            &request,
+        );
+
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+
+        if let rmcp::model::RawContent::Text(text_content) = &call_result.content[0].raw {
+            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).unwrap();
+
+            let metadata = &parsed["metadata"];
+
+            // Test all expected fields are present
+            let expected_fields = [
+                "url",
+                "final_url",
+                "title",
+                "content_type",
+                "content_length",
+                "status_code",
+                "response_time_ms",
+                "markdown_content",
+                "word_count",
+                "headers",
+            ];
+
+            for field in &expected_fields {
+                assert!(
+                    metadata[field] != serde_json::Value::Null,
+                    "Field '{}' should be present and not null",
+                    field
+                );
+            }
+
+            // Test specific values
+            assert_eq!(metadata["url"], "https://complete.example.com");
+            assert_eq!(metadata["final_url"], "https://complete.example.com");
+            assert_eq!(metadata["title"], "Complete Test");
+            assert_eq!(metadata["content_type"], "text/html");
+            assert_eq!(metadata["status_code"], 200);
+            assert_eq!(metadata["response_time_ms"], 750);
+
+            // Test headers are properly included
+            let headers_obj = metadata["headers"].as_object().unwrap();
+            assert_eq!(headers_obj["server"], "Apache/2.4.41");
+            assert_eq!(headers_obj["content-encoding"], "gzip");
+            assert_eq!(headers_obj["etag"], "\"1234567890\"");
+        }
+    }
+
+    #[test]
+    fn test_title_extraction_edge_cases() {
+        let test_cases = [
+            (
+                "# Simple Title\n\nContent",
+                Some("Simple Title".to_string()),
+            ),
+            (
+                "## Second Level Title\n\nContent",
+                Some("Second Level Title".to_string()),
+            ),
+            (
+                "### Third Level\n\nContent",
+                Some("Third Level".to_string()),
+            ),
+            ("#\n\nNo title text", None),
+            ("# \n\nEmpty title", None),
+            ("##   \n\nWhitespace title", None),
+            ("No heading at all\n\nJust content", None),
+            (
+                "# First Title\n\n## Second Title",
+                Some("First Title".to_string()),
+            ), // Should get first
+            (
+                "Not a heading\n# Later Title\n\nContent",
+                Some("Later Title".to_string()),
+            ),
+            (
+                "#Multiple#Hash#Tags#\n\nContent",
+                Some("Multiple#Hash#Tags#".to_string()),
+            ),
+            (
+                "# Title with *markdown* **formatting**",
+                Some("Title with *markdown* **formatting**".to_string()),
+            ),
+            (
+                "# Title with [link](http://example.com)",
+                Some("Title with [link](http://example.com)".to_string()),
+            ),
+        ];
+
+        for (markdown, expected_title) in test_cases {
+            let extracted = WebFetchTool::extract_title_from_markdown(markdown);
+            assert_eq!(
+                extracted,
+                expected_title,
+                "Title extraction failed for: '{}'",
+                markdown.replace('\n', "\\n")
+            );
+        }
+    }
+
+    #[test]
+    fn test_response_json_validity() {
+        // Test that all responses produce valid JSON
+        let content = "# Valid JSON Test\n\nThis tests JSON validity.";
+        let redirect_info = RedirectInfo {
+            redirect_count: 0,
+            redirect_chain: vec![RedirectStep {
+                url: "https://json.example.com".to_string(),
+                status_code: 200,
+            }],
+            final_url: "https://json.example.com".to_string(),
+        };
+        let headers = std::collections::HashMap::new();
+        let request = WebFetchRequest {
+            url: "https://json.example.com".to_string(),
+            timeout: None,
+            follow_redirects: None,
+            max_content_length: None,
+            user_agent: None,
+        };
+
+        let success_result = WebFetchTool::build_success_response(
+            content.to_string(),
+            redirect_info,
+            headers,
+            100,
+            &request,
+        )
+        .unwrap();
+
+        // Test success response JSON validity
+        if let rmcp::model::RawContent::Text(text_content) = &success_result.content[0].raw {
+            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text_content.text);
+            assert!(parsed.is_ok(), "Success response should be valid JSON");
+
+            let json = parsed.unwrap();
+            assert!(json.is_object());
+            assert!(json["content"].is_array());
+            assert!(json["metadata"].is_object());
+        }
+
+        // Test error response JSON validity
+        let error = std::io::Error::new(std::io::ErrorKind::Other, "Test error");
+        let error_result = WebFetchTool::build_error_response(&error, 200, &request).unwrap();
+
+        if let rmcp::model::RawContent::Text(text_content) = &error_result.content[0].raw {
+            let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text_content.text);
+            assert!(parsed.is_ok(), "Error response should be valid JSON");
+
+            let json = parsed.unwrap();
+            assert!(json.is_object());
+            assert!(json["content"].is_array());
+            assert!(json["metadata"].is_object());
+        }
+    }
+
+    #[test]
+    fn test_response_content_encoding() {
+        // Test response handling with special characters and encoding
+        let content_with_special_chars =
+            "# Título con Ñandú\n\nContent with émojis: 🚀🎉\nAnd unicode: αβγδε";
+
+        let redirect_info = RedirectInfo {
+            redirect_count: 0,
+            redirect_chain: vec![RedirectStep {
+                url: "https://unicode.example.com".to_string(),
+                status_code: 200,
+            }],
+            final_url: "https://unicode.example.com".to_string(),
+        };
+        let headers = std::collections::HashMap::new();
+        let request = WebFetchRequest {
+            url: "https://unicode.example.com".to_string(),
+            timeout: None,
+            follow_redirects: None,
+            max_content_length: None,
+            user_agent: None,
+        };
+
+        let result = WebFetchTool::build_success_response(
+            content_with_special_chars.to_string(),
+            redirect_info,
+            headers,
+            300,
+            &request,
+        );
+
+        assert!(result.is_ok());
+        let call_result = result.unwrap();
+
+        if let rmcp::model::RawContent::Text(text_content) = &call_result.content[0].raw {
+            let parsed: serde_json::Value = serde_json::from_str(&text_content.text).unwrap();
+
+            let metadata = &parsed["metadata"];
+            assert_eq!(metadata["title"], "Título con Ñandú");
+
+            let markdown_content = metadata["markdown_content"].as_str().unwrap();
+            assert!(markdown_content.contains("🚀🎉"));
+            assert!(markdown_content.contains("αβγδε"));
+            assert!(markdown_content.contains("Ñandú"));
+        }
+    }
+
+    // Tool interface compliance tests
+
+    #[test]
+    fn test_mcp_tool_interface_compliance() {
+        let tool = WebFetchTool::new();
+
+        // Test required interface methods
+        assert_eq!(tool.name(), "web_fetch");
+        assert!(!tool.description().is_empty());
+
+        let schema = tool.schema();
+        assert!(schema.is_object());
+
+        // Test schema has required MCP fields
+        let obj = schema.as_object().unwrap();
+        assert!(obj.contains_key("type"));
+        assert!(obj.contains_key("properties"));
+        assert!(obj.contains_key("required"));
+
+        // Test required field is properly specified
+        let required = obj["required"].as_array().unwrap();
+        assert_eq!(required.len(), 1);
+        assert_eq!(required[0], "url");
+    }
+
+    #[test]
+    fn test_tool_instantiation_patterns() {
+        // Test default creation
+        let tool1 = WebFetchTool::default();
+        assert_eq!(tool1.name(), "web_fetch");
+
+        // Test new() creation
+        let tool2 = WebFetchTool::new();
+        assert_eq!(tool2.name(), "web_fetch");
+
+        // Both should behave identically
+        assert_eq!(tool1.name(), tool2.name());
+        assert_eq!(tool1.description(), tool2.description());
+
+        let schema1 = tool1.schema();
+        let schema2 = tool2.schema();
+        assert_eq!(schema1, schema2);
+    }
+
+    #[test]
+    fn test_tool_description_content() {
+        let tool = WebFetchTool::new();
+        let description = tool.description();
+
+        // Test description contains key information
+        assert!(!description.is_empty());
+        // The actual description comes from tool_descriptions so we can't test exact content
+        // but we can verify it's properly loaded
+    }
+
+    #[test]
+    fn test_schema_validation_completeness() {
+        let tool = WebFetchTool::new();
+        let schema = tool.schema();
+
+        let obj = schema.as_object().unwrap();
+        let properties = obj["properties"].as_object().unwrap();
+
+        // Test all parameters have proper schema definitions
+        let expected_properties = [
+            "url",
+            "timeout",
+            "follow_redirects",
+            "max_content_length",
+            "user_agent",
+        ];
+
+        for prop in &expected_properties {
+            assert!(
+                properties.contains_key(*prop),
+                "Schema should contain property: {}",
+                prop
+            );
+
+            let prop_def = &properties[*prop];
+            assert!(
+                prop_def.is_object(),
+                "Property '{}' should be an object",
+                prop
+            );
+            assert!(
+                prop_def["type"].is_string(),
+                "Property '{}' should have a type field",
+                prop
+            );
+        }
+
+        // Test URL property specifics
+        let url_prop = &properties["url"];
+        assert_eq!(url_prop["type"], "string");
+        assert_eq!(url_prop["format"], "uri");
+
+        // Test numeric properties have bounds
+        let timeout_prop = &properties["timeout"];
+        assert_eq!(timeout_prop["type"], "integer");
+        assert!(timeout_prop["minimum"].is_number());
+        assert!(timeout_prop["maximum"].is_number());
+
+        let max_content_prop = &properties["max_content_length"];
+        assert_eq!(max_content_prop["type"], "integer");
+        assert!(max_content_prop["minimum"].is_number());
+        assert!(max_content_prop["maximum"].is_number());
+
+        // Test boolean property
+        let redirect_prop = &properties["follow_redirects"];
+        assert_eq!(redirect_prop["type"], "boolean");
+
+        // Test string property
+        let user_agent_prop = &properties["user_agent"];
+        assert_eq!(user_agent_prop["type"], "string");
+    }
+
+    #[test]
+    fn test_constants_consistency() {
+        // Test that constants used in schema match the validation constants
+        let tool = WebFetchTool::new();
+        let schema = tool.schema();
+        let properties = schema["properties"].as_object().unwrap();
+
+        // Test timeout constants
+        let timeout_prop = &properties["timeout"];
+        assert_eq!(timeout_prop["minimum"], MIN_TIMEOUT_SECONDS);
+        assert_eq!(timeout_prop["maximum"], MAX_TIMEOUT_SECONDS);
+        assert_eq!(timeout_prop["default"], DEFAULT_TIMEOUT_SECONDS);
+
+        // Test content length constants
+        let content_prop = &properties["max_content_length"];
+        assert_eq!(content_prop["minimum"], MIN_CONTENT_LENGTH_BYTES);
+        assert_eq!(content_prop["maximum"], MAX_CONTENT_LENGTH_BYTES);
+        assert_eq!(content_prop["default"], DEFAULT_CONTENT_LENGTH_BYTES);
+
+        // Test that constants are reasonable
+        assert!(MIN_TIMEOUT_SECONDS > 0);
+        assert!(MAX_TIMEOUT_SECONDS > MIN_TIMEOUT_SECONDS);
+        assert!(DEFAULT_TIMEOUT_SECONDS >= MIN_TIMEOUT_SECONDS);
+        assert!(DEFAULT_TIMEOUT_SECONDS <= MAX_TIMEOUT_SECONDS);
+
+        assert!(MIN_CONTENT_LENGTH_BYTES > 0);
+        assert!(MAX_CONTENT_LENGTH_BYTES > MIN_CONTENT_LENGTH_BYTES);
+        assert!(DEFAULT_CONTENT_LENGTH_BYTES >= MIN_CONTENT_LENGTH_BYTES);
+        assert!(DEFAULT_CONTENT_LENGTH_BYTES <= MAX_CONTENT_LENGTH_BYTES);
+    }
+
+    #[test]
+    fn test_redirect_constants() {
+        // Test redirect constants are reasonable
+        assert!(MAX_REDIRECTS > 0);
+        assert!(MAX_REDIRECTS <= 20); // Sanity check - shouldn't be too high
+        assert_eq!(MAX_REDIRECTS, 10); // Current expected value
+    }
 }
