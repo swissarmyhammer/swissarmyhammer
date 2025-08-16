@@ -1,10 +1,14 @@
 //! Web search tool for MCP operations
 //!
-//! This module provides the WebSearchTool for performing web searches using DuckDuckGo through the MCP protocol.
+//! This module provides the WebSearchTool for performing web searches using DuckDuckGo's
+//! official Instant Answer API through the MCP protocol. For comprehensive web search results,
+//! consider configuring third-party APIs.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
-use crate::mcp::tools::web_search::duckduckgo_client::DuckDuckGoClient;
+use crate::mcp::tools::web_search::duckduckgo_api_client::{
+    DuckDuckGoApiClient, DuckDuckGoApiError,
+};
 use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
@@ -12,26 +16,26 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::{Duration, Instant};
 
-/// Tool for performing web searches using DuckDuckGo
+/// Tool for performing web searches using DuckDuckGo's API
 #[derive(Default)]
 pub struct WebSearchTool {
-    duckduckgo_client: Option<DuckDuckGoClient>,
+    duckduckgo_api_client: Option<DuckDuckGoApiClient>,
 }
 
 impl WebSearchTool {
     /// Creates a new instance of the WebSearchTool
     pub fn new() -> Self {
         Self {
-            duckduckgo_client: None,
+            duckduckgo_api_client: None,
         }
     }
 
-    /// Gets or creates a DuckDuckGo client
-    fn get_duckduckgo_client(&mut self) -> &DuckDuckGoClient {
-        if self.duckduckgo_client.is_none() {
-            self.duckduckgo_client = Some(DuckDuckGoClient::new());
+    /// Gets or creates a DuckDuckGo API client
+    fn get_duckduckgo_api_client(&mut self) -> &DuckDuckGoApiClient {
+        if self.duckduckgo_api_client.is_none() {
+            self.duckduckgo_api_client = Some(DuckDuckGoApiClient::new());
         }
-        self.duckduckgo_client.as_ref().unwrap()
+        self.duckduckgo_api_client.as_ref().unwrap()
     }
 
     /// Loads configuration for content fetching
@@ -332,21 +336,42 @@ impl McpTool for WebSearchTool {
         let privacy_config = Self::load_privacy_config();
         let privacy_manager = PrivacyManager::new(privacy_config);
 
-        // Perform search using DuckDuckGo client
-        let duckduckgo_client = search_tool.get_duckduckgo_client();
-        let mut results = match duckduckgo_client.search(&request, &privacy_manager).await {
+        // Perform search using DuckDuckGo Instant Answer API
+        let duckduckgo_api_client = search_tool.get_duckduckgo_api_client();
+        let mut results = match duckduckgo_api_client
+            .search_instant_answer(&request, &privacy_manager)
+            .await
+        {
             Ok(results) => results,
+            Err(DuckDuckGoApiError::NoInstantAnswer) => {
+                // No instant answer available - provide informative response
+                let error = WebSearchError {
+                    error_type: "no_instant_answer".to_string(),
+                    error_details: format!(
+                        "No instant answer available for '{}'. DuckDuckGo's official API only provides instant answers for factual queries like definitions, calculations, conversions, and well-known topics. For comprehensive web search results, consider using third-party search APIs or the web interface directly.",
+                        request.query
+                    ),
+                    attempted_instances: vec!["https://api.duckduckgo.com".to_string()],
+                    retry_after: None,
+                };
+
+                return Err(McpError::invalid_request(
+                    serde_json::to_string_pretty(&error)
+                        .unwrap_or_else(|_| "No instant answer available".to_string()),
+                    None,
+                ));
+            }
             Err(e) => {
                 let error = WebSearchError {
-                    error_type: "search_failed".to_string(),
-                    error_details: format!("DuckDuckGo search failed: {e}"),
-                    attempted_instances: vec!["https://duckduckgo.com".to_string()],
-                    retry_after: Some(30), // Suggest retry after 30 seconds
+                    error_type: "api_failed".to_string(),
+                    error_details: format!("DuckDuckGo API search failed: {e}"),
+                    attempted_instances: vec!["https://api.duckduckgo.com".to_string()],
+                    retry_after: Some(10), // Suggest retry after 10 seconds for API issues
                 };
 
                 return Err(McpError::internal_error(
                     serde_json::to_string_pretty(&error)
-                        .unwrap_or_else(|_| "Search failed".to_string()),
+                        .unwrap_or_else(|_| "API search failed".to_string()),
                     None,
                 ));
             }
@@ -383,9 +408,9 @@ impl McpTool for WebSearchTool {
                 language: request.language.unwrap_or_else(|| "en".to_string()),
                 results_count: results.len(),
                 search_time_ms: search_time.as_millis() as u64,
-                instance_used: "https://duckduckgo.com".to_string(),
+                instance_used: "https://api.duckduckgo.com".to_string(),
                 total_results: results.len(),
-                engines_used: vec!["duckduckgo".to_string()],
+                engines_used: vec!["duckduckgo-api".to_string()],
                 content_fetch_stats,
                 fetch_content: request.fetch_content.unwrap_or(true),
             },

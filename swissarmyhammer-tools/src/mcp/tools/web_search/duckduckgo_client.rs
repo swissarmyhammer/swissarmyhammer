@@ -200,7 +200,7 @@ impl DuckDuckGoClient {
         use scraper::{Html, Selector};
 
         let mut results = Vec::new();
-        
+
         // Parse the HTML document
         let document = Html::parse_document(html_content);
 
@@ -217,7 +217,7 @@ impl DuckDuckGoClient {
 
         let title_selectors = vec![
             "h3 a",
-            "a[data-testid='result-title-a']", 
+            "a[data-testid='result-title-a']",
             "a.result__a",
             ".result__title a",
             "a[class*='result__a']",
@@ -233,11 +233,12 @@ impl DuckDuckGoClient {
 
         // Try each result selector until we find results
         for result_selector_str in &result_selectors {
-            let result_selector = Selector::parse(result_selector_str)
-                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid CSS selector '{}': {}", result_selector_str, e)))?;
-            
+            let result_selector = Selector::parse(result_selector_str).map_err(|e| {
+                DuckDuckGoError::Parse(format!("Invalid CSS selector '{result_selector_str}': {e}"))
+            })?;
+
             let result_elements: Vec<_> = document.select(&result_selector).collect();
-            
+
             if result_elements.is_empty() {
                 continue; // Try next selector
             }
@@ -249,12 +250,12 @@ impl DuckDuckGoClient {
 
                 // Extract title and URL using multiple selector strategies
                 let (title, url) = self.extract_title_and_url(result_element, &title_selectors)?;
-                
+
                 if title.is_empty() || url.is_empty() || !url.starts_with("http") {
                     continue; // Skip invalid results
                 }
 
-                // Extract description using multiple selector strategies  
+                // Extract description using multiple selector strategies
                 let description = self.extract_description(result_element, &description_selectors);
 
                 results.push(SearchResult {
@@ -282,17 +283,27 @@ impl DuckDuckGoClient {
     }
 
     /// Extracts title and URL from a result element using multiple selector strategies
-    fn extract_title_and_url(&self, element: &scraper::ElementRef, title_selectors: &[&str]) -> Result<(String, String), DuckDuckGoError> {
+    fn extract_title_and_url(
+        &self,
+        element: &scraper::ElementRef,
+        title_selectors: &[&str],
+    ) -> Result<(String, String), DuckDuckGoError> {
         use scraper::Selector;
 
         for selector_str in title_selectors {
-            let selector = Selector::parse(selector_str)
-                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid title selector '{}': {}", selector_str, e)))?;
-            
+            let selector = Selector::parse(selector_str).map_err(|e| {
+                DuckDuckGoError::Parse(format!("Invalid title selector '{selector_str}': {e}"))
+            })?;
+
             if let Some(title_element) = element.select(&selector).next() {
                 let url = title_element.value().attr("href").unwrap_or("").to_string();
-                let title = title_element.text().collect::<Vec<_>>().join(" ").trim().to_string();
-                
+                let title = title_element
+                    .text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim()
+                    .to_string();
+
                 if !title.is_empty() && !url.is_empty() {
                     return Ok((title, url));
                 }
@@ -303,13 +314,22 @@ impl DuckDuckGoClient {
     }
 
     /// Extracts description from a result element using multiple selector strategies
-    fn extract_description(&self, element: &scraper::ElementRef, description_selectors: &[&str]) -> String {
+    fn extract_description(
+        &self,
+        element: &scraper::ElementRef,
+        description_selectors: &[&str],
+    ) -> String {
         use scraper::Selector;
 
         for selector_str in description_selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
                 if let Some(desc_element) = element.select(&selector).next() {
-                    let description = desc_element.text().collect::<Vec<_>>().join(" ").trim().to_string();
+                    let description = desc_element
+                        .text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string();
                     if !description.is_empty() {
                         return description;
                     }
@@ -323,7 +343,7 @@ impl DuckDuckGoClient {
     /// Calculates result score based on position using configurable scoring algorithm
     fn calculate_result_score(&self, index: usize) -> f64 {
         let config = &self.scoring_config;
-        
+
         if config.exponential_decay {
             // Exponential decay: score = base_score * e^(-decay_rate * index)
             let score = config.base_score * (-config.decay_rate * index as f64).exp();
@@ -564,7 +584,7 @@ mod tests {
         let score_0 = exp_client.calculate_result_score(0);
         let score_1 = exp_client.calculate_result_score(1);
         let score_2 = exp_client.calculate_result_score(2);
-        
+
         assert_eq!(score_0, 1.0); // e^0 = 1
         assert!(score_1 < score_0); // Should decay
         assert!(score_2 < score_1); // Should decay further

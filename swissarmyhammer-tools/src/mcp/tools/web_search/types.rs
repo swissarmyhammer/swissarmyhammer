@@ -298,16 +298,16 @@ pub struct WebSearchError {
 pub struct ScoringConfig {
     /// Base score for the first result (default: 1.0)
     pub base_score: f64,
-    
+
     /// Score reduction per position (default: 0.05 = 5% per position)
     pub position_penalty: f64,
-    
+
     /// Minimum score threshold (default: 0.05 = 5%)
     pub min_score: f64,
-    
+
     /// Whether to apply exponential decay instead of linear (default: false)
     pub exponential_decay: bool,
-    
+
     /// Decay rate for exponential scoring (default: 0.1, only used if exponential_decay is true)
     pub decay_rate: f64,
 }

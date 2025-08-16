@@ -85,9 +85,9 @@ impl Default for PrivacyConfig {
             anonymize_content_requests: true,
             content_request_delay_ms: 200,
             enable_adaptive_rate_limiting: true,
-            captcha_backoff_initial_ms: 1000,  // 1 second initial backoff
-            captcha_backoff_max_ms: 30000,     // 30 second max backoff
-            captcha_backoff_multiplier: 2.0,   // Double delay for each consecutive CAPTCHA
+            captcha_backoff_initial_ms: 1000, // 1 second initial backoff
+            captcha_backoff_max_ms: 30000,    // 30 second max backoff
+            captcha_backoff_multiplier: 2.0,  // Double delay for each consecutive CAPTCHA
             captcha_backoff_duration_mins: 10, // Maintain backoff for 10 minutes
         }
     }
@@ -346,7 +346,7 @@ impl AdaptiveRateLimiter {
         }
 
         let now = Instant::now();
-        
+
         {
             let mut last_captcha = self.last_captcha_time.lock().unwrap();
             let mut current_backoff = self.current_backoff_ms.lock().unwrap();
@@ -354,7 +354,8 @@ impl AdaptiveRateLimiter {
 
             // Check if this is within the backoff duration of the last CAPTCHA
             let is_consecutive = if let Some(last_time) = *last_captcha {
-                now.duration_since(last_time).as_secs() < (self.config.captcha_backoff_duration_mins * 60)
+                now.duration_since(last_time).as_secs()
+                    < (self.config.captcha_backoff_duration_mins * 60)
             } else {
                 false
             };
@@ -362,7 +363,8 @@ impl AdaptiveRateLimiter {
             if is_consecutive {
                 *consecutive += 1;
                 // Exponential backoff: multiply by multiplier for consecutive CAPTCHAs
-                *current_backoff = (*current_backoff as f64 * self.config.captcha_backoff_multiplier) as u64;
+                *current_backoff =
+                    (*current_backoff as f64 * self.config.captcha_backoff_multiplier) as u64;
             } else {
                 *consecutive = 1;
                 *current_backoff = self.config.captcha_backoff_initial_ms;
@@ -392,8 +394,9 @@ impl AdaptiveRateLimiter {
         // Check if we're still within the backoff duration
         if let Some(last_time) = *last_captcha {
             let elapsed = Instant::now().duration_since(last_time);
-            let backoff_duration = Duration::from_secs(self.config.captcha_backoff_duration_mins * 60);
-            
+            let backoff_duration =
+                Duration::from_secs(self.config.captcha_backoff_duration_mins * 60);
+
             if elapsed < backoff_duration {
                 return Duration::from_millis(*current_backoff);
             }
@@ -406,7 +409,10 @@ impl AdaptiveRateLimiter {
     pub async fn apply_adaptive_delay(&self) {
         let delay = self.get_additional_delay();
         if delay.as_millis() > 0 {
-            tracing::info!("Applying adaptive rate limit delay: {}ms", delay.as_millis());
+            tracing::info!(
+                "Applying adaptive rate limit delay: {}ms",
+                delay.as_millis()
+            );
             tokio::time::sleep(delay).await;
         }
     }
@@ -740,10 +746,10 @@ mod tests {
         };
 
         let limiter = AdaptiveRateLimiter::new(config);
-        
+
         // Record CAPTCHA
         limiter.record_captcha_challenge();
-        
+
         // Should still have no delay when disabled
         let delay = limiter.get_additional_delay();
         assert_eq!(delay.as_millis(), 0);
