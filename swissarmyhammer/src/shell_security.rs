@@ -1,7 +1,7 @@
 //! Shell command security validation and control system
 //!
 //! This module provides comprehensive security controls for shell command execution,
-//! including command injection prevention, directory access controls, and audit logging.
+//! including blocked command prevention, directory access controls, and audit logging.
 
 use crate::sah_config::{load_config, ConfigValue};
 use crate::{Result, SwissArmyHammerError};
@@ -29,15 +29,6 @@ const MAX_TIMEOUT_SECONDS: u64 = 3600;
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
 pub enum ShellSecurityError {
-    /// Command contains dangerous injection pattern
-    #[error("Command contains dangerous injection pattern: {pattern} in command: {command}")]
-    DangerousInjectionPattern {
-        /// The matched dangerous pattern
-        pattern: String,
-        /// The command containing the pattern
-        command: String,
-    },
-
     /// Command contains blocked pattern
     #[error("Command contains blocked pattern: {pattern} in command: {command}")]
     BlockedCommandPattern {

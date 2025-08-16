@@ -233,29 +233,31 @@ mod security_validation {
     use super::*;
 
     #[tokio::test]
-    async fn test_comprehensive_injection_prevention() {
+    async fn test_blocked_command_validation() {
         let _guard = IsolatedTestEnvironment::new();
         
         let policy = SecurityPolicy::default();
         let validator = CommandValidator::new(policy);
         
-        // Test comprehensive injection patterns
-        let injection_patterns = vec![
-            ("echo test; rm -rf /", true), // Command injection
-            ("echo test && rm file", true), // Command chaining
-            ("echo test | rm", true), // Pipe to dangerous command
-            ("echo test $(rm file)", true), // Command substitution
-            ("echo test `rm file`", true), // Backtick substitution
+        // Test blocked command patterns (only dangerous commands are blocked)
+        let command_tests = vec![
+            ("rm -rf /", true), // Blocked dangerous command
+            ("sudo something", true), // Blocked dangerous command
+            ("echo test; ls", false), // Shell constructs now allowed
+            ("echo test && ls", false), // Command chaining now allowed
+            ("echo test | grep pattern", false), // Pipes now allowed
+            ("echo $(date)", false), // Command substitution now allowed
+            ("echo `whoami`", false), // Backticks now allowed
             ("echo 'safe string'", false), // Safe command
             ("ls -la", false), // Safe command
         ];
         
-        for (command, should_be_blocked) in injection_patterns {
+        for (command, should_be_blocked) in command_tests {
             let result = validator.validate_command(command, Path::new("/tmp"));
             assert_eq!(
                 result.is_err(),
                 should_be_blocked,
-                "Injection validation failed for: {}",
+                "Command validation failed for: {}",
                 command
             );
         }
@@ -276,7 +278,6 @@ mod security_validation {
             allowed_directories: Some(vec!["/tmp".to_string()]),
             blocked_commands: vec!["rm".to_string()],
             max_command_length: 500,
-            enable_injection_detection: true,
         };
         
         let validator = CommandValidator::new(policy);
@@ -314,7 +315,6 @@ mod security_validation {
         
         // Verify security defaults are appropriate for production
         assert!(config.security.enable_validation);
-        assert!(config.security.enable_injection_detection);
         assert!(config.security.max_command_length > 0);
         assert!(!config.security.blocked_commands.is_empty());
         
@@ -441,7 +441,6 @@ mod production_readiness {
                 ],
                 allowed_directories: Some(vec!["/app".to_string()]),
                 max_command_length: 500,
-                enable_injection_detection: true,
             },
             execution: ShellExecutionConfig {
                 default_timeout: 300,
