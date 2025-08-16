@@ -4,7 +4,6 @@
 //! The tools provide privacy-respecting search capabilities with automatic result fetching and content processing.
 
 pub mod content_fetcher;
-pub mod duckduckgo_api_client;
 pub mod duckduckgo_client;
 pub mod privacy;
 pub mod search;
