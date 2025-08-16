@@ -1,10 +1,10 @@
 # Web Search Tool
 
-Perform web searches using DuckDuckGo with privacy protection and optional content fetching.
+Perform comprehensive web searches using DuckDuckGo with privacy protection and optional content fetching.
 
 ## Purpose
 
-The web search tool enables LLMs to search the web for current information, technical documentation, fact-checking, and research tasks. It uses DuckDuckGo to provide privacy-respecting search capabilities without tracking user queries.
+The web search tool enables LLMs to search the web for current information, technical documentation, fact-checking, and research tasks. It uses DuckDuckGo's web search interface to provide actual web search results (not just instant answers) with privacy-respecting capabilities and no query tracking.
 
 ## Important Limitations
 
@@ -86,9 +86,9 @@ Returns a structured response with search results and metadata:
     "language": "en",
     "results_count": 10,
     "search_time_ms": 1250,
-    "instance_used": "https://search.example.org",
+    "instance_used": "https://html.duckduckgo.com",
     "total_results": 8450,
-    "engines_used": ["duckduckgo", "google", "bing"],
+    "engines_used": ["duckduckgo"],
     "fetch_content": true,
     "content_fetch_stats": {
       "attempted": 10,
@@ -106,10 +106,10 @@ Returns error information when search operations fail:
 
 ```json
 {
-  "error_type": "no_instances_available",
-  "error_details": "All configured SearXNG instances are unavailable or rate limited",
-  "attempted_instances": ["https://search.example1.org", "https://search.example2.org"],
-  "retry_after": 300
+  "error_type": "captcha_required",
+  "error_details": "DuckDuckGo is requesting CAPTCHA verification. This is a bot protection measure. Please try again later or reduce request frequency.",
+  "attempted_instances": ["https://html.duckduckgo.com"],
+  "retry_after": 60
 }
 ```
 

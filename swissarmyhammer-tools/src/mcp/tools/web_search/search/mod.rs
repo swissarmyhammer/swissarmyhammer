@@ -6,9 +6,10 @@
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
-use crate::mcp::tools::web_search::duckduckgo_api_client::{
-    DuckDuckGoApiClient, DuckDuckGoApiConfig, DuckDuckGoApiError,
+use crate::mcp::tools::web_search::duckduckgo_client::{
+    DuckDuckGoClient, DuckDuckGoError,
 };
+use crate::mcp::tools::web_search::types::ScoringConfig;
 use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
@@ -16,27 +17,27 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::{Duration, Instant};
 
-/// Tool for performing web searches using DuckDuckGo's API
+/// Tool for performing web searches using DuckDuckGo web scraping
 #[derive(Default)]
 pub struct WebSearchTool {
-    duckduckgo_api_client: Option<DuckDuckGoApiClient>,
+    duckduckgo_client: Option<DuckDuckGoClient>,
 }
 
 impl WebSearchTool {
     /// Creates a new instance of the WebSearchTool
     pub fn new() -> Self {
         Self {
-            duckduckgo_api_client: None,
+            duckduckgo_client: None,
         }
     }
 
-    /// Gets or creates a DuckDuckGo API client
-    fn get_duckduckgo_api_client(&mut self) -> &DuckDuckGoApiClient {
-        if self.duckduckgo_api_client.is_none() {
-            let config = Self::load_duckduckgo_api_config();
-            self.duckduckgo_api_client = Some(DuckDuckGoApiClient::with_config(config));
+    /// Gets or creates a DuckDuckGo web search client
+    fn get_duckduckgo_client(&mut self) -> &DuckDuckGoClient {
+        if self.duckduckgo_client.is_none() {
+            let config = Self::load_scoring_config();
+            self.duckduckgo_client = Some(DuckDuckGoClient::with_scoring_config(config));
         }
-        self.duckduckgo_api_client.as_ref().unwrap()
+        self.duckduckgo_client.as_ref().unwrap()
     }
 
     /// Helper function to load configuration with a callback for setting values
@@ -243,23 +244,38 @@ impl WebSearchTool {
         })
     }
 
-    /// Loads configuration for DuckDuckGo API client
-    fn load_duckduckgo_api_config() -> DuckDuckGoApiConfig {
-        Self::load_config_with_callback(DuckDuckGoApiConfig::default(), |config, repo_config| {
-            // API URL setting
-            if let Some(swissarmyhammer::ConfigValue::String(api_url)) =
-                repo_config.get("web_search.api.duckduckgo_endpoint")
+    /// Loads configuration for DuckDuckGo scoring algorithm
+    fn load_scoring_config() -> ScoringConfig {
+        Self::load_config_with_callback(ScoringConfig::default(), |config, repo_config| {
+            // Scoring algorithm configuration
+            if let Some(swissarmyhammer::ConfigValue::Float(base_score)) =
+                repo_config.get("web_search.scoring.base_score")
             {
-                config.api_url = api_url.clone();
+                config.base_score = *base_score;
             }
 
-            // Timeout setting
-            if let Some(swissarmyhammer::ConfigValue::Integer(timeout)) =
-                repo_config.get("web_search.api.timeout_seconds")
+            if let Some(swissarmyhammer::ConfigValue::Float(position_penalty)) =
+                repo_config.get("web_search.scoring.position_penalty")
             {
-                if *timeout > 0 {
-                    config.timeout = std::time::Duration::from_secs(*timeout as u64);
-                }
+                config.position_penalty = *position_penalty;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Float(min_score)) =
+                repo_config.get("web_search.scoring.min_score")
+            {
+                config.min_score = *min_score;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Boolean(exponential_decay)) =
+                repo_config.get("web_search.scoring.exponential_decay")
+            {
+                config.exponential_decay = *exponential_decay;
+            }
+
+            if let Some(swissarmyhammer::ConfigValue::Float(decay_rate)) =
+                repo_config.get("web_search.scoring.decay_rate")
+            {
+                config.decay_rate = *decay_rate;
             }
         })
     }
@@ -359,42 +375,56 @@ impl McpTool for WebSearchTool {
         let privacy_config = Self::load_privacy_config();
         let privacy_manager = PrivacyManager::new(privacy_config);
 
-        // Perform search using DuckDuckGo Instant Answer API
-        let duckduckgo_api_client = search_tool.get_duckduckgo_api_client();
-        let mut results = match duckduckgo_api_client
-            .search_instant_answer(&request, &privacy_manager)
+        // Perform search using DuckDuckGo web scraping
+        let duckduckgo_client = search_tool.get_duckduckgo_client();
+        let mut results = match duckduckgo_client
+            .search(&request, &privacy_manager)
             .await
         {
             Ok(results) => results,
-            Err(DuckDuckGoApiError::NoInstantAnswer) => {
-                // No instant answer available - provide informative response
+            Err(DuckDuckGoError::NoResults) => {
+                // No web results found - provide informative response
                 let error = WebSearchError {
-                    error_type: "no_instant_answer".to_string(),
+                    error_type: "no_results".to_string(),
                     error_details: format!(
-                        "No instant answer available for '{}'. DuckDuckGo's official API only provides instant answers for factual queries like definitions, calculations, conversions, and well-known topics. For comprehensive web search results, consider using third-party search APIs or the web interface directly.",
+                        "No web search results found for '{}'. The search may be too specific or the terms may not match any web pages.",
                         request.query
                     ),
-                    attempted_instances: vec!["https://api.duckduckgo.com".to_string()],
+                    attempted_instances: vec!["https://html.duckduckgo.com".to_string()],
                     retry_after: None,
                 };
 
                 return Err(McpError::invalid_request(
                     serde_json::to_string_pretty(&error)
-                        .unwrap_or_else(|_| "No instant answer available".to_string()),
+                        .unwrap_or_else(|_| "No results found".to_string()),
+                    None,
+                ));
+            }
+            Err(DuckDuckGoError::CaptchaRequired) => {
+                let error = WebSearchError {
+                    error_type: "captcha_required".to_string(),
+                    error_details: "DuckDuckGo is requesting CAPTCHA verification. This is a bot protection measure. Please try again later or reduce request frequency.".to_string(),
+                    attempted_instances: vec!["https://html.duckduckgo.com".to_string()],
+                    retry_after: Some(60), // Suggest retry after 60 seconds for CAPTCHA
+                };
+
+                return Err(McpError::internal_error(
+                    serde_json::to_string_pretty(&error)
+                        .unwrap_or_else(|_| "CAPTCHA required".to_string()),
                     None,
                 ));
             }
             Err(e) => {
                 let error = WebSearchError {
-                    error_type: "api_failed".to_string(),
-                    error_details: format!("DuckDuckGo API search failed: {e}"),
-                    attempted_instances: vec!["https://api.duckduckgo.com".to_string()],
-                    retry_after: Some(10), // Suggest retry after 10 seconds for API issues
+                    error_type: "search_failed".to_string(),
+                    error_details: format!("DuckDuckGo web search failed: {e}"),
+                    attempted_instances: vec!["https://html.duckduckgo.com".to_string()],
+                    retry_after: Some(10), // Suggest retry after 10 seconds for general issues
                 };
 
                 return Err(McpError::internal_error(
                     serde_json::to_string_pretty(&error)
-                        .unwrap_or_else(|_| "API search failed".to_string()),
+                        .unwrap_or_else(|_| "Search failed".to_string()),
                     None,
                 ));
             }
@@ -431,9 +461,9 @@ impl McpTool for WebSearchTool {
                 language: request.language.unwrap_or_else(|| "en".to_string()),
                 results_count: results.len(),
                 search_time_ms: search_time.as_millis() as u64,
-                instance_used: "https://api.duckduckgo.com".to_string(),
+                instance_used: "https://html.duckduckgo.com".to_string(),
                 total_results: results.len(),
-                engines_used: vec!["duckduckgo-api".to_string()],
+                engines_used: vec!["duckduckgo".to_string()],
                 content_fetch_stats,
                 fetch_content: request.fetch_content.unwrap_or(true),
             },
