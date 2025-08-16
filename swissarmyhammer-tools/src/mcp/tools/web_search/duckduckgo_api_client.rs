@@ -15,6 +15,16 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use url::Url;
 
+/// Topic scoring configuration constants
+/// Base score for the first related topic (0.85 = 85%)
+const TOPIC_BASE_SCORE: f64 = 0.85;
+
+/// Score reduction per position for related topics (0.05 = 5% per position)
+const TOPIC_POSITION_PENALTY: f64 = 0.05;
+
+/// Minimum score for any related topic (0.1 = 10%)
+const TOPIC_MIN_SCORE: f64 = 0.1;
+
 /// Configuration for the DuckDuckGo API client
 #[derive(Debug, Clone)]
 pub struct DuckDuckGoApiConfig {
@@ -46,8 +56,8 @@ pub enum DuckDuckGoApiError {
     #[error("Network error: {0}")]
     Network(#[from] ReqwestError),
     /// JSON parsing error
-    #[error("Parse error: {0}")]
-    Parse(String),
+    #[error("JSON parsing failed: {0}")]
+    JsonParse(ReqwestError),
     /// Invalid search request parameters
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
@@ -90,13 +100,13 @@ pub struct DuckDuckGoApiResponse {
     #[serde(rename = "Image", default)]
     pub image: String,
 
-    /// Image height
+    /// Image height in pixels
     #[serde(rename = "ImageHeight", default)]
-    pub image_height: serde_json::Value,
+    pub image_height: Option<u32>,
 
-    /// Image width  
+    /// Image width in pixels
     #[serde(rename = "ImageWidth", default)]
-    pub image_width: serde_json::Value,
+    pub image_width: Option<u32>,
 
     /// Whether image is a logo
     #[serde(rename = "ImageIsLogo", default)]
@@ -234,7 +244,7 @@ impl DuckDuckGoApiClient {
         let api_response: DuckDuckGoApiResponse = response
             .json()
             .await
-            .map_err(|e| DuckDuckGoApiError::Parse(format!("Failed to parse JSON: {e}")))?;
+            .map_err(DuckDuckGoApiError::JsonParse)?;
 
         // Convert the API response to SearchResult format
         let results = self.convert_api_response_to_search_results(
@@ -400,11 +410,11 @@ impl DuckDuckGoApiClient {
 
     /// Calculates score for related topics based on their position
     fn calculate_topic_score(&self, index: usize) -> f64 {
-        // Start at 0.85 for first topic and decrease by 0.05 per position
-        let score = 0.85 - (index as f64 * 0.05);
+        // Use configurable constants for topic scoring
+        let score = TOPIC_BASE_SCORE - (index as f64 * TOPIC_POSITION_PENALTY);
         // Round to 2 decimal places to avoid floating point precision issues
         let rounded_score = (score * 100.0).round() / 100.0;
-        rounded_score.max(0.1) // Minimum score of 0.1
+        rounded_score.max(TOPIC_MIN_SCORE)
     }
 }
 
@@ -478,8 +488,8 @@ mod tests {
             entity: String::new(),
             heading: "Test Heading".to_string(),
             image: String::new(),
-            image_height: serde_json::Value::from(0),
-            image_width: serde_json::Value::from(0),
+            image_height: Some(0),
+            image_width: Some(0),
             image_is_logo: serde_json::Value::from(0),
             infobox: String::new(),
             related_topics: vec![],
@@ -526,8 +536,8 @@ mod tests {
             entity: String::new(),
             heading: String::new(),
             image: String::new(),
-            image_height: serde_json::Value::from(0),
-            image_width: serde_json::Value::from(0),
+            image_height: Some(0),
+            image_width: Some(0),
             image_is_logo: serde_json::Value::from(0),
             infobox: String::new(),
             related_topics: vec![

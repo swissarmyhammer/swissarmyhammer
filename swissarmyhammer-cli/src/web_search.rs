@@ -9,6 +9,25 @@ use crate::mcp_integration::CliToolContext;
 use serde_json::json;
 use std::error::Error;
 
+/// Truncates a string to the specified maximum width, adding ellipsis if truncated
+///
+/// # Arguments
+///
+/// * `text` - The text to truncate
+/// * `max_width` - Maximum width in characters (must be >= 3 for ellipsis)
+///
+/// # Returns
+///
+/// Truncated string with "..." appended if truncation occurred
+fn truncate_text(text: &str, max_width: usize) -> String {
+    if text.chars().count() > max_width {
+        let truncated: String = text.chars().take(max_width - 3).collect();
+        format!("{truncated}...")
+    } else {
+        text.to_string()
+    }
+}
+
 /// Handle web search CLI commands
 ///
 /// This function processes web search commands and delegates to the appropriate
@@ -154,7 +173,6 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
 /// # Returns
 ///
 /// * `Result<(), Box<dyn Error>>` - Success or error result
-#[allow(clippy::uninlined_format_args)]
 fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dyn Error>> {
     // Extract the content from MCP response
     let content = result["content"]
@@ -257,35 +275,25 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             let engine = result_item["engine"].as_str().unwrap_or("unknown");
 
             // Truncate long text for table display
-            let truncated_title = if title.chars().count() > max_title_width {
-                let truncated: String = title.chars().take(max_title_width - 3).collect();
-                format!("{}...", truncated)
-            } else {
-                title.to_string()
-            };
+            let truncated_title = truncate_text(title, max_title_width);
+            let truncated_desc = truncate_text(description, max_desc_width);
 
-            let truncated_desc = if description.chars().count() > max_desc_width {
-                let truncated: String = description.chars().take(max_desc_width - 3).collect();
-                format!("{}...", truncated)
-            } else {
-                description.to_string()
-            };
-
+            // Print main result row: Title | Score | Engine | Description
+            // Format explanation:
+            // - {:width$}: Left-aligned text with variable width (title)
+            // - {:>6.2}: Right-aligned decimal with 6 chars total, 2 decimal places (score)  
+            // - {:^10}: Center-aligned text with 10 chars width (engine name)
+            // - {:desc_width$}: Left-aligned text with variable width (description)
             println!(
-                "│ {:width$} │ {:>6.2} │ {:^10} │ {:desc_width$} │",
-                truncated_title,
-                score,
-                engine,
-                truncated_desc,
-                width = max_title_width,
-                desc_width = max_desc_width
+                "│ {truncated_title:max_title_width$} │ {score:>6.2} │ {engine:^10} │ {truncated_desc:max_desc_width$} │"
             );
 
-            // Show URL on next line
+            // Show URL on next line in table format
+            // Format uses empty strings for score and engine columns to maintain alignment
             println!(
                 "│ {:width$} │        │            │ {:desc_width$} │",
                 format!("🔗 {}", url),
-                "",
+                "", // Empty string for score column (8 spaces to match header)
                 width = max_title_width,
                 desc_width = max_desc_width
             );
@@ -296,13 +304,10 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
                     content_info["word_count"].as_u64(),
                     content_info["summary"].as_str(),
                 ) {
-                    let content_summary = if summary.chars().count() > max_desc_width {
-                        let truncated: String = summary.chars().take(max_desc_width - 3).collect();
-                        format!("{}...", truncated)
-                    } else {
-                        summary.to_string()
-                    };
+                    let content_summary = truncate_text(summary, max_desc_width);
 
+                    // Show content metadata: word count and summary in table format
+                    // Uses same column alignment as other rows
                     println!(
                         "│ {:width$} │        │            │ {:desc_width$} │",
                         format!("📄 {} words", word_count),

@@ -95,12 +95,18 @@ pub struct WebSearchRequest {
     pub time_range: Option<TimeRange>,
 }
 
+/// Default number of search results to return
+const DEFAULT_RESULTS_COUNT: usize = 10;
+
+/// Default value for fetch_content option
+const DEFAULT_FETCH_CONTENT: bool = true;
+
 fn default_results_count() -> Option<usize> {
-    Some(10)
+    Some(DEFAULT_RESULTS_COUNT)
 }
 
 fn default_fetch_content() -> Option<bool> {
-    Some(true)
+    Some(DEFAULT_FETCH_CONTENT)
 }
 
 /// Individual search result
