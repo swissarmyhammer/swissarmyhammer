@@ -1,13 +1,13 @@
 //! DuckDuckGo search client implementation
 //!
-//! This module provides a client for performing web searches using DuckDuckGo's search API.
-//! It replaces the previous SearXNG implementation with a direct connection to DuckDuckGo.
+//! This module provides a client for performing web searches using DuckDuckGo's HTML search interface.
+//! Based on the proven approach from the ddgs Python library (https://github.com/deedy5/ddgs).
 //!
-//! Key improvements:
-//! - VQD token extraction and management for authentic requests
-//! - Session-based requests with proper cookie handling
-//! - Enhanced CAPTCHA avoidance through realistic browser behavior
-//! - Improved HTML parsing with multiple fallback strategies
+//! Key features:
+//! - Simple POST requests to DuckDuckGo HTML endpoint without VQD tokens
+//! - XPath-based HTML parsing for reliable result extraction
+//! - CAPTCHA detection and graceful error handling
+//! - Configurable scoring for search result ranking
 
 use crate::mcp::tools::web_search::privacy::PrivacyManager;
 use crate::mcp::tools::web_search::types::{ScoringConfig, *};
@@ -15,15 +15,11 @@ use reqwest::{Client, Error as ReqwestError};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// DuckDuckGo search client with VQD token support
+/// DuckDuckGo search client using simple HTML scraping
 pub struct DuckDuckGoClient {
     client: Client,
     base_url: String,
     scoring_config: ScoringConfig,
-    /// Current VQD token for authentic requests
-    vqd_token: Option<String>,
-    /// Session initialization state
-    session_initialized: bool,
 }
 
 /// Errors that can occur during DuckDuckGo search operations
@@ -44,20 +40,10 @@ pub enum DuckDuckGoError {
     /// DuckDuckGo is requesting CAPTCHA verification
     #[error("DuckDuckGo is requesting CAPTCHA verification to confirm this search was made by a human. This is a bot protection measure. Please try again later or use the web interface directly.")]
     CaptchaRequired,
-    /// Failed to extract VQD token
-    #[error("Failed to extract VQD token: {0}")]
-    VqdExtractionFailed(String),
-    /// JSON parsing error
-    #[error("JSON parse error: {0}")]
-    JsonParse(#[from] serde_json::Error),
-    /// Session initialization failed
-    #[error("Session initialization failed: {0}")]
-    SessionInitFailed(String),
 }
 
 impl DuckDuckGoClient {
     /// Creates a new DuckDuckGo client with default scoring configuration
-    /// Note: User-Agent will be set per-request by privacy manager
     pub fn new() -> Self {
         Self::with_scoring_config(ScoringConfig::default())
     }
@@ -66,8 +52,6 @@ impl DuckDuckGoClient {
     pub fn with_scoring_config(scoring_config: ScoringConfig) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
-            .cookie_store(true) // Enable cookie storage for session management
-            // Don't set User-Agent here - privacy manager will handle it per-request
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -75,12 +59,10 @@ impl DuckDuckGoClient {
             client,
             base_url: "https://html.duckduckgo.com".to_string(),
             scoring_config,
-            vqd_token: None,
-            session_initialized: false,
         }
     }
 
-    /// Performs a web search using DuckDuckGo with VQD token support
+    /// Performs a web search using DuckDuckGo HTML interface
     pub async fn search(
         &mut self,
         request: &WebSearchRequest,
@@ -88,230 +70,20 @@ impl DuckDuckGoClient {
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
         tracing::debug!("Starting DuckDuckGo search for: '{}'", request.query);
 
-        // Initialize session if needed
-        if !self.session_initialized {
-            self.initialize_session(privacy_manager).await?;
-        }
-
-        // Try search with VQD token first
-        match self.get_vqd_token(&request.query, privacy_manager).await {
-            Ok(vqd_token) => {
-                tracing::debug!("Using VQD token for search: {}", vqd_token);
-                match self
-                    .perform_search_with_vqd(&vqd_token, request, privacy_manager)
-                    .await
-                {
-                    Ok(results) => {
-                        tracing::debug!(
-                            "DuckDuckGo search found {} results with VQD",
-                            results.len()
-                        );
-                        return Ok(results);
-                    }
-                    Err(e) => {
-                        tracing::warn!("VQD-based search failed: {}, trying without VQD", e);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("VQD token extraction failed: {}, trying without VQD", e);
-            }
-        }
-
-        // Fallback: try search without VQD token
-        let results = self
-            .perform_search_without_vqd(request, privacy_manager)
-            .await?;
-
-        tracing::debug!(
-            "DuckDuckGo search found {} results without VQD",
-            results.len()
-        );
-
-        Ok(results)
-    }
-
-    /// Initialize session by visiting homepage and establishing cookies
-    async fn initialize_session(
-        &mut self,
-        privacy_manager: &PrivacyManager,
-    ) -> Result<(), DuckDuckGoError> {
-        tracing::debug!("Initializing DuckDuckGo session");
-
         // Apply request jitter for privacy
         privacy_manager.apply_jitter().await;
 
-        // Visit homepage to establish session
-        let mut request_builder = self.client.get(&self.base_url);
-
-        // Apply User-Agent and privacy headers
-        if let Some(user_agent) = privacy_manager.get_user_agent() {
-            request_builder = request_builder.header("User-Agent", user_agent);
-        }
-        request_builder = privacy_manager.apply_privacy_headers(request_builder);
-
-        let response = request_builder
-            .send()
-            .await
-            .map_err(DuckDuckGoError::Network)?;
-
-        if !response.status().is_success() {
-            return Err(DuckDuckGoError::SessionInitFailed(format!(
-                "Homepage request failed with status: {}",
-                response.status()
-            )));
-        }
-
-        self.session_initialized = true;
-        tracing::debug!("Session initialized successfully");
-        Ok(())
-    }
-
-    /// Extract VQD token for the given query
-    async fn get_vqd_token(
-        &mut self,
-        query: &str,
-        privacy_manager: &PrivacyManager,
-    ) -> Result<String, DuckDuckGoError> {
-        tracing::debug!("Extracting VQD token for query: {}", query);
-
-        // Try to extract VQD from search page first (simpler approach)
-        self.extract_vqd_from_html(query, privacy_manager).await
-    }
-
-    /// Extract VQD token from HTML search page
-    async fn extract_vqd_from_html(
-        &mut self,
-        query: &str,
-        privacy_manager: &PrivacyManager,
-    ) -> Result<String, DuckDuckGoError> {
-        tracing::debug!("Extracting VQD token from HTML page");
-
-        // Apply request jitter for privacy
-        privacy_manager.apply_jitter().await;
-
-        let search_url = format!("{}/?q={}", self.base_url, urlencoding::encode(query));
-
-        let mut request_builder = self.client.get(&search_url);
-
-        // Apply User-Agent and privacy headers
-        if let Some(user_agent) = privacy_manager.get_user_agent() {
-            request_builder = request_builder.header("User-Agent", user_agent);
-        }
-        request_builder = privacy_manager.apply_privacy_headers(request_builder);
-
-        let response = request_builder
-            .send()
-            .await
-            .map_err(DuckDuckGoError::Network)?;
-
-        if !response.status().is_success() {
-            return Err(DuckDuckGoError::VqdExtractionFailed(format!(
-                "HTML page request failed with status: {}",
-                response.status()
-            )));
-        }
-
-        let html_content = response.text().await.map_err(DuckDuckGoError::Network)?;
-
-        // Check for CAPTCHA before extraction
-        if self.is_captcha_challenge(&html_content) {
-            privacy_manager.record_captcha_challenge();
-            return Err(DuckDuckGoError::CaptchaRequired);
-        }
-
-        // Extract VQD from HTML
-        if let Some(vqd) = self.extract_vqd_from_html_content(&html_content) {
-            self.vqd_token = Some(vqd.clone());
-            return Ok(vqd);
-        }
-
-        Err(DuckDuckGoError::VqdExtractionFailed(
-            "Could not find VQD token in HTML content".to_string(),
-        ))
-    }
-
-    /// Extract VQD token from HTML content
-    fn extract_vqd_from_html_content(&self, html_content: &str) -> Option<String> {
-        use regex::Regex;
-
-        tracing::debug!(
-            "Attempting to extract VQD from HTML content (length: {})",
-            html_content.len()
-        );
-
-        // Look for vqd in various HTML patterns
-        let patterns = [
-            r#"vqd["']?\s*[:=]\s*["']([^"']+)["']"#,
-            r#"data-vqd=["']([^"']+)["']"#,
-            r#"name=["']vqd["']\s+value=["']([^"']+)["']"#,
-            r#""vqd"\s*:\s*"([^"]+)""#,
-            r#"vqd\s*=\s*["']([^"']+)["']"#,
-            r#"\"vqd\":\"([^\"]+)\""#,
-            r#"vqd=([^&\s"']+)"#,
-        ];
-
-        for (i, pattern) in patterns.iter().enumerate() {
-            if let Ok(re) = Regex::new(pattern) {
-                if let Some(captures) = re.captures(html_content) {
-                    if let Some(vqd_match) = captures.get(1) {
-                        let vqd = vqd_match.as_str().to_string();
-                        if !vqd.is_empty() {
-                            tracing::debug!("Found VQD token from HTML pattern {}: {}", i, vqd);
-                            return Some(vqd);
-                        }
-                    }
-                }
-            } else {
-                tracing::warn!("Invalid regex pattern {}: {}", i, pattern);
-            }
-        }
-
-        // If no patterns match, try to find it in a JavaScript snippet
-        if let Some(start) = html_content.find("vqd") {
-            let context = &html_content
-                [start.saturating_sub(50)..std::cmp::min(start + 200, html_content.len())];
-            tracing::debug!("VQD context found: {}", context);
-        }
-
-        tracing::debug!("No VQD token found in HTML content");
-        None
-    }
-
-    /// Perform actual search with VQD token
-    async fn perform_search_with_vqd(
-        &self,
-        vqd_token: &str,
-        request: &WebSearchRequest,
-        privacy_manager: &PrivacyManager,
-    ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
-        tracing::debug!("Performing search with VQD token");
-
-        // Apply request jitter for privacy
-        privacy_manager.apply_jitter().await;
-
-        // Use DuckDuckGo's search endpoint with POST
+        // Use DuckDuckGo's HTML search endpoint with POST (based on ddgs approach)
         let search_url = format!("{}/html/", self.base_url);
 
-        // Build form parameters
+        // Build form parameters (simplified from ddgs implementation)
         let mut params = HashMap::new();
         params.insert("q", request.query.as_str());
-        params.insert("vqd", vqd_token);
-        params.insert("o", "json"); // Request JSON response if available
-        params.insert("dc", "1"); // Desktop client
-        params.insert("t", "D"); // Web search
-
-        // Add safe search parameter
-        let safe_search = match request.safe_search.unwrap_or(SafeSearchLevel::Moderate) {
-            SafeSearchLevel::Off => "-1",
-            SafeSearchLevel::Moderate => "1",
-            SafeSearchLevel::Strict => "1",
-        };
-        params.insert("safe", safe_search);
-
-        // Add language parameter
-        if let Some(ref language) = request.language {
-            let region = match language.as_str() {
+        params.insert("b", ""); // Empty value as in ddgs
+        
+        // Add region parameter
+        let region = if let Some(ref language) = request.language {
+            match language.as_str() {
                 "en" => "us-en",
                 "es" => "es-es",
                 "fr" => "fr-fr",
@@ -323,18 +95,20 @@ impl DuckDuckGoClient {
                 "ko" => "kr-kr",
                 "zh" => "cn-zh",
                 _ => "us-en",
-            };
-            params.insert("kl", region);
-        }
+            }
+        } else {
+            "us-en"
+        };
+        params.insert("l", region);
 
-        // Add time range parameter
+        // Add time range parameter if specified
         if let Some(ref time_range) = request.time_range {
             let time_param = match time_range {
-                TimeRange::All => None,
                 TimeRange::Day => Some("d"),
                 TimeRange::Week => Some("w"),
                 TimeRange::Month => Some("m"),
                 TimeRange::Year => Some("y"),
+                TimeRange::All => None,
             };
             if let Some(time) = time_param {
                 params.insert("df", time);
@@ -369,105 +143,14 @@ impl DuckDuckGoClient {
             return Err(DuckDuckGoError::CaptchaRequired);
         }
 
-        // Parse results
-        let results =
-            self.parse_html_results(&response_text, request.results_count.unwrap_or(10))?;
+        // Parse results using XPath-based approach (similar to ddgs)
+        let results = self.parse_html_results(&response_text, request.results_count.unwrap_or(10))?;
+
+        tracing::debug!("DuckDuckGo search found {} results", results.len());
 
         Ok(results)
     }
 
-    /// Perform search without VQD token (fallback method)
-    async fn perform_search_without_vqd(
-        &self,
-        request: &WebSearchRequest,
-        privacy_manager: &PrivacyManager,
-    ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
-        tracing::debug!("Performing search without VQD token");
-
-        // Apply request jitter for privacy
-        privacy_manager.apply_jitter().await;
-
-        // Use simple GET request to DuckDuckGo HTML endpoint
-        let mut search_url = format!(
-            "{}/?q={}",
-            self.base_url,
-            urlencoding::encode(&request.query)
-        );
-
-        // Add parameters directly to URL
-        let safe_search = match request.safe_search.unwrap_or(SafeSearchLevel::Moderate) {
-            SafeSearchLevel::Off => "&safe=-1",
-            SafeSearchLevel::Moderate => "&safe=1",
-            SafeSearchLevel::Strict => "&safe=1",
-        };
-        search_url.push_str(safe_search);
-
-        // Add language parameter
-        if let Some(ref language) = request.language {
-            let region = match language.as_str() {
-                "en" => "us-en",
-                "es" => "es-es",
-                "fr" => "fr-fr",
-                "de" => "de-de",
-                "it" => "it-it",
-                "pt" => "pt-br",
-                "ru" => "ru-ru",
-                "ja" => "jp-jp",
-                "ko" => "kr-kr",
-                "zh" => "cn-zh",
-                _ => "us-en",
-            };
-            search_url.push_str(&format!("&kl={region}"));
-        }
-
-        // Add time range parameter
-        if let Some(ref time_range) = request.time_range {
-            let time_param = match time_range {
-                TimeRange::All => None,
-                TimeRange::Day => Some("d"),
-                TimeRange::Week => Some("w"),
-                TimeRange::Month => Some("m"),
-                TimeRange::Year => Some("y"),
-            };
-            if let Some(time) = time_param {
-                search_url.push_str(&format!("&df={time}"));
-            }
-        }
-
-        let mut request_builder = self.client.get(&search_url);
-
-        // Apply User-Agent and privacy headers
-        if let Some(user_agent) = privacy_manager.get_user_agent() {
-            request_builder = request_builder.header("User-Agent", user_agent);
-        }
-        request_builder = privacy_manager.apply_privacy_headers(request_builder);
-
-        let response = request_builder
-            .send()
-            .await
-            .map_err(DuckDuckGoError::Network)?;
-
-        if !response.status().is_success() {
-            return Err(DuckDuckGoError::InvalidRequest(format!(
-                "Search request failed with status: {}",
-                response.status()
-            )));
-        }
-
-        let response_text = response.text().await.map_err(DuckDuckGoError::Network)?;
-
-        // Check for CAPTCHA challenges
-        if self.is_captcha_challenge(&response_text) {
-            privacy_manager.record_captcha_challenge();
-            return Err(DuckDuckGoError::CaptchaRequired);
-        }
-
-        // Parse results
-        let results =
-            self.parse_html_results(&response_text, request.results_count.unwrap_or(10))?;
-
-        Ok(results)
-    }
 
     /// Checks if the HTML response contains a CAPTCHA challenge
     fn is_captcha_challenge(&self, html_content: &str) -> bool {
@@ -480,15 +163,13 @@ impl DuckDuckGoClient {
             || html_content.contains("human verification")
     }
 
-    /// Parses HTML content to extract search results using proper HTML parser
+    /// Parses HTML content to extract search results (simplified based on ddgs approach)
     fn parse_html_results(
         &self,
         html_content: &str,
         max_results: usize,
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
         use scraper::{Html, Selector};
-
-        let mut results = Vec::new();
 
         tracing::debug!(
             "Parsing HTML content of {} characters for search results",
@@ -508,34 +189,14 @@ impl DuckDuckGoClient {
         // Parse the HTML document
         let document = Html::parse_document(html_content);
 
-        // DuckDuckGo uses several different CSS selectors for results, try them in order
+        // Use ddgs-based selectors (translated from XPath to CSS)
+        // Original ddgs: items_xpath = "//div[contains(@class, 'body')]"
         let result_selectors = vec![
-            // Main organic results
-            "div[data-testid='web-result']",
-            "div.result",
-            "div[class*='result']",
-            // Alternative result containers
-            "div.web-result",
-            "div[class*='web-result']",
+            "div[class*='body']",          // Primary selector from ddgs
+            "div[data-testid='web-result']", // Modern DuckDuckGo
+            "div.result",                    // Classic DuckDuckGo
         ];
 
-        let title_selectors = vec![
-            "h3 a",
-            "a[data-testid='result-title-a']",
-            "a.result__a",
-            ".result__title a",
-            "a[class*='result__a']",
-        ];
-
-        let description_selectors = vec![
-            "[data-testid='result-snippet']",
-            ".result__snippet",
-            "a.result__snippet",
-            "[class*='result__snippet']",
-            ".result-snippet",
-        ];
-
-        // Try each result selector until we find results
         for result_selector_str in &result_selectors {
             let result_selector = Selector::parse(result_selector_str).map_err(|e| {
                 DuckDuckGoError::Parse(format!("Invalid CSS selector '{result_selector_str}': {e}"))
@@ -544,23 +205,28 @@ impl DuckDuckGoClient {
             let result_elements: Vec<_> = document.select(&result_selector).collect();
 
             if result_elements.is_empty() {
+                tracing::debug!("No results found with selector: {}", result_selector_str);
                 continue; // Try next selector
             }
 
+            tracing::debug!("Found {} potential results with selector: {}", result_elements.len(), result_selector_str);
+
+            let mut results = Vec::new();
             for (index, result_element) in result_elements.iter().enumerate() {
                 if index >= max_results {
                     break;
                 }
 
-                // Extract title and URL using multiple selector strategies
-                let (title, url) = self.extract_title_and_url(result_element, &title_selectors)?;
+                // Extract title and URL (based on ddgs: title from h2, href from a)
+                let (title, url) = self.extract_title_and_url_simple(result_element)?;
 
                 if title.is_empty() || url.is_empty() || !url.starts_with("http") {
+                    tracing::debug!("Skipping invalid result {}: title='{}', url='{}'", index, title, url);
                     continue; // Skip invalid results
                 }
 
-                // Extract description using multiple selector strategies
-                let description = self.extract_description(result_element, &description_selectors);
+                // Extract description (based on ddgs: body from a text)
+                let description = self.extract_description_simple(result_element);
 
                 results.push(SearchResult {
                     title: html_escape::decode_html_entities(&title).to_string(),
@@ -574,60 +240,82 @@ impl DuckDuckGoClient {
 
             // If we found results with this selector, we're done
             if !results.is_empty() {
-                break;
+                tracing::debug!("Successfully parsed {} results", results.len());
+                return Ok(results);
             }
         }
 
-        if results.is_empty() {
-            // Try fallback regex parsing for edge cases
-            self.parse_html_results_alternative(html_content, max_results)
-        } else {
-            Ok(results)
-        }
+        tracing::warn!("No search results found with any selector");
+        Err(DuckDuckGoError::NoResults)
     }
 
-    /// Extracts title and URL from a result element using multiple selector strategies
-    fn extract_title_and_url(
+    /// Extract title and URL from result element (simplified ddgs approach)
+    fn extract_title_and_url_simple(
         &self,
         element: &scraper::ElementRef,
-        title_selectors: &[&str],
     ) -> Result<(String, String), DuckDuckGoError> {
         use scraper::Selector;
 
-        for selector_str in title_selectors {
-            let selector = Selector::parse(selector_str).map_err(|e| {
-                DuckDuckGoError::Parse(format!("Invalid title selector '{selector_str}': {e}"))
-            })?;
+        // ddgs approach: title from h2, href from a
+        let title_selectors = vec!["h2 a", "h3 a", "h2", "h3", "a"];
+        let url_selectors = vec!["a"];
 
-            if let Some(title_element) = element.select(&selector).next() {
-                let url = title_element.value().attr("href").unwrap_or("").to_string();
-                let title = title_element
-                    .text()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .trim()
-                    .to_string();
+        let mut title = String::new();
+        let mut url = String::new();
 
-                if !title.is_empty() && !url.is_empty() {
-                    return Ok((title, url));
+        // Extract title and URL from the same <a> element if possible
+        for selector_str in &title_selectors {
+            if let Ok(selector) = Selector::parse(selector_str) {
+                if let Some(link_element) = element.select(&selector).next() {
+                    if let Some(href) = link_element.value().attr("href") {
+                        url = href.to_string();
+                    }
+                    title = link_element
+                        .text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string();
+                    if !title.is_empty() && !url.is_empty() {
+                        break;
+                    }
                 }
             }
         }
 
-        Ok((String::new(), String::new()))
+        // If we didn't find both title and URL, try to find URL separately
+        if url.is_empty() {
+            for selector_str in &url_selectors {
+                if let Ok(selector) = Selector::parse(selector_str) {
+                    if let Some(link_element) = element.select(&selector).next() {
+                        if let Some(href) = link_element.value().attr("href") {
+                            url = href.to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((title, url))
     }
 
-    /// Extracts description from a result element using multiple selector strategies
-    fn extract_description(
-        &self,
-        element: &scraper::ElementRef,
-        description_selectors: &[&str],
-    ) -> String {
+    /// Extract description from result element (simplified ddgs approach)
+    fn extract_description_simple(&self, element: &scraper::ElementRef) -> String {
         use scraper::Selector;
 
-        for selector_str in description_selectors {
+        // ddgs approach: body text from a elements
+        let description_selectors = vec![
+            "a.result__snippet",
+            ".result__snippet",
+            "a[class*='snippet']",
+            "[class*='snippet']",
+            "a", // Fallback to any link text
+        ];
+
+        for selector_str in &description_selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
-                if let Some(desc_element) = element.select(&selector).next() {
+                for desc_element in element.select(&selector) {
                     let description = desc_element
                         .text()
                         .collect::<Vec<_>>()
@@ -635,7 +323,10 @@ impl DuckDuckGoClient {
                         .trim()
                         .to_string();
                     if !description.is_empty() {
-                        return description;
+                        // Avoid using the same text as title
+                        if description.len() > 10 {
+                            return description;
+                        }
                     }
                 }
             }
@@ -643,6 +334,7 @@ impl DuckDuckGoClient {
 
         String::new()
     }
+
 
     /// Calculates result score based on position using configurable scoring algorithm
     fn calculate_result_score(&self, index: usize) -> f64 {
@@ -659,70 +351,6 @@ impl DuckDuckGoClient {
         }
     }
 
-    /// Alternative HTML parsing method for different DuckDuckGo result layouts
-    fn parse_html_results_alternative(
-        &self,
-        html_content: &str,
-        max_results: usize,
-    ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
-        use regex::Regex;
-
-        let mut results = Vec::new();
-
-        // Alternative patterns for different DuckDuckGo layouts
-        let link_pattern = Regex::new(
-            r#"(?s)<a[^>]+href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"[^>]*>([^<]+)</a>"#,
-        )
-        .map_err(|e| DuckDuckGoError::Parse(format!("Invalid regex: {e}")))?;
-
-        let snippet_pattern =
-            Regex::new(r#"(?s)<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([^<]+)</a>"#)
-                .map_err(|e| DuckDuckGoError::Parse(format!("Invalid regex: {e}")))?;
-
-        let links: Vec<_> = link_pattern.captures_iter(html_content).collect();
-        let snippets: Vec<_> = snippet_pattern.captures_iter(html_content).collect();
-
-        for (index, link_captures) in links.iter().enumerate().take(max_results) {
-            let url = link_captures
-                .get(1)
-                .map(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
-            let title = link_captures
-                .get(2)
-                .map(|m| m.as_str())
-                .unwrap_or("Untitled")
-                .to_string();
-
-            // Get corresponding description if available
-            let description = snippets
-                .get(index)
-                .and_then(|captures| captures.get(1))
-                .map(|m| m.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            // Validate URL format
-            if url.is_empty() || !url.starts_with("http") {
-                continue;
-            }
-
-            results.push(SearchResult {
-                title: html_escape::decode_html_entities(&title).to_string(),
-                url,
-                description: html_escape::decode_html_entities(&description).to_string(),
-                score: self.calculate_result_score(index),
-                engine: "duckduckgo".to_string(),
-                content: None,
-            });
-        }
-
-        if results.is_empty() {
-            Err(DuckDuckGoError::NoResults)
-        } else {
-            Ok(results)
-        }
-    }
 }
 
 impl Default for DuckDuckGoClient {
@@ -741,27 +369,6 @@ mod tests {
         assert_eq!(client.base_url, "https://html.duckduckgo.com");
     }
 
-    #[test]
-    fn test_vqd_extraction_from_html() {
-        let client = DuckDuckGoClient::new();
-
-        // Test various HTML patterns
-        let html_content1 = r#"<input name="vqd" value="html123">"#;
-        assert_eq!(
-            client.extract_vqd_from_html_content(html_content1),
-            Some("html123".to_string())
-        );
-
-        let html_content2 = r#"<div data-vqd="html456">"#;
-        assert_eq!(
-            client.extract_vqd_from_html_content(html_content2),
-            Some("html456".to_string())
-        );
-
-        // Test no match
-        let html_content3 = r#"<div>no vqd here</div>"#;
-        assert_eq!(client.extract_vqd_from_html_content(html_content3), None);
-    }
 
     #[test]
     fn test_is_captcha_challenge() {
