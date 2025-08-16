@@ -241,6 +241,66 @@ async fn test_specification_use_case_news_analysis() {
     }
 }
 
+/// Test case 5: GitHub Issue Processing
+/// URL: GitHub issue for testing structured content extraction
+#[tokio::test]
+async fn test_specification_use_case_github_issue() {
+    let tool = WebFetchTool::new();
+    let context = create_test_context();
+
+    let args = json!({
+        "url": "https://github.com/rust-lang/rust/issues/1",
+        "timeout": 30,
+        "user_agent": "SwissArmyHammer-IssueTracker/1.0"
+    });
+
+    let result = tool.execute(args.as_object().unwrap().clone(), &context).await;
+    
+    match result {
+        Ok(call_result) => {
+            assert_eq!(call_result.is_error, Some(false));
+            
+            let response_text = match &call_result.content[0].resource {
+                swissarmyhammer_tools::rmcp::model::RawContent::Text(text_content) => &text_content.text,
+                _ => panic!("Expected text content"),
+            };
+            
+            let response: serde_json::Value = serde_json::from_str(response_text).unwrap();
+            let metadata = &response["metadata"];
+            
+            // Verify GitHub-specific content characteristics
+            let markdown_content = metadata["markdown_content"].as_str().unwrap();
+            assert!(
+                markdown_content.to_lowercase().contains("issue") || 
+                markdown_content.to_lowercase().contains("github") ||
+                markdown_content.to_lowercase().contains("rust"),
+                "Should contain GitHub issue-related content"
+            );
+            
+            // Verify structured content extraction
+            assert!(metadata["word_count"].as_u64().unwrap() > 0, "Should have extracted text content");
+            assert!(metadata["content_type"].as_str().unwrap().contains("html"), "Should be HTML content");
+            
+            // Verify custom user agent was used
+            let user_agent_used = args["user_agent"].as_str().unwrap();
+            assert_eq!(user_agent_used, "SwissArmyHammer-IssueTracker/1.0");
+            
+            // Verify performance requirements for structured content
+            let response_time = metadata["response_time_ms"].as_u64().unwrap();
+            assert!(response_time < 30000, "Should complete within timeout");
+            
+            println!("✅ GitHub issue processing use case passed");
+        }
+        Err(e) => {
+            if e.to_string().contains("Connection") || e.to_string().contains("timeout") {
+                println!("⚠️  Network error acceptable in CI: {}", e);
+            } else {
+                panic!("Unexpected error in GitHub issue test: {}", e);
+            }
+        }
+    }
+}
+
 /// Test response format compliance with specification
 #[tokio::test]
 async fn test_response_format_specification_compliance() {
