@@ -30,12 +30,12 @@ impl WebSearchTool {
     }
 
     /// Gets or creates a DuckDuckGo web search client
-    fn get_duckduckgo_client(&mut self) -> &DuckDuckGoClient {
+    fn get_duckduckgo_client(&mut self) -> &mut DuckDuckGoClient {
         if self.duckduckgo_client.is_none() {
             let config = Self::load_scoring_config();
             self.duckduckgo_client = Some(DuckDuckGoClient::with_scoring_config(config));
         }
-        self.duckduckgo_client.as_ref().unwrap()
+        self.duckduckgo_client.as_mut().unwrap()
     }
 
     /// Helper function to load configuration with a callback for setting values

@@ -51,6 +51,7 @@ scraper = "0.20"
 futures-util = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
+urlencoding = "2.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
