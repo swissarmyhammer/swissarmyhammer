@@ -75,10 +75,10 @@ impl DuckDuckGoClient {
 
         // Build search parameters based on ddgs approach
         let params = self.build_search_params(request);
-        
+
         // Create the HTTP request with privacy headers
         let response = self.create_search_request(&params, privacy_manager).await?;
-        
+
         // Validate response and check for CAPTCHA
         let response_text = self.validate_response(response, privacy_manager).await?;
 
@@ -101,7 +101,7 @@ impl DuckDuckGoClient {
         let region = if let Some(ref language) = request.language {
             match language.as_str() {
                 "en" => "us-en",
-                "es" => "es-es", 
+                "es" => "es-es",
                 "fr" => "fr-fr",
                 "de" => "de-de",
                 "it" => "it-it",
@@ -312,7 +312,7 @@ impl DuckDuckGoClient {
                         .join(" ")
                         .trim()
                         .to_string();
-                    
+
                     // If this is an 'a' element, also extract href
                     if title_element.value().name() == "a" {
                         if let Some(href) = title_element.value().attr("href") {
@@ -362,7 +362,7 @@ impl DuckDuckGoClient {
         for selector_str in &description_selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
                 let mut all_texts = Vec::new();
-                
+
                 for desc_element in element.select(&selector) {
                     let text = desc_element
                         .text()
@@ -370,16 +370,17 @@ impl DuckDuckGoClient {
                         .join(" ")
                         .trim()
                         .to_string();
-                    
+
                     if !text.is_empty() && text.len() > 10 {
                         all_texts.push(text);
                     }
                 }
-                
+
                 if !all_texts.is_empty() {
                     // Join all extracted text and return first meaningful description
                     let combined = all_texts.join(" ").trim().to_string();
-                    if combined.len() > 20 { // Ensure substantial content
+                    if combined.len() > 20 {
+                        // Ensure substantial content
                         return combined;
                     }
                 }
@@ -617,7 +618,10 @@ mod tests {
         </div>
         "#;
         let document1 = scraper::Html::parse_document(html1);
-        let element1 = document1.select(&scraper::Selector::parse("div").unwrap()).next().unwrap();
+        let element1 = document1
+            .select(&scraper::Selector::parse("div").unwrap())
+            .next()
+            .unwrap();
         let (title1, url1) = client.extract_title_and_url_simple(&element1).unwrap();
         assert_eq!(title1, "Example Title");
         assert_eq!(url1, "https://example.com");
@@ -629,7 +633,10 @@ mod tests {
         </div>
         "#;
         let document2 = scraper::Html::parse_document(html2);
-        let element2 = document2.select(&scraper::Selector::parse("div").unwrap()).next().unwrap();
+        let element2 = document2
+            .select(&scraper::Selector::parse("div").unwrap())
+            .next()
+            .unwrap();
         let (title2, url2) = client.extract_title_and_url_simple(&element2).unwrap();
         assert_eq!(title2, "Test Page");
         assert_eq!(url2, "https://test.org");
@@ -648,9 +655,12 @@ mod tests {
         </div>
         "#;
         let document = scraper::Html::parse_document(html);
-        let element = document.select(&scraper::Selector::parse("div").unwrap()).next().unwrap();
+        let element = document
+            .select(&scraper::Selector::parse("div").unwrap())
+            .next()
+            .unwrap();
         let description = client.extract_description_simple(&element);
-        
+
         assert!(description.contains("detailed description"));
         assert!(description.len() > 20);
     }

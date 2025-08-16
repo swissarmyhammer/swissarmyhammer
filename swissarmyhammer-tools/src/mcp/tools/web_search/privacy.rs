@@ -115,7 +115,9 @@ impl UserAgentRotator {
     pub fn new(config: &PrivacyConfig) -> Self {
         let user_agents = config
             .custom_user_agents
-            .clone()
+            .as_ref()
+            .filter(|agents| !agents.is_empty()) // Only use custom agents if non-empty
+            .cloned()
             .unwrap_or_else(Self::default_user_agents);
 
         Self {
@@ -145,20 +147,22 @@ impl UserAgentRotator {
 
     /// Gets the next User-Agent string based on the rotation strategy
     pub fn get_next_user_agent(&self) -> String {
-        if self.user_agents.is_empty() {
-            // Fallback to basic User-Agent if no agents configured
-            return "SwissArmyHammer/1.0 (Privacy-Focused Web Search)".to_string();
-        }
+        let user_agents = if self.user_agents.is_empty() {
+            // Fallback to default browser User-Agent strings if none configured
+            Self::default_user_agents()
+        } else {
+            self.user_agents.clone()
+        };
 
         if self.randomize {
             let index = {
                 let mut rng = rand::thread_rng();
-                rng.gen_range(0..self.user_agents.len())
+                rng.gen_range(0..user_agents.len())
             };
-            self.user_agents[index].clone()
+            user_agents[index].clone()
         } else {
-            let index = self.current_index.fetch_add(1, Ordering::Relaxed) % self.user_agents.len();
-            self.user_agents[index].clone()
+            let index = self.current_index.fetch_add(1, Ordering::Relaxed) % user_agents.len();
+            user_agents[index].clone()
         }
     }
 }
@@ -556,7 +560,9 @@ mod tests {
         let rotator = UserAgentRotator::new(&config);
         let agent = rotator.get_next_user_agent();
 
-        assert!(agent.contains("SwissArmyHammer"));
+        // Should fall back to default browser user agents, not SwissArmyHammer
+        assert!(agent.contains("Mozilla"));
+        assert!(!agent.contains("SwissArmyHammer"));
     }
 
     #[test]

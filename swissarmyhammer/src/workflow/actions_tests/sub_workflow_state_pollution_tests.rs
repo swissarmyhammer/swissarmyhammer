@@ -5,6 +5,7 @@
 
 use crate::test_utils::IsolatedTestHome;
 use crate::workflow::actions::{clear_test_storage, set_test_storage};
+use serial_test::serial;
 use crate::workflow::storage::{
     MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowStorageBackend,
 };
@@ -30,6 +31,7 @@ fn setup_test_storage_with_workflows(workflows: &[(&str, &str)]) -> Arc<Workflow
 }
 
 #[tokio::test]
+#[serial]
 async fn test_nested_workflow_state_name_pollution() {
     let _guard = IsolatedTestHome::new();
     // This test verifies that when a parent workflow calls a sub-workflow,
@@ -140,6 +142,7 @@ stateDiagram-v2
 }
 
 #[tokio::test]
+#[serial]
 async fn test_nested_workflow_correct_action_execution() {
     let _guard = IsolatedTestHome::new();
     // Create a more complex test where both workflows have conflicting state names
@@ -243,6 +246,7 @@ stateDiagram-v2
 }
 
 #[tokio::test]
+#[serial]
 async fn test_deeply_nested_workflows_state_isolation() {
     let _guard = IsolatedTestHome::new();
     // Test with 3 levels of nesting to ensure state isolation works at depth

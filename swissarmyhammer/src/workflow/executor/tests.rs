@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 #[cfg(test)]
 use crate::test_utils::IsolatedTestHome;
+use serial_test::serial;
 
 /// RAII helper that isolates both HOME directory and current working directory for tests
 /// This prevents abort file pollution between tests by ensuring each test runs in its own environment
@@ -145,6 +146,7 @@ async fn test_transition_to_invalid_state() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_max_transition_limit() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();

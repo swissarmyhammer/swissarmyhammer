@@ -938,6 +938,7 @@ impl WorkflowStorage {
 mod tests {
     use super::*;
     use crate::workflow::{State, StateId, StateType};
+    use serial_test::serial;
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new(
@@ -1207,6 +1208,7 @@ stateDiagram-v2
     }
 
     #[test]
+    #[serial]
     fn test_workflow_resolver_precedence() {
         use crate::test_utils::IsolatedTestHome;
         use std::fs;
