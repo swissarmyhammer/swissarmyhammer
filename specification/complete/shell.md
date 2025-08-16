@@ -1,193 +1,323 @@
-# Shell Action Specification for Workflows
+# MCP Shell Tool Specification
 
 ## Overview
 
-This specification defines a new workflow action type called `shell` that allows workflows to execute shell commands directly. This feature will enable workflows to interact with the system, run build scripts, perform file operations, and integrate with external tools.
+This specification defines a new MCP tool `shell` that enables LLMs to execute shell commands in a controlled environment. The tool provides secure command execution with timeout controls and proper output handling for interactive AI workflows.
 
-## Syntax
+## Problem Statement
 
-The shell action follows the existing workflow action syntax patterns:
+LLMs often need to execute shell commands to:
+1. Check system state and environment
+2. Run build and test commands 
+3. Perform file operations and data processing
+4. Interact with development tools and utilities
+5. Execute scripts and automation tasks
 
-Make sure `shell` is case insensitive.
+Currently, there's no standardized way for MCP tools to execute arbitrary shell commands with proper safety controls and timeout management.
 
+## Solution: MCP Shell Tool
+
+### Tool Definition
+
+**Tool Name**: `shell`  
+**Purpose**: Execute shell commands with timeout and output capture  
+**Usage Context**: Available to LLMs during MCP workflow execution
+
+### Parameters
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "The shell command to execute",
+      "minLength": 1
+    },
+    "working_directory": {
+      "type": "string", 
+      "description": "Working directory for command execution (optional, defaults to current directory)"
+    },
+    "timeout": {
+      "type": "integer",
+      "description": "Command timeout in seconds (optional, defaults to 300 seconds / 5 minutes)",
+      "minimum": 1,
+      "maximum": 1800,
+      "default": 300
+    },
+    "environment": {
+      "type": "object",
+      "description": "Additional environment variables to set (optional)",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["command"]
+}
 ```
-Shell "command to execute"
-Shell "command" with timeout=30
-Shell "command" with timeout=30 result="output_variable" 
+
+### Implementation Requirements
+
+#### Command Execution
+- Execute commands in a separate process using `std::process::Command`
+- Capture both stdout and stderr output
+- Return exit code along with output
+- Support setting working directory and environment variables
+- Handle command interruption on timeout
+
+#### Timeout Management
+- **Default Timeout**: 5 minutes (300 seconds)
+- **Maximum Timeout**: 30 minutes (1800 seconds) 
+- **Minimum Timeout**: 1 second
+- Use `tokio::time::timeout` for async command execution
+- Kill process tree on timeout to prevent orphaned processes
+- Return timeout error with partial output if available
+
+#### Security Controls
+- Validate command strings to prevent shell injection
+- Restrict access to sensitive directories if configured
+- Log all executed commands for audit trails
+- Optional command whitelist/blacklist support
+
+#### Output Handling
+- Stream output in real-time for long-running commands
+- Truncate excessive output to prevent memory issues
+- Handle binary output gracefully
+- Preserve exit codes and signal information
+
+## Response Format
+
+### Successful Execution
+```json
+{
+  "content": [{
+    "type": "text",
+    "text": "Command executed successfully"
+  }],
+  "is_error": false,
+  "metadata": {
+    "command": "ls -la",
+    "exit_code": 0,
+    "stdout": "total 8\ndrwxr-xr-x  3 user  staff   96 Jan 15 10:30 .\n...",
+    "stderr": "",
+    "execution_time_ms": 45,
+    "working_directory": "/path/to/dir"
+  }
+}
 ```
 
-### Basic Format
-- `Shell "command"` - Execute a shell command with default settings
-- Case-insensitive: `shell "command"` also works
+### Command Failure
+```json
+{
+  "content": [{
+    "type": "text", 
+    "text": "Command failed with exit code 1"
+  }],
+  "is_error": true,
+  "metadata": {
+    "command": "ls /nonexistent",
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": "ls: /nonexistent: No such file or directory\n",
+    "execution_time_ms": 23,
+    "working_directory": "/path/to/dir"
+  }
+}
+```
 
-### Extended Format with Parameters
-- `Shell "command" with timeout=N` - Execute with custom timeout (in seconds)
-- `Shell "command" with result="variable_name"` - Store output in a variable
-- `Shell "command" with timeout=30 result="output"` - Combine timeout and result capture
+### Timeout Error
+```json
+{
+  "content": [{
+    "type": "text",
+    "text": "Command timed out after 300 seconds"
+  }],
+  "is_error": true, 
+  "metadata": {
+    "command": "long_running_command",
+    "timeout_seconds": 300,
+    "partial_stdout": "...",
+    "partial_stderr": "...",
+    "working_directory": "/path/to/dir"
+  }
+}
+```
 
-## Parameters
+## Use Cases
 
-### Required Parameters
-- `command` (string): The shell command to execute, provided as a quoted string
+### Development Workflow
+```json
+{
+  "command": "cargo test",
+  "working_directory": "/project/path",
+  "timeout": 600
+}
+```
 
-### Optional Parameters
-- `timeout` (integer): Maximum execution time in seconds (default: 30)
-- `result` (string): Variable name to store the command output
-- `working_dir` (string): Working directory for command execution (default: current directory)
-- `env` (object): Environment variables to set for the command
+### System Information
+```json
+{
+  "command": "uname -a && df -h",
+  "timeout": 30
+}
+```
 
-## Behavior
+### Build Automation
+```json
+{
+  "command": "./build.sh --release",
+  "environment": {
+    "RUST_LOG": "debug",
+    "BUILD_ENV": "production"
+  },
+  "timeout": 900
+}
+```
 
-### Command Execution
-- Commands are executed in a subprocess using the system shell
-- Standard output and standard error are captured
-- Exit codes are monitored and affect workflow transitions
-- Commands run with the same user permissions as the workflow executor
-
-### Variable Setting
-When execution completes, the following variables are automatically set:
-- `success`: Boolean indicating if the command succeeded (exit code 0)
-- `failure`: Boolean indicating if the command failed (exit code != 0)
-- `exit_code`: Integer exit code from the command
-- `stdout`: Standard output from the command
-- `stderr`: Standard error from the command
-- `duration_ms`: Execution time in milliseconds
-- `result`: Command output (if `result` parameter specified)
-
-### Timeout Handling
-- Commands that exceed the timeout are terminated
-- Timeout triggers a failure state (success=false, failure=true)
-- Default timeout is no timeout at all
-- There is no maximum timeout
+### File Operations
+```json
+{
+  "command": "find . -name '*.rs' -type f | wc -l",
+  "working_directory": "/src"
+}
+```
 
 ## Security Considerations
 
-### Command Injection Prevention
-- Commands are executed through proper shell escaping
-- No variable substitution occurs within the command string itself
-- User input must be sanitized before being used in shell commands
+### Command Validation
+- Sanitize command strings to prevent injection attacks
+- Optional regex-based command filtering
+- Logging of all executed commands with timestamps
 
-### Restricted Operations
-- Commands cannot modify the workflow execution environment
-- No access to workflow internal state beyond defined variables
-- Network operations should be carefully considered
+### Resource Protection
+- Process isolation using system-level controls
+- Memory and CPU usage monitoring
+- Disk space protection through working directory restrictions
 
-### Execution Limits
-- Maximum execution time: 300 seconds
-- Memory usage monitoring (implementation-dependent)
-- Process isolation from workflow executor
+### Access Controls
+- Optional directory access restrictions
+- Environment variable filtering
+- User permission inheritance
 
-### Dangerous Commands
-The following types of commands should trigger warnings or restrictions:
-- Commands that modify system configuration
-- Commands that install software
-- Commands with elevated privileges
-- Commands that access sensitive directories
+## Configuration Options
 
-## Usage Examples
-
-### Basic Command Execution
-```yaml
-Actions:
-- BuildProject: Shell "cargo build --release"
-- TestProject: Shell "cargo test"
-- CheckVersion: Shell "git describe --tags" with result="version"
+### Global Settings
+```toml
+[shell_tool]
+default_timeout = 300  # seconds
+max_timeout = 1800     # seconds
+max_output_size = "10MB"
+allowed_directories = ["/project", "/tmp"]
+blocked_commands = ["rm -rf", "format", "dd"]
+log_commands = true
 ```
 
-### With Timeout and Result Capture
-```yaml
-Actions:
-- LongRunning: Shell "npm run build" with timeout=120 result="build_output"
-- QuickCheck: Shell "ls -la" with timeout=5 result="file_list"
-```
-
-### Conditional Execution Based on Results
-```yaml
-Actions:
-- CheckGit: Shell "git status --porcelain" with result="git_status"
-- HandleClean: Log "Repository is clean"
-- HandleDirty: Log "Repository has uncommitted changes"
-
-# Transitions based on shell command results
-CheckGit --> HandleClean: git_status == ""
-CheckGit --> HandleDirty: git_status != ""
-```
-
-### Environment and Working Directory
-```yaml
-Actions:
-- CustomEnv: Shell "echo $CUSTOM_VAR" with env={"CUSTOM_VAR": "hello"} result="greeting"
-- InSubdir: Shell "ls" with working_dir="./src" result="source_files"
-```
-
-## Integration with Existing Actions
-
-### Variable Substitution
-Shell commands can use variables from previous workflow steps:
-```yaml
-Actions:
-- SetFile: Set filename="test.txt"
-- ProcessFile: Shell "cat ${filename}" with result="file_contents"
-```
-
-### Chaining with Other Actions
-```yaml
-Actions:
-- GetCommit: Shell "git rev-parse HEAD" with result="commit_hash"
-- AnalyzeCommit: Execute prompt "analyze-commit" with commit="${commit_hash}"
-```
+### Per-Execution Settings
+- Timeout overrides (within limits)
+- Working directory specification
+- Environment variable injection
+- Output size limits
 
 ## Error Handling
 
-### Command Failures
-- Non-zero exit codes set `failure=true` and `success=false`
-- Workflows can branch on failure conditions
-- Error output is captured in `stderr` variable
+### Command Not Found
+- Return clear error message
+- Suggest similar commands if available
+- Log attempt for security audit
 
-### Timeout Scenarios
-- Processes exceeding timeout are terminated with SIGTERM
-- If process doesn't respond, SIGKILL is used after grace period
-- Timeout failures set appropriate error variables
+### Permission Denied
+- Return permission error with context
+- Log security violation
+- Suggest alternative approaches
 
-### System Errors
-- Permission denied, command not found, etc. are treated as failures
-- System error details are included in `stderr` variable
+### Resource Exhaustion  
+- Handle out-of-memory conditions
+- Manage disk space limits
+- Control CPU usage spikes
 
-## Implementation Notes
+## Integration with Existing Tools
 
-### Parser Integration
-- Add shell action parsing to `ActionParser` in `action_parser.rs`
-- Follow existing patterns for command parsing and validation
-- Support case-insensitive command recognition
+### Workflow Integration
+- Shell commands can be part of larger workflows
+- Output can be passed to subsequent tools
+- Conditional execution based on exit codes
 
-### Execution Infrastructure
-- Create `ShellAction` struct in `actions.rs`
-- Implement proper subprocess management with tokio
-- Add timeout handling and process cleanup
+### Logging Integration
+- All commands logged through tracing system
+- Structured logging with execution metadata
+- Security audit trail maintenance
 
-### Security Implementation
-- Implement command validation and sanitization
-- Add configurable restrictions for dangerous operations
-- Provide audit logging for shell command execution
+### Error Propagation
+- Shell failures can trigger workflow abort files
+- Integration with existing MCP error handling
+- Graceful degradation on command failures
+
+## Implementation Strategy
+
+### Phase 1: Basic Implementation
+- Core command execution with timeout
+- Basic output capture and formatting
+- Simple error handling and logging
+
+### Phase 2: Security Enhancements
+- Command validation and filtering
+- Directory access restrictions
+- Enhanced logging and auditing
+
+### Phase 3: Advanced Features
+- Real-time output streaming
+- Interactive command support
+- Enhanced resource monitoring
+
+## Inspiration and References
+
+### QwenLM Shell Tool
+Based on the shell tool implementation from [Qwen Code](https://github.com/QwenLM/qwen-code/blob/main/packages/core/src/tools/shell.ts), this specification adapts the concept for Rust/MCP environment with enhanced security and timeout controls.
+
+### Key Adaptations
+- Rust-native process management using `std::process::Command`
+- Tokio async runtime integration for timeout handling  
+- MCP-specific response format and error handling
+- Enhanced security controls for server environments
+
+## Testing Strategy
+
+### Unit Tests
+- Command execution with various parameters
+- Timeout behavior verification
+- Error condition handling
+- Output formatting validation
+
+### Integration Tests  
+- Workflow integration scenarios
+- Security control verification
+- Resource limit testing
+- Cross-platform compatibility
+
+### Security Tests
+- Command injection prevention
+- Resource exhaustion protection
+- Access control validation
+- Audit trail verification
 
 ## Future Enhancements
 
-### Advanced Features
-- Support for command pipelines
-- Interactive command support with input/output streams
-- Parallel command execution
-- Command templates with parameter substitution
+### Interactive Shell Support
+- Persistent shell sessions
+- Interactive command input/output
+- Shell state preservation across commands
 
-### Security Enhancements
+### Enhanced Output Processing
+- Syntax highlighting for command output
+- Structured data extraction from output
+- Real-time progress indicators
+
+### Advanced Security
 - Sandboxed execution environments
-- Command allowlists and blocklists
-- Resource usage monitoring and limits
+- Container-based isolation
+- Advanced threat detection
 
-### Integration Features
-- Integration with workflow logging system
-- Command history and audit trails
-- Performance metrics and monitoring
+## Conclusion
 
-## Compatibility
-
-This specification is designed to be backward compatible with existing workflows. The new shell action type will not interfere with existing action types and follows established patterns for syntax and behavior.
+The MCP shell tool provides essential command execution capabilities for LLM workflows while maintaining security and resource controls. The 5-minute default timeout balances practical usage needs with system protection, and the comprehensive parameter set enables flexible usage across diverse scenarios.
