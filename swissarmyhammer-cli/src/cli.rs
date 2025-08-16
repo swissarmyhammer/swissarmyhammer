@@ -1352,10 +1352,10 @@ mod tests {
                 assert_eq!(save, None);
                 assert!(!debug);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1387,10 +1387,10 @@ mod tests {
                 assert_eq!(save, None);
                 assert!(!debug);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1430,10 +1430,10 @@ mod tests {
                 assert_eq!(save, None);
                 assert!(!debug);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1474,10 +1474,10 @@ mod tests {
                 assert_eq!(save, Some("output.md".to_string()));
                 assert!(debug);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1519,10 +1519,10 @@ mod tests {
                 assert_eq!(save, None);
                 assert!(!debug);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1562,10 +1562,10 @@ mod tests {
                 assert!(!highlight);
                 assert_eq!(limit, None);
             } else {
-                assert!(false, "Expected Search subcommand");
+                unreachable!( "Expected Search subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1622,10 +1622,10 @@ mod tests {
                 assert!(highlight);
                 assert_eq!(limit, Some(5));
             } else {
-                assert!(false, "Expected Search subcommand");
+                unreachable!( "Expected Search subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1654,10 +1654,10 @@ mod tests {
                     ])
                 );
             } else {
-                assert!(false, "Expected Search subcommand");
+                unreachable!( "Expected Search subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1682,10 +1682,10 @@ mod tests {
                 assert_eq!(category, None);
                 assert_eq!(search, None);
             } else {
-                assert!(false, "Expected List subcommand");
+                unreachable!( "Expected List subcommand");
             }
         } else {
-            assert!(false, "Expected Prompt command");
+            unreachable!( "Expected Prompt command");
         }
     }
 
@@ -1705,7 +1705,7 @@ mod tests {
             assert!(matches!(format, ValidateFormat::Text));
             assert!(workflow_dirs.is_empty());
         } else {
-            assert!(false, "Expected Validate command");
+            unreachable!( "Expected Validate command");
         }
     }
 
@@ -1733,7 +1733,7 @@ mod tests {
             assert!(matches!(format, ValidateFormat::Json));
             assert_eq!(workflow_dirs, vec!["./workflows"]);
         } else {
-            assert!(false, "Expected Validate command");
+            unreachable!( "Expected Validate command");
         }
     }
 
@@ -1760,10 +1760,10 @@ mod tests {
                 assert_eq!(timeout, None);
                 assert!(!quiet);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Flow command");
+            unreachable!( "Expected Flow command");
         }
     }
 
@@ -1805,10 +1805,10 @@ mod tests {
                 assert_eq!(timeout, Some("30s".to_string()));
                 assert!(quiet);
             } else {
-                assert!(false, "Expected Test subcommand");
+                unreachable!( "Expected Test subcommand");
             }
         } else {
-            assert!(false, "Expected Flow command");
+            unreachable!( "Expected Flow command");
         }
     }
 
@@ -1914,10 +1914,10 @@ mod tests {
                 assert_eq!(content, Some("Fix login bug".to_string()));
                 assert_eq!(file, None);
             } else {
-                assert!(false, "Expected Create subcommand");
+                unreachable!( "Expected Create subcommand");
             }
         } else {
-            assert!(false, "Expected Issue command");
+            unreachable!( "Expected Issue command");
         }
     }
 
@@ -1944,10 +1944,10 @@ mod tests {
                 assert_eq!(content, Some("Quick fix needed".to_string()));
                 assert_eq!(file, None);
             } else {
-                assert!(false, "Expected Create subcommand");
+                unreachable!( "Expected Create subcommand");
             }
         } else {
-            assert!(false, "Expected Issue command");
+            unreachable!( "Expected Issue command");
         }
     }
 
@@ -1969,10 +1969,10 @@ mod tests {
                 assert_eq!(content, None);
                 assert_eq!(file, Some(std::path::PathBuf::from("issue.md")));
             } else {
-                assert!(false, "Expected Create subcommand");
+                unreachable!( "Expected Create subcommand");
             }
         } else {
-            assert!(false, "Expected Issue command");
+            unreachable!( "Expected Issue command");
         }
     }
 
@@ -2000,10 +2000,10 @@ mod tests {
                 assert_eq!(content, None);
                 assert_eq!(file, Some(std::path::PathBuf::from("feature.md")));
             } else {
-                assert!(false, "Expected Create subcommand");
+                unreachable!( "Expected Create subcommand");
             }
         } else {
-            assert!(false, "Expected Issue command");
+            unreachable!( "Expected Issue command");
         }
     }
 
@@ -2019,10 +2019,10 @@ mod tests {
                 assert_eq!(title, "Meeting Notes");
                 assert_eq!(content, None);
             } else {
-                assert!(false, "Expected Create subcommand");
+                unreachable!( "Expected Create subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2044,10 +2044,10 @@ mod tests {
                 assert_eq!(title, "Task List");
                 assert_eq!(content, Some("1. Review code\n2. Write tests".to_string()));
             } else {
-                assert!(false, "Expected Create subcommand");
+                unreachable!( "Expected Create subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2061,10 +2061,10 @@ mod tests {
             if let MemoCommands::List = subcommand {
                 // Test passes
             } else {
-                assert!(false, "Expected List subcommand");
+                unreachable!( "Expected List subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2083,10 +2083,10 @@ mod tests {
             if let MemoCommands::Get { id } = subcommand {
                 assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
             } else {
-                assert!(false, "Expected Get subcommand");
+                unreachable!( "Expected Get subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2108,10 +2108,10 @@ mod tests {
                 assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
                 assert_eq!(content, Some("Updated content".to_string()));
             } else {
-                assert!(false, "Expected Update subcommand");
+                unreachable!( "Expected Update subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2130,10 +2130,10 @@ mod tests {
             if let MemoCommands::Delete { id } = subcommand {
                 assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
             } else {
-                assert!(false, "Expected Delete subcommand");
+                unreachable!( "Expected Delete subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2148,10 +2148,10 @@ mod tests {
             if let MemoCommands::Search { query } = subcommand {
                 assert_eq!(query, "meeting notes");
             } else {
-                assert!(false, "Expected Search subcommand");
+                unreachable!( "Expected Search subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2165,10 +2165,10 @@ mod tests {
             if let MemoCommands::Context = subcommand {
                 // Test passes
             } else {
-                assert!(false, "Expected Context subcommand");
+                unreachable!( "Expected Context subcommand");
             }
         } else {
-            assert!(false, "Expected Memo command");
+            unreachable!( "Expected Memo command");
         }
     }
 
@@ -2183,10 +2183,10 @@ mod tests {
                 assert_eq!(patterns, vec!["**/*.rs".to_string()]);
                 assert!(!force);
             } else {
-                assert!(false, "Expected Index subcommand");
+                unreachable!( "Expected Index subcommand");
             }
         } else {
-            assert!(false, "Expected Search command");
+            unreachable!( "Expected Search command");
         }
     }
 
@@ -2215,10 +2215,10 @@ mod tests {
                 );
                 assert!(!force);
             } else {
-                assert!(false, "Expected Index subcommand");
+                unreachable!( "Expected Index subcommand");
             }
         } else {
-            assert!(false, "Expected Search command");
+            unreachable!( "Expected Search command");
         }
     }
 
@@ -2234,10 +2234,10 @@ mod tests {
                 assert_eq!(patterns, vec!["**/*.rs".to_string()]);
                 assert!(force);
             } else {
-                assert!(false, "Expected Index subcommand");
+                unreachable!( "Expected Index subcommand");
             }
         } else {
-            assert!(false, "Expected Search command");
+            unreachable!( "Expected Search command");
         }
     }
 
@@ -2267,10 +2267,10 @@ mod tests {
                 assert_eq!(limit, 5);
                 assert!(matches!(format, OutputFormat::Json));
             } else {
-                assert!(false, "Expected Query subcommand");
+                unreachable!( "Expected Query subcommand");
             }
         } else {
-            assert!(false, "Expected Search command");
+            unreachable!( "Expected Search command");
         }
     }
 
@@ -2284,7 +2284,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "./specification/new-feature.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2298,7 +2298,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "/path/to/custom-plan.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2311,7 +2311,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "specification/plan.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2324,7 +2324,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "./plans/feature.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2360,7 +2360,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "test-plan.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2375,7 +2375,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "debug-plan.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2390,7 +2390,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "quiet-plan.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2403,7 +2403,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "plan with spaces.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2423,7 +2423,7 @@ mod tests {
                 "./specifications/features/advanced-feature-plan.md"
             );
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2444,7 +2444,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "multi-flag-plan.md");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2470,7 +2470,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, long_path);
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2484,7 +2484,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "plan.markdown");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 
@@ -2498,7 +2498,7 @@ mod tests {
         if let Some(Commands::Plan { plan_filename }) = cli.command {
             assert_eq!(plan_filename, "plan-file-without-extension");
         } else {
-            assert!(false, "Expected Plan command");
+            unreachable!( "Expected Plan command");
         }
     }
 

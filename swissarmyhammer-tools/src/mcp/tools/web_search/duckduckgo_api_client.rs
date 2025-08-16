@@ -63,87 +63,87 @@ pub enum DuckDuckGoApiError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuckDuckGoApiResponse {
     /// The instant answer abstract text
-    #[serde(rename = "Abstract")]
+    #[serde(rename = "Abstract", default)]
     pub abstract_text: String,
 
     /// Source of the abstract
-    #[serde(rename = "AbstractSource")]
+    #[serde(rename = "AbstractSource", default)]
     pub abstract_source: String,
 
     /// Abstract text content
-    #[serde(rename = "AbstractText")]
+    #[serde(rename = "AbstractText", default)]
     pub abstract_text_content: String,
 
     /// URL for the abstract source
-    #[serde(rename = "AbstractURL")]
+    #[serde(rename = "AbstractURL", default)]
     pub abstract_url: String,
 
     /// Entity information
-    #[serde(rename = "Entity")]
+    #[serde(rename = "Entity", default)]
     pub entity: String,
 
     /// Heading text
-    #[serde(rename = "Heading")]
+    #[serde(rename = "Heading", default)]
     pub heading: String,
 
     /// Image URL
-    #[serde(rename = "Image")]
+    #[serde(rename = "Image", default)]
     pub image: String,
 
     /// Image height
-    #[serde(rename = "ImageHeight")]
+    #[serde(rename = "ImageHeight", default)]
     pub image_height: serde_json::Value,
 
     /// Image width  
-    #[serde(rename = "ImageWidth")]
+    #[serde(rename = "ImageWidth", default)]
     pub image_width: serde_json::Value,
 
     /// Whether image is a logo
-    #[serde(rename = "ImageIsLogo")]
+    #[serde(rename = "ImageIsLogo", default)]
     pub image_is_logo: serde_json::Value,
 
     /// Infobox content
-    #[serde(rename = "Infobox")]
+    #[serde(rename = "Infobox", default)]
     pub infobox: String,
 
     /// Related topics (can be nested)
-    #[serde(rename = "RelatedTopics")]
+    #[serde(rename = "RelatedTopics", default)]
     pub related_topics: Vec<RelatedTopicItem>,
 
     /// Definition text
-    #[serde(rename = "Definition")]
+    #[serde(rename = "Definition", default)]
     pub definition: String,
 
     /// Definition source
-    #[serde(rename = "DefinitionSource")]
+    #[serde(rename = "DefinitionSource", default)]
     pub definition_source: String,
 
     /// Definition URL
-    #[serde(rename = "DefinitionURL")]
+    #[serde(rename = "DefinitionURL", default)]
     pub definition_url: String,
 
     /// Answer text (for calculations, conversions, etc.)
-    #[serde(rename = "Answer")]
+    #[serde(rename = "Answer", default)]
     pub answer: String,
 
     /// Answer type
-    #[serde(rename = "AnswerType")]
+    #[serde(rename = "AnswerType", default)]
     pub answer_type: String,
 
     /// Type of response
-    #[serde(rename = "Type")]
+    #[serde(rename = "Type", default)]
     pub response_type: String,
 
     /// Redirect URL if applicable
-    #[serde(rename = "Redirect")]
+    #[serde(rename = "Redirect", default)]
     pub redirect: String,
 
     /// Results array (usually empty for instant answers)
-    #[serde(rename = "Results")]
+    #[serde(rename = "Results", default)]
     pub results: Vec<serde_json::Value>,
 
     /// Metadata
-    #[serde(rename = "meta")]
+    #[serde(rename = "meta", default)]
     pub meta: Option<serde_json::Value>,
 }
 
@@ -209,25 +209,11 @@ impl DuckDuckGoApiClient {
         // Apply request jitter for privacy
         privacy_manager.apply_jitter().await;
 
-        // Build the request with privacy headers
-        let mut request_builder = self.client.get(&api_url);
-
-        // Apply User-Agent from privacy manager
-        if let Some(user_agent) = privacy_manager.get_user_agent() {
-            request_builder = request_builder.header("User-Agent", user_agent);
-        } else {
-            // Use a simple User-Agent for API requests
-            request_builder = request_builder.header(
-                "User-Agent",
-                "swissarmyhammer-search/1.0 (https://github.com/wballard/sah-search)",
-            );
-        }
-
-        // Apply privacy headers
-        request_builder = privacy_manager.apply_privacy_headers(request_builder);
-
-        // Explicitly request uncompressed content
-        request_builder = request_builder.header("Accept-Encoding", "identity");
+        // Build a minimal request
+        let request_builder = self.client.get(&api_url).header(
+            "User-Agent",
+            "Mozilla/5.0 (compatible; SwissArmyHammer/1.0)",
+        );
 
         let response = request_builder
             .send()

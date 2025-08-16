@@ -257,14 +257,16 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             let engine = result_item["engine"].as_str().unwrap_or("unknown");
 
             // Truncate long text for table display
-            let truncated_title = if title.len() > max_title_width {
-                format!("{}...", &title[..max_title_width - 3])
+            let truncated_title = if title.chars().count() > max_title_width {
+                let truncated: String = title.chars().take(max_title_width - 3).collect();
+                format!("{}...", truncated)
             } else {
                 title.to_string()
             };
 
-            let truncated_desc = if description.len() > max_desc_width {
-                format!("{}...", &description[..max_desc_width - 3])
+            let truncated_desc = if description.chars().count() > max_desc_width {
+                let truncated: String = description.chars().take(max_desc_width - 3).collect();
+                format!("{}...", truncated)
             } else {
                 description.to_string()
             };
@@ -294,8 +296,9 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
                     content_info["word_count"].as_u64(),
                     content_info["summary"].as_str(),
                 ) {
-                    let content_summary = if summary.len() > max_desc_width {
-                        format!("{}...", &summary[..max_desc_width - 3])
+                    let content_summary = if summary.chars().count() > max_desc_width {
+                        let truncated: String = summary.chars().take(max_desc_width - 3).collect();
+                        format!("{}...", truncated)
                     } else {
                         summary.to_string()
                     };
