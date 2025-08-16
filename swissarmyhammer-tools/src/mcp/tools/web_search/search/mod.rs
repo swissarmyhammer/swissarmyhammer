@@ -6,11 +6,9 @@
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
-use crate::mcp::tools::web_search::duckduckgo_client::{
-    DuckDuckGoClient, DuckDuckGoError,
-};
-use crate::mcp::tools::web_search::types::ScoringConfig;
+use crate::mcp::tools::web_search::duckduckgo_client::{DuckDuckGoClient, DuckDuckGoError};
 use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
+use crate::mcp::tools::web_search::types::ScoringConfig;
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
@@ -377,10 +375,7 @@ impl McpTool for WebSearchTool {
 
         // Perform search using DuckDuckGo web scraping
         let duckduckgo_client = search_tool.get_duckduckgo_client();
-        let mut results = match duckduckgo_client
-            .search(&request, &privacy_manager)
-            .await
-        {
+        let mut results = match duckduckgo_client.search(&request, &privacy_manager).await {
             Ok(results) => results,
             Err(DuckDuckGoError::NoResults) => {
                 // No web results found - provide informative response

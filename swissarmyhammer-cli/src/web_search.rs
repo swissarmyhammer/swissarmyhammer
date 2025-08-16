@@ -281,7 +281,7 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             // Print main result row: Title | Score | Engine | Description
             // Format explanation:
             // - {:width$}: Left-aligned text with variable width (title)
-            // - {:>6.2}: Right-aligned decimal with 6 chars total, 2 decimal places (score)  
+            // - {:>6.2}: Right-aligned decimal with 6 chars total, 2 decimal places (score)
             // - {:^10}: Center-aligned text with 10 chars width (engine name)
             // - {:desc_width$}: Left-aligned text with variable width (description)
             println!(

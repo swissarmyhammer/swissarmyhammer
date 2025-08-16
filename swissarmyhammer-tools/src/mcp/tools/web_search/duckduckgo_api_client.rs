@@ -31,14 +31,13 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::Error;
-    
+
     let value: serde_json::Value = Deserialize::deserialize(deserializer)?;
     match value {
         serde_json::Value::String(s) if s.is_empty() => Ok(None),
-        serde_json::Value::String(s) => s.parse::<u32>()
-            .map(Some)
-            .map_err(D::Error::custom),
-        serde_json::Value::Number(n) => n.as_u64()
+        serde_json::Value::String(s) => s.parse::<u32>().map(Some).map_err(D::Error::custom),
+        serde_json::Value::Number(n) => n
+            .as_u64()
             .map(|u| u as u32)
             .map(Some)
             .ok_or_else(|| D::Error::custom("Invalid number")),
@@ -123,11 +122,19 @@ pub struct DuckDuckGoApiResponse {
     pub image: String,
 
     /// Image height in pixels
-    #[serde(rename = "ImageHeight", default, deserialize_with = "deserialize_empty_string_as_none")]
+    #[serde(
+        rename = "ImageHeight",
+        default,
+        deserialize_with = "deserialize_empty_string_as_none"
+    )]
     pub image_height: Option<u32>,
 
     /// Image width in pixels
-    #[serde(rename = "ImageWidth", default, deserialize_with = "deserialize_empty_string_as_none")]
+    #[serde(
+        rename = "ImageWidth",
+        default,
+        deserialize_with = "deserialize_empty_string_as_none"
+    )]
     pub image_width: Option<u32>,
 
     /// Whether image is a logo
