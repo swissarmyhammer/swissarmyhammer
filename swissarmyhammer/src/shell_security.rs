@@ -114,9 +114,6 @@ pub struct ShellSecurityPolicy {
     /// Enable audit logging of all command executions
     pub enable_audit_logging: bool,
 
-    /// Enable injection pattern detection
-    pub enable_injection_prevention: bool,
-
     /// Default timeout for commands in seconds
     pub default_timeout_seconds: u64,
 
@@ -162,7 +159,6 @@ impl Default for ShellSecurityPolicy {
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,
-            enable_injection_prevention: true,
             default_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
             max_timeout_seconds: MAX_TIMEOUT_SECONDS,
             max_env_value_length: MAX_ENV_VALUE_LENGTH,
@@ -174,19 +170,16 @@ impl Default for ShellSecurityPolicy {
 #[derive(Debug)]
 pub struct ShellSecurityValidator {
     policy: ShellSecurityPolicy,
-    injection_patterns: Vec<Regex>,
     blocked_patterns: Vec<Regex>,
 }
 
 impl ShellSecurityValidator {
     /// Create a new validator with the given policy
     pub fn new(policy: ShellSecurityPolicy) -> Result<Self> {
-        let injection_patterns = Self::compile_injection_patterns()?;
         let blocked_patterns = Self::compile_blocked_patterns(&policy.blocked_commands)?;
 
         Ok(Self {
             policy,
-            injection_patterns,
             blocked_patterns,
         })
     }
@@ -204,11 +197,6 @@ impl ShellSecurityValidator {
 
         // Check command length
         self.check_command_length(command)?;
-
-        // Check for injection patterns
-        if self.policy.enable_injection_prevention {
-            self.check_injection_patterns(command)?;
-        }
 
         // Check for blocked patterns
         self.check_blocked_patterns(command)?;
@@ -308,22 +296,6 @@ impl ShellSecurityValidator {
         Ok(())
     }
 
-    /// Check for dangerous injection patterns
-    fn check_injection_patterns(
-        &self,
-        command: &str,
-    ) -> std::result::Result<(), ShellSecurityError> {
-        for pattern in &self.injection_patterns {
-            if pattern.is_match(command) {
-                return Err(ShellSecurityError::DangerousInjectionPattern {
-                    pattern: pattern.as_str().to_string(),
-                    command: command.to_string(),
-                });
-            }
-        }
-        Ok(())
-    }
-
     /// Check for blocked command patterns
     fn check_blocked_patterns(&self, command: &str) -> std::result::Result<(), ShellSecurityError> {
         for pattern in &self.blocked_patterns {
@@ -335,39 +307,6 @@ impl ShellSecurityValidator {
             }
         }
         Ok(())
-    }
-
-    /// Compile injection detection patterns
-    fn compile_injection_patterns() -> Result<Vec<Regex>> {
-        let patterns = [
-            r";\s*\w",           // Command separation/chaining with following command
-            r"\|\s*\w",          // Pipes to any command (potential injection)
-            r"&&\s*\w",          // Command chaining with AND
-            r"\|\|\s*\w",        // Command chaining with OR
-            r"\$\([^)]*\)",      // Command substitution with $()
-            r"`[^`]*`",          // Backtick command substitution
-            r"<\s*/dev/[^/\s]+", // Input redirection from devices
-            r"exec\s*\([^)]*\)", // Exec function calls
-            r">\s*&[3-9]",       // File descriptor redirection to higher numbers (potential attack)
-            r"<\s*&[3-9]", // File descriptor redirection from higher numbers (potential attack)
-            r"<\s*\([^)]*\)", // Process substitution input <(command)
-            r">\s*\([^)]*\)", // Process substitution output >(command)
-            r"<<\s*[A-Za-z_]", // Here-document start (<<EOF, <<END)
-            r"<<-\s*[A-Za-z_]", // Here-document with tab stripping (<<-EOF)
-            r"\{\{.*\}\}", // Brace expansion (potential code injection)
-            r"\*\{.*\}",   // Glob brace expansion
-        ];
-
-        let mut compiled = Vec::new();
-        for pattern in &patterns {
-            compiled.push(Regex::new(pattern).map_err(|e| {
-                SwissArmyHammerError::Other(format!(
-                    "Failed to compile injection pattern '{}': {}",
-                    pattern, e
-                ))
-            })?);
-        }
-        Ok(compiled)
     }
 
     /// Compile blocked command patterns from configuration
@@ -658,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn test_injection_pattern_detection() {
+    fn test_shell_constructs_now_allowed() {
         let policy = ShellSecurityPolicy::default();
         let validator = ShellSecurityValidator::new(policy).unwrap();
 
@@ -666,21 +605,37 @@ mod tests {
         assert!(validator.validate_command("echo hello").is_ok());
         assert!(validator.validate_command("ls -la").is_ok());
 
-        // Dangerous patterns should be blocked
-        let dangerous_commands = [
-            "echo hello; rm -rf /",
-            "ls | sh",
-            "echo $(cat /etc/passwd)",
+        // Shell constructs should now be allowed (injection patterns removed)
+        let allowed_commands = [
+            "echo hello; ls",
+            "ls | grep test",
+            "echo $(date)",
             "echo `whoami`",
-            "ls && rm -rf /tmp",
+            "ls && echo done",
+            "echo hello || echo world",
         ];
 
-        for cmd in &dangerous_commands {
+        for cmd in &allowed_commands {
             let result = validator.validate_command(cmd);
-            assert!(result.is_err(), "Command should be blocked: {}", cmd);
+            assert!(result.is_ok(), "Command should be allowed: {}", cmd);
+        }
+
+        // But commands with blocked patterns should still be blocked
+        let blocked_commands = [
+            "rm -rf /",        // Matches blocked pattern
+            "sudo echo hello", // Matches blocked pattern
+        ];
+
+        for cmd in &blocked_commands {
+            let result = validator.validate_command(cmd);
+            assert!(
+                result.is_err(),
+                "Command should still be blocked by blocked patterns: {}",
+                cmd
+            );
             assert!(matches!(
                 result.unwrap_err(),
-                ShellSecurityError::DangerousInjectionPattern { .. }
+                ShellSecurityError::BlockedCommandPattern { .. }
             ));
         }
     }

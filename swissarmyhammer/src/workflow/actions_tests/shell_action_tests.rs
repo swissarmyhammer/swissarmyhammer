@@ -371,19 +371,19 @@ fn test_dangerous_pattern_detection() {
 }
 
 #[test]
-fn test_command_structure_validation_injection_patterns() {
+fn test_command_structure_validation_now_allows_shell_constructs() {
     use crate::shell_security::get_validator;
 
     let validator = get_validator();
 
-    // Test command injection patterns that should be blocked
-    assert!(validator.validate_command("echo hello; rm -rf /").is_err());
-    assert!(validator.validate_command("echo hello && rm file").is_err());
-    assert!(validator.validate_command("echo hello || rm file").is_err());
-    assert!(validator.validate_command("echo `dangerous`").is_err());
-    assert!(validator.validate_command("echo $(dangerous)").is_err());
+    // Test that shell constructs are now allowed (injection patterns removed)
+    assert!(validator.validate_command("echo hello; ls").is_ok());
+    assert!(validator.validate_command("echo hello && ls").is_ok());
+    assert!(validator.validate_command("echo hello || ls").is_ok());
+    assert!(validator.validate_command("echo `date`").is_ok());
+    assert!(validator.validate_command("echo $(date)").is_ok());
 
-    // Test safe command
+    // Test safe command still works
     assert!(validator.validate_command("echo hello world").is_ok());
 }
 
@@ -393,41 +393,33 @@ fn test_command_structure_validation_safe_pipes() {
 
     let validator = get_validator();
 
-    // Simple pipes should be blocked by injection prevention (pipes can be dangerous)
-    assert!(validator.validate_command("ls | grep test").is_err());
+    // Simple pipes should now be allowed (injection patterns removed)
+    assert!(validator.validate_command("ls | grep test").is_ok());
+    assert!(validator.validate_command("cat file | sort").is_ok());
 
-    // Test that safe commands without pipes work
+    // Test that safe commands without pipes still work
     assert!(validator.validate_command("ls").is_ok());
     assert!(validator.validate_command("grep test file.txt").is_ok());
 }
 
 #[test]
 fn test_safe_usage_validation() {
-    use crate::shell_security::{get_validator, ShellSecurityPolicy, ShellSecurityValidator};
+    use crate::shell_security::get_validator;
 
-    // Test with a custom policy that allows pipes
-    let policy = ShellSecurityPolicy {
-        enable_injection_prevention: false, // Disable injection prevention to allow pipes
-        ..Default::default()
-    };
+    let validator = get_validator();
 
-    let validator = ShellSecurityValidator::new(policy).unwrap();
-
-    // With injection prevention disabled, commands should pass validation
+    // With injection patterns removed, common shell constructs should work
     assert!(validator.validate_command("ls | grep test").is_ok());
     assert!(validator.validate_command("echo hello").is_ok());
+    assert!(validator.validate_command("echo hello && ls").is_ok());
+    assert!(validator.validate_command("echo $(date)").is_ok());
 
-    // Test that dangerous operators are blocked by default validator
-    let default_validator = get_validator();
-    assert!(default_validator
-        .validate_command("echo hello && rm file")
-        .is_err());
-    assert!(default_validator
-        .validate_command("echo hello || rm file")
-        .is_err());
-    assert!(default_validator
-        .validate_command("echo hello; rm file")
-        .is_err());
+    // But dangerous commands should still be blocked by blocked patterns
+    assert!(validator.validate_command("rm -rf /").is_err());
+
+    // These commands are now allowed since injection patterns are removed
+    assert!(validator.validate_command("echo hello || ls").is_ok());
+    assert!(validator.validate_command("echo hello; ls").is_ok());
 }
 
 #[test]
@@ -1871,51 +1863,43 @@ mod additional_security_tests {
     }
 
     #[test]
-    fn test_command_injection_patterns_comprehensive() {
+    fn test_shell_constructs_now_allowed() {
         use crate::shell_security::get_validator;
 
         let validator = get_validator();
 
-        let injection_patterns = [
-            "echo hello; rm -rf /",
-            "echo hello && rm file",
-            "echo hello || rm file",
-            "echo `whoami`",
-            "echo $(id)",
+        // These shell constructs should now be allowed (injection patterns removed)
+        let allowed_patterns = [
+            "echo hello; ls",
+            "echo hello && ls",
+            "echo hello || ls",
+            "echo `date`",
+            "echo $(date)",
+            "ls | grep test",
         ];
 
-        for pattern in injection_patterns {
+        for pattern in allowed_patterns {
             let result = validator.validate_command(pattern);
             assert!(
-                result.is_err(),
-                "Injection pattern '{pattern}' should be blocked"
+                result.is_ok(),
+                "Shell construct '{pattern}' should be allowed"
             );
         }
     }
 
     #[test]
     fn test_safe_pipe_usage_validation() {
-        use crate::shell_security::{get_validator, ShellSecurityPolicy, ShellSecurityValidator};
+        use crate::shell_security::get_validator;
 
-        // Test with injection prevention disabled to allow pipes
-        let policy = ShellSecurityPolicy {
-            enable_injection_prevention: false,
-            ..Default::default()
-        };
-        let validator = ShellSecurityValidator::new(policy).unwrap();
+        let validator = get_validator();
 
-        // With injection prevention disabled, simple pipes should work
+        // With injection patterns removed, pipes should work
         assert!(validator.validate_command("ls | grep test").is_ok());
         assert!(validator.validate_command("cat file | sort").is_ok());
+        assert!(validator.validate_command("ls | head -n 10").is_ok());
 
-        // But the default validator should block them
-        let default_validator = get_validator();
-        assert!(default_validator
-            .validate_command("ls | grep test")
-            .is_err());
-        assert!(default_validator
-            .validate_command("ls | nc -l 8080")
-            .is_err());
+        // But dangerous commands in pipes should still be blocked by blocked patterns
+        assert!(validator.validate_command("ls | nc -l 8080").is_err()); // nc -l is in blocked patterns
     }
 
     #[test]
