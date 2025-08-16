@@ -1,0 +1,1 @@
+Clean up any dead code in the web_search tool.

@@ -73,19 +73,35 @@ impl DuckDuckGoClient {
         // Apply request jitter for privacy
         privacy_manager.apply_jitter().await;
 
-        // Use DuckDuckGo's HTML search endpoint with POST (based on ddgs approach)
-        let search_url = format!("{}/html/", self.base_url);
-
-        // Build form parameters (simplified from ddgs implementation)
-        let mut params = HashMap::new();
-        params.insert("q", request.query.as_str());
-        params.insert("b", ""); // Empty value as in ddgs
+        // Build search parameters based on ddgs approach
+        let params = self.build_search_params(request);
         
-        // Add region parameter
+        // Create the HTTP request with privacy headers
+        let response = self.create_search_request(&params, privacy_manager).await?;
+        
+        // Validate response and check for CAPTCHA
+        let response_text = self.validate_response(response, privacy_manager).await?;
+
+        // Parse results using XPath-based approach (similar to ddgs)
+        let results =
+            self.parse_html_results(&response_text, request.results_count.unwrap_or(10))?;
+
+        tracing::debug!("DuckDuckGo search found {} results", results.len());
+
+        Ok(results)
+    }
+
+    /// Builds search parameters for DuckDuckGo request (based on ddgs implementation)
+    fn build_search_params(&self, request: &WebSearchRequest) -> HashMap<String, String> {
+        let mut params = HashMap::new();
+        params.insert("q".to_string(), request.query.clone());
+        params.insert("b".to_string(), "".to_string()); // Empty value as in ddgs
+
+        // Add region parameter based on language
         let region = if let Some(ref language) = request.language {
             match language.as_str() {
                 "en" => "us-en",
-                "es" => "es-es",
+                "es" => "es-es", 
                 "fr" => "fr-fr",
                 "de" => "de-de",
                 "it" => "it-it",
@@ -99,7 +115,7 @@ impl DuckDuckGoClient {
         } else {
             "us-en"
         };
-        params.insert("l", region);
+        params.insert("l".to_string(), region.to_string());
 
         // Add time range parameter if specified
         if let Some(ref time_range) = request.time_range {
@@ -111,11 +127,21 @@ impl DuckDuckGoClient {
                 TimeRange::All => None,
             };
             if let Some(time) = time_param {
-                params.insert("df", time);
+                params.insert("df".to_string(), time.to_string());
             }
         }
 
-        let mut request_builder = self.client.post(&search_url).form(&params);
+        params
+    }
+
+    /// Creates and sends the HTTP request to DuckDuckGo
+    async fn create_search_request(
+        &self,
+        params: &HashMap<String, String>,
+        privacy_manager: &PrivacyManager,
+    ) -> Result<reqwest::Response, DuckDuckGoError> {
+        let search_url = format!("{}/html/", self.base_url);
+        let mut request_builder = self.client.post(&search_url).form(params);
 
         // Apply User-Agent and privacy headers
         if let Some(user_agent) = privacy_manager.get_user_agent() {
@@ -128,6 +154,15 @@ impl DuckDuckGoClient {
             .await
             .map_err(DuckDuckGoError::Network)?;
 
+        Ok(response)
+    }
+
+    /// Validates response and checks for CAPTCHA challenges
+    async fn validate_response(
+        &self,
+        response: reqwest::Response,
+        privacy_manager: &PrivacyManager,
+    ) -> Result<String, DuckDuckGoError> {
         if !response.status().is_success() {
             return Err(DuckDuckGoError::InvalidRequest(format!(
                 "Search request failed with status: {}",
@@ -143,14 +178,8 @@ impl DuckDuckGoClient {
             return Err(DuckDuckGoError::CaptchaRequired);
         }
 
-        // Parse results using XPath-based approach (similar to ddgs)
-        let results = self.parse_html_results(&response_text, request.results_count.unwrap_or(10))?;
-
-        tracing::debug!("DuckDuckGo search found {} results", results.len());
-
-        Ok(results)
+        Ok(response_text)
     }
-
 
     /// Checks if the HTML response contains a CAPTCHA challenge
     fn is_captcha_challenge(&self, html_content: &str) -> bool {
@@ -189,12 +218,12 @@ impl DuckDuckGoClient {
         // Parse the HTML document
         let document = Html::parse_document(html_content);
 
-        // Use ddgs-based selectors (translated from XPath to CSS)
-        // Original ddgs: items_xpath = "//div[contains(@class, 'body')]"
+        // Use exact ddgs selectors (translated from XPath to CSS)
+        // ddgs uses: items_xpath = "//div[contains(@class, 'body')]"
         let result_selectors = vec![
-            "div[class*='body']",          // Primary selector from ddgs
-            "div[data-testid='web-result']", // Modern DuckDuckGo
-            "div.result",                    // Classic DuckDuckGo
+            "div[class*='body']",            // Exact ddgs primary selector
+            "div.result",                    // Fallback classic DuckDuckGo
+            "div[data-testid='web-result']", // Modern DuckDuckGo fallback
         ];
 
         for result_selector_str in &result_selectors {
@@ -209,7 +238,11 @@ impl DuckDuckGoClient {
                 continue; // Try next selector
             }
 
-            tracing::debug!("Found {} potential results with selector: {}", result_elements.len(), result_selector_str);
+            tracing::debug!(
+                "Found {} potential results with selector: {}",
+                result_elements.len(),
+                result_selector_str
+            );
 
             let mut results = Vec::new();
             for (index, result_element) in result_elements.iter().enumerate() {
@@ -221,7 +254,12 @@ impl DuckDuckGoClient {
                 let (title, url) = self.extract_title_and_url_simple(result_element)?;
 
                 if title.is_empty() || url.is_empty() || !url.starts_with("http") {
-                    tracing::debug!("Skipping invalid result {}: title='{}', url='{}'", index, title, url);
+                    tracing::debug!(
+                        "Skipping invalid result {}: title='{}', url='{}'",
+                        index,
+                        title,
+                        url
+                    );
                     continue; // Skip invalid results
                 }
 
@@ -256,28 +294,36 @@ impl DuckDuckGoClient {
     ) -> Result<(String, String), DuckDuckGoError> {
         use scraper::Selector;
 
-        // ddgs approach: title from h2, href from a
-        let title_selectors = vec!["h2 a", "h3 a", "h2", "h3", "a"];
-        let url_selectors = vec!["a"];
+        // Exact ddgs approach: title from ".//h2//text()", href from "./a/@href"
+        // In CSS selector terms: h2 for title, a[href] for links
+        let title_selectors = vec!["h2", "h3", "h2 a", "h3 a"];
+        let url_selectors = vec!["a[href]", "a"];
 
         let mut title = String::new();
         let mut url = String::new();
 
-        // Extract title and URL from the same <a> element if possible
+        // ddgs: title from ".//h2//text()" - extract text from h2 elements first
         for selector_str in &title_selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
-                if let Some(link_element) = element.select(&selector).next() {
-                    if let Some(href) = link_element.value().attr("href") {
-                        url = href.to_string();
-                    }
-                    title = link_element
+                if let Some(title_element) = element.select(&selector).next() {
+                    let extracted_title = title_element
                         .text()
                         .collect::<Vec<_>>()
                         .join(" ")
                         .trim()
                         .to_string();
-                    if !title.is_empty() && !url.is_empty() {
-                        break;
+                    
+                    // If this is an 'a' element, also extract href
+                    if title_element.value().name() == "a" {
+                        if let Some(href) = title_element.value().attr("href") {
+                            url = href.to_string();
+                            title = extracted_title;
+                            if !title.is_empty() && !url.is_empty() {
+                                break;
+                            }
+                        }
+                    } else if !extracted_title.is_empty() {
+                        title = extracted_title;
                     }
                 }
             }
@@ -304,29 +350,37 @@ impl DuckDuckGoClient {
     fn extract_description_simple(&self, element: &scraper::ElementRef) -> String {
         use scraper::Selector;
 
-        // ddgs approach: body text from a elements
+        // Exact ddgs approach: body from "./a//text()"
+        // In CSS selector terms: extract text from all <a> elements
         let description_selectors = vec![
-            "a.result__snippet",
-            ".result__snippet",
-            "a[class*='snippet']",
+            "a", // Primary ddgs approach: text from links
             "[class*='snippet']",
-            "a", // Fallback to any link text
+            ".result__snippet",
         ];
 
+        // ddgs approach: body from "./a//text()" - extract text from all link elements
         for selector_str in &description_selectors {
             if let Ok(selector) = Selector::parse(selector_str) {
+                let mut all_texts = Vec::new();
+                
                 for desc_element in element.select(&selector) {
-                    let description = desc_element
+                    let text = desc_element
                         .text()
                         .collect::<Vec<_>>()
                         .join(" ")
                         .trim()
                         .to_string();
-                    if !description.is_empty() {
-                        // Avoid using the same text as title
-                        if description.len() > 10 {
-                            return description;
-                        }
+                    
+                    if !text.is_empty() && text.len() > 10 {
+                        all_texts.push(text);
+                    }
+                }
+                
+                if !all_texts.is_empty() {
+                    // Join all extracted text and return first meaningful description
+                    let combined = all_texts.join(" ").trim().to_string();
+                    if combined.len() > 20 { // Ensure substantial content
+                        return combined;
                     }
                 }
             }
@@ -334,7 +388,6 @@ impl DuckDuckGoClient {
 
         String::new()
     }
-
 
     /// Calculates result score based on position using configurable scoring algorithm
     fn calculate_result_score(&self, index: usize) -> f64 {
@@ -350,7 +403,6 @@ impl DuckDuckGoClient {
             score.max(config.min_score)
         }
     }
-
 }
 
 impl Default for DuckDuckGoClient {
@@ -368,7 +420,6 @@ mod tests {
         let client = DuckDuckGoClient::new();
         assert_eq!(client.base_url, "https://html.duckduckgo.com");
     }
-
 
     #[test]
     fn test_is_captcha_challenge() {
@@ -433,5 +484,174 @@ mod tests {
         assert!(score_1 < score_0); // Should decay
         assert!(score_2 < score_1); // Should decay further
         assert!(score_1 > 0.8); // Should be approximately e^(-0.2) ≈ 0.819
+    }
+
+    #[test]
+    fn test_html_parsing_with_sample_duckduckgo_response() {
+        let client = DuckDuckGoClient::new();
+
+        // Sample DuckDuckGo HTML response structure (based on ddgs approach)
+        let sample_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>DuckDuckGo Search</title></head>
+        <body>
+            <div class="results">
+                <div class="result body">
+                    <h2><a href="https://example.com/apple">What is an Apple? - Example.com</a></h2>
+                    <a href="https://example.com/apple">An apple is a round fruit that grows on trees. Apples are commonly red, green, or yellow.</a>
+                </div>
+                <div class="result body">
+                    <h2><a href="https://en.wikipedia.org/wiki/Apple">Apple - Wikipedia</a></h2>
+                    <a href="https://en.wikipedia.org/wiki/Apple">An apple is an edible fruit produced by an apple tree. Apple trees are cultivated worldwide.</a>
+                </div>
+                <div class="result body">
+                    <h2><a href="https://nutrition.org/apples">Apple Nutrition Facts</a></h2>
+                    <a href="https://nutrition.org/apples">Apples are a great source of fiber and vitamin C. They make healthy snacks.</a>
+                </div>
+            </div>
+        </body>
+        </html>
+        "#;
+
+        let results = client.parse_html_results(sample_html, 10).unwrap();
+
+        assert_eq!(results.len(), 3);
+
+        // Test first result
+        assert_eq!(results[0].title, "What is an Apple? - Example.com");
+        assert_eq!(results[0].url, "https://example.com/apple");
+        assert!(results[0].description.contains("apple is a round fruit"));
+        assert_eq!(results[0].engine, "duckduckgo");
+        assert_eq!(results[0].score, 1.0); // First result gets full score
+
+        // Test second result
+        assert_eq!(results[1].title, "Apple - Wikipedia");
+        assert_eq!(results[1].url, "https://en.wikipedia.org/wiki/Apple");
+        assert!(results[1].description.contains("edible fruit"));
+        assert_eq!(results[1].score, 0.95); // Second result gets 95%
+
+        // Test third result
+        assert_eq!(results[2].title, "Apple Nutrition Facts");
+        assert_eq!(results[2].url, "https://nutrition.org/apples");
+        assert!(results[2].description.contains("great source of fiber"));
+        assert_eq!(results[2].score, 0.90); // Third result gets 90%
+    }
+
+    #[test]
+    fn test_html_parsing_with_complex_duckduckgo_structure() {
+        let client = DuckDuckGoClient::new();
+
+        // More complex HTML structure with nested elements
+        let complex_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <div class="main-results">
+                <div class="search-result body">
+                    <div class="result-header">
+                        <h2><a href="https://apple.com">Apple Inc. Official Website</a></h2>
+                    </div>
+                    <div class="result-content">
+                        <a href="https://apple.com">Discover the innovative world of Apple and shop everything iPhone, iPad, Mac, Apple Watch.</a>
+                    </div>
+                </div>
+                <div class="search-result body">
+                    <h3>
+                        <a href="https://healthline.com/apple-benefits">
+                            <span>Health Benefits of Apples</span>
+                        </a>
+                    </h3>
+                    <a href="https://healthline.com/apple-benefits">
+                        <span>Apples provide numerous health benefits including improved heart health and better digestion.</span>
+                    </a>
+                </div>
+            </div>
+        </body>
+        </html>
+        "#;
+
+        let results = client.parse_html_results(complex_html, 5).unwrap();
+
+        assert_eq!(results.len(), 2);
+
+        // Test extraction from nested h2
+        assert_eq!(results[0].title, "Apple Inc. Official Website");
+        assert_eq!(results[0].url, "https://apple.com");
+        assert!(results[0].description.contains("innovative world of Apple"));
+
+        // Test extraction from h3 with nested spans
+        assert_eq!(results[1].title, "Health Benefits of Apples");
+        assert_eq!(results[1].url, "https://healthline.com/apple-benefits");
+        assert!(results[1].description.contains("health benefits"));
+    }
+
+    #[test]
+    fn test_html_parsing_no_results() {
+        let client = DuckDuckGoClient::new();
+
+        // HTML without matching selectors
+        let empty_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <div class="header">Search Results</div>
+            <div class="no-results">No results found</div>
+        </body>
+        </html>
+        "#;
+
+        let result = client.parse_html_results(empty_html, 10);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DuckDuckGoError::NoResults));
+    }
+
+    #[test]
+    fn test_extract_title_and_url_variations() {
+        let client = DuckDuckGoClient::new();
+
+        // Test h2 with direct link
+        let html1 = r#"
+        <div class="result body">
+            <h2><a href="https://example.com">Example Title</a></h2>
+        </div>
+        "#;
+        let document1 = scraper::Html::parse_document(html1);
+        let element1 = document1.select(&scraper::Selector::parse("div").unwrap()).next().unwrap();
+        let (title1, url1) = client.extract_title_and_url_simple(&element1).unwrap();
+        assert_eq!(title1, "Example Title");
+        assert_eq!(url1, "https://example.com");
+
+        // Test h3 with link
+        let html2 = r#"
+        <div class="result body">
+            <h3><a href="https://test.org">Test Page</a></h3>
+        </div>
+        "#;
+        let document2 = scraper::Html::parse_document(html2);
+        let element2 = document2.select(&scraper::Selector::parse("div").unwrap()).next().unwrap();
+        let (title2, url2) = client.extract_title_and_url_simple(&element2).unwrap();
+        assert_eq!(title2, "Test Page");
+        assert_eq!(url2, "https://test.org");
+    }
+
+    #[test]
+    fn test_description_extraction_variations() {
+        let client = DuckDuckGoClient::new();
+
+        // Test description from link elements
+        let html = r#"
+        <div class="result body">
+            <h2><a href="https://example.com">Title</a></h2>
+            <a href="https://example.com">This is a detailed description of the content from the link.</a>
+            <a href="https://example.com">Additional context about the webpage content.</a>
+        </div>
+        "#;
+        let document = scraper::Html::parse_document(html);
+        let element = document.select(&scraper::Selector::parse("div").unwrap()).next().unwrap();
+        let description = client.extract_description_simple(&element);
+        
+        assert!(description.contains("detailed description"));
+        assert!(description.len() > 20);
     }
 }
