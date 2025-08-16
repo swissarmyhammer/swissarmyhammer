@@ -15,10 +15,28 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use url::Url;
 
+/// Configuration for the DuckDuckGo API client
+#[derive(Debug, Clone)]
+pub struct DuckDuckGoApiConfig {
+    /// Base API URL for DuckDuckGo instant answers
+    pub api_url: String,
+    /// Request timeout duration
+    pub timeout: Duration,
+}
+
+impl Default for DuckDuckGoApiConfig {
+    fn default() -> Self {
+        Self {
+            api_url: "https://api.duckduckgo.com".to_string(),
+            timeout: Duration::from_secs(10),
+        }
+    }
+}
+
 /// DuckDuckGo Instant Answer API client
 pub struct DuckDuckGoApiClient {
     client: Client,
-    api_url: String,
+    config: DuckDuckGoApiConfig,
 }
 
 /// Errors that can occur during DuckDuckGo API operations
@@ -158,17 +176,19 @@ pub struct RelatedTopicItem {
 }
 
 impl DuckDuckGoApiClient {
-    /// Creates a new DuckDuckGo API client
+    /// Creates a new DuckDuckGo API client with default configuration
     pub fn new() -> Self {
+        Self::with_config(DuckDuckGoApiConfig::default())
+    }
+
+    /// Creates a new DuckDuckGo API client with the specified configuration
+    pub fn with_config(config: DuckDuckGoApiConfig) -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(config.timeout)
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self {
-            client,
-            api_url: "https://api.duckduckgo.com".to_string(),
-        }
+        Self { client, config }
     }
 
     /// Performs an instant answer search using DuckDuckGo's API
@@ -247,7 +267,7 @@ impl DuckDuckGoApiClient {
 
     /// Builds the API URL with proper parameters
     fn build_api_url(&self, request: &WebSearchRequest) -> Result<String, DuckDuckGoApiError> {
-        let mut url = Url::parse(&self.api_url)
+        let mut url = Url::parse(&self.config.api_url)
             .map_err(|e| DuckDuckGoApiError::InvalidRequest(format!("Invalid API URL: {e}")))?;
 
         {
@@ -415,7 +435,18 @@ mod tests {
     #[test]
     fn test_duckduckgo_api_client_new() {
         let client = DuckDuckGoApiClient::new();
-        assert_eq!(client.api_url, "https://api.duckduckgo.com");
+        assert_eq!(client.config.api_url, "https://api.duckduckgo.com");
+    }
+
+    #[test]
+    fn test_duckduckgo_api_client_with_custom_config() {
+        let config = DuckDuckGoApiConfig {
+            api_url: "https://custom.api.com".to_string(),
+            timeout: Duration::from_secs(5),
+        };
+        let client = DuckDuckGoApiClient::with_config(config.clone());
+        assert_eq!(client.config.api_url, "https://custom.api.com");
+        assert_eq!(client.config.timeout, Duration::from_secs(5));
     }
 
     #[test]

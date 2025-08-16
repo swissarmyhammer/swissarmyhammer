@@ -7,7 +7,7 @@
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::duckduckgo_api_client::{
-    DuckDuckGoApiClient, DuckDuckGoApiError,
+    DuckDuckGoApiClient, DuckDuckGoApiConfig, DuckDuckGoApiError,
 };
 use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
 use crate::mcp::tools::web_search::types::*;
@@ -33,17 +33,26 @@ impl WebSearchTool {
     /// Gets or creates a DuckDuckGo API client
     fn get_duckduckgo_api_client(&mut self) -> &DuckDuckGoApiClient {
         if self.duckduckgo_api_client.is_none() {
-            self.duckduckgo_api_client = Some(DuckDuckGoApiClient::new());
+            let config = Self::load_duckduckgo_api_config();
+            self.duckduckgo_api_client = Some(DuckDuckGoApiClient::with_config(config));
         }
         self.duckduckgo_api_client.as_ref().unwrap()
     }
 
+    /// Helper function to load configuration with a callback for setting values
+    fn load_config_with_callback<T, F>(mut config: T, configure_fn: F) -> T
+    where
+        F: FnOnce(&mut T, &swissarmyhammer::Configuration),
+    {
+        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+            configure_fn(&mut config, &repo_config);
+        }
+        config
+    }
+
     /// Loads configuration for content fetching
     fn load_content_fetch_config() -> ContentFetchConfig {
-        let mut config = ContentFetchConfig::default();
-
-        // Try to load from configuration
-        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+        Self::load_config_with_callback(ContentFetchConfig::default(), |config, repo_config| {
             // Concurrent processing settings
             if let Some(swissarmyhammer::ConfigValue::Integer(max_concurrent)) =
                 repo_config.get("web_search.content_fetching.max_concurrent_fetches")
@@ -123,17 +132,12 @@ impl WebSearchTool {
             {
                 config.processing_config.extract_metadata = *extract_metadata;
             }
-        }
-
-        config
+        })
     }
 
     /// Loads configuration for privacy features
     fn load_privacy_config() -> PrivacyConfig {
-        let mut config = PrivacyConfig::default();
-
-        // Try to load from configuration
-        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+        Self::load_config_with_callback(PrivacyConfig::default(), |config, repo_config| {
             // User-Agent rotation settings
             if let Some(swissarmyhammer::ConfigValue::Boolean(rotate)) =
                 repo_config.get("web_search.privacy.rotate_user_agents")
@@ -236,9 +240,28 @@ impl WebSearchTool {
                     config.content_request_delay_ms = *content_delay as u64;
                 }
             }
-        }
+        })
+    }
 
-        config
+    /// Loads configuration for DuckDuckGo API client
+    fn load_duckduckgo_api_config() -> DuckDuckGoApiConfig {
+        Self::load_config_with_callback(DuckDuckGoApiConfig::default(), |config, repo_config| {
+            // API URL setting
+            if let Some(swissarmyhammer::ConfigValue::String(api_url)) =
+                repo_config.get("web_search.api.duckduckgo_endpoint")
+            {
+                config.api_url = api_url.clone();
+            }
+
+            // Timeout setting
+            if let Some(swissarmyhammer::ConfigValue::Integer(timeout)) =
+                repo_config.get("web_search.api.timeout_seconds")
+            {
+                if *timeout > 0 {
+                    config.timeout = std::time::Duration::from_secs(*timeout as u64);
+                }
+            }
+        })
     }
 
     /// Parse size string like "2MB" into bytes
