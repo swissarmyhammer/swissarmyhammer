@@ -4,6 +4,7 @@
 //! prompts and workflows to ensure consistent parameter validation, CLI integration,
 //! and user experience across the SwissArmyHammer system.
 
+use crate::common::parameter_conditions::{ConditionError, ParameterCondition};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -157,6 +158,24 @@ pub enum ParameterError {
         max_selections: usize,
         /// Actual number of selections
         actual_selections: usize,
+    },
+
+    /// Conditional parameter is missing due to unmet condition
+    #[error("Parameter '{parameter}' is required because condition '{condition}' is met")]
+    ConditionalParameterMissing {
+        /// Name of the conditional parameter
+        parameter: String,
+        /// The condition that makes this parameter required
+        condition: String,
+    },
+
+    /// Condition evaluation failed
+    #[error("Failed to evaluate condition for parameter '{parameter}': {condition_error}")]
+    ConditionEvaluationFailed {
+        /// Name of the parameter with the condition
+        parameter: String,
+        /// The underlying condition error
+        condition_error: ConditionError,
     },
 }
 
@@ -362,6 +381,9 @@ pub struct Parameter {
 
     /// Advanced validation rules for this parameter
     pub validation: Option<ValidationRules>,
+
+    /// Condition that determines when this parameter is required or shown
+    pub condition: Option<ParameterCondition>,
 }
 
 impl Parameter {
@@ -379,6 +401,7 @@ impl Parameter {
             default: None,
             choices: None,
             validation: None,
+            condition: None,
         }
     }
 
@@ -455,6 +478,18 @@ impl Parameter {
             .unwrap_or_default()
             .with_selection_range(min_selections, max_selections);
         self.validation = Some(validation);
+        self
+    }
+
+    /// Set a condition for this parameter
+    pub fn with_condition(mut self, condition: ParameterCondition) -> Self {
+        self.condition = Some(condition);
+        self
+    }
+
+    /// Set a condition with a simple expression (convenience method)
+    pub fn when(mut self, expression: impl Into<String>) -> Self {
+        self.condition = Some(ParameterCondition::new(expression));
         self
     }
 }
@@ -535,12 +570,139 @@ impl ParameterResolver for DefaultParameterResolver {
         interactive: bool,
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         // Parse CLI arguments
-        let parsed_args = self.parse_cli_args(cli_args);
+        let resolved = self.parse_cli_args(cli_args);
+        
+        // Handle conditional parameters with iterative resolution
+        self.resolve_conditional_parameters(parameters, resolved, interactive)
+    }
+}
 
-        // Use interactive prompts to fill missing parameters
-        let interactive_prompts =
-            crate::common::interactive_prompts::InteractivePrompts::new(!interactive);
-        interactive_prompts.prompt_for_parameters(parameters, &parsed_args)
+impl DefaultParameterResolver {
+    /// Resolve parameters with conditional logic, using iterative approach to handle dependencies
+    fn resolve_conditional_parameters(
+        &self,
+        parameters: &[Parameter],
+        mut resolved: HashMap<String, serde_json::Value>,
+        interactive: bool,
+    ) -> ParameterResult<HashMap<String, serde_json::Value>> {
+        use crate::common::parameter_conditions::ConditionEvaluator;
+        
+        let mut changed = true;
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
+        
+        while changed && iterations < MAX_ITERATIONS {
+            changed = false;
+            iterations += 1;
+            
+            for param in parameters {
+                if resolved.contains_key(&param.name) {
+                    continue; // Already resolved
+                }
+                
+                // Check if this parameter should be included based on its condition
+                let should_include = if let Some(condition) = &param.condition {
+                    let evaluator = ConditionEvaluator::new(resolved.clone());
+                    match evaluator.evaluate(&condition.expression) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            // Condition references parameters we don't have yet, skip for now
+                            continue;
+                        }
+                    }
+                } else {
+                    true // No condition means always include
+                };
+                
+                if should_include {
+                    // Check if we can use a default value, regardless of whether it's required
+                    if let Some(default) = &param.default {
+                        // Use default value for parameters when condition is met
+                        resolved.insert(param.name.clone(), default.clone());
+                        changed = true;
+                    } else if param.required {
+                        // Only fail for required parameters without defaults
+                        if interactive {
+                            // We'll use the original prompting system for now
+                            let interactive_prompts =
+                                crate::common::interactive_prompts::InteractivePrompts::new(false);
+                            
+                            // Create a temporary parameter list with just this parameter
+                            let temp_params = vec![param.clone()];
+                            let temp_resolved = HashMap::new(); // Start fresh for prompting
+                            
+                            match interactive_prompts.prompt_for_parameters(&temp_params, &temp_resolved) {
+                                Ok(prompted_values) => {
+                                    if let Some(value) = prompted_values.get(&param.name) {
+                                        resolved.insert(param.name.clone(), value.clone());
+                                        changed = true;
+                                    }
+                                }
+                                Err(e) => return Err(e),
+                            }
+                        } else {
+                            // Return appropriate error based on whether parameter has a condition
+                            if param.condition.is_some() {
+                                return Err(ParameterError::ConditionalParameterMissing {
+                                    parameter: param.name.clone(),
+                                    condition: param.condition.as_ref().unwrap().expression.clone(),
+                                });
+                            } else {
+                                return Err(ParameterError::MissingRequired {
+                                    name: param.name.clone(),
+                                });
+                            }
+                        }
+                    }
+                    // If it's not required and has no default, we simply don't include it
+                } else {
+                    // Parameter condition not met - don't include it even if it has defaults
+                    continue;
+                }
+            }
+        }
+        
+        if iterations >= MAX_ITERATIONS {
+            return Err(ParameterError::ValidationFailed {
+                message: "Too many iterations resolving conditional parameters - possible circular dependency".to_string(),
+            });
+        }
+        
+        // Final validation pass to ensure all required parameters are present
+        for param in parameters {
+            if self.is_parameter_required(param, &resolved)? && !resolved.contains_key(&param.name) {
+                if param.condition.is_some() {
+                    return Err(ParameterError::ConditionalParameterMissing {
+                        parameter: param.name.clone(),
+                        condition: param.condition.as_ref().unwrap().expression.clone(),
+                    });
+                } else {
+                    return Err(ParameterError::MissingRequired {
+                        name: param.name.clone(),
+                    });
+                }
+            }
+        }
+        
+        Ok(resolved)
+    }
+    
+    /// Check if a parameter is required given the current context
+    fn is_parameter_required(&self, param: &Parameter, context: &HashMap<String, serde_json::Value>) -> ParameterResult<bool> {
+        if let Some(condition) = &param.condition {
+            use crate::common::parameter_conditions::ConditionEvaluator;
+            
+            let evaluator = ConditionEvaluator::new(context.clone());
+            match evaluator.evaluate(&condition.expression) {
+                Ok(condition_met) => Ok(param.required && condition_met),
+                Err(_) => {
+                    // If condition can't be evaluated (missing params), assume not required for now
+                    Ok(false)
+                },
+            }
+        } else {
+            Ok(param.required)
+        }
     }
 }
 
@@ -1550,5 +1712,219 @@ mod tests {
             result.is_err(),
             "Password without special character should fail validation"
         );
+    }
+
+    // Tests for conditional parameters
+
+    #[test]
+    fn test_parameter_with_condition() {
+        use crate::common::parameter_conditions::ParameterCondition;
+        
+        let param = Parameter::new("prod_confirmation", "Production confirmation", ParameterType::Boolean)
+            .required(true)
+            .with_condition(ParameterCondition::new("deploy_env == 'prod'"));
+
+        assert!(param.condition.is_some());
+        let condition = param.condition.unwrap();
+        assert_eq!(condition.expression, "deploy_env == 'prod'");
+    }
+
+    #[test]
+    fn test_parameter_when_convenience_method() {
+        let param = Parameter::new("cert_path", "SSL certificate path", ParameterType::String)
+            .when("enable_ssl == true");
+
+        assert!(param.condition.is_some());
+        let condition = param.condition.unwrap();
+        assert_eq!(condition.expression, "enable_ssl == true");
+    }
+
+    #[test]
+    fn test_conditional_parameter_resolver() {
+        // Test that the existing resolver still works
+        let resolver = DefaultParameterResolver::new();
+        
+        // Parameter without condition should work as before
+        let param = Parameter::new("normal_param", "Normal parameter", ParameterType::String).required(true);
+        let parameters = vec![param];
+
+        let mut cli_args = HashMap::new();
+        cli_args.insert("normal_param".to_string(), "value".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("normal_param").unwrap(), &serde_json::json!("value"));
+    }
+
+    #[test]
+    fn test_conditional_parameter_basic_scenario() {
+        let resolver = DefaultParameterResolver::new();
+        
+        // Base parameter that determines condition
+        let deploy_env = Parameter::new("deploy_env", "Deployment environment", ParameterType::Choice)
+            .with_choices(vec!["dev".to_string(), "staging".to_string(), "prod".to_string()])
+            .required(true);
+            
+        // Conditional parameter that appears only for prod
+        let prod_confirmation = Parameter::new("prod_confirmation", "Production confirmation", ParameterType::Boolean)
+            .required(true)
+            .when("deploy_env == 'prod'");
+            
+        let parameters = vec![deploy_env, prod_confirmation];
+
+        // Test 1: deploy_env = dev, should not require prod_confirmation
+        let mut cli_args = HashMap::new();
+        cli_args.insert("deploy_env".to_string(), "dev".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("deploy_env").unwrap(), &serde_json::json!("dev"));
+        assert!(!result.contains_key("prod_confirmation"));
+
+        // Test 2: deploy_env = prod, should require prod_confirmation (but we don't provide it)
+        let mut cli_args = HashMap::new();
+        cli_args.insert("deploy_env".to_string(), "prod".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false);
+        assert!(result.is_err());
+        
+        if let Err(ParameterError::ConditionalParameterMissing { parameter, condition }) = result {
+            assert_eq!(parameter, "prod_confirmation");
+            assert_eq!(condition, "deploy_env == 'prod'");
+        } else {
+            panic!("Expected ConditionalParameterMissing error");
+        }
+
+        // Test 3: deploy_env = prod with prod_confirmation provided
+        let mut cli_args = HashMap::new();
+        cli_args.insert("deploy_env".to_string(), "prod".to_string());
+        cli_args.insert("prod_confirmation".to_string(), "true".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("deploy_env").unwrap(), &serde_json::json!("prod"));
+        assert_eq!(result.get("prod_confirmation").unwrap(), &serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_conditional_parameter_with_defaults() {
+        let resolver = DefaultParameterResolver::new();
+        
+        let enable_ssl = Parameter::new("enable_ssl", "Enable SSL", ParameterType::Boolean)
+            .with_default(serde_json::json!(false))
+            .required(false);
+            
+        let cert_path = Parameter::new("cert_path", "SSL certificate path", ParameterType::String)
+            .required(true)
+            .when("enable_ssl == true")
+            .with_default(serde_json::json!("/etc/ssl/cert.pem"));
+            
+        let parameters = vec![enable_ssl, cert_path];
+
+        // Test 1: No CLI args, should use defaults and not require cert_path
+        let cli_args = HashMap::new();
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(false));
+        assert!(!result.contains_key("cert_path"));
+
+        // Test 2: enable_ssl = true, should use cert_path default
+        let mut cli_args = HashMap::new();
+        cli_args.insert("enable_ssl".to_string(), "true".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(true));
+        assert_eq!(result.get("cert_path").unwrap(), &serde_json::json!("/etc/ssl/cert.pem"));
+    }
+
+    #[test]
+    fn test_conditional_parameter_complex_logic() {
+        let resolver = DefaultParameterResolver::new();
+        
+        let env = Parameter::new("env", "Environment", ParameterType::String)
+            .required(true);
+            
+        let urgent = Parameter::new("urgent", "Urgent deployment", ParameterType::Boolean)
+            .with_default(serde_json::json!(false));
+            
+        // Complex condition: show this parameter if env is prod OR urgent is true
+        let approval_token = Parameter::new("approval_token", "Approval token", ParameterType::String)
+            .required(true)
+            .when("env == 'prod' || urgent == true");
+            
+        let parameters = vec![env, urgent, approval_token];
+
+        // Test 1: env = dev, urgent = false -> no approval_token needed
+        let mut cli_args = HashMap::new();
+        cli_args.insert("env".to_string(), "dev".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(!result.contains_key("approval_token"));
+
+        // Test 2: env = dev, urgent = true -> approval_token needed
+        let mut cli_args = HashMap::new();
+        cli_args.insert("env".to_string(), "dev".to_string());
+        cli_args.insert("urgent".to_string(), "true".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false);
+        assert!(result.is_err()); // Should fail because approval_token is missing
+
+        // Test 3: env = prod, urgent = false -> approval_token needed
+        let mut cli_args = HashMap::new();
+        cli_args.insert("env".to_string(), "prod".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false);
+        assert!(result.is_err()); // Should fail because approval_token is missing
+    }
+
+    #[test]
+    fn test_conditional_parameter_dependency_chain() {
+        let resolver = DefaultParameterResolver::new();
+        
+        // Chain: database_type -> requires_ssl -> cert_path
+        let database_type = Parameter::new("database_type", "Database type", ParameterType::Choice)
+            .with_choices(vec!["mysql".to_string(), "postgres".to_string(), "redis".to_string()])
+            .required(true);
+            
+        let requires_ssl = Parameter::new("requires_ssl", "SSL required", ParameterType::Boolean)
+            .when("database_type in [\"mysql\", \"postgres\"]")
+            .with_default(serde_json::json!(true));
+            
+        let cert_path = Parameter::new("cert_path", "Certificate path", ParameterType::String)
+            .required(true)
+            .when("requires_ssl == true");
+            
+        let parameters = vec![database_type, requires_ssl, cert_path];
+
+        // Test 1: database_type = redis -> no SSL needed, no cert needed
+        let mut cli_args = HashMap::new();
+        cli_args.insert("database_type".to_string(), "redis".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("database_type").unwrap(), &serde_json::json!("redis"));
+        assert!(!result.contains_key("requires_ssl"));
+        assert!(!result.contains_key("cert_path"));
+
+        // Test 2: database_type = mysql -> SSL required by default -> cert needed
+        let mut cli_args = HashMap::new();
+        cli_args.insert("database_type".to_string(), "mysql".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false);
+        assert!(result.is_err()); // Should fail because cert_path is missing
+
+        // Test 3: database_type = mysql, cert_path provided -> should work
+        let mut cli_args = HashMap::new();
+        cli_args.insert("database_type".to_string(), "mysql".to_string());
+        cli_args.insert("cert_path".to_string(), "/etc/mysql/ssl/cert.pem".to_string());
+
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.get("database_type").unwrap(), &serde_json::json!("mysql"));
+        assert_eq!(result.get("requires_ssl").unwrap(), &serde_json::json!(true));
+        assert_eq!(result.get("cert_path").unwrap(), &serde_json::json!("/etc/mysql/ssl/cert.pem"));
     }
 }
