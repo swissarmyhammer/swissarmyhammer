@@ -229,6 +229,62 @@ pub trait ParameterResolver {
     ) -> ParameterResult<HashMap<String, serde_json::Value>>;
 }
 
+/// Default implementation of parameter resolver with interactive prompting
+pub struct DefaultParameterResolver;
+
+impl DefaultParameterResolver {
+    /// Create a new default parameter resolver
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Parse CLI arguments into parameter values
+    fn parse_cli_args(&self, cli_args: &HashMap<String, String>) -> HashMap<String, serde_json::Value> {
+        cli_args
+            .iter()
+            .map(|(key, value)| {
+                // Try to parse as different types
+                let parsed_value = if value.eq_ignore_ascii_case("true") {
+                    serde_json::Value::Bool(true)
+                } else if value.eq_ignore_ascii_case("false") {
+                    serde_json::Value::Bool(false)
+                } else if let Ok(num) = value.parse::<f64>() {
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(num).unwrap_or_else(|| {
+                            serde_json::Number::from(0)
+                        })
+                    )
+                } else {
+                    serde_json::Value::String(value.clone())
+                };
+                (key.clone(), parsed_value)
+            })
+            .collect()
+    }
+}
+
+impl Default for DefaultParameterResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ParameterResolver for DefaultParameterResolver {
+    fn resolve_parameters(
+        &self,
+        parameters: &[Parameter],
+        cli_args: &HashMap<String, String>,
+        interactive: bool,
+    ) -> ParameterResult<HashMap<String, serde_json::Value>> {
+        // Parse CLI arguments
+        let parsed_args = self.parse_cli_args(cli_args);
+
+        // Use interactive prompts to fill missing parameters
+        let interactive_prompts = crate::common::interactive_prompts::InteractivePrompts::new(!interactive);
+        interactive_prompts.prompt_for_parameters(parameters, &parsed_args)
+    }
+}
+
 /// Parameter validation engine
 pub struct ParameterValidator;
 
@@ -594,5 +650,79 @@ mod tests {
         } else {
             panic!("Expected OutOfRange error");
         }
+    }
+    
+    #[test]
+    fn test_default_parameter_resolver_parse_cli_args() {
+        let resolver = DefaultParameterResolver::new();
+        
+        let mut cli_args = HashMap::new();
+        cli_args.insert("string_param".to_string(), "hello".to_string());
+        cli_args.insert("bool_param".to_string(), "true".to_string());
+        cli_args.insert("number_param".to_string(), "42.5".to_string());
+        cli_args.insert("false_param".to_string(), "false".to_string());
+        cli_args.insert("text_param".to_string(), "not_a_number".to_string());
+        
+        let parsed = resolver.parse_cli_args(&cli_args);
+        
+        assert_eq!(parsed.len(), 5);
+        assert_eq!(parsed.get("string_param").unwrap(), &serde_json::json!("hello"));
+        assert_eq!(parsed.get("bool_param").unwrap(), &serde_json::json!(true));
+        assert_eq!(parsed.get("number_param").unwrap(), &serde_json::json!(42.5));
+        assert_eq!(parsed.get("false_param").unwrap(), &serde_json::json!(false));
+        assert_eq!(parsed.get("text_param").unwrap(), &serde_json::json!("not_a_number"));
+    }
+    
+    #[test]
+    fn test_default_parameter_resolver_non_interactive() {
+        let resolver = DefaultParameterResolver::new();
+        
+        let param = Parameter::new("test_param", "Test parameter", ParameterType::String)
+            .required(true);
+        let parameters = vec![param];
+        
+        let cli_args = HashMap::new(); // Empty CLI args
+        
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false);
+        assert!(result.is_err());
+        
+        if let Err(ParameterError::MissingRequired { name }) = result {
+            assert_eq!(name, "test_param");
+        } else {
+            panic!("Expected MissingRequired error");
+        }
+    }
+    
+    #[test]
+    fn test_default_parameter_resolver_with_cli_args() {
+        let resolver = DefaultParameterResolver::new();
+        
+        let param = Parameter::new("test_param", "Test parameter", ParameterType::String)
+            .required(true);
+        let parameters = vec![param];
+        
+        let mut cli_args = HashMap::new();
+        cli_args.insert("test_param".to_string(), "provided_value".to_string());
+        
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("test_param").unwrap(), &serde_json::json!("provided_value"));
+    }
+    
+    #[test]
+    fn test_default_parameter_resolver_with_defaults() {
+        let resolver = DefaultParameterResolver::new();
+        
+        let param = Parameter::new("optional_param", "Optional parameter", ParameterType::String)
+            .with_default(serde_json::json!("default_value"));
+        let parameters = vec![param];
+        
+        let cli_args = HashMap::new(); // No CLI args provided
+        
+        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("optional_param").unwrap(), &serde_json::json!("default_value"));
     }
 }

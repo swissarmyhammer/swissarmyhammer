@@ -134,13 +134,16 @@ fn test_prompt_resolver_with_test_home() {
     // Debug output to see what prompts were loaded
     println!("Loaded prompts: {user_prompt_names:?}");
 
-    // Should have loaded our test prompts
+    // Should have loaded our test prompts (check that they exist among all loaded prompts)
+    // The resolver loads builtin prompts + user prompts, so we just need to verify our test prompts are there
     assert!(
         user_prompt_names.contains(&"test-prompt".to_string()),
-        "Missing test-prompt"
+        "Missing test-prompt from loaded prompts: {:?}",
+        user_prompt_names
     );
     assert!(
         user_prompt_names.contains(&"another-test".to_string()),
-        "Missing another-test"
+        "Missing another-test from loaded prompts: {:?}",
+        user_prompt_names
     );
 }
