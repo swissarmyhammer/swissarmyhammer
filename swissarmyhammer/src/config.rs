@@ -126,6 +126,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_config_new() {
         // Clean up any environment variables from other tests
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");

@@ -576,6 +576,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_setup_test_home() {
         let _guard = IsolatedTestHome::new();
 

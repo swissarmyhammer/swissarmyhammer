@@ -1,5 +1,6 @@
 //! Main workflow type and validation
 
+use crate::common::{Parameter, ParameterProvider};
 use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::workflow::{State, StateId, Transition};
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,54 @@ pub struct WorkflowParameter {
     pub choices: Option<Vec<String>>,
 }
 
+impl WorkflowParameter {
+    /// Convert this WorkflowParameter to the shared Parameter type
+    pub fn to_parameter(&self) -> Parameter {
+        let shared_type = match self.parameter_type {
+            ParameterType::String => crate::common::ParameterType::String,
+            ParameterType::Boolean => crate::common::ParameterType::Boolean,
+            ParameterType::Number => crate::common::ParameterType::Number,
+            ParameterType::Choice => crate::common::ParameterType::Choice,
+            ParameterType::MultiChoice => crate::common::ParameterType::MultiChoice,
+        };
+
+        let mut param =
+            Parameter::new(&self.name, &self.description, shared_type).required(self.required);
+
+        if let Some(default) = &self.default {
+            param = param.with_default(default.clone());
+        }
+
+        if let Some(choices) = &self.choices {
+            param = param.with_choices(choices.clone());
+        }
+
+        param
+    }
+}
+
+impl From<Parameter> for WorkflowParameter {
+    /// Convert a shared Parameter back to WorkflowParameter for backward compatibility
+    fn from(param: Parameter) -> Self {
+        let workflow_type = match param.parameter_type {
+            crate::common::ParameterType::String => ParameterType::String,
+            crate::common::ParameterType::Boolean => ParameterType::Boolean,
+            crate::common::ParameterType::Number => ParameterType::Number,
+            crate::common::ParameterType::Choice => ParameterType::Choice,
+            crate::common::ParameterType::MultiChoice => ParameterType::MultiChoice,
+        };
+
+        Self {
+            name: param.name,
+            description: param.description,
+            required: param.required,
+            parameter_type: workflow_type,
+            default: param.default,
+            choices: param.choices,
+        }
+    }
+}
+
 /// Main workflow representation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workflow {
@@ -106,6 +155,12 @@ pub struct Workflow {
     pub description: String,
     /// Parameter schema for this workflow
     pub parameters: Vec<WorkflowParameter>,
+    /// Cached shared parameters converted from WorkflowParameters.
+    ///
+    /// This field is lazily populated to provide efficient access to the shared
+    /// parameter system without breaking backward compatibility.
+    #[serde(skip)]
+    cached_parameters: std::sync::OnceLock<Vec<Parameter>>,
     /// All states in the workflow
     pub states: HashMap<StateId, State>,
     /// All transitions in the workflow
@@ -123,6 +178,7 @@ impl Workflow {
             name,
             description,
             parameters: Vec::new(),
+            cached_parameters: std::sync::OnceLock::new(),
             states: Default::default(),
             transitions: Vec::new(),
             initial_state,
@@ -213,13 +269,17 @@ impl Workflow {
 
             // Check parameter description is not empty
             if parameter.description.trim().is_empty() {
-                errors.push(format!("Parameter '{}' must have a description", parameter.name));
+                errors.push(format!(
+                    "Parameter '{}' must have a description",
+                    parameter.name
+                ));
             }
 
             // Validate choices for Choice and MultiChoice types
             match parameter.parameter_type {
                 ParameterType::Choice | ParameterType::MultiChoice => {
-                    if parameter.choices.is_none() || parameter.choices.as_ref().unwrap().is_empty() {
+                    if parameter.choices.is_none() || parameter.choices.as_ref().unwrap().is_empty()
+                    {
                         errors.push(format!(
                             "Parameter '{}' with type {:?} must have choices defined",
                             parameter.name, parameter.parameter_type
@@ -232,7 +292,9 @@ impl Workflow {
                 }
                 ParameterType::Boolean | ParameterType::Number => {
                     // For Boolean and Number types, choices should not be defined
-                    if parameter.choices.is_some() && !parameter.choices.as_ref().unwrap().is_empty() {
+                    if parameter.choices.is_some()
+                        && !parameter.choices.as_ref().unwrap().is_empty()
+                    {
                         errors.push(format!(
                             "Parameter '{}' with type {:?} should not have choices defined",
                             parameter.name, parameter.parameter_type
@@ -314,6 +376,18 @@ impl Workflow {
     }
 }
 
+impl ParameterProvider for Workflow {
+    /// Get the parameters for this workflow by converting from WorkflowParameter
+    fn get_parameters(&self) -> &[Parameter] {
+        self.cached_parameters.get_or_init(|| {
+            self.parameters
+                .iter()
+                .map(|workflow_param| workflow_param.to_parameter())
+                .collect()
+        })
+    }
+}
+
 impl Validatable for Workflow {
     fn validate(&self, source_path: Option<&Path>) -> Vec<ValidationIssue> {
         match self.validate_structure() {
@@ -386,7 +460,7 @@ mod tests {
         use crate::workflow::test_helpers::*;
 
         let mut workflow = create_basic_workflow();
-        
+
         // Add valid parameters
         workflow.parameters.push(WorkflowParameter {
             name: "valid_string".to_string(),
@@ -416,7 +490,7 @@ mod tests {
         use crate::workflow::test_helpers::*;
 
         let mut workflow = create_basic_workflow();
-        
+
         // Add invalid parameters
         workflow.parameters.push(WorkflowParameter {
             name: "".to_string(), // Empty name
@@ -475,14 +549,24 @@ mod tests {
 
         let result = workflow.validate_parameters();
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("Parameter name cannot be empty")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("Parameter name cannot be empty")));
         assert!(errors.iter().any(|e| e.contains("must have a description")));
-        assert!(errors.iter().any(|e| e.contains("must have choices defined")));
-        assert!(errors.iter().any(|e| e.contains("should not have choices defined")));
-        assert!(errors.iter().any(|e| e.contains("default value does not match parameter type")));
-        assert!(errors.iter().any(|e| e.contains("Duplicate parameter name")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("must have choices defined")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("should not have choices defined")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("default value does not match parameter type")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("Duplicate parameter name")));
     }
 
     #[test]
@@ -490,7 +574,7 @@ mod tests {
         use crate::workflow::test_helpers::*;
 
         let mut workflow = create_basic_workflow();
-        
+
         // Add invalid parameter that should cause workflow validation to fail
         workflow.parameters.push(WorkflowParameter {
             name: "invalid".to_string(),
@@ -503,9 +587,62 @@ mod tests {
 
         let result = workflow.validate_structure();
         assert!(result.is_err());
-        
+
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.contains("must have a description")));
-        assert!(errors.iter().any(|e| e.contains("must have choices defined")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("must have choices defined")));
+    }
+
+    #[test]
+    fn test_shared_parameter_system_integration() {
+        use crate::common::ParameterProvider;
+        use crate::workflow::test_helpers::*;
+
+        let mut workflow = create_basic_workflow();
+
+        // Add workflow parameters
+        workflow.parameters.push(WorkflowParameter {
+            name: "input_file".to_string(),
+            description: "Input file path".to_string(),
+            required: true,
+            parameter_type: ParameterType::String,
+            default: None,
+            choices: None,
+        });
+
+        workflow.parameters.push(WorkflowParameter {
+            name: "mode".to_string(),
+            description: "Processing mode".to_string(),
+            required: false,
+            parameter_type: ParameterType::Choice,
+            default: Some(serde_json::Value::String("fast".to_string())),
+            choices: Some(vec!["fast".to_string(), "thorough".to_string()]),
+        });
+
+        // Test that ParameterProvider trait works
+        let parameters = workflow.get_parameters();
+        assert_eq!(parameters.len(), 2);
+
+        // Check first parameter
+        assert_eq!(parameters[0].name, "input_file");
+        assert_eq!(parameters[0].description, "Input file path");
+        assert!(parameters[0].required);
+        assert_eq!(parameters[0].parameter_type.as_str(), "string");
+
+        // Check second parameter
+        assert_eq!(parameters[1].name, "mode");
+        assert_eq!(parameters[1].description, "Processing mode");
+        assert!(!parameters[1].required);
+        assert_eq!(parameters[1].parameter_type.as_str(), "choice");
+        assert_eq!(
+            parameters[1].choices,
+            Some(vec!["fast".to_string(), "thorough".to_string()])
+        );
+        assert_eq!(
+            parameters[1].default,
+            Some(serde_json::Value::String("fast".to_string()))
+        );
     }
 }

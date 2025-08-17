@@ -227,6 +227,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_when_file_exists() {
         use tempfile::TempDir;
 
@@ -270,6 +271,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_when_file_does_not_exist() {
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
@@ -288,6 +290,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_continues_on_permission_error() {
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
@@ -308,6 +311,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_multiple_workflow_runs_cleanup_abort_file() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -323,6 +327,9 @@ mod tests {
         workflow.add_state(create_state("start", "Start state", false));
 
         let abort_path = ".swissarmyhammer/.abort";
+
+        // Create the .swissarmyhammer directory if it doesn't exist
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
 
         // Create first abort file
         std::fs::write(abort_path, "first abort reason").unwrap();
@@ -346,6 +353,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_with_unicode_content() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -376,6 +384,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_with_large_content() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -406,6 +415,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_concurrent_workflow_runs() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -455,6 +465,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_empty_file() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -484,6 +495,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_with_newlines() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -520,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_workflow_initialization_after_cleanup() {
         use crate::test_utils::IsolatedTestHome;
         use std::path::Path;
@@ -531,6 +544,9 @@ mod tests {
         std::env::set_current_dir(guard.home_path()).unwrap();
 
         let abort_path = ".swissarmyhammer/.abort";
+
+        // Create the .swissarmyhammer directory if it doesn't exist
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
 
         // Create abort file
         std::fs::write(abort_path, "test reason").unwrap();
