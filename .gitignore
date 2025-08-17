@@ -70,3 +70,5 @@ doc/book
 
 # Test home directories (temporary test fixtures)
 tests/test-home/
+
+Cargo.lock

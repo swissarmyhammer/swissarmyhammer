@@ -1,0 +1,1 @@
+the info messages in swissarmyhammer_tools::mcp::tools::web_search::duckduckgo_client need to be debug

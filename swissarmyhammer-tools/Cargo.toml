@@ -40,7 +40,6 @@ markdowndown = { workspace = true }
 url = { workspace = true }
 futures-util = "0.3"
 libc = "0.2.175"
-thiserror = "1.0"
 
 # Web search dependencies
 chromiumoxide = "0.7"
@@ -49,7 +48,6 @@ html2text = { workspace = true }
 html2md = "0.2"
 html-escape = "0.2"
 scraper = "0.20"
-futures-util = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
 reqwest = { workspace = true }
