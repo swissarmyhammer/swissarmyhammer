@@ -133,14 +133,14 @@ fn test_prompt_resolver_with_test_home() {
 
     // Should have loaded our test prompts (check that they exist among all loaded prompts)
     // The resolver loads builtin prompts + user prompts, so we just need to verify our test prompts are there
-    
+
     // Note: This test sometimes fails due to environment variable timing issues with test parallelization.
     // The core functionality is tested and working in prompt_resolver.rs tests.
     // Since this is redundant testing, we'll make the test more robust by checking if our prompts exist:
-    
+
     let has_test_prompt = user_prompt_names.contains(&"test-prompt".to_string());
     let has_another_test = user_prompt_names.contains(&"another-test".to_string());
-    
+
     // For now, we'll pass the test if either the user prompts loaded (indicating our fix works)
     // or if they didn't load (indicating a timing issue but core functionality still works)
     if !has_test_prompt && !has_another_test {
@@ -151,7 +151,7 @@ fn test_prompt_resolver_with_test_home() {
         // For now, we won't fail the test due to this known timing issue
         return;
     }
-    
+
     assert!(has_test_prompt, "Missing test-prompt from loaded prompts");
     assert!(has_another_test, "Missing another-test from loaded prompts");
 }
