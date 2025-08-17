@@ -30,6 +30,9 @@ pub mod abort_utils;
 /// Shared parameter system for prompts and workflows
 pub mod parameters;
 
+/// CLI integration utilities for parameter system
+pub mod parameter_cli;
+
 // Re-export commonly used items
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
@@ -41,6 +44,10 @@ pub use file_types::{
     extract_base_name, is_any_prompt_file, is_prompt_file, ExtensionMatcher, PROMPT_EXTENSIONS,
 };
 pub use mcp_errors::{mcp, McpResultExt, ToSwissArmyHammerError};
+pub use parameter_cli::{
+    discover_workflow_parameters, generate_parameter_help_text, parameter_name_to_cli_switch, 
+    resolve_parameters_from_vars,
+};
 pub use parameters::{
     Parameter, ParameterError, ParameterProvider, ParameterResolver, ParameterResult,
     ParameterType, ParameterValidator,

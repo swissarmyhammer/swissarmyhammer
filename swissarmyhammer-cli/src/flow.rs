@@ -3,6 +3,7 @@
 use crate::cli::{
     FlowSubcommand, OutputFormat, PromptSource, PromptSourceArg, VisualizationFormat,
 };
+use crate::parameter_cli;
 use colored::*;
 use is_terminal::IsTerminal;
 use std::collections::{HashMap, HashSet};
@@ -130,15 +131,29 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     let workflow_name_typed = WorkflowName::new(&config.workflow_name);
     let workflow = workflow_storage.get_workflow(&workflow_name_typed)?;
 
-    // Parse variables
-    let mut variables = HashMap::new();
+    // Resolve workflow parameters with enhanced parameter system
+    let workflow_variables = parameter_cli::resolve_workflow_parameters(
+        &config.workflow_name,
+        &config.vars,
+        &config.set,
+    ).unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to resolve workflow parameters: {}", e);
+        HashMap::new()
+    });
+
+    // Parse additional variables not handled by workflow parameters (backward compatibility)
+    let mut variables = workflow_variables;
     for var in config.vars {
         let parts: Vec<&str> = var.splitn(2, '=').collect();
         if parts.len() == 2 {
-            variables.insert(
-                parts[0].to_string(),
-                serde_json::Value::String(parts[1].to_string()),
-            );
+            let key = parts[0].to_string();
+            // Only add if not already resolved by workflow parameter system
+            if !variables.contains_key(&key) {
+                variables.insert(
+                    key,
+                    serde_json::Value::String(parts[1].to_string()),
+                );
+            }
         } else {
             return Err(SwissArmyHammerError::Other(format!(
                 "Invalid variable format: '{var}'. Expected 'key=value' format. Example: --var input=test"

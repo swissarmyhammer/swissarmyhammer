@@ -12,6 +12,7 @@ mod list;
 mod logging;
 mod mcp_integration;
 mod memo;
+mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
 mod prompt;
 mod search;
