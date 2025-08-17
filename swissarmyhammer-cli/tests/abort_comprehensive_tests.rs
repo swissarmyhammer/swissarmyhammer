@@ -20,16 +20,6 @@ fn cleanup_abort_file() {
     let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 }
 
-/// Helper to verify abort file exists with specific content
-fn assert_abort_file_exists(expected_reason: &str) -> Result<()> {
-    let abort_path = Path::new(".swissarmyhammer/.abort");
-    assert!(abort_path.exists(), "Abort file should exist");
-
-    let content = std::fs::read_to_string(abort_path)?;
-    assert_eq!(content, expected_reason, "Abort file content mismatch");
-    Ok(())
-}
-
 /// Helper to verify abort file does not exist
 fn assert_abort_file_not_exists() {
     let abort_path = Path::new(".swissarmyhammer/.abort");

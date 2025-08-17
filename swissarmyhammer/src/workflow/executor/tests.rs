@@ -7,6 +7,7 @@ use crate::workflow::{
     WorkflowName, WorkflowRun, WorkflowRunStatus,
 };
 use serde_json::Value;
+use serial_test::serial;
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -1549,6 +1550,7 @@ async fn test_say_hello_workflow() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1575,7 +1577,15 @@ async fn test_abort_file_detection() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     // Create the abort file in the isolated test directory
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", "Test abort reason").unwrap();
 
     // Now execute with the abort file present
@@ -1593,6 +1603,7 @@ async fn test_abort_file_detection() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection_with_read_error() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1613,7 +1624,15 @@ async fn test_abort_file_detection_with_read_error() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     // Create abort file but make it unreadable (simulate read error)
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", "").unwrap();
 
     let result = executor
@@ -1626,6 +1645,7 @@ async fn test_abort_file_detection_with_read_error() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection_during_multiple_state_transitions() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1646,7 +1666,15 @@ async fn test_abort_file_detection_during_multiple_state_transitions() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     // Create the abort file in the isolated test directory
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", "Mid-execution abort").unwrap();
 
     // Now execute with the abort file present
@@ -1664,6 +1692,7 @@ async fn test_abort_file_detection_during_multiple_state_transitions() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection_with_unicode_reason() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1681,7 +1710,15 @@ async fn test_abort_file_detection_with_unicode_reason() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     let unicode_reason = "中文测试 🚫 Abort with émojis and ñoñ-ASCII";
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", unicode_reason).unwrap();
 
     let result = executor
@@ -1696,6 +1733,7 @@ async fn test_abort_file_detection_with_unicode_reason() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection_with_large_reason() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1713,7 +1751,15 @@ async fn test_abort_file_detection_with_large_reason() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     let large_reason = "x".repeat(5000);
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", &large_reason).unwrap();
 
     let result = executor
@@ -1728,6 +1774,7 @@ async fn test_abort_file_detection_with_large_reason() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection_with_newlines() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1745,7 +1792,15 @@ async fn test_abort_file_detection_with_newlines() {
     let mut run = executor.start_workflow(workflow).unwrap();
 
     let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", reason_with_newlines).unwrap();
 
     let result = executor
@@ -1793,7 +1848,15 @@ async fn test_abort_file_performance_impact() {
     let start_with_abort = Instant::now();
     for _ in 0..10 {
         // Recreate the abort file each time since it gets detected and errors
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        std::fs::create_dir_all(".swissarmyhammer")
+            .or_else(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .unwrap();
         std::fs::write(&abort_file_path, "Performance test abort").unwrap();
         let mut run = executor.start_workflow(workflow.clone()).unwrap();
         let _ = executor.execute_state_with_limit(&mut run, 1000).await;
@@ -1810,6 +1873,7 @@ async fn test_abort_file_performance_impact() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_abort_file_detection_zero_transitions_limit() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1826,7 +1890,15 @@ async fn test_abort_file_detection_zero_transitions_limit() {
 
     let mut run = executor.start_workflow(workflow).unwrap();
 
-    std::fs::create_dir_all(".swissarmyhammer").unwrap();
+    std::fs::create_dir_all(".swissarmyhammer")
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
+        .unwrap();
     std::fs::write(".swissarmyhammer/.abort", "Zero limit abort").unwrap();
 
     // Execute with 1 transition limit - should check for abort before transitions

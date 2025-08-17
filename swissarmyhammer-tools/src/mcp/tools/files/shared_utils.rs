@@ -18,8 +18,8 @@
 //! error types for consistent client experience across all file tools.
 
 use rmcp::Error as McpError;
-use std::path::{Path, PathBuf};
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// Validate that a file path is absolute and within acceptable boundaries
 ///
@@ -228,7 +228,7 @@ pub enum FileOperation {
 /// use crate::mcp::tools::files::shared_utils::FilePathValidator;
 ///
 /// let validator = FilePathValidator::with_workspace_root("/home/user/project".into());
-/// 
+///
 /// // Valid path within workspace
 /// let safe_path = validator.validate_absolute_path("/home/user/project/src/main.rs")?;
 ///
@@ -264,18 +264,18 @@ impl FilePathValidator {
     /// - Unicode normalization enabled
     pub fn new() -> Self {
         let mut blocked_patterns = HashSet::new();
-        
+
         // Add common path traversal patterns
         blocked_patterns.insert("..".to_string());
         blocked_patterns.insert("./".to_string());
         blocked_patterns.insert("../".to_string());
         blocked_patterns.insert("\\..\\".to_string());
         blocked_patterns.insert("..\\".to_string());
-        
+
         // Add null byte and other dangerous patterns
         blocked_patterns.insert("\0".to_string());
         blocked_patterns.insert("\\0".to_string());
-        
+
         Self {
             workspace_root: None,
             allow_symlinks: false,
@@ -283,7 +283,7 @@ impl FilePathValidator {
             normalize_unicode: true,
         }
     }
-    
+
     /// Creates a validator with a specific workspace root
     ///
     /// All validated paths must be within the specified workspace directory.
@@ -297,7 +297,7 @@ impl FilePathValidator {
         validator.workspace_root = Some(workspace_root);
         validator
     }
-    
+
     /// Enables or disables symlink resolution
     ///
     /// # Security Warning
@@ -312,7 +312,7 @@ impl FilePathValidator {
         self.allow_symlinks = allow;
         self
     }
-    
+
     /// Adds a custom blocked pattern
     ///
     /// # Arguments
@@ -322,7 +322,7 @@ impl FilePathValidator {
         self.blocked_patterns.insert(pattern);
         self
     }
-    
+
     /// Validates an absolute path with comprehensive security checks
     ///
     /// This method performs all security validations including:
@@ -350,7 +350,7 @@ impl FilePathValidator {
     pub fn validate_absolute_path(&self, path: &str) -> Result<PathBuf, McpError> {
         // Step 0: Check for blocked patterns early
         self.check_blocked_patterns(path)?;
-        
+
         // Step 1: Create PathBuf and check if it's absolute
         let path_buf = PathBuf::from(path);
         if !path_buf.is_absolute() {
@@ -359,7 +359,7 @@ impl FilePathValidator {
                 None,
             ));
         }
-        
+
         // Step 2: Symlink validation BEFORE canonicalization
         if path_buf.is_symlink() && !self.allow_symlinks {
             return Err(McpError::invalid_request(
@@ -367,10 +367,10 @@ impl FilePathValidator {
                 None,
             ));
         }
-        
+
         // Step 3: Basic validation (reuse existing function which may canonicalize)
         let mut validated_path = validate_file_path(path)?;
-        
+
         // Step 4: Unicode normalization if enabled
         if self.normalize_unicode {
             // Convert to string and back to handle Unicode normalization
@@ -378,20 +378,20 @@ impl FilePathValidator {
             let normalized = self.normalize_unicode_path(&path_str)?;
             validated_path = PathBuf::from(normalized);
         }
-        
+
         // Step 5: Workspace boundary validation
         if let Some(ref workspace_root) = self.workspace_root {
             self.ensure_workspace_boundary(&validated_path, workspace_root)?;
         }
-        
+
         // Step 6: Final symlink resolution with boundary check if symlinks are allowed
         if self.allow_symlinks && PathBuf::from(path).is_symlink() {
             validated_path = self.resolve_symlink_securely(&validated_path)?;
         }
-        
+
         Ok(validated_path)
     }
-    
+
     /// Ensures a path is within workspace boundaries
     ///
     /// This method prevents directory traversal attacks by ensuring
@@ -401,53 +401,61 @@ impl FilePathValidator {
     ///
     /// * `path` - The path to check
     /// * `workspace_root` - The workspace boundary to enforce
-    pub fn ensure_workspace_boundary(&self, path: &Path, workspace_root: &Path) -> Result<(), McpError> {
+    pub fn ensure_workspace_boundary(
+        &self,
+        path: &Path,
+        workspace_root: &Path,
+    ) -> Result<(), McpError> {
         // Canonicalize both paths for accurate comparison
-        let canonical_workspace = workspace_root.canonicalize()
-            .map_err(|e| McpError::invalid_request(
-                format!("Invalid workspace root: {}", e),
-                None,
-            ))?;
-            
+        let canonical_workspace = workspace_root.canonicalize().map_err(|e| {
+            McpError::invalid_request(format!("Invalid workspace root: {}", e), None)
+        })?;
+
         // For non-existent paths, check the deepest existing parent
         let path_to_check = if path.exists() {
-            path.canonicalize().map_err(|e| McpError::invalid_request(
-                format!("Failed to canonicalize path: {}", e),
-                None,
-            ))?
+            path.canonicalize().map_err(|e| {
+                McpError::invalid_request(format!("Failed to canonicalize path: {}", e), None)
+            })?
         } else {
             // Find the deepest existing parent directory
             let mut current = path;
             let mut found_path = None;
-            
+
             while let Some(parent) = current.parent() {
                 if parent.exists() {
-                    let canonical_parent = parent.canonicalize().map_err(|e| McpError::invalid_request(
-                        format!("Failed to canonicalize parent directory: {}", e),
-                        None,
-                    ))?;
-                    
-                    // Reconstruct the full path using the canonical parent
-                    let relative_part: PathBuf = path.strip_prefix(parent)
-                        .map_err(|_| McpError::invalid_request(
-                            "Failed to determine relative path component".to_string(),
+                    let canonical_parent = parent.canonicalize().map_err(|e| {
+                        McpError::invalid_request(
+                            format!("Failed to canonicalize parent directory: {}", e),
                             None,
-                        ))?
+                        )
+                    })?;
+
+                    // Reconstruct the full path using the canonical parent
+                    let relative_part: PathBuf = path
+                        .strip_prefix(parent)
+                        .map_err(|_| {
+                            McpError::invalid_request(
+                                "Failed to determine relative path component".to_string(),
+                                None,
+                            )
+                        })?
                         .into();
-                    
+
                     found_path = Some(canonical_parent.join(relative_part));
                     break;
                 }
                 current = parent;
             }
-            
+
             // If no parent exists, this is likely an invalid path
-            found_path.ok_or_else(|| McpError::invalid_request(
-                format!("Path has no existing parent directory: {}", path.display()),
-                None,
-            ))?
+            found_path.ok_or_else(|| {
+                McpError::invalid_request(
+                    format!("Path has no existing parent directory: {}", path.display()),
+                    None,
+                )
+            })?
         };
-        
+
         // Check if the path is within workspace boundaries
         if !path_to_check.starts_with(&canonical_workspace) {
             return Err(McpError::invalid_request(
@@ -459,10 +467,10 @@ impl FilePathValidator {
                 None,
             ));
         }
-        
+
         Ok(())
     }
-    
+
     /// Checks for blocked dangerous patterns in the path
     fn check_blocked_patterns(&self, path: &str) -> Result<(), McpError> {
         for pattern in &self.blocked_patterns {
@@ -475,36 +483,38 @@ impl FilePathValidator {
         }
         Ok(())
     }
-    
+
     /// Normalizes Unicode in file paths to prevent Unicode-based attacks
     fn normalize_unicode_path(&self, path: &str) -> Result<String, McpError> {
         // For now, we'll do basic validation and return the path as-is
         // In a full implementation, this would use Unicode normalization libraries
-        
+
         // Check for null bytes and other control characters
-        if path.contains('\0') || path.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t') {
+        if path.contains('\0')
+            || path
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
+        {
             return Err(McpError::invalid_request(
                 "Path contains invalid control characters".to_string(),
                 None,
             ));
         }
-        
+
         Ok(path.to_string())
     }
-    
+
     /// Securely resolves symlinks while maintaining workspace boundaries
     fn resolve_symlink_securely(&self, path: &Path) -> Result<PathBuf, McpError> {
-        let resolved = path.canonicalize()
-            .map_err(|e| McpError::invalid_request(
-                format!("Failed to resolve symlink: {}", e),
-                None,
-            ))?;
-            
+        let resolved = path.canonicalize().map_err(|e| {
+            McpError::invalid_request(format!("Failed to resolve symlink: {}", e), None)
+        })?;
+
         // Re-check workspace boundaries after symlink resolution
         if let Some(ref workspace_root) = self.workspace_root {
             self.ensure_workspace_boundary(&resolved, workspace_root)?;
         }
-        
+
         Ok(resolved)
     }
 }
@@ -528,17 +538,17 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
             // Check if file is readable
             if path.exists() {
                 let metadata = get_file_metadata(path)?;
-                
+
                 // On Unix systems, we could check specific permission bits
                 // For now, we'll use a simple existence and metadata check
                 if metadata.len() == 0 && metadata.is_file() {
                     // Empty files might be readable, let the actual read operation handle it
                 }
-                
+
                 // Additional permission checks could be added here based on platform
             }
         }
-        
+
         FileOperation::Write => {
             // Check if we can write to the file or its parent directory
             if path.exists() {
@@ -558,12 +568,12 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                             None,
                         ));
                     }
-                    
+
                     // Could add more sophisticated permission checks here
                 }
             }
         }
-        
+
         FileOperation::Edit => {
             // For edit operations, the file must exist and be writable
             if !path.exists() {
@@ -572,7 +582,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                     None,
                 ));
             }
-            
+
             if get_file_metadata(path)?.permissions().readonly() {
                 return Err(McpError::invalid_request(
                     format!("File is read-only and cannot be edited: {}", path.display()),
@@ -580,7 +590,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
                 ));
             }
         }
-        
+
         FileOperation::Directory => {
             // For directory operations, check if directory exists or can be created
             if path.exists() && !path.is_dir() {
@@ -591,7 +601,7 @@ pub fn check_file_permissions(path: &Path, operation: FileOperation) -> Result<(
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -631,17 +641,17 @@ impl SecureFileAccess {
     pub fn new(validator: FilePathValidator) -> Self {
         Self { validator }
     }
-    
+
     /// Creates a SecureFileAccess with default security settings
     pub fn default_secure() -> Self {
         Self::new(FilePathValidator::new())
     }
-    
+
     /// Creates a SecureFileAccess with workspace boundary enforcement
     pub fn with_workspace(workspace_root: PathBuf) -> Self {
         Self::new(FilePathValidator::with_workspace_root(workspace_root))
     }
-    
+
     /// Securely reads file content with validation
     ///
     /// # Arguments
@@ -653,17 +663,22 @@ impl SecureFileAccess {
     /// # Returns
     ///
     /// * `Result<String, McpError>` - File content or error
-    pub fn read(&self, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String, McpError> {
+    pub fn read(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<String, McpError> {
         // Validate path through security framework
         let validated_path = self.validator.validate_absolute_path(path)?;
-        
+
         // Check permissions for read operation
         check_file_permissions(&validated_path, FileOperation::Read)?;
-        
+
         // Perform the actual read operation
         let content = std::fs::read_to_string(&validated_path)
             .map_err(|e| handle_file_error(e, "read", &validated_path))?;
-            
+
         // Apply offset and limit if specified (same logic as existing read tool)
         let final_content = match (offset, limit) {
             (Some(offset), Some(limit)) => {
@@ -688,10 +703,10 @@ impl SecureFileAccess {
             (None, Some(limit)) => content.lines().take(limit).collect::<Vec<_>>().join("\n"),
             (None, None) => content,
         };
-        
+
         Ok(final_content)
     }
-    
+
     /// Securely writes file content with validation
     ///
     /// # Arguments
@@ -705,22 +720,22 @@ impl SecureFileAccess {
     pub fn write(&self, path: &str, content: &str) -> Result<(), McpError> {
         // Validate path through security framework
         let validated_path = self.validator.validate_absolute_path(path)?;
-        
+
         // Check permissions for write operation
         check_file_permissions(&validated_path, FileOperation::Write)?;
-        
+
         // Ensure parent directory exists
         if let Some(parent) = validated_path.parent() {
             ensure_directory_exists(parent)?;
         }
-        
+
         // Perform the actual write operation
         std::fs::write(&validated_path, content)
             .map_err(|e| handle_file_error(e, "write", &validated_path))?;
-            
+
         Ok(())
     }
-    
+
     /// Securely performs string replacement in files with validation
     ///
     /// # Arguments
@@ -733,17 +748,23 @@ impl SecureFileAccess {
     /// # Returns
     ///
     /// * `Result<(), McpError>` - Success or error
-    pub fn edit(&self, path: &str, old_string: &str, new_string: &str, replace_all: bool) -> Result<(), McpError> {
+    pub fn edit(
+        &self,
+        path: &str,
+        old_string: &str,
+        new_string: &str,
+        replace_all: bool,
+    ) -> Result<(), McpError> {
         // Validate path through security framework
         let validated_path = self.validator.validate_absolute_path(path)?;
-        
+
         // Check permissions for edit operation
         check_file_permissions(&validated_path, FileOperation::Edit)?;
-        
+
         // Read current content
         let content = std::fs::read_to_string(&validated_path)
             .map_err(|e| handle_file_error(e, "read", &validated_path))?;
-            
+
         // Perform replacement
         let new_content = if replace_all {
             content.replace(old_string, new_string)
@@ -765,11 +786,11 @@ impl SecureFileAccess {
             }
             content.replacen(old_string, new_string, 1)
         };
-        
+
         // Write back the modified content
         std::fs::write(&validated_path, new_content)
             .map_err(|e| handle_file_error(e, "write", &validated_path))?;
-            
+
         Ok(())
     }
 }
@@ -881,84 +902,88 @@ mod tests {
         let mcp_error = handle_file_error(permission_error, "write", path);
         assert!(format!("{:?}", mcp_error).contains("Permission denied"));
     }
-    
+
     // Enhanced Security Framework Tests
-    
+
     #[test]
     fn test_file_path_validator_default() {
         let validator = FilePathValidator::new();
-        
+
         // Test default blocked patterns
         let temp_dir = TempDir::new().unwrap();
         let base_path = temp_dir.path().to_string_lossy().to_string();
-        
+
         // These should be blocked by default patterns
         let dangerous_paths = vec![
             format!("{}/../etc/passwd", base_path),
             format!("{}/./file", base_path),
             format!("{}\\..\\windows\\system32", base_path),
         ];
-        
+
         for dangerous_path in dangerous_paths {
             let result = validator.validate_absolute_path(&dangerous_path);
-            assert!(result.is_err(), "Should block dangerous path: {}", dangerous_path);
+            assert!(
+                result.is_err(),
+                "Should block dangerous path: {}",
+                dangerous_path
+            );
         }
     }
-    
+
     #[test]
     fn test_file_path_validator_workspace_boundary() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let validator = FilePathValidator::with_workspace_root(workspace_root.clone());
-        
+
         // Create a test file within workspace
         let safe_file = workspace_root.join("safe_file.txt");
         fs::write(&safe_file, "safe content").unwrap();
-        
+
         // This should succeed - within workspace
         let result = validator.validate_absolute_path(&safe_file.to_string_lossy());
         assert!(result.is_ok());
-        
+
         // This should fail - outside workspace (system file)
         let result = validator.validate_absolute_path("/etc/passwd");
         assert!(result.is_err());
-        
+
         // Test with a path outside workspace that exists
         let outside_dir = TempDir::new().unwrap();
         let outside_file = outside_dir.path().join("outside.txt");
         fs::write(&outside_file, "outside content").unwrap();
-        
+
         let result = validator.validate_absolute_path(&outside_file.to_string_lossy());
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_file_path_validator_blocked_patterns() {
         let mut validator = FilePathValidator::new();
         validator.add_blocked_pattern("secret".to_string());
-        
+
         let temp_dir = TempDir::new().unwrap();
         let safe_file = temp_dir.path().join("normal.txt");
         let dangerous_file = temp_dir.path().join("secret_file.txt");
-        
+
         // Safe file should pass
         let result = validator.validate_absolute_path(&safe_file.to_string_lossy());
         assert!(result.is_ok());
-        
+
         // File with blocked pattern should fail
         let result = validator.validate_absolute_path(&dangerous_file.to_string_lossy());
         assert!(result.is_err());
         assert!(format!("{:?}", result).contains("blocked pattern"));
     }
-    
+
     #[test]
     fn test_file_path_validator_symlinks() {
         let temp_dir = TempDir::new().unwrap();
         let target_file = temp_dir.path().join("target.txt");
         let symlink_file = temp_dir.path().join("symlink.txt");
-        
+
         fs::write(&target_file, "target content").unwrap();
-        
+
         // Create symlink (skip if platform doesn't support)
         #[cfg(unix)]
         {
@@ -969,13 +994,19 @@ mod tests {
                     // Test with symlinks disabled (default)
                     let validator = FilePathValidator::new();
                     let result = validator.validate_absolute_path(&symlink_file.to_string_lossy());
-                    assert!(result.is_err(), "Symlink should be rejected when symlinks are disabled");
-                    
+                    assert!(
+                        result.is_err(),
+                        "Symlink should be rejected when symlinks are disabled"
+                    );
+
                     // Test with symlinks enabled
                     let mut validator = FilePathValidator::new();
                     validator.set_allow_symlinks(true);
                     let result = validator.validate_absolute_path(&symlink_file.to_string_lossy());
-                    assert!(result.is_ok(), "Symlink should be allowed when symlinks are enabled");
+                    assert!(
+                        result.is_ok(),
+                        "Symlink should be allowed when symlinks are enabled"
+                    );
                 } else {
                     // Symlink creation failed or system doesn't support detection, skip test
                     println!("Symlink test skipped: symlink creation failed or not detected");
@@ -984,191 +1015,187 @@ mod tests {
                 println!("Symlink test skipped: failed to create symlink");
             }
         }
-        
+
         #[cfg(not(unix))]
         {
             println!("Symlink test skipped: not on Unix platform");
         }
     }
-    
+
     #[test]
     fn test_file_path_validator_unicode_normalization() {
         let validator = FilePathValidator::new();
-        
+
         // Test null byte rejection
         let result = validator.validate_absolute_path("/tmp/file\0.txt");
         assert!(result.is_err());
-        
+
         // Test other control characters
         let result = validator.validate_absolute_path("/tmp/file\x01.txt");
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_check_file_permissions() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("permissions_test.txt");
-        
+
         // Test read permissions on non-existent file (should not fail)
         let result = check_file_permissions(&test_file, FileOperation::Read);
         assert!(result.is_ok());
-        
+
         // Create file and test read permissions
         fs::write(&test_file, "test content").unwrap();
         let result = check_file_permissions(&test_file, FileOperation::Read);
         assert!(result.is_ok());
-        
+
         // Test write permissions on existing file
         let result = check_file_permissions(&test_file, FileOperation::Write);
         assert!(result.is_ok());
-        
+
         // Test edit permissions (requires existing file)
         let result = check_file_permissions(&test_file, FileOperation::Edit);
         assert!(result.is_ok());
-        
+
         // Test edit on non-existent file (should fail)
         let non_existent = temp_dir.path().join("does_not_exist.txt");
         let result = check_file_permissions(&non_existent, FileOperation::Edit);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_secure_file_access_read() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let secure_access = SecureFileAccess::with_workspace(workspace_root.clone());
-        
+
         // Create test file with content
         let test_file = workspace_root.join("test_read.txt");
         let content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
         fs::write(&test_file, content).unwrap();
-        
+
         // Test full read
         let result = secure_access.read(&test_file.to_string_lossy(), None, None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), content);
-        
+
         // Test read with offset
         let result = secure_access.read(&test_file.to_string_lossy(), Some(2), None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Line 2\nLine 3\nLine 4\nLine 5");
-        
+
         // Test read with limit
         let result = secure_access.read(&test_file.to_string_lossy(), None, Some(2));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Line 1\nLine 2");
-        
+
         // Test read with both offset and limit
         let result = secure_access.read(&test_file.to_string_lossy(), Some(2), Some(2));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Line 2\nLine 3");
     }
-    
+
     #[test]
     fn test_secure_file_access_write() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let secure_access = SecureFileAccess::with_workspace(workspace_root.clone());
-        
+
         let test_file = workspace_root.join("test_write.txt");
         let content = "This is test content for writing";
-        
+
         // Test write operation
         let result = secure_access.write(&test_file.to_string_lossy(), content);
         assert!(result.is_ok());
-        
+
         // Verify content was written correctly
         let written_content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(written_content, content);
     }
-    
+
     #[test]
     fn test_secure_file_access_edit() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let secure_access = SecureFileAccess::with_workspace(workspace_root.clone());
-        
+
         let test_file = workspace_root.join("test_edit.txt");
         let initial_content = "Hello world! This is a test.";
         fs::write(&test_file, initial_content).unwrap();
-        
+
         // Test single replacement
-        let result = secure_access.edit(
-            &test_file.to_string_lossy(),
-            "world",
-            "universe",
-            false,
-        );
+        let result = secure_access.edit(&test_file.to_string_lossy(), "world", "universe", false);
         assert!(result.is_ok());
-        
+
         let edited_content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(edited_content, "Hello universe! This is a test.");
-        
+
         // Test replace_all
         let multi_content = "test test test";
         fs::write(&test_file, multi_content).unwrap();
-        
-        let result = secure_access.edit(
-            &test_file.to_string_lossy(),
-            "test",
-            "exam",
-            true,
-        );
+
+        let result = secure_access.edit(&test_file.to_string_lossy(), "test", "exam", true);
         assert!(result.is_ok());
-        
+
         let edited_content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(edited_content, "exam exam exam");
     }
-    
+
     #[test]
     fn test_secure_file_access_workspace_security() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let secure_access = SecureFileAccess::with_workspace(workspace_root);
-        
+
         // Attempt to read a file outside workspace should fail
         let result = secure_access.read("/etc/passwd", None, None);
         assert!(result.is_err());
         assert!(format!("{:?}", result).contains("outside workspace boundaries"));
-        
+
         // Attempt to write outside workspace should fail
         let result = secure_access.write("/tmp/malicious.txt", "malicious content");
         assert!(result.is_err());
         assert!(format!("{:?}", result).contains("outside workspace boundaries"));
     }
-    
+
     #[test]
     fn test_path_traversal_attack_prevention() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let validator = FilePathValidator::with_workspace_root(workspace_root);
-        
+
         // Common path traversal attack patterns
         let attack_patterns = vec![
             "../../../etc/passwd",
-            "..\\..\\..\\windows\\system32\\config", 
+            "..\\..\\..\\windows\\system32\\config",
             "./../../secret",
             // Note: URL-encoded attacks would require additional URL decoding validation
         ];
-        
+
         for pattern in attack_patterns {
             let full_path = format!("{}/{}", temp_dir.path().display(), pattern);
             let result = validator.validate_absolute_path(&full_path);
-            assert!(result.is_err(), "Should block path traversal attack: {}", pattern);
+            assert!(
+                result.is_err(),
+                "Should block path traversal attack: {}",
+                pattern
+            );
         }
     }
-    
+
     #[test]
     fn test_error_handling_for_security_violations() {
         let temp_dir = TempDir::new().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
         let secure_access = SecureFileAccess::with_workspace(workspace_root);
-        
+
         // Test error message contains security context
         let result = secure_access.read("/etc/passwd", None, None);
         assert!(result.is_err());
-        
+
         let error_msg = format!("{:?}", result);
-        assert!(error_msg.contains("workspace boundaries") || error_msg.contains("blocked pattern"));
+        assert!(
+            error_msg.contains("workspace boundaries") || error_msg.contains("blocked pattern")
+        );
     }
 }

@@ -64,7 +64,7 @@ impl McpTool for WriteFileTool {
 
         // Create secure file access with enhanced security validation
         let secure_access = SecureFileAccess::default_secure();
-        
+
         // Perform secure write operation
         secure_access.write(&request.file_path, &request.content)?;
 

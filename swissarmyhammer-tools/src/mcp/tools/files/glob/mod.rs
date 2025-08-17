@@ -3,6 +3,7 @@
 //! This module provides the GlobFileTool for fast file pattern matching with advanced filtering.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
@@ -116,23 +117,24 @@ impl McpTool for GlobFileTool {
         // Parse arguments
         let request: GlobRequest = BaseToolImpl::parse_arguments(arguments)?;
 
+        // Use FilePathValidator for comprehensive security validation
+        let validator = FilePathValidator::new();
+
         // Determine starting directory
         let search_dir = match request.path {
             Some(path_str) => {
-                let path_buf = std::path::PathBuf::from(&path_str);
-                if !path_buf.is_absolute() {
+                // Use comprehensive security validation
+                let validated_path = validator.validate_absolute_path(&path_str)?;
+                if !validated_path.exists() {
                     return Err(rmcp::Error::invalid_request(
-                        "Search path must be absolute".to_string(),
+                        format!(
+                            "Search directory does not exist: {}",
+                            validated_path.display()
+                        ),
                         None,
                     ));
                 }
-                if !path_buf.exists() {
-                    return Err(rmcp::Error::invalid_request(
-                        format!("Search directory does not exist: {}", path_buf.display()),
-                        None,
-                    ));
-                }
-                path_buf
+                validated_path
             }
             None => std::env::current_dir().map_err(|e| {
                 rmcp::Error::internal_error(format!("Failed to get current directory: {}", e), None)

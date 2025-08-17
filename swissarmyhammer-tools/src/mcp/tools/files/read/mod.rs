@@ -69,13 +69,9 @@ impl McpTool for ReadFileTool {
 
         // Create secure file access with enhanced security validation
         let secure_access = SecureFileAccess::default_secure();
-        
+
         // Perform secure read operation
-        let content = secure_access.read(
-            &request.absolute_path,
-            request.offset,
-            request.limit,
-        )?;
+        let content = secure_access.read(&request.absolute_path, request.offset, request.limit)?;
 
         Ok(BaseToolImpl::create_success_response(content))
     }

@@ -83,7 +83,7 @@ impl McpTool for EditFileTool {
 
         // Create secure file access with enhanced security validation
         let secure_access = SecureFileAccess::default_secure();
-        
+
         // Perform secure edit operation
         let replace_all = request.replace_all.unwrap_or(false);
         secure_access.edit(

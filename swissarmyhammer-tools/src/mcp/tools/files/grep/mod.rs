@@ -3,6 +3,7 @@
 //! This module provides the GrepFileTool for fast text searching using ripgrep.
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
@@ -152,29 +153,26 @@ impl McpTool for GrepFileTool {
                 rmcp::Error::invalid_request(format!("Invalid regex pattern: {}", e), None)
             })?;
 
+        // Use FilePathValidator for comprehensive security validation
+        let validator = FilePathValidator::new();
+
         // Determine search directory
         let search_dir = match request.path {
             Some(path_str) => {
-                let path_buf = std::path::PathBuf::from(&path_str);
-                if !path_buf.is_absolute() {
+                // Use comprehensive security validation
+                let validated_path = validator.validate_absolute_path(&path_str)?;
+                if !validated_path.exists() {
                     return Err(rmcp::Error::invalid_request(
-                        "Search path must be absolute".to_string(),
+                        format!("Search path does not exist: {}", validated_path.display()),
                         None,
                     ));
                 }
-                path_buf
+                validated_path
             }
             None => std::env::current_dir().map_err(|e| {
                 rmcp::Error::internal_error(format!("Failed to get current directory: {}", e), None)
             })?,
         };
-
-        if !search_dir.exists() {
-            return Err(rmcp::Error::invalid_request(
-                format!("Search path does not exist: {}", search_dir.display()),
-                None,
-            ));
-        }
 
         let output_mode = request.output_mode.unwrap_or_else(|| "content".to_string());
         let context_lines = request.context_lines.unwrap_or(0);
