@@ -6,6 +6,7 @@ use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
+use tracing::{debug, info};
 
 /// Tool for reading file contents from the local filesystem
 #[derive(Default)]
@@ -67,11 +68,57 @@ impl McpTool for ReadFileTool {
         // Parse arguments
         let request: ReadRequest = BaseToolImpl::parse_arguments(arguments)?;
 
+        // Validate parameters before security layer
+        if let Some(offset) = request.offset {
+            if offset > 1_000_000 {
+                return Err(McpError::invalid_request(
+                    "offset must be less than 1,000,000 lines".to_string(),
+                    None,
+                ));
+            }
+        }
+
+        if let Some(limit) = request.limit {
+            if limit == 0 {
+                return Err(McpError::invalid_request(
+                    "limit must be greater than 0".to_string(),
+                    None,
+                ));
+            }
+            if limit > 100_000 {
+                return Err(McpError::invalid_request(
+                    "limit must be less than or equal to 100,000 lines".to_string(),
+                    None,
+                ));
+            }
+        }
+
+        if request.absolute_path.is_empty() {
+            return Err(McpError::invalid_request(
+                "absolute_path cannot be empty".to_string(),
+                None,
+            ));
+        }
+
         // Create secure file access with enhanced security validation
         let secure_access = SecureFileAccess::default_secure();
 
+        // Log file access attempt for security auditing
+        info!(
+            path = %request.absolute_path,
+            offset = request.offset,
+            limit = request.limit,
+            "Attempting to read file"
+        );
+
         // Perform secure read operation
         let content = secure_access.read(&request.absolute_path, request.offset, request.limit)?;
+
+        debug!(
+            path = %request.absolute_path,
+            content_length = content.len(),
+            "Successfully read file content"
+        );
 
         Ok(BaseToolImpl::create_success_response(content))
     }

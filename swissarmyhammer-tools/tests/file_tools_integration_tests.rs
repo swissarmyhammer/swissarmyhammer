@@ -502,3 +502,211 @@ async fn test_read_tool_with_unicode_content() {
 
     assert_eq!(response_text, test_content);
 }
+
+#[tokio::test]
+async fn test_read_tool_parameter_validation_errors() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_read").unwrap();
+
+    // Test invalid offset (too large)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("absolute_path".to_string(), json!("/tmp/test.txt"));
+    arguments.insert("offset".to_string(), json!(2_000_000)); // Too large
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Should reject offset over 1,000,000");
+    if let Err(e) = result {
+        let error_msg = format!("{:?}", e);
+        assert!(error_msg.contains("offset must be less than 1,000,000"));
+    }
+
+    // Test invalid limit (zero)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("absolute_path".to_string(), json!("/tmp/test.txt"));
+    arguments.insert("limit".to_string(), json!(0)); // Zero limit
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Should reject zero limit");
+    if let Err(e) = result {
+        let error_msg = format!("{:?}", e);
+        assert!(error_msg.contains("limit must be greater than 0"));
+    }
+
+    // Test invalid limit (too large)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("absolute_path".to_string(), json!("/tmp/test.txt"));
+    arguments.insert("limit".to_string(), json!(200_000)); // Too large
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Should reject limit over 100,000");
+    if let Err(e) = result {
+        let error_msg = format!("{:?}", e);
+        assert!(error_msg.contains("limit must be less than or equal to 100,000"));
+    }
+
+    // Test empty path
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("absolute_path".to_string(), json!(""));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Should reject empty path");
+    if let Err(e) = result {
+        let error_msg = format!("{:?}", e);
+        assert!(error_msg.contains("absolute_path cannot be empty"));
+    }
+}
+
+#[tokio::test]
+async fn test_read_tool_file_not_found_error() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_read").unwrap();
+
+    // Test non-existent file
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!("/tmp/definitely_does_not_exist_12345.txt"),
+    );
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Should fail for non-existent file");
+}
+
+#[tokio::test]
+async fn test_read_tool_permission_denied_scenarios() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_read").unwrap();
+
+    // Test unreadable file (if we can create one)
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("unreadable.txt");
+    fs::write(&test_file, "secret content").unwrap();
+
+    // Try to make it unreadable (may not work on all systems)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&test_file).unwrap().permissions();
+        perms.set_mode(0o000); // No permissions
+        let _ = fs::set_permissions(&test_file, perms);
+    }
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
+
+    let result = tool.execute(arguments, &context).await;
+    // Note: This test may pass on systems where we can't actually restrict permissions
+    if result.is_err() {
+        let error_msg = format!("{:?}", result.unwrap_err());
+        println!("Permission denied test error: {}", error_msg);
+    }
+}
+
+#[tokio::test]
+async fn test_read_tool_large_file_handling() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_read").unwrap();
+
+    // Create a larger file to test performance
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("large_file.txt");
+
+    let mut large_content = String::new();
+    for i in 0..1000 {
+        large_content.push_str(&format!("This is line number {}\n", i + 1));
+    }
+    fs::write(&test_file, &large_content).unwrap();
+
+    // Test reading with limit to avoid reading the entire large file
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
+    arguments.insert("limit".to_string(), json!(100)); // Read only 100 lines
+
+    let start_time = std::time::Instant::now();
+    let result = tool.execute(arguments, &context).await;
+    let duration = start_time.elapsed();
+
+    assert!(
+        result.is_ok(),
+        "Large file read should succeed: {:?}",
+        result
+    );
+    assert!(
+        duration.as_secs() < 5,
+        "Large file read should complete quickly"
+    );
+
+    let call_result = result.unwrap();
+    let response_text = if let Some(content_item) = call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    // Should contain exactly 100 lines worth of content
+    let line_count = response_text.lines().count();
+    assert_eq!(line_count, 100, "Should read exactly 100 lines");
+}
+
+#[tokio::test]
+async fn test_read_tool_edge_cases() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_read").unwrap();
+
+    // Test empty file
+    let temp_dir = TempDir::new().unwrap();
+    let empty_file = temp_dir.path().join("empty.txt");
+    fs::write(&empty_file, "").unwrap();
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(empty_file.to_string_lossy()),
+    );
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Empty file read should succeed");
+
+    // Test file with only whitespace
+    let whitespace_file = temp_dir.path().join("whitespace.txt");
+    fs::write(&whitespace_file, "   \n\t\n   \n").unwrap();
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(whitespace_file.to_string_lossy()),
+    );
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Whitespace file read should succeed");
+
+    // Test file with mixed line endings
+    let mixed_endings_file = temp_dir.path().join("mixed_endings.txt");
+    fs::write(&mixed_endings_file, "Line 1\nLine 2\r\nLine 3\rLine 4").unwrap();
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(mixed_endings_file.to_string_lossy()),
+    );
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(
+        result.is_ok(),
+        "Mixed line endings file read should succeed"
+    );
+}

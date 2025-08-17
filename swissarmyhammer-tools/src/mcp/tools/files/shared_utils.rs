@@ -79,19 +79,36 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
     // Canonicalize path to resolve symlinks and relative components
     match path_buf.canonicalize() {
         Ok(canonical_path) => Ok(canonical_path),
-        Err(_) => {
-            // If canonicalization fails, the path might not exist yet
-            // For operations like write, this is acceptable
-            // Return the absolute path as-is but validate its parent
-            if let Some(parent) = path_buf.parent() {
-                if !parent.exists() {
-                    return Err(McpError::invalid_request(
-                        format!("Parent directory does not exist: {}", parent.display()),
-                        None,
-                    ));
+        Err(e) => {
+            // Provide specific error messages based on error kind
+            use std::io::ErrorKind;
+            match e.kind() {
+                ErrorKind::NotFound => {
+                    // Path doesn't exist - check if parent exists for better error messaging
+                    if let Some(parent) = path_buf.parent() {
+                        if !parent.exists() {
+                            return Err(McpError::invalid_request(
+                                format!("Parent directory does not exist: {}", parent.display()),
+                                None,
+                            ));
+                        }
+                    }
+                    // For operations like write, this is acceptable - return the absolute path
+                    Ok(path_buf)
                 }
+                ErrorKind::PermissionDenied => Err(McpError::invalid_request(
+                    format!("Permission denied accessing path: {}", path_buf.display()),
+                    None,
+                )),
+                ErrorKind::InvalidInput => Err(McpError::invalid_request(
+                    format!("Invalid path format: {}", path_buf.display()),
+                    None,
+                )),
+                _ => Err(McpError::invalid_request(
+                    format!("Failed to resolve path '{}': {}", path_buf.display(), e),
+                    None,
+                )),
             }
-            Ok(path_buf)
         }
     }
 }
