@@ -40,6 +40,7 @@ markdowndown = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 futures-util = "0.3"
+libc = "0.2.175"
 
 [dev-dependencies]
 tokio-test = "0.4"
