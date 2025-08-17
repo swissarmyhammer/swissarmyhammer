@@ -5,7 +5,6 @@
 
 pub mod content_fetcher;
 pub mod duckduckgo_client;
-pub mod privacy;
 pub mod search;
 pub mod types;
 

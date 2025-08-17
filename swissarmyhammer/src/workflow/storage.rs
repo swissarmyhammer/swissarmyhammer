@@ -937,8 +937,8 @@ impl WorkflowStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::{State, StateId, StateType};
     use crate::test_utils::IsolatedTestEnvironment;
+    use crate::workflow::{State, StateId, StateType};
     use serial_test::serial;
 
     fn create_test_workflow() -> Workflow {
@@ -1214,8 +1214,9 @@ stateDiagram-v2
         use std::fs;
 
         // Use isolated test environment to safely manage both HOME and current working directory
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+
         // Get the isolated home directory (managed by IsolatedTestEnvironment)
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());
 

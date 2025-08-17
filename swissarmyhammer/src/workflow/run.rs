@@ -129,8 +129,8 @@ impl WorkflowRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::test_helpers::*;
     use crate::test_utils::IsolatedTestEnvironment;
+    use crate::workflow::test_helpers::*;
 
     #[test]
     fn test_workflow_run_id_creation() {
@@ -233,7 +233,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -308,7 +309,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -343,7 +345,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -370,7 +373,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -398,7 +402,8 @@ mod tests {
         use std::sync::Arc;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -443,7 +448,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -469,7 +475,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
@@ -502,7 +509,8 @@ mod tests {
         use std::path::Path;
 
         // Use isolated test environment to safely manage directories
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory

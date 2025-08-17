@@ -26,7 +26,7 @@ pub struct DuckDuckGoClient {
 pub enum DuckDuckGoError {
     /// Browser automation error
     #[error("Browser error: {0}")]
-    Browser(#[from] CdpError),
+    Browser(Box<CdpError>),
     /// HTML parsing error
     #[error("Parse error: {0}")]
     Parse(String),
@@ -42,6 +42,12 @@ pub enum DuckDuckGoError {
     /// Navigation or page load timeout
     #[error("Timeout waiting for: {0}")]
     Timeout(String),
+}
+
+impl From<CdpError> for DuckDuckGoError {
+    fn from(err: CdpError) -> Self {
+        DuckDuckGoError::Browser(Box::new(err))
+    }
 }
 
 impl DuckDuckGoClient {
@@ -60,17 +66,24 @@ impl DuckDuckGoClient {
         &mut self,
         request: &WebSearchRequest,
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
-        tracing::debug!("Starting DuckDuckGo browser search for: '{}'", request.query);
+        tracing::debug!(
+            "Starting DuckDuckGo browser search for: '{}'",
+            request.query
+        );
 
         // Launch browser
         let (mut browser, mut handler) = Browser::launch(
             BrowserConfig::builder()
-                .with_head()
                 .window_size(1920, 1080)
                 .build()
-                .map_err(|e| DuckDuckGoError::InvalidRequest(format!("Failed to build browser config: {e}")))?
+                .map_err(|e| {
+                    DuckDuckGoError::InvalidRequest(format!("Failed to build browser config: {e}"))
+                })?,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            DuckDuckGoError::Browser(Box::new(e))
+        })?;
 
         // Spawn handler task
         let handler_task = tokio::spawn(async move {
@@ -82,36 +95,91 @@ impl DuckDuckGoClient {
         });
 
         // Create page and navigate to DuckDuckGo
-        let page = browser.new_page("about:blank").await?;
-        
-        tracing::debug!("Navigating to DuckDuckGo");
-        page.goto("https://duckduckgo.com").await?;
-        
-        // Wait for page to load
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Find search input box and enter query
-        tracing::debug!("Entering search query: {}", request.query);
-        let search_input = page
-            .find_element("input[name='q']")
+        let page = browser
+            .new_page("about:blank")
             .await
-            .map_err(|_| DuckDuckGoError::ElementNotFound("search input box".to_string()))?;
+            .map_err(|e| {
+                DuckDuckGoError::Browser(Box::new(e))
+            })?;
 
-        search_input.click().await?;
-        search_input.type_str(&request.query).await?;
+        tracing::debug!("Navigating to DuckDuckGo");
+        page.goto("https://duckduckgo.com")
+            .await
+            .map_err(|e| {
+                DuckDuckGoError::Timeout(format!("Failed to navigate to DuckDuckGo: {e}"))
+            })?;
+
+        // Wait for search input box to be available
+        tracing::debug!("Waiting for search input to load");
+        let search_input = {
+            let mut attempts = 0;
+            loop {
+                match page.find_element("input[name='q']").await {
+                    Ok(element) => break element,
+                    Err(_) if attempts < 20 => {
+                        attempts += 1;
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    Err(_) => return Err(DuckDuckGoError::ElementNotFound("search input box".to_string())),
+                }
+            }
+        };
+        
+        tracing::debug!("Entering search query: {}", request.query);
+
+        search_input
+            .click()
+            .await
+            .map_err(|e| {
+                DuckDuckGoError::Browser(Box::new(e))
+            })?;
+        search_input
+            .type_str(&request.query)
+            .await
+            .map_err(|e| {
+                DuckDuckGoError::Browser(Box::new(e))
+            })?;
 
         // Submit search by pressing Enter
-        search_input.press_key("Enter").await?;
+        search_input
+            .press_key("Enter")
+            .await
+            .map_err(|e| {
+                DuckDuckGoError::Browser(Box::new(e))
+            })?;
 
-        // Wait for search results to load
-        tracing::debug!("Waiting for search results");
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        // Wait for search results to appear
+        tracing::debug!("Waiting for search results to load");
+        {
+            let mut attempts = 0;
+            loop {
+                // Try multiple selectors for search results
+                let result_found = page.find_element("article[data-testid='result']").await.is_ok()
+                    || page.find_element(".result").await.is_ok()
+                    || page.find_element("[data-result]").await.is_ok();
+                
+                if result_found {
+                    break;
+                } else if attempts < 30 {
+                    attempts += 1;
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                } else {
+                    return Err(DuckDuckGoError::Timeout("search results".to_string()));
+                }
+            }
+        }
 
         // Get the page HTML content
-        let html_content = page.content().await?;
+        let html_content = page
+            .content()
+            .await
+            .map_err(|e| {
+                DuckDuckGoError::Browser(Box::new(e))
+            })?;
 
         // Parse results using existing HTML parsing logic
-        let results = self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
+        let results =
+            self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
 
         tracing::debug!("DuckDuckGo search found {} results", results.len());
 
@@ -121,7 +189,6 @@ impl DuckDuckGoClient {
 
         Ok(results)
     }
-
 
     /// Parses HTML content to extract search results from rendered DuckDuckGo page
     fn parse_html_results(
@@ -187,11 +254,7 @@ impl DuckDuckGoClient {
                 let (title, url) = self.extract_title_and_url_simple(result_element)?;
 
                 if title.is_empty() || url.is_empty() || !url.starts_with("http") {
-                    tracing::debug!(
-                        "Skipping invalid result: title='{}', url='{}'",
-                        title,
-                        url
-                    );
+                    tracing::debug!("Skipping invalid result: title='{}', url='{}'", title, url);
                     continue; // Skip invalid results
                 }
 
@@ -216,7 +279,10 @@ impl DuckDuckGoClient {
         }
 
         if !all_results.is_empty() {
-            tracing::debug!("Successfully parsed {} results from all selectors", all_results.len());
+            tracing::debug!(
+                "Successfully parsed {} results from all selectors",
+                all_results.len()
+            );
             return Ok(all_results);
         }
 
@@ -235,13 +301,13 @@ impl DuckDuckGoClient {
         let title_selectors = vec![
             "h2 a[data-testid='result-title-a']", // Modern testid-based title link
             "h3 a[data-testid='result-title-a']", // H3 variant
-            "h2 a", // Fallback: any link in h2
-            "h3 a", // Fallback: any link in h3
-            "a[data-testid='result-title-a']", // Direct title link
-            "h2",   // Title text only
-            "h3",   // H3 title text only
+            "h2 a",                               // Fallback: any link in h2
+            "h3 a",                               // Fallback: any link in h3
+            "a[data-testid='result-title-a']",    // Direct title link
+            "h2",                                 // Title text only
+            "h3",                                 // H3 title text only
         ];
-        
+
         let url_selectors = vec![
             "a[data-testid='result-title-a']", // Primary title link
             "a[href^='http']",                 // Any external link
@@ -301,11 +367,11 @@ impl DuckDuckGoClient {
 
         // Modern DuckDuckGo description selectors
         let description_selectors = vec![
-            "[data-testid='result-snippet']",    // Modern testid-based snippet
-            ".result__snippet",                  // Classic snippet class
-            "[class*='snippet']",                // Any element with snippet in class
-            "div[data-result='snippet']",        // Data attribute variant
-            "div.snippet",                       // Simple snippet div
+            "[data-testid='result-snippet']",     // Modern testid-based snippet
+            ".result__snippet",                   // Classic snippet class
+            "[class*='snippet']",                 // Any element with snippet in class
+            "div[data-result='snippet']",         // Data attribute variant
+            "div.snippet",                        // Simple snippet div
             "span[data-testid='result-snippet']", // Span-based snippet
         ];
 

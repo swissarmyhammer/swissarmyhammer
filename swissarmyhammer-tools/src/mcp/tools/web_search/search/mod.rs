@@ -133,7 +133,6 @@ impl WebSearchTool {
         })
     }
 
-
     /// Loads configuration for DuckDuckGo scoring algorithm
     fn load_scoring_config() -> ScoringConfig {
         Self::load_config_with_callback(ScoringConfig::default(), |config, repo_config| {
@@ -308,9 +307,7 @@ impl McpTool for WebSearchTool {
             let content_config = Self::load_content_fetch_config();
             let content_fetcher = ContentFetcher::new(content_config);
 
-            let (processed_results, stats) = content_fetcher
-                .fetch_search_results(results)
-                .await;
+            let (processed_results, stats) = content_fetcher.fetch_search_results(results).await;
 
             results = processed_results;
 

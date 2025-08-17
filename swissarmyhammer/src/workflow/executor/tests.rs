@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use crate::test_utils::IsolatedTestEnvironment;
 use serial_test::serial;
 
-
 fn create_test_workflow() -> Workflow {
     let mut workflow = Workflow::new(
         WorkflowName::new("Test Workflow"),
