@@ -27,6 +27,7 @@
 //! assert_eq!(result, "Hello World!");
 //! ```
 
+use crate::common::{Parameter, ParameterProvider, ParameterType};
 use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::{Result, SwissArmyHammerError, Template};
 use serde::{Deserialize, Serialize};
@@ -147,6 +148,13 @@ pub struct Prompt {
     /// default values, and documentation. Used for validation and help generation.
     pub arguments: Vec<ArgumentSpec>,
 
+    /// Cached shared parameters converted from arguments.
+    ///
+    /// This field is lazily populated to provide efficient access to the shared
+    /// parameter system without breaking backward compatibility.
+    #[serde(skip)]
+    cached_parameters: std::sync::OnceLock<Vec<Parameter>>,
+
     /// Path to the source file (if loaded from file).
     ///
     /// Used for debugging and file watching functionality.
@@ -224,6 +232,55 @@ pub struct ArgumentSpec {
     pub type_hint: Option<String>,
 }
 
+impl ArgumentSpec {
+    /// Convert this ArgumentSpec to the shared Parameter type
+    pub fn to_parameter(&self) -> Parameter {
+        let parameter_type = if let Some(type_hint) = &self.type_hint {
+            type_hint.parse().unwrap_or(ParameterType::String)
+        } else {
+            ParameterType::String // Default to string
+        };
+
+        let mut param = Parameter::new(
+            &self.name,
+            self.description.clone().unwrap_or_default(),
+            parameter_type,
+        )
+        .required(self.required);
+
+        if let Some(default) = &self.default {
+            param = param.with_default(serde_json::Value::String(default.clone()));
+        }
+
+        param
+    }
+}
+
+impl From<Parameter> for ArgumentSpec {
+    /// Convert a shared Parameter back to ArgumentSpec for backward compatibility
+    fn from(param: Parameter) -> Self {
+        Self {
+            name: param.name,
+            description: Some(param.description),
+            required: param.required,
+            default: param.default.and_then(|v| v.as_str().map(String::from)),
+            type_hint: Some(param.parameter_type.as_str().to_string()),
+        }
+    }
+}
+
+impl ParameterProvider for Prompt {
+    /// Get the parameters for this prompt by converting from ArgumentSpec
+    fn get_parameters(&self) -> &[Parameter] {
+        self.cached_parameters.get_or_init(|| {
+            self.arguments
+                .iter()
+                .map(|arg_spec| arg_spec.to_parameter())
+                .collect()
+        })
+    }
+}
+
 impl Prompt {
     /// Creates a new prompt with the given name and template.
     ///
@@ -253,6 +310,7 @@ impl Prompt {
             tags: Vec::new(),
             template: template.into(),
             arguments: Vec::new(),
+            cached_parameters: std::sync::OnceLock::new(),
             source: None,
             metadata: HashMap::new(),
         }
@@ -544,6 +602,8 @@ impl Prompt {
     #[must_use]
     pub fn add_argument(mut self, arg: ArgumentSpec) -> Self {
         self.arguments.push(arg);
+        // Clear the cached parameters since arguments have changed
+        self.cached_parameters = std::sync::OnceLock::new();
         self
     }
 
@@ -1751,6 +1811,27 @@ This is another prompt.
         let prompt_names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
         assert!(prompt_names.contains(&"valid".to_string()));
         assert!(prompt_names.contains(&"prompts/another".to_string()));
+    }
+
+    #[test]
+    fn test_shared_parameter_system_integration() {
+        use crate::common::ParameterProvider;
+
+        let prompt = Prompt::new("test", "Hello {{name}}!").add_argument(ArgumentSpec {
+            name: "name".to_string(),
+            description: Some("Name to greet".to_string()),
+            required: true,
+            default: None,
+            type_hint: Some("string".to_string()),
+        });
+
+        // Test that ParameterProvider trait works
+        let parameters = prompt.get_parameters();
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(parameters[0].name, "name");
+        assert_eq!(parameters[0].description, "Name to greet");
+        assert!(parameters[0].required);
+        assert_eq!(parameters[0].parameter_type.as_str(), "string");
     }
 
     #[test]
