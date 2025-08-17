@@ -15,7 +15,7 @@ use swissarmyhammer::Result;
 pub fn resolve_workflow_parameters(
     workflow_name: &str,
     var_args: &[String],
-    _set_args: &[String], // TODO: integrate set args for liquid template variables
+    _set_args: &[String], // Reserved for future --set liquid template variable integration
 ) -> Result<HashMap<String, Value>> {
     // Phase 1: Discover workflow parameters
     let workflow_params = match discover_workflow_parameters(workflow_name) {
@@ -31,6 +31,8 @@ pub fn resolve_workflow_parameters(
 }
 
 /// Get workflow parameters for help text generation (best effort)
+/// Used for future dynamic help text generation implementation
+#[allow(dead_code)]
 pub fn get_workflow_parameters_for_help(workflow_name: &str) -> Vec<WorkflowParameter> {
     discover_workflow_parameters(workflow_name).unwrap_or_default()
 }

@@ -29,13 +29,13 @@ pub fn generate_parameter_help_text(param: &WorkflowParameter) -> String {
             Value::Bool(b) => b.to_string(),
             _ => default.to_string(),
         };
-        help = format!("{} [default: {}]", help, default_str);
+        help = format!("{help} [default: {default_str}]");
     }
     
     // Add choices if present
     if let Some(choices) = &param.choices {
         let choices_str = choices.join(", ");
-        help = format!("{} [possible values: {}]", help, choices_str);
+        help = format!("{help} [possible values: {choices_str}]");
     }
     
     help
@@ -61,7 +61,7 @@ pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<Wo
 pub fn resolve_parameters_from_vars(
     workflow_params: &[WorkflowParameter],
     var_args: &[String],
-    _interactive: bool, // TODO: implement interactive prompting
+    _interactive: bool, // Reserved for future interactive prompting when parameters are missing
 ) -> crate::Result<HashMap<String, Value>> {
     let mut resolved = HashMap::new();
     
@@ -108,8 +108,7 @@ fn parse_var_arguments(var_args: &[String]) -> crate::Result<HashMap<String, Str
             map.insert(key.to_string(), value.to_string());
         } else {
             return Err(crate::SwissArmyHammerError::Config(format!(
-                "Invalid --var format '{}'. Expected KEY=VALUE",
-                var
+                "Invalid --var format '{var}'. Expected KEY=VALUE"
             )));
         }
     }
@@ -124,8 +123,7 @@ fn parse_parameter_value(value: &str, param_type: &crate::workflow::ParameterTyp
         crate::workflow::ParameterType::Boolean => {
             let parsed = value.parse::<bool>().map_err(|_| {
                 crate::SwissArmyHammerError::Config(format!(
-                    "Invalid boolean value '{}'. Expected true/false",
-                    value
+                    "Invalid boolean value '{value}'. Expected true/false"
                 ))
             })?;
             Ok(Value::Bool(parsed))
@@ -137,14 +135,12 @@ fn parse_parameter_value(value: &str, param_type: &crate::workflow::ParameterTyp
             } else if let Ok(float_val) = value.parse::<f64>() {
                 Ok(Value::Number(serde_json::Number::from_f64(float_val).ok_or_else(|| {
                     crate::SwissArmyHammerError::Config(format!(
-                        "Invalid number value '{}'. Number too large or invalid",
-                        value
+                        "Invalid number value '{value}'. Number too large or invalid"
                     ))
                 })?))
             } else {
                 Err(crate::SwissArmyHammerError::Config(format!(
-                    "Invalid number value '{}'. Expected a number",
-                    value
+                    "Invalid number value '{value}'. Expected a number"
                 )))
             }
         }
