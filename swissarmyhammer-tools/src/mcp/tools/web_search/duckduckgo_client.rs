@@ -145,6 +145,7 @@ impl DuckDuckGoClient {
 
         // Apply User-Agent and privacy headers
         if let Some(user_agent) = privacy_manager.get_user_agent() {
+            tracing::debug!("Using User-Agent: {}", user_agent);
             request_builder = request_builder.header("User-Agent", user_agent);
         }
         request_builder = privacy_manager.apply_privacy_headers(request_builder);

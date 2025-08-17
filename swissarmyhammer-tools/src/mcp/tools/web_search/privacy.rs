@@ -130,18 +130,12 @@ impl UserAgentRotator {
     /// Returns the default set of realistic User-Agent strings
     fn default_user_agents() -> Vec<String> {
         vec![
-            // Chrome on Windows
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
-            // Firefox on Windows  
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0".to_string(),
+            // Chrome on Mac
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36".to_string(),
             // Safari on macOS
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15".to_string(),
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15".to_string(),
             // Chrome on macOS
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
-            // Firefox on Linux
-            "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0".to_string(),
-            // Chrome on Linux
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
         ]
     }
 
@@ -169,51 +163,19 @@ impl UserAgentRotator {
 
 /// Manages privacy headers for request anonymization
 #[derive(Clone)]
-pub struct PrivacyHeaders {
-    enable_dnt: bool,
-    strip_referrer: bool,
-    disable_cache: bool,
-}
+pub struct PrivacyHeaders {}
 
 impl PrivacyHeaders {
     /// Creates a new PrivacyHeaders instance from config
-    pub fn new(config: &PrivacyConfig) -> Self {
-        Self {
-            enable_dnt: config.enable_dnt,
-            strip_referrer: config.strip_referrer,
-            disable_cache: config.disable_cache,
-        }
+    pub fn new(_config: &PrivacyConfig) -> Self {
+        Self {}
     }
 
     /// Applies privacy headers to a request builder
     pub fn apply_privacy_headers(&self, mut request: RequestBuilder) -> RequestBuilder {
-        // Add Do Not Track header
-        if self.enable_dnt {
-            request = request.header("DNT", "1");
-        }
-
-        // Strip referrer to prevent tracking
-        if self.strip_referrer {
-            request = request.header("Referrer-Policy", "no-referrer");
-        }
-
-        // Disable caching for privacy
-        if self.disable_cache {
-            request = request.header("Cache-Control", "no-cache, no-store, must-revalidate");
-            request = request.header("Pragma", "no-cache");
-            request = request.header("Expires", "0");
-        }
-
         // Set standard browser headers to avoid standing out
         request = request.header("Accept-Language", "en-US,en;q=0.9");
         request = request.header("Accept-Encoding", "gzip, deflate, br");
-        request = request.header(
-            "Accept",
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        );
-
-        // Add Upgrade-Insecure-Requests for HTTPS preference
-        request = request.header("Upgrade-Insecure-Requests", "1");
 
         request
     }
@@ -563,21 +525,6 @@ mod tests {
         // Should fall back to default browser user agents, not SwissArmyHammer
         assert!(agent.contains("Mozilla"));
         assert!(!agent.contains("SwissArmyHammer"));
-    }
-
-    #[test]
-    fn test_privacy_headers_configuration() {
-        let config = PrivacyConfig {
-            enable_dnt: false,
-            strip_referrer: false,
-            disable_cache: false,
-            ..Default::default()
-        };
-
-        let privacy_headers = PrivacyHeaders::new(&config);
-        assert!(!privacy_headers.enable_dnt);
-        assert!(!privacy_headers.strip_referrer);
-        assert!(!privacy_headers.disable_cache);
     }
 
     #[test]
