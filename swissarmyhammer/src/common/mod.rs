@@ -33,6 +33,9 @@ pub mod parameters;
 /// CLI integration utilities for parameter system
 pub mod parameter_cli;
 
+/// Interactive parameter prompting system
+pub mod interactive_prompts;
+
 // Re-export commonly used items
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
@@ -48,9 +51,10 @@ pub use parameter_cli::{
     discover_workflow_parameters, generate_parameter_help_text, parameter_name_to_cli_switch, 
     resolve_parameters_from_vars,
 };
+pub use interactive_prompts::InteractivePrompts;
 pub use parameters::{
-    Parameter, ParameterError, ParameterProvider, ParameterResolver, ParameterResult,
-    ParameterType, ParameterValidator,
+    DefaultParameterResolver, Parameter, ParameterError, ParameterProvider, ParameterResolver, 
+    ParameterResult, ParameterType, ParameterValidator,
 };
 pub use rate_limiter::{
     get_rate_limiter, init_rate_limiter, RateLimitStatus, RateLimiter, RateLimiterConfig,
