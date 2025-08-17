@@ -3,7 +3,9 @@
 //! This module provides interactive prompting capabilities for parameters using the dialoguer crate.
 //! It handles different parameter types with appropriate UI controls and validation.
 
-use crate::common::parameters::{Parameter, ParameterError, ParameterResult, ParameterType, ParameterValidator};
+use crate::common::parameters::{
+    CommonPatterns, Parameter, ParameterError, ParameterResult, ParameterType, ParameterValidator,
+};
 use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input, MultiSelect};
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
@@ -26,7 +28,7 @@ impl InteractivePrompts {
     }
 
     /// Prompt for missing parameters interactively
-    /// 
+    ///
     /// This method will prompt for any required parameters that are missing from existing_values.
     /// Optional parameters with defaults are automatically resolved.
     pub fn prompt_for_parameters(
@@ -84,12 +86,11 @@ impl InteractivePrompts {
             }
             ParameterType::Number => {
                 let value = self.prompt_number(param)?;
-                serde_json::Value::Number(
-                    serde_json::Number::from_f64(value)
-                        .ok_or_else(|| ParameterError::ValidationFailed {
-                            message: format!("Invalid number value: {value}"),
-                        })?,
-                )
+                serde_json::Value::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
+                    ParameterError::ValidationFailed {
+                        message: format!("Invalid number value: {value}"),
+                    }
+                })?)
             }
             ParameterType::Choice => {
                 let value = self.prompt_choice(param)?;
@@ -98,10 +99,7 @@ impl InteractivePrompts {
             ParameterType::MultiChoice => {
                 let values = self.prompt_multi_choice(param)?;
                 serde_json::Value::Array(
-                    values
-                        .into_iter()
-                        .map(serde_json::Value::String)
-                        .collect(),
+                    values.into_iter().map(serde_json::Value::String).collect(),
                 )
             }
         };
@@ -120,7 +118,7 @@ impl InteractivePrompts {
         }
 
         let theme = ColorfulTheme::default();
-        
+
         loop {
             let mut input_prompt = Input::<String>::with_theme(&theme)
                 .with_prompt(format!("Enter {} ({})", param.name, param.description));
@@ -132,11 +130,11 @@ impl InteractivePrompts {
                 }
             }
 
-            let input = input_prompt.interact().map_err(|e| {
-                ParameterError::ValidationFailed {
+            let input = input_prompt
+                .interact()
+                .map_err(|e| ParameterError::ValidationFailed {
                     message: format!("Failed to read input: {e}"),
-                }
-            })?;
+                })?;
 
             // Validate the input
             let value = serde_json::Value::String(input.clone());
@@ -144,6 +142,7 @@ impl InteractivePrompts {
                 Ok(_) => return Ok(input),
                 Err(e) => {
                     println!("❌ {e}");
+                    self.print_validation_hints(param);
                     println!("Please try again.");
                 }
             }
@@ -169,11 +168,11 @@ impl InteractivePrompts {
             }
         }
 
-        confirm_prompt.interact().map_err(|e| {
-            ParameterError::ValidationFailed {
+        confirm_prompt
+            .interact()
+            .map_err(|e| ParameterError::ValidationFailed {
                 message: format!("Failed to read input: {e}"),
-            }
-        })
+            })
     }
 
     /// Prompt for a numeric parameter with validation
@@ -185,19 +184,20 @@ impl InteractivePrompts {
         }
 
         let theme = ColorfulTheme::default();
-        
+
         loop {
             let mut prompt_text = format!("Enter {} ({})", param.name, param.description);
-            if let (Some(min), Some(max)) = (&param.min, &param.max) {
-                prompt_text = format!("{prompt_text} [{min}-{max}]");
-            } else if let Some(min) = &param.min {
-                prompt_text = format!("{prompt_text} [>= {min}]");
-            } else if let Some(max) = &param.max {
-                prompt_text = format!("{prompt_text} [<= {max}]");
+            if let Some(validation) = &param.validation {
+                if let (Some(min), Some(max)) = (validation.min, validation.max) {
+                    prompt_text = format!("{prompt_text} [{min}-{max}]");
+                } else if let Some(min) = validation.min {
+                    prompt_text = format!("{prompt_text} [>= {min}]");
+                } else if let Some(max) = validation.max {
+                    prompt_text = format!("{prompt_text} [<= {max}]");
+                }
             }
-            
-            let mut input_prompt = Input::<String>::with_theme(&theme)
-                .with_prompt(prompt_text);
+
+            let mut input_prompt = Input::<String>::with_theme(&theme).with_prompt(prompt_text);
 
             // Add default value if available
             if let Some(default) = &param.default {
@@ -206,28 +206,28 @@ impl InteractivePrompts {
                 }
             }
 
-            let input = input_prompt.interact().map_err(|e| {
-                ParameterError::ValidationFailed {
+            let input = input_prompt
+                .interact()
+                .map_err(|e| ParameterError::ValidationFailed {
                     message: format!("Failed to read input: {e}"),
-                }
-            })?;
+                })?;
 
             // Parse the number
             match input.parse::<f64>() {
                 Ok(num) => {
                     // Validate the input
-                    let value = serde_json::Value::Number(
-                        serde_json::Number::from_f64(num).ok_or_else(|| {
-                            ParameterError::ValidationFailed {
+                    let value =
+                        serde_json::Value::Number(serde_json::Number::from_f64(num).ok_or_else(
+                            || ParameterError::ValidationFailed {
                                 message: format!("Invalid number value: {num}"),
-                            }
-                        })?,
-                    );
-                    
+                            },
+                        )?);
+
                     match self.validator.validate_parameter(param, &value) {
                         Ok(_) => return Ok(num),
                         Err(e) => {
                             println!("❌ {e}");
+                            self.print_validation_hints(param);
                             println!("Please try again.");
                         }
                     }
@@ -248,11 +248,12 @@ impl InteractivePrompts {
             });
         }
 
-        let choices = param.choices.as_ref().ok_or_else(|| {
-            ParameterError::ValidationFailed {
+        let choices = param
+            .choices
+            .as_ref()
+            .ok_or_else(|| ParameterError::ValidationFailed {
                 message: format!("Choice parameter '{}' has no choices defined", param.name),
-            }
-        })?;
+            })?;
 
         if choices.is_empty() {
             return Err(ParameterError::ValidationFailed {
@@ -274,11 +275,11 @@ impl InteractivePrompts {
             }
         }
 
-        let selection = select_prompt.interact().map_err(|e| {
-            ParameterError::ValidationFailed {
+        let selection = select_prompt
+            .interact()
+            .map_err(|e| ParameterError::ValidationFailed {
                 message: format!("Failed to read selection: {e}"),
-            }
-        })?;
+            })?;
 
         Ok(choices[selection].clone())
     }
@@ -291,14 +292,15 @@ impl InteractivePrompts {
             });
         }
 
-        let choices = param.choices.as_ref().ok_or_else(|| {
-            ParameterError::ValidationFailed {
+        let choices = param
+            .choices
+            .as_ref()
+            .ok_or_else(|| ParameterError::ValidationFailed {
                 message: format!(
                     "MultiChoice parameter '{}' has no choices defined",
                     param.name
                 ),
-            }
-        })?;
+            })?;
 
         if choices.is_empty() {
             return Err(ParameterError::ValidationFailed {
@@ -332,18 +334,72 @@ impl InteractivePrompts {
             }
         }
 
-        let selections = multi_select.interact().map_err(|e| {
-            ParameterError::ValidationFailed {
+        let selections = multi_select
+            .interact()
+            .map_err(|e| ParameterError::ValidationFailed {
                 message: format!("Failed to read selections: {e}"),
-            }
-        })?;
+            })?;
 
-        let selected_values: Vec<String> = selections
-            .iter()
-            .map(|&i| choices[i].clone())
-            .collect();
+        let selected_values: Vec<String> = selections.iter().map(|&i| choices[i].clone()).collect();
 
         Ok(selected_values)
+    }
+
+    /// Print helpful validation hints for a parameter
+    fn print_validation_hints(&self, param: &Parameter) {
+        if let Some(validation) = &param.validation {
+            match param.parameter_type {
+                ParameterType::String => {
+                    if let Some(pattern) = &validation.pattern {
+                        let hint = CommonPatterns::hint_for_pattern(pattern);
+                        let description = CommonPatterns::description_for_pattern(pattern);
+                        println!("💡 Expected format: {hint} ({description})");
+                    }
+
+                    if let (Some(min), Some(max)) = (validation.min_length, validation.max_length) {
+                        println!("💡 Length must be between {min} and {max} characters");
+                    } else if let Some(min) = validation.min_length {
+                        println!("💡 Must be at least {min} characters long");
+                    } else if let Some(max) = validation.max_length {
+                        println!("💡 Must be at most {max} characters long");
+                    }
+                }
+                ParameterType::Number => {
+                    if let (Some(min), Some(max)) = (validation.min, validation.max) {
+                        println!("💡 Value must be between {min} and {max}");
+                    } else if let Some(min) = validation.min {
+                        println!("💡 Value must be at least {min}");
+                    } else if let Some(max) = validation.max {
+                        println!("💡 Value must be at most {max}");
+                    }
+
+                    if let Some(step) = validation.step {
+                        println!("💡 Value must be a multiple of {step}");
+                    }
+                }
+                ParameterType::MultiChoice => {
+                    if let (Some(min), Some(max)) =
+                        (validation.min_selections, validation.max_selections)
+                    {
+                        println!("💡 Must select between {min} and {max} options");
+                    } else if let Some(min) = validation.min_selections {
+                        println!("💡 Must select at least {min} options");
+                    } else if let Some(max) = validation.max_selections {
+                        println!("💡 Must select at most {max} options");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Show choices hint for choice/multichoice parameters
+        if let Some(choices) = &param.choices {
+            if !choices.is_empty() && choices.len() <= 5 {
+                println!("💡 Available options: {}", choices.join(", "));
+            } else if !choices.is_empty() {
+                println!("💡 {} available options", choices.len());
+            }
+        }
     }
 }
 
@@ -361,14 +417,19 @@ mod tests {
     fn test_prompt_for_parameters_with_existing_values() {
         let prompts = InteractivePrompts::new(true);
 
-        let param = Parameter::new("test_param", "Test parameter", ParameterType::String)
-            .required(true);
+        let param =
+            Parameter::new("test_param", "Test parameter", ParameterType::String).required(true);
         let parameters = vec![param];
 
         let mut existing = HashMap::new();
-        existing.insert("test_param".to_string(), serde_json::Value::String("existing_value".to_string()));
+        existing.insert(
+            "test_param".to_string(),
+            serde_json::Value::String("existing_value".to_string()),
+        );
 
-        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(
@@ -381,13 +442,19 @@ mod tests {
     fn test_prompt_for_parameters_with_defaults() {
         let prompts = InteractivePrompts::new(true);
 
-        let param = Parameter::new("optional_param", "Optional parameter", ParameterType::String)
-            .with_default(serde_json::Value::String("default_value".to_string()));
+        let param = Parameter::new(
+            "optional_param",
+            "Optional parameter",
+            ParameterType::String,
+        )
+        .with_default(serde_json::Value::String("default_value".to_string()));
         let parameters = vec![param];
 
         let existing = HashMap::new();
 
-        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(
@@ -400,8 +467,12 @@ mod tests {
     fn test_prompt_for_parameters_missing_required_non_interactive() {
         let prompts = InteractivePrompts::new(true);
 
-        let param = Parameter::new("required_param", "Required parameter", ParameterType::String)
-            .required(true);
+        let param = Parameter::new(
+            "required_param",
+            "Required parameter",
+            ParameterType::String,
+        )
+        .required(true);
         let parameters = vec![param];
 
         let existing = HashMap::new();
@@ -425,12 +496,20 @@ mod tests {
         let parameters = vec![param];
 
         let mut existing = HashMap::new();
-        existing.insert("choice_param".to_string(), serde_json::Value::String("invalid_choice".to_string()));
+        existing.insert(
+            "choice_param".to_string(),
+            serde_json::Value::String("invalid_choice".to_string()),
+        );
 
         let result = prompts.prompt_for_parameters(&parameters, &existing);
         assert!(result.is_err());
 
-        if let Err(ParameterError::InvalidChoice { name, value, choices }) = result {
+        if let Err(ParameterError::InvalidChoice {
+            name,
+            value,
+            choices,
+        }) = result
+        {
             assert_eq!(name, "choice_param");
             assert_eq!(value, "invalid_choice");
             assert_eq!(choices, vec!["option1", "option2"]);
@@ -443,7 +522,7 @@ mod tests {
     fn test_prompt_choice_no_choices() {
         let prompts = InteractivePrompts::new(true);
         let param = Parameter::new("bad_choice", "Bad choice parameter", ParameterType::Choice);
-        
+
         let result = prompts.prompt_choice(&param);
         assert!(result.is_err());
     }
@@ -451,8 +530,12 @@ mod tests {
     #[test]
     fn test_prompt_multi_choice_no_choices() {
         let prompts = InteractivePrompts::new(true);
-        let param = Parameter::new("bad_multi_choice", "Bad multi choice parameter", ParameterType::MultiChoice);
-        
+        let param = Parameter::new(
+            "bad_multi_choice",
+            "Bad multi choice parameter",
+            ParameterType::MultiChoice,
+        );
+
         let result = prompts.prompt_multi_choice(&param);
         assert!(result.is_err());
     }
@@ -460,9 +543,13 @@ mod tests {
     #[test]
     fn test_prompt_choice_empty_choices() {
         let prompts = InteractivePrompts::new(true);
-        let param = Parameter::new("empty_choice", "Empty choice parameter", ParameterType::Choice)
-            .with_choices(vec![]);
-        
+        let param = Parameter::new(
+            "empty_choice",
+            "Empty choice parameter",
+            ParameterType::Choice,
+        )
+        .with_choices(vec![]);
+
         let result = prompts.prompt_choice(&param);
         assert!(result.is_err());
     }
@@ -470,9 +557,13 @@ mod tests {
     #[test]
     fn test_prompt_multi_choice_empty_choices() {
         let prompts = InteractivePrompts::new(true);
-        let param = Parameter::new("empty_multi_choice", "Empty multi choice parameter", ParameterType::MultiChoice)
-            .with_choices(vec![]);
-        
+        let param = Parameter::new(
+            "empty_multi_choice",
+            "Empty multi choice parameter",
+            ParameterType::MultiChoice,
+        )
+        .with_choices(vec![]);
+
         let result = prompts.prompt_multi_choice(&param);
         assert!(result.is_err());
     }
