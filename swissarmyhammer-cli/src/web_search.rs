@@ -8,6 +8,20 @@ use crate::cli::{OutputFormat, WebSearchCommands};
 use crate::mcp_integration::CliToolContext;
 use serde_json::json;
 use std::error::Error;
+use tabled::{Table, Tabled};
+
+/// Represents a search result for table display
+#[derive(Tabled)]
+struct SearchResultRow {
+    #[tabled(rename = "Title")]
+    title: String,
+    #[tabled(rename = "Score")]
+    score: String,
+    #[tabled(rename = "Engine")]
+    engine: String,
+    #[tabled(rename = "Description")]
+    description: String,
+}
 
 /// Truncates a string to the specified maximum width, adding ellipsis if truncated
 ///
@@ -164,7 +178,7 @@ pub async fn handle_web_search_command(command: WebSearchCommands) -> Result<(),
 /// Display search results in a formatted table
 ///
 /// Parses the MCP tool response and displays search results in a human-readable
-/// table format similar to other CLI tools in the system.
+/// table format using the tabled crate for consistent formatting.
 ///
 /// # Arguments
 ///
@@ -220,128 +234,62 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             return Ok(());
         }
 
-        // Calculate column widths for better formatting
-        let max_title_width = results
-            .iter()
-            .filter_map(|r| r["title"].as_str())
-            .map(|s| s.len())
-            .max()
-            .unwrap_or(20)
-            .min(60); // Cap at 60 characters
+        // Collect all table rows (main results plus URL/content rows)
+        let mut table_rows: Vec<SearchResultRow> = Vec::new();
 
-        let max_desc_width = results
-            .iter()
-            .filter_map(|r| r["description"].as_str())
-            .map(|s| s.len())
-            .max()
-            .unwrap_or(40)
-            .min(80); // Cap at 80 characters
-
-        // Print table header
-        println!(
-            "┌{:─<width$}┬{:─<8}┬{:─<12}┬{:─<desc_width$}┐",
-            "",
-            "",
-            "",
-            "",
-            width = max_title_width + 2,
-            desc_width = max_desc_width + 2
-        );
-        println!(
-            "│{:^width$}│{:^8}│{:^12}│{:^desc_width$}│",
-            "Title",
-            "Score",
-            "Engine",
-            "Description",
-            width = max_title_width + 2,
-            desc_width = max_desc_width + 2
-        );
-        println!(
-            "├{:─<width$}┼{:─<8}┼{:─<12}┼{:─<desc_width$}┤",
-            "",
-            "",
-            "",
-            "",
-            width = max_title_width + 2,
-            desc_width = max_desc_width + 2
-        );
-
-        // Print each result
-        for (index, result_item) in results.iter().enumerate() {
+        for result_item in results.iter() {
             let title = result_item["title"].as_str().unwrap_or("Untitled");
             let url = result_item["url"].as_str().unwrap_or("");
             let description = result_item["description"].as_str().unwrap_or("");
             let score = result_item["score"].as_f64().unwrap_or(0.0);
             let engine = result_item["engine"].as_str().unwrap_or("unknown");
 
-            // Truncate long text for table display
-            let truncated_title = truncate_text(title, max_title_width);
-            let truncated_desc = truncate_text(description, max_desc_width);
+            // Truncate text to reasonable lengths for table display
+            let truncated_title = truncate_text(title, 60);
+            let truncated_desc = truncate_text(description, 80);
 
-            // Print main result row: Title | Score | Engine | Description
-            // Format explanation:
-            // - {:width$}: Left-aligned text with variable width (title)
-            // - {:>6.2}: Right-aligned decimal with 6 chars total, 2 decimal places (score)
-            // - {:^10}: Center-aligned text with 10 chars width (engine name)
-            // - {:desc_width$}: Left-aligned text with variable width (description)
-            println!(
-                "│ {truncated_title:max_title_width$} │ {score:>6.2} │ {engine:^10} │ {truncated_desc:max_desc_width$} │"
-            );
+            // Add main result row
+            table_rows.push(SearchResultRow {
+                title: truncated_title,
+                score: format!("{score:.2}"),
+                engine: engine.to_string(),
+                description: truncated_desc,
+            });
 
-            // Show URL on next line in table format
-            // Format uses empty strings for score and engine columns to maintain alignment
-            println!(
-                "│ {:width$} │        │            │ {:desc_width$} │",
-                format!("🔗 {}", url),
-                "", // Empty string for score column (8 spaces to match header)
-                width = max_title_width,
-                desc_width = max_desc_width
-            );
+            // Add URL row
+            let truncated_url = truncate_text(url, 100);
+            table_rows.push(SearchResultRow {
+                title: format!("🔗 {truncated_url}"),
+                score: String::new(),
+                engine: String::new(),
+                description: String::new(),
+            });
 
-            // Show content info if available
+            // Add content info row if available
             if let Some(content_info) = result_item["content"].as_object() {
                 if let (Some(word_count), Some(summary)) = (
                     content_info["word_count"].as_u64(),
                     content_info["summary"].as_str(),
                 ) {
-                    let content_summary = truncate_text(summary, max_desc_width);
+                    let content_summary = if !summary.is_empty() {
+                        truncate_text(summary, 80)
+                    } else {
+                        String::new()
+                    };
 
-                    // Show content metadata: word count and summary in table format
-                    // Uses same column alignment as other rows
-                    println!(
-                        "│ {:width$} │        │            │ {:desc_width$} │",
-                        format!("📄 {} words", word_count),
-                        content_summary,
-                        width = max_title_width,
-                        desc_width = max_desc_width
-                    );
+                    table_rows.push(SearchResultRow {
+                        title: format!("📄 {word_count} words"),
+                        score: String::new(),
+                        engine: String::new(),
+                        description: content_summary,
+                    });
                 }
-            }
-
-            // Add separator line between results (except for last result)
-            if index < results.len() - 1 {
-                println!(
-                    "├{:─<width$}┼{:─<8}┼{:─<12}┼{:─<desc_width$}┤",
-                    "",
-                    "",
-                    "",
-                    "",
-                    width = max_title_width + 2,
-                    desc_width = max_desc_width + 2
-                );
             }
         }
 
-        // Print table footer
-        println!(
-            "└{:─<width$}┴{:─<8}┴{:─<12}┴{:─<desc_width$}┘",
-            "",
-            "",
-            "",
-            "",
-            width = max_title_width + 2,
-            desc_width = max_desc_width + 2
-        );
+        // Create and display the table using tabled
+        let table = Table::new(table_rows);
+        println!("{table}");
 
         // Display content fetch statistics if available
         if let Some(fetch_stats) = metadata["content_fetch_stats"].as_object() {
@@ -391,6 +339,43 @@ mod tests {
         });
 
         // Should fallback to plain text display
+        assert!(display_search_results_table(&result).is_ok());
+    }
+
+    #[test]
+    fn test_display_search_results_table_with_wide_content() {
+        // Test case that reproduces the table alignment issue from the problem description
+        let result = json!({
+            "content": [{
+                "text": r#"{"results": [
+                    {
+                        "title": "Apple - Official Site - Explore new products",
+                        "url": "https://duckduckgo.com/y.js?ad_domain=apple.com&ad_provider=bingv7aa&ad_type=txad&click_metadata=NgjwJGO7CK0qpxaWDIxNtwSxyPTOKjKn22vISUDxEmFNKKXDIwOwT9YeFLs7DzeW0J3DMKPoPApYnPmWTwpWMJ3LqUOSqVVMPqBeCiOdpQqskjdJSrGjlcIshtT_dmp0.DEixbuIPVsWUmnWfgmPKkQ&rut=442ff7be7887db99478724500fa09458b3b545cce09265a3a0e3f3df30b0bb0d&u3=https%3A%2F%2Fwww.bing.com%2Faclick%3Fld%3De8uLnfJ7gUMvIDQ_TALU0sLTVUCUzz3TRt0gNOitPwnTxfpBYisM6LGhRY9BApmygW5PnyZkRBEV5_eP6md3bdV6Y5uck3gXZArBUFpPnhJMzr5DVnlrW1gNVSOm1tRYtkyFc4qLCqFlBWA_0mhiIml8lXhHHZk7KEusEly5t6Maf%2DEOV0VNc6eILCgzdt8najThk3hQ%26u%3DaHR0cHMlM2ElMmYlMmZ3d3cuYXBwbGUuY29tJTJmdXMlMmZzaG9wJTJmZ28lMmZzdG9yZSUzZmNpZCUzZGFvcy11cy1rd2JpLWJyYW5kLWJ0cy1sYXVuY2gtdXBkYXRlLTA3MDIyNS0lMjZhb3NpZCUzZHAyNDAlMjZrZW5fcGlkJTNkYmklN2VjbXAtNjk4MTk5NjIzJTdlYWRnLTEyNDM1NDg5ODkzMDE2ODElN2VhZC03NzcyMTk0NjU3OTA1NF9rd2QtNzc3MjIxODQ5Mjk3MzIlM2Fsb2MtMTkwJTdlZGV2LWMlN2VleHQtJTdlcHJkLSU3ZW50LXNlYXJjaCU3ZWNyaWQtJTI2dG9rZW4lM2Q4YzFhNzZhYi1jZmU1LTQzODAtYjU1MS1lNzU1YTNiNDhiYzg%26rlid%3D6d3f22dbd2e81f12eaf84a79f408ccd7&vqd=4-289524564473418491957113467918030559449&iurl=%7B1%7DIG%3DFBD528C5732B4AF8BB452C28605F9B5B%26CID%3D0ED3FF454A63625237A2E90E4B85632B%26ID%3DDevEx%2C5045.1",
+                        "description": "Buy Mac or iPad for college, get AirPods or an eligible accessory of choice. ...",
+                        "score": 1.0,
+                        "engine": "duckduckgo",
+                        "content": {
+                            "word_count": 16266,
+                            "summary": "Apple Store Online - Apple document. cookie = \"as_sfa=Mnx1c3x1c3x8ZW5fVVN8Y..."
+                        }
+                    },
+                    {
+                        "title": "Apple - Wikipedia",
+                        "url": "https://en.wikipedia.org/wiki/Apple",
+                        "description": "An apple is the round, edible fruit of an apple tree (Malus spp.). Fru...",
+                        "score": 0.9,
+                        "engine": "duckduckgo",
+                        "content": {
+                            "word_count": 15726,
+                            "summary": ""
+                        }
+                    }
+                ], "metadata": {"query": "what is an apple", "search_time_ms": 4778, "instance_used": "https://duckduckgo.com", "engines_used": ["duckduckgo"]}}"#
+            }]
+        });
+
+        // This test currently succeeds but produces jagged output
+        // After implementing tabled, the output should be properly aligned
         assert!(display_search_results_table(&result).is_ok());
     }
 

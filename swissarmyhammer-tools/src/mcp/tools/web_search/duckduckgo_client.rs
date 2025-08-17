@@ -14,10 +14,10 @@ use crate::mcp::tools::web_search::types::{DuckDuckGoConfig, ScoringConfig, *};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
 use futures::StreamExt;
-use std::time::Duration;
 use std::io::Write;
-use urlencoding::decode;
+use std::time::Duration;
 use tempfile;
+use urlencoding::decode;
 
 // CSS selectors for finding result elements and content
 
@@ -135,7 +135,10 @@ impl DuckDuckGoClient {
 
     /// Creates a new DuckDuckGo client with custom configurations
     pub fn with_configs(scoring_config: ScoringConfig, timing_config: DuckDuckGoConfig) -> Self {
-        Self { scoring_config, timing_config }
+        Self {
+            scoring_config,
+            timing_config,
+        }
     }
 
     /// Performs a web search using DuckDuckGo with browser automation
@@ -239,7 +242,10 @@ impl DuckDuckGoClient {
             })?;
 
             // Wait for page to fully load and log current URL
-            tokio::time::sleep(Duration::from_millis(self.timing_config.initial_page_load_delay_ms)).await;
+            tokio::time::sleep(Duration::from_millis(
+                self.timing_config.initial_page_load_delay_ms,
+            ))
+            .await;
 
             if let Ok(current_url) = page.url().await {
                 tracing::debug!("Current URL after navigation: {:?}", current_url);
@@ -337,7 +343,7 @@ impl DuckDuckGoClient {
                         tracing::debug!("HTML response saved to temp file {:?}", temp_file.path());
                         // temp_file will be automatically cleaned up when it goes out of scope
                     }
-                },
+                }
                 Err(e) => {
                     tracing::debug!("Failed to create temp file for HTML debug: {}", e);
                 }
@@ -403,28 +409,33 @@ impl DuckDuckGoClient {
                 let (title, url) = self.extract_title_and_url_simple(result_element)?;
 
                 // Handle DuckDuckGo redirect URLs
-                let final_url = if let Some(encoded_url) = url.strip_prefix("//duckduckgo.com/l/?uddg=") {
-                    // Extract the actual URL from the DuckDuckGo redirect
-                    let url_to_decode = if let Some(end) = encoded_url.find('&') {
-                        &encoded_url[..end]
-                    } else {
-                        encoded_url
-                    };
-                    
-                    // Use proper URL decoding library
-                    match decode(url_to_decode) {
-                        Ok(decoded) => decoded.to_string(),
-                        Err(e) => {
-                            tracing::warn!("Failed to decode DuckDuckGo redirect URL '{}': {}", url_to_decode, e);
-                            // Fall back to the original URL if decoding fails
-                            url.clone()
+                let final_url =
+                    if let Some(encoded_url) = url.strip_prefix("//duckduckgo.com/l/?uddg=") {
+                        // Extract the actual URL from the DuckDuckGo redirect
+                        let url_to_decode = if let Some(end) = encoded_url.find('&') {
+                            &encoded_url[..end]
+                        } else {
+                            encoded_url
+                        };
+
+                        // Use proper URL decoding library
+                        match decode(url_to_decode) {
+                            Ok(decoded) => decoded.to_string(),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to decode DuckDuckGo redirect URL '{}': {}",
+                                    url_to_decode,
+                                    e
+                                );
+                                // Fall back to the original URL if decoding fails
+                                url.clone()
+                            }
                         }
-                    }
-                } else if url.starts_with("//") {
-                    format!("https:{url}")
-                } else {
-                    url.to_string()
-                };
+                    } else if url.starts_with("//") {
+                        format!("https:{url}")
+                    } else {
+                        url.to_string()
+                    };
 
                 if title.is_empty() || final_url.is_empty() || !final_url.starts_with("http") {
                     tracing::info!(
@@ -892,7 +903,10 @@ mod tests {
             cleanup_delay_ms: 200,
         };
         let combined_client = DuckDuckGoClient::with_configs(scoring_config, timing_config);
-        assert_eq!(combined_client.timing_config.initial_page_load_delay_ms, 3000);
+        assert_eq!(
+            combined_client.timing_config.initial_page_load_delay_ms,
+            3000
+        );
         assert_eq!(combined_client.timing_config.cleanup_delay_ms, 200);
         assert_eq!(combined_client.scoring_config.base_score, 1.0);
     }
@@ -912,7 +926,10 @@ mod tests {
         let results = client.parse_html_results(html_with_redirect, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Test Title");
-        assert_eq!(results[0].url, "https://example.com/path?query=value&other=param");
+        assert_eq!(
+            results[0].url,
+            "https://example.com/path?query=value&other=param"
+        );
 
         // Test DuckDuckGo redirect URL with additional parameters
         let html_with_complex_redirect = r#"
@@ -922,7 +939,9 @@ mod tests {
         </div>
         "#;
 
-        let complex_results = client.parse_html_results(html_with_complex_redirect, 10).unwrap();
+        let complex_results = client
+            .parse_html_results(html_with_complex_redirect, 10)
+            .unwrap();
         assert_eq!(complex_results.len(), 1);
         assert_eq!(complex_results[0].title, "Complex Title");
         assert_eq!(complex_results[0].url, "https://test.org/complex?param=123");
