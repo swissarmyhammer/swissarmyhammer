@@ -137,7 +137,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         &config.vars,
         &config.set,
     ).unwrap_or_else(|e| {
-        eprintln!("Warning: Failed to resolve workflow parameters: {}", e);
+        eprintln!("Warning: Failed to resolve workflow parameters: {e}");
         HashMap::new()
     });
 
@@ -148,12 +148,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         if parts.len() == 2 {
             let key = parts[0].to_string();
             // Only add if not already resolved by workflow parameter system
-            if !variables.contains_key(&key) {
-                variables.insert(
-                    key,
-                    serde_json::Value::String(parts[1].to_string()),
-                );
-            }
+            variables.entry(key).or_insert_with(|| serde_json::Value::String(parts[1].to_string()));
         } else {
             return Err(SwissArmyHammerError::Other(format!(
                 "Invalid variable format: '{var}'. Expected 'key=value' format. Example: --var input=test"
