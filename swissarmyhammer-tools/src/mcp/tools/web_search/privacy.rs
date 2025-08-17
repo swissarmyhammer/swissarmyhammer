@@ -173,10 +173,6 @@ impl PrivacyHeaders {
 
     /// Applies privacy headers to a request builder
     pub fn apply_privacy_headers(&self, mut request: RequestBuilder) -> RequestBuilder {
-        // Set standard browser headers to avoid standing out
-        request = request.header("Accept-Language", "en-US,en;q=0.9");
-        request = request.header("Accept-Encoding", "gzip, deflate, br");
-
         request
     }
 }
