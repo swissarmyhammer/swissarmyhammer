@@ -12,7 +12,6 @@ use swissarmyhammer::common::{
 use swissarmyhammer::workflow::WorkflowParameter;
 use swissarmyhammer::Result;
 
-
 /// Resolve workflow parameters with optional interactive prompting
 pub fn resolve_workflow_parameters_interactive(
     workflow_name: &str,
@@ -28,11 +27,11 @@ pub fn resolve_workflow_parameters_interactive(
             return Ok(HashMap::new());
         }
     };
-    
+
     if interactive {
         // Phase 2: Use interactive parameter resolver
         let resolver = DefaultParameterResolver::new();
-        
+
         // Convert var_args to HashMap format expected by resolver
         let mut cli_args = HashMap::new();
         for var in var_args {
@@ -41,14 +40,20 @@ pub fn resolve_workflow_parameters_interactive(
                 cli_args.insert(parts[0].to_string(), parts[1].to_string());
             }
         }
-        
+
         // Convert WorkflowParameter to Parameter
-        let parameters: Vec<_> = workflow_params.into_iter()
+        let parameters: Vec<_> = workflow_params
+            .into_iter()
             .map(|wp| wp.to_parameter())
             .collect();
-        
-        resolver.resolve_parameters(&parameters, &cli_args, interactive)
-            .map_err(|e| swissarmyhammer::SwissArmyHammerError::Other(format!("Parameter resolution failed: {e}")))
+
+        resolver
+            .resolve_parameters(&parameters, &cli_args, interactive)
+            .map_err(|e| {
+                swissarmyhammer::SwissArmyHammerError::Other(format!(
+                    "Parameter resolution failed: {e}"
+                ))
+            })
     } else {
         // Phase 2: Use legacy parameter resolution (non-interactive)
         resolve_parameters_from_vars(&workflow_params, var_args, false)
@@ -62,14 +67,14 @@ pub fn get_workflow_parameters_for_help(workflow_name: &str) -> Vec<WorkflowPara
     discover_workflow_parameters(workflow_name).unwrap_or_default()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_resolve_workflow_parameters_empty() {
-        let result = resolve_workflow_parameters_interactive("nonexistent-workflow", &[], &[], false);
+        let result =
+            resolve_workflow_parameters_interactive("nonexistent-workflow", &[], &[], false);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
