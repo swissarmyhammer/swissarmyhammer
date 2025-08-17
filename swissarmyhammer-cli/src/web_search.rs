@@ -10,6 +10,11 @@ use serde_json::json;
 use std::error::Error;
 use tabled::{Table, Tabled};
 
+// Table display truncation limits
+const MAX_TITLE_WIDTH: usize = 60;
+const MAX_DESCRIPTION_WIDTH: usize = 80;
+const MAX_URL_WIDTH: usize = 100;
+
 /// Represents a search result for table display
 #[derive(Tabled)]
 struct SearchResultRow {
@@ -242,8 +247,8 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             let score = result_item["score"].as_f64().unwrap_or(0.0);
 
             // Truncate text to reasonable lengths for table display
-            let truncated_title = truncate_text(title, 60);
-            let truncated_desc = truncate_text(description, 80);
+            let truncated_title = truncate_text(title, MAX_TITLE_WIDTH);
+            let truncated_desc = truncate_text(description, MAX_DESCRIPTION_WIDTH);
 
             // Add main result row
             table_rows.push(SearchResultRow {
@@ -253,7 +258,7 @@ fn display_search_results_table(result: &serde_json::Value) -> Result<(), Box<dy
             });
 
             // Add URL row
-            let truncated_url = truncate_text(url, 100);
+            let truncated_url = truncate_text(url, MAX_URL_WIDTH);
             table_rows.push(SearchResultRow {
                 title: format!("🔗 {truncated_url}"),
                 score: String::new(),
@@ -355,26 +360,6 @@ mod tests {
 
     #[test]
     fn test_display_search_results_table_clean_format() {
-        use std::io::{self, Write};
-        use std::sync::{Arc, Mutex};
-
-        // Capture stdout to verify clean table format without engine, word count, and text preview
-        struct MockWriter {
-            buffer: Arc<Mutex<Vec<u8>>>,
-        }
-
-        impl Write for MockWriter {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                let mut buffer = self.buffer.lock().unwrap();
-                buffer.extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
         let result = json!({
             "content": [{
                 "text": r#"{"results": [
@@ -393,8 +378,7 @@ mod tests {
             }]
         });
 
-        // Test should pass after implementing clean format
-        // The output should NOT contain:
+        // Test should pass with clean format that excludes:
         // - Engine column or engine values
         // - Word count rows with "📄 X words" format
         // - Text preview/summary content
