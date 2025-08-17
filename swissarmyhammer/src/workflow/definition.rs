@@ -278,7 +278,7 @@ impl Workflow {
                         if let Some(default_array) = default_value.as_array() {
                             if let Some(choices) = &parameter.choices {
                                 default_array.iter().all(|v| {
-                                    v.as_str().map_or(false, |s| choices.contains(&s.to_string()))
+                                    v.as_str().is_some_and(|s| choices.contains(&s.to_string()))
                                 })
                             } else {
                                 false

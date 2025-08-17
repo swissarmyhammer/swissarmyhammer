@@ -213,7 +213,7 @@ impl MermaidParser {
         // Parse YAML frontmatter
         let frontmatter: serde_yaml::Value = serde_yaml::from_str(yaml_content)
             .map_err(|e| ParseError::InvalidStructure { 
-                message: format!("Invalid YAML frontmatter: {}", e)
+                message: format!("Invalid YAML frontmatter: {e}")
             })?;
 
         // Extract parameters from frontmatter if present
@@ -222,25 +222,25 @@ impl MermaidParser {
                 for param_value in params_array {
                     if let Some(param_obj) = param_value.as_mapping() {
                         let name = param_obj
-                            .get(&serde_yaml::Value::String("name".to_string()))
+                            .get(serde_yaml::Value::String("name".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let description = param_obj
-                            .get(&serde_yaml::Value::String("description".to_string()))
+                            .get(serde_yaml::Value::String("description".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let required = param_obj
-                            .get(&serde_yaml::Value::String("required".to_string()))
+                            .get(serde_yaml::Value::String("required".to_string()))
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 
                         // Parse parameter type
                         let type_str = param_obj
-                            .get(&serde_yaml::Value::String("type".to_string()))
+                            .get(serde_yaml::Value::String("type".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("string");
                         
@@ -255,12 +255,12 @@ impl MermaidParser {
 
                         // Parse default value
                         let default = param_obj
-                            .get(&serde_yaml::Value::String("default".to_string()))
+                            .get(serde_yaml::Value::String("default".to_string()))
                             .and_then(|v| serde_json::to_value(v).ok());
 
                         // Parse choices if present
                         let choices = param_obj
-                            .get(&serde_yaml::Value::String("choices".to_string()))
+                            .get(serde_yaml::Value::String("choices".to_string()))
                             .and_then(|v| v.as_sequence())
                             .map(|seq| {
                                 seq.iter()
@@ -1157,7 +1157,7 @@ stateDiagram-v2
         assert_eq!(param3.description, "Use formal greeting");
         assert!(!param3.required);
         assert!(matches!(param3.parameter_type, crate::workflow::ParameterType::Boolean));
-        assert_eq!(param3.default.as_ref().unwrap().as_bool().unwrap(), false);
+        assert!(!param3.default.as_ref().unwrap().as_bool().unwrap());
         assert!(param3.choices.is_none());
     }
 
@@ -1223,7 +1223,7 @@ stateDiagram-v2
         assert_eq!(bool_param.name, "enabled");
         assert!(matches!(bool_param.parameter_type, crate::workflow::ParameterType::Boolean));
         assert!(!bool_param.required);
-        assert_eq!(bool_param.default.as_ref().unwrap().as_bool().unwrap(), true);
+        assert!(bool_param.default.as_ref().unwrap().as_bool().unwrap());
         
         // Check choice parameter
         let choice_param = &workflow.parameters[2];
