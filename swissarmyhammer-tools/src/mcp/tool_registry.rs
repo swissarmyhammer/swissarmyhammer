@@ -503,6 +503,12 @@ pub fn register_todo_tools(registry: &mut ToolRegistry) {
     todo::register_todo_tools(registry);
 }
 
+/// Register all web fetch-related tools with the registry
+pub fn register_web_fetch_tools(registry: &mut ToolRegistry) {
+    use super::tools::web_fetch;
+    web_fetch::register_web_fetch_tools(registry);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

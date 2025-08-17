@@ -1230,7 +1230,7 @@ impl ShellAction {
     ) -> ActionResult<Value> {
         // Extract shell execution result from enhanced shell response
         let json_data = response_processing::extract_json_data(&result)
-            .map_err(|e| ActionError::ExecutionError(format!("Result processing failed: {}", e)))?;
+            .map_err(|e| ActionError::ExecutionError(format!("Result processing failed: {e}")))?;
 
         // Parse shell execution metadata from MCP tool response
         let exit_code = json_data["exit_code"].as_i64().unwrap_or(-1);
@@ -1336,7 +1336,7 @@ impl Action for ShellAction {
 
         // Create enhanced shell context
         let shell_context = WorkflowShellContext::new().await.map_err(|e| {
-            ActionError::ExecutionError(format!("Enhanced shell initialization failed: {}", e))
+            ActionError::ExecutionError(format!("Enhanced shell initialization failed: {e}"))
         })?;
 
         // Execute via enhanced shell context
@@ -2649,13 +2649,11 @@ mod tests {
         // Being more lenient with timing to account for CI environment variations
         assert!(
             duration_ms >= 800,
-            "Duration {} ms should be at least 800ms",
-            duration_ms
+            "Duration {duration_ms} ms should be at least 800ms"
         );
         assert!(
             duration_ms <= 3000,
-            "Duration {} ms should not exceed 3000ms",
-            duration_ms
+            "Duration {duration_ms} ms should not exceed 3000ms"
         );
 
         // Result should be false for timeout

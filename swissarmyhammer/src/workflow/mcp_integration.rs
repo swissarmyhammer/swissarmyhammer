@@ -60,14 +60,12 @@ impl EnhancedShellExecutor {
             let path = Path::new(work_dir);
             if !path.exists() {
                 return Err(ActionError::ExecutionError(format!(
-                    "Working directory does not exist: {}",
-                    work_dir
+                    "Working directory does not exist: {work_dir}"
                 )));
             }
             if !path.is_dir() {
                 return Err(ActionError::ExecutionError(format!(
-                    "Working directory is not a directory: {}",
-                    work_dir
+                    "Working directory is not a directory: {work_dir}"
                 )));
             }
             cmd.current_dir(path);
@@ -85,7 +83,7 @@ impl EnhancedShellExecutor {
 
         // Spawn the process
         let mut child = cmd.spawn().map_err(|e| {
-            ActionError::ExecutionError(format!("Failed to spawn command '{}': {}", command, e))
+            ActionError::ExecutionError(format!("Failed to spawn command '{command}': {e}"))
         })?;
 
         // Execute with or without timeout
@@ -136,7 +134,7 @@ impl EnhancedShellExecutor {
                 tokio::join!(child.wait(), stdout_task, stderr_task);
 
             let status = status_result
-                .map_err(|e| ActionError::ExecutionError(format!("Process wait failed: {}", e)))?;
+                .map_err(|e| ActionError::ExecutionError(format!("Process wait failed: {e}")))?;
 
             let stdout = stdout_result?;
             let stderr = stderr_result?;
@@ -187,7 +185,7 @@ impl EnhancedShellExecutor {
             tokio::join!(child.wait(), stdout_task, stderr_task);
 
         let status = status_result
-            .map_err(|e| ActionError::ExecutionError(format!("Command execution failed: {}", e)))?;
+            .map_err(|e| ActionError::ExecutionError(format!("Command execution failed: {e}")))?;
 
         let stdout = stdout_result?;
         let stderr = stderr_result?;
@@ -208,7 +206,7 @@ impl EnhancedShellExecutor {
             .take(max_size as u64)
             .read_to_end(&mut buffer)
             .await
-            .map_err(|e| ActionError::ExecutionError(format!("Failed to read output: {}", e)))?;
+            .map_err(|e| ActionError::ExecutionError(format!("Failed to read output: {e}")))?;
 
         self.safe_string_conversion(&buffer, max_size)
     }

@@ -9,6 +9,7 @@ use serde_json::Map;
 use std::sync::Arc;
 use swissarmyhammer_tools::{
     register_issue_tools, register_memo_tools, register_search_tools, register_shell_tools,
+    register_web_fetch_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -108,6 +109,7 @@ impl CliToolContext {
         register_memo_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
         register_shell_tools(&mut tool_registry);
+        register_web_fetch_tools(&mut tool_registry);
         tool_registry
     }
 

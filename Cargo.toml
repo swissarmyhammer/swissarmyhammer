@@ -76,6 +76,9 @@ rand = "0.8"
 syntect = "5.2"
 once_cell = "1.19"
 
+# Web fetch dependencies
+markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown", version = "0.1.0" }
+
 # Dev dependencies
 assert_cmd = "2.0"
 predicates = "3.0"

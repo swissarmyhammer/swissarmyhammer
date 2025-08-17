@@ -416,19 +416,19 @@ pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
         // No unit, assume bytes
         return size_str
             .parse::<usize>()
-            .map_err(|_| format!("Invalid numeric value: {}", size_str));
+            .map_err(|_| format!("Invalid numeric value: {size_str}"));
     };
 
     let base_size: usize = numeric_part
         .parse()
-        .map_err(|_| format!("Invalid numeric value: {}", numeric_part))?;
+        .map_err(|_| format!("Invalid numeric value: {numeric_part}"))?;
 
     let multiplier = match unit {
         "B" | "" => 1,
         "KB" => 1_024,
         "MB" => 1_024 * 1_024,
         "GB" => 1_024 * 1_024 * 1_024,
-        _ => return Err(format!("Unknown size unit: {}", unit)),
+        _ => return Err(format!("Unknown size unit: {unit}")),
     };
 
     base_size

@@ -177,14 +177,14 @@ async fn test_notify_tool_different_levels() {
         args.insert("level".to_string(), json!(level));
 
         let result = tool.execute(args, &context).await;
-        assert!(result.is_ok(), "Failed for level: {}", level);
+        assert!(result.is_ok(), "Failed for level: {level}");
 
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
 
         let content_text = call_result.content[0].as_text().unwrap().text.clone();
         assert!(content_text.contains("Notification sent"));
-        assert!(content_text.contains(&format!("Test {} message", level)));
+        assert!(content_text.contains(&format!("Test {level} message")));
     }
 }
 
@@ -306,12 +306,11 @@ async fn test_notify_tool_performance_characteristics() {
 
         let result = timeout(Duration::from_millis(100), tool.execute(args, &context)).await;
 
-        assert!(result.is_ok(), "Timeout on operation {}", i);
+        assert!(result.is_ok(), "Timeout on operation {i}");
         let execution_result = result.unwrap();
         assert!(
             execution_result.is_ok(),
-            "Execution failed on operation {}",
-            i
+            "Execution failed on operation {i}"
         );
     }
 
@@ -320,8 +319,7 @@ async fn test_notify_tool_performance_characteristics() {
     // Performance assertion: should handle 50 notifications reasonably quickly
     assert!(
         elapsed < Duration::from_secs(2),
-        "Performance test took too long: {:?}",
-        elapsed
+        "Performance test took too long: {elapsed:?}"
     );
 }
 
