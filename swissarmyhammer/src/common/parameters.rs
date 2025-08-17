@@ -2146,7 +2146,7 @@ mod tests {
         }
 
         fn get_parameter_groups(&self) -> Option<&[ParameterGroup]> {
-            self.groups.as_ref().map(|g| g.as_slice())
+            self.groups.as_deref()
         }
     }
 

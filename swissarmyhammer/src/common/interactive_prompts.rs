@@ -148,8 +148,7 @@ impl InteractivePrompts {
 
     /// Capitalize words in a string for display
     fn capitalize_words(&self, s: &str) -> String {
-        s.replace('_', " ")
-            .replace('-', " ")
+        s.replace(['_', '-'], " ")
             .split_whitespace()
             .map(|word| {
                 let mut chars: Vec<char> = word.chars().collect();

@@ -412,8 +412,7 @@ impl Workflow {
                 for param_name in &group.parameters {
                     if assigned_params.contains(param_name) {
                         errors.push(format!(
-                            "Parameter '{}' is assigned to multiple groups",
-                            param_name
+                            "Parameter '{param_name}' is assigned to multiple groups"
                         ));
                     } else {
                         assigned_params.insert(param_name.clone());
