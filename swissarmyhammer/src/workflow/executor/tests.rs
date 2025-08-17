@@ -196,6 +196,7 @@ fn test_execution_history_limit() {
 
 #[tokio::test]
 async fn test_fork_join_parallel_execution() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
 
     // Create a workflow with fork and join
@@ -1399,6 +1400,7 @@ async fn test_manual_intervention_recovery() {
 
 #[tokio::test]
 async fn test_skip_failed_state() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
     let mut workflow = Workflow::new(
         WorkflowName::new("Skip Failed Test"),

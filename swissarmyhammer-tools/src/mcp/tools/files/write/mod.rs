@@ -50,8 +50,8 @@ impl McpTool for WriteFileTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        use serde::Deserialize;
         use crate::mcp::tools::files::shared_utils;
+        use serde::Deserialize;
 
         #[derive(Deserialize)]
         struct WriteRequest {
@@ -61,10 +61,10 @@ impl McpTool for WriteFileTool {
 
         // Parse arguments
         let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
-        
+
         // Validate file path
         let validated_path = shared_utils::validate_file_path(&request.file_path)?;
-        
+
         // Ensure parent directory exists
         if let Some(parent_dir) = validated_path.parent() {
             shared_utils::ensure_directory_exists(parent_dir)?;

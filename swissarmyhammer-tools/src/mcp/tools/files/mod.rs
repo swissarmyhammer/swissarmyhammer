@@ -45,59 +45,14 @@
 //! ## Tool Implementation Pattern
 //!
 //! Each file tool follows the standard MCP pattern with shared utilities:
-//! ```rust,no_run
-//! use async_trait::async_trait;
-//! use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-//! use crate::mcp::tool_descriptions;
-//! use super::shared_utils;
 //!
-//! #[derive(Default)]
-//! pub struct ExampleFileTool;
+//! - **Tool Structure**: Each tool implements the `McpTool` trait with `name()`, `description()`, `schema()`, and `execute()` methods
+//! - **Argument Parsing**: Uses `BaseToolImpl::parse_arguments()` for JSON argument parsing with serde
+//! - **Security Validation**: Leverages `shared_utils::validate_file_path()` for path validation and security checks
+//! - **Error Handling**: Uses MCP-compatible error types and proper error propagation
+//! - **Response Creation**: Returns structured responses using `BaseToolImpl::create_success_response()`
 //!
-//! impl ExampleFileTool {
-//!     pub fn new() -> Self { Self }
-//! }
-//!
-//! #[async_trait]
-//! impl McpTool for ExampleFileTool {
-//!     fn name(&self) -> &'static str {
-//!         "files_example"
-//!     }
-//!     
-//!     fn description(&self) -> &'static str {
-//!         tool_descriptions::get_tool_description("files", "example")
-//!             .unwrap_or("Tool description not available")
-//!     }
-//!     
-//!     fn schema(&self) -> serde_json::Value {
-//!         serde_json::json!({
-//!             "type": "object",
-//!             "properties": {
-//!                 "absolute_path": {
-//!                     "type": "string",
-//!                     "description": "Full absolute path to the file"
-//!                 }
-//!             },
-//!             "required": ["absolute_path"]
-//!         })
-//!     }
-//!     
-//!     async fn execute(
-//!         &self,
-//!         arguments: serde_json::Map<String, serde_json::Value>,
-//!         context: &ToolContext,
-//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
-//!         let request: ExampleRequest = BaseToolImpl::parse_arguments(arguments)?;
-//!         
-//!         // Validate file path using shared utilities
-//!         shared_utils::validate_file_path(&request.absolute_path)?;
-//!         
-//!         // Tool implementation here...
-//!         
-//!         Ok(BaseToolImpl::create_success_response("Example executed"))
-//!     }
-//! }
-//! ```
+//! See individual tool modules (`read`, `write`, `edit`, `glob`, `grep`) for specific implementations.
 //!
 //! ## Available Tools
 //!

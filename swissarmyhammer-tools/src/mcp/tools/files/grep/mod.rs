@@ -99,7 +99,7 @@ impl McpTool for GrepFileTool {
                     "description": "Glob pattern to filter files (e.g., *.js) (optional)"
                 },
                 "type": {
-                    "type": "string", 
+                    "type": "string",
                     "description": "File type filter (e.g., js, py, rust) (optional)"
                 },
                 "case_insensitive": {
@@ -125,8 +125,8 @@ impl McpTool for GrepFileTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        use serde::Deserialize;
         use regex::RegexBuilder;
+        use serde::Deserialize;
         use walkdir::WalkDir;
 
         #[derive(Deserialize)]
@@ -143,7 +143,7 @@ impl McpTool for GrepFileTool {
 
         // Parse arguments
         let request: GrepRequest = BaseToolImpl::parse_arguments(arguments)?;
-        
+
         // Build regex pattern
         let regex = RegexBuilder::new(&request.pattern)
             .case_insensitive(request.case_insensitive.unwrap_or(false))
@@ -192,7 +192,7 @@ impl McpTool for GrepFileTool {
 
         for entry in walker.into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
@@ -233,18 +233,24 @@ impl McpTool for GrepFileTool {
             for (line_num, line) in lines.iter().enumerate() {
                 if regex.is_match(line) {
                     match_count += 1;
-                    
+
                     if output_mode == "content" {
                         // Include context lines
-                        let start = if line_num >= context_lines { line_num - context_lines } else { 0 };
+                        let start = line_num.saturating_sub(context_lines);
                         let end = std::cmp::min(line_num + context_lines + 1, lines.len());
-                        
-                        let context_block: Vec<String> = (start..end).map(|i| {
-                            let prefix = if i == line_num { ">" } else { " " };
-                            format!("{}{}:{}", prefix, i + 1, lines[i])
-                        }).collect();
-                        
-                        file_matches.push(format!("{}:\n{}", path.display(), context_block.join("\n")));
+
+                        let context_block: Vec<String> = (start..end)
+                            .map(|i| {
+                                let prefix = if i == line_num { ">" } else { " " };
+                                format!("{}{}:{}", prefix, i + 1, lines[i])
+                            })
+                            .collect();
+
+                        file_matches.push(format!(
+                            "{}:\n{}",
+                            path.display(),
+                            context_block.join("\n")
+                        ));
                     }
                 }
             }
@@ -266,20 +272,29 @@ impl McpTool for GrepFileTool {
                 if results.is_empty() {
                     "No files found with matches".to_string()
                 } else {
-                    format!("Files with matches ({}):\n{}", results.len(), results.join("\n"))
+                    format!(
+                        "Files with matches ({}):\n{}",
+                        results.len(),
+                        results.join("\n")
+                    )
                 }
             }
             "content" => {
                 if results.is_empty() {
                     "No matches found".to_string()
                 } else {
-                    format!("Found {} matches in {} files:\n\n{}", 
-                           match_count, file_count, results.join("\n\n"))
+                    format!(
+                        "Found {} matches in {} files:\n\n{}",
+                        match_count,
+                        file_count,
+                        results.join("\n\n")
+                    )
                 }
             }
             _ => {
                 return Err(rmcp::Error::invalid_request(
-                    "Invalid output_mode. Must be 'content', 'files_with_matches', or 'count'".to_string(),
+                    "Invalid output_mode. Must be 'content', 'files_with_matches', or 'count'"
+                        .to_string(),
                     None,
                 ));
             }

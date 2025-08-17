@@ -131,12 +131,8 @@ pub fn file_exists(path: &Path) -> Result<bool, McpError> {
 ///
 /// * `Result<std::fs::Metadata, McpError>` - File metadata or error
 pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
-    std::fs::metadata(path).map_err(|e| {
-        McpError::invalid_request(
-            format!("Failed to get file metadata: {}", e),
-            None,
-        )
-    })
+    std::fs::metadata(path)
+        .map_err(|e| McpError::invalid_request(format!("Failed to get file metadata: {}", e), None))
 }
 
 /// Ensure a directory exists, creating it if necessary
@@ -154,10 +150,7 @@ pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
 pub fn ensure_directory_exists(dir_path: &Path) -> Result<(), McpError> {
     if !dir_path.exists() {
         std::fs::create_dir_all(dir_path).map_err(|e| {
-            McpError::internal_error(
-                format!("Failed to create directory: {}", e),
-                None,
-            )
+            McpError::internal_error(format!("Failed to create directory: {}", e), None)
         })?;
     }
     Ok(())
@@ -177,11 +170,7 @@ pub fn ensure_directory_exists(dir_path: &Path) -> Result<(), McpError> {
 /// # Returns
 ///
 /// * `McpError` - Formatted MCP error
-pub fn handle_file_error(
-    error: std::io::Error,
-    operation: &str,
-    path: &Path,
-) -> McpError {
+pub fn handle_file_error(error: std::io::Error, operation: &str, path: &Path) -> McpError {
     let error_message = match error.kind() {
         std::io::ErrorKind::NotFound => {
             format!("File not found: {}", path.display())
@@ -213,7 +202,7 @@ mod tests {
     fn test_validate_file_path_empty() {
         let result = validate_file_path("");
         assert!(result.is_err());
-        
+
         let result = validate_file_path("   ");
         assert!(result.is_err());
     }
@@ -222,10 +211,10 @@ mod tests {
     fn test_validate_file_path_relative() {
         let result = validate_file_path("relative/path");
         assert!(result.is_err());
-        
+
         let result = validate_file_path("./current/path");
         assert!(result.is_err());
-        
+
         let result = validate_file_path("../parent/path");
         assert!(result.is_err());
     }
@@ -240,15 +229,15 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test] 
+    #[test]
     fn test_validate_file_path_absolute_existing() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test.txt");
         fs::write(&test_file, "test content").unwrap();
-        
+
         let result = validate_file_path(&test_file.to_string_lossy());
         assert!(result.is_ok());
-        
+
         let validated_path = result.unwrap();
         assert!(validated_path.is_absolute());
     }
@@ -258,13 +247,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let existing_file = temp_dir.path().join("existing.txt");
         let non_existing_file = temp_dir.path().join("non_existing.txt");
-        
+
         fs::write(&existing_file, "content").unwrap();
-        
+
         let result = file_exists(&existing_file);
         assert!(result.is_ok());
         assert!(result.unwrap());
-        
+
         let result = file_exists(&non_existing_file);
         assert!(result.is_ok());
         assert!(!result.unwrap());
@@ -275,10 +264,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("metadata_test.txt");
         fs::write(&test_file, "test content for metadata").unwrap();
-        
+
         let result = get_file_metadata(&test_file);
         assert!(result.is_ok());
-        
+
         let metadata = result.unwrap();
         assert!(metadata.len() > 0);
     }
@@ -287,9 +276,9 @@ mod tests {
     fn test_ensure_directory_exists() {
         let temp_dir = TempDir::new().unwrap();
         let nested_dir = temp_dir.path().join("nested").join("directory");
-        
+
         assert!(!nested_dir.exists());
-        
+
         let result = ensure_directory_exists(&nested_dir);
         assert!(result.is_ok());
         assert!(nested_dir.exists());
@@ -299,13 +288,13 @@ mod tests {
     #[test]
     fn test_handle_file_error() {
         use std::io::{Error, ErrorKind};
-        
+
         let path = Path::new("/test/path");
-        
+
         let not_found_error = Error::new(ErrorKind::NotFound, "test error");
         let mcp_error = handle_file_error(not_found_error, "read", path);
         assert!(format!("{:?}", mcp_error).contains("File not found"));
-        
+
         let permission_error = Error::new(ErrorKind::PermissionDenied, "test error");
         let mcp_error = handle_file_error(permission_error, "write", path);
         assert!(format!("{:?}", mcp_error).contains("Permission denied"));

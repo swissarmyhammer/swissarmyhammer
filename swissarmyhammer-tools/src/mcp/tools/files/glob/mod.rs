@@ -12,14 +12,24 @@ use rmcp::Error as McpError;
 fn should_ignore_path(path: &str) -> bool {
     // Common patterns to ignore
     let ignore_patterns = [
-        ".git/", ".gitignore", ".DS_Store", "node_modules/", "target/",
-        ".vscode/", ".idea/", "*.tmp", "*.swp", "*.swo", "*.bak", "Thumbs.db",
+        ".git/",
+        ".gitignore",
+        ".DS_Store",
+        "node_modules/",
+        "target/",
+        ".vscode/",
+        ".idea/",
+        "*.tmp",
+        "*.swp",
+        "*.swo",
+        "*.bak",
+        "Thumbs.db",
     ];
-    
+
     for pattern in &ignore_patterns {
-        if pattern.ends_with('/') {
+        if let Some(stripped) = pattern.strip_suffix('/') {
             // Directory pattern
-            if path.contains(&pattern[..pattern.len()-1]) {
+            if path.contains(stripped) {
                 return true;
             }
         } else if pattern.contains('*') {
@@ -35,7 +45,7 @@ fn should_ignore_path(path: &str) -> bool {
             }
         }
     }
-    
+
     false
 }
 
@@ -105,7 +115,7 @@ impl McpTool for GlobFileTool {
 
         // Parse arguments
         let request: GlobRequest = BaseToolImpl::parse_arguments(arguments)?;
-        
+
         // Determine starting directory
         let search_dir = match request.path {
             Some(path_str) => {
@@ -134,7 +144,10 @@ impl McpTool for GlobFileTool {
         let glob_pattern = if Path::new(&request.pattern).is_absolute() {
             request.pattern.clone()
         } else {
-            search_dir.join(&request.pattern).to_string_lossy().to_string()
+            search_dir
+                .join(&request.pattern)
+                .to_string_lossy()
+                .to_string()
         };
 
         // Configure glob options
@@ -144,10 +157,9 @@ impl McpTool for GlobFileTool {
         glob_options.require_literal_leading_dot = false;
 
         // Execute glob pattern
-        let entries = glob::glob_with(&glob_pattern, glob_options)
-            .map_err(|e| {
-                rmcp::Error::invalid_request(format!("Invalid glob pattern: {}", e), None)
-            })?;
+        let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
+            rmcp::Error::invalid_request(format!("Invalid glob pattern: {}", e), None)
+        })?;
 
         let mut matched_files: Vec<String> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
@@ -165,7 +177,7 @@ impl McpTool for GlobFileTool {
                             continue;
                         }
                     }
-                    
+
                     matched_files.push(path.to_string_lossy().to_string());
                 }
                 Err(e) => {
@@ -178,12 +190,12 @@ impl McpTool for GlobFileTool {
         matched_files.sort_by(|a, b| {
             let a_metadata = std::fs::metadata(a).ok();
             let b_metadata = std::fs::metadata(b).ok();
-            
+
             match (a_metadata, b_metadata) {
-                (Some(a_meta), Some(b_meta)) => {
-                    b_meta.modified().unwrap_or(std::time::UNIX_EPOCH)
-                        .cmp(&a_meta.modified().unwrap_or(std::time::UNIX_EPOCH))
-                }
+                (Some(a_meta), Some(b_meta)) => b_meta
+                    .modified()
+                    .unwrap_or(std::time::UNIX_EPOCH)
+                    .cmp(&a_meta.modified().unwrap_or(std::time::UNIX_EPOCH)),
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (None, None) => a.cmp(b), // Fallback to lexicographic
@@ -192,18 +204,27 @@ impl McpTool for GlobFileTool {
 
         // Format response
         let mut response_parts = Vec::new();
-        
+
         if !matched_files.is_empty() {
-            response_parts.push(format!("Found {} files matching pattern '{}'\n", matched_files.len(), request.pattern));
+            response_parts.push(format!(
+                "Found {} files matching pattern '{}'\n",
+                matched_files.len(),
+                request.pattern
+            ));
             response_parts.push(matched_files.join("\n"));
         } else {
-            response_parts.push(format!("No files found matching pattern '{}'", request.pattern));
+            response_parts.push(format!(
+                "No files found matching pattern '{}'",
+                request.pattern
+            ));
         }
 
         if !errors.is_empty() {
             response_parts.push(format!("\nErrors encountered:\n{}", errors.join("\n")));
         }
 
-        Ok(BaseToolImpl::create_success_response(response_parts.join("\n")))
+        Ok(BaseToolImpl::create_success_response(
+            response_parts.join("\n"),
+        ))
     }
 }

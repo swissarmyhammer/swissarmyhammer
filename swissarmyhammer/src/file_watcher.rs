@@ -109,6 +109,18 @@ impl FileWatcher {
         // The resolver already returns only existing paths
         if watch_paths.is_empty() {
             tracing::warn!("No prompt directories found to watch");
+            // Still set up a mock watcher handle for consistency in tests
+            #[cfg(test)]
+            {
+                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    // Mock implementation: just wait for shutdown signal
+                    let _ = shutdown_rx.await;
+                    tracing::info!("Mock file watcher (no directories) shutting down");
+                });
+                self.watcher_handle = Some(handle);
+                self.shutdown_tx = Some(shutdown_tx);
+            }
             return Ok(());
         }
 

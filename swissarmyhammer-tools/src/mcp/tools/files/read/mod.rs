@@ -41,7 +41,7 @@ impl McpTool for ReadFileTool {
                     "description": "Starting line number for partial reading (optional)"
                 },
                 "limit": {
-                    "type": "number", 
+                    "type": "number",
                     "description": "Maximum number of lines to read (optional)"
                 }
             },
@@ -54,8 +54,8 @@ impl McpTool for ReadFileTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        use serde::Deserialize;
         use crate::mcp::tools::files::shared_utils;
+        use serde::Deserialize;
 
         #[derive(Deserialize)]
         struct ReadRequest {
@@ -66,10 +66,10 @@ impl McpTool for ReadFileTool {
 
         // Parse arguments
         let request: ReadRequest = BaseToolImpl::parse_arguments(arguments)?;
-        
+
         // Validate file path
         let validated_path = shared_utils::validate_file_path(&request.absolute_path)?;
-        
+
         // Check if file exists
         if !shared_utils::file_exists(&validated_path)? {
             return Err(rmcp::Error::invalid_request(
@@ -86,27 +86,24 @@ impl McpTool for ReadFileTool {
         let final_content = match (request.offset, request.limit) {
             (Some(offset), Some(limit)) => {
                 let lines: Vec<&str> = content.lines().collect();
-                lines.iter()
+                lines
+                    .iter()
                     .skip(offset.saturating_sub(1)) // Convert to 0-based index
                     .take(limit)
-                    .map(|&line| line)
+                    .copied()
                     .collect::<Vec<_>>()
                     .join("\n")
             }
             (Some(offset), None) => {
                 let lines: Vec<&str> = content.lines().collect();
-                lines.iter()
+                lines
+                    .iter()
                     .skip(offset.saturating_sub(1)) // Convert to 0-based index
-                    .map(|&line| line)
+                    .copied()
                     .collect::<Vec<_>>()
                     .join("\n")
             }
-            (None, Some(limit)) => {
-                content.lines()
-                    .take(limit)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
+            (None, Some(limit)) => content.lines().take(limit).collect::<Vec<_>>().join("\n"),
             (None, None) => content,
         };
 

@@ -41,7 +41,7 @@ impl McpTool for EditFileTool {
                     "description": "Exact text to replace"
                 },
                 "new_string": {
-                    "type": "string", 
+                    "type": "string",
                     "description": "Replacement text"
                 },
                 "replace_all": {
@@ -59,8 +59,8 @@ impl McpTool for EditFileTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        use serde::Deserialize;
         use crate::mcp::tools::files::shared_utils;
+        use serde::Deserialize;
 
         #[derive(Deserialize)]
         struct EditRequest {
@@ -72,10 +72,10 @@ impl McpTool for EditFileTool {
 
         // Parse arguments
         let request: EditRequest = BaseToolImpl::parse_arguments(arguments)?;
-        
+
         // Validate file path
         let validated_path = shared_utils::validate_file_path(&request.file_path)?;
-        
+
         // Check if file exists
         if !shared_utils::file_exists(&validated_path)? {
             return Err(rmcp::Error::invalid_request(
@@ -130,7 +130,11 @@ impl McpTool for EditFileTool {
 
         let replacements = if replace_all {
             let count = content.matches(&request.old_string).count();
-            format!("Made {} replacements in file: {}", count, validated_path.display())
+            format!(
+                "Made {} replacements in file: {}",
+                count,
+                validated_path.display()
+            )
         } else {
             format!("Made 1 replacement in file: {}", validated_path.display())
         };

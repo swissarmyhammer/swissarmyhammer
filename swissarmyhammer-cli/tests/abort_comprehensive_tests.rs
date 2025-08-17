@@ -261,7 +261,10 @@ fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
         }
         // Use direct assertion with clearer error message
         let final_content = std::fs::read_to_string(abort_path)?;
-        assert_eq!(final_content, reason, "Abort file content mismatch after cleanup/retry");
+        assert_eq!(
+            final_content, reason,
+            "Abort file content mismatch after cleanup/retry"
+        );
     }
 
     // Note: CLI commands themselves don't clean up abort files

@@ -1909,6 +1909,7 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::IsolatedTestEnvironment;
     use crate::workflow::action_parser::ActionParser;
 
     #[test]
@@ -2133,6 +2134,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_abort_action_execution() {
+        let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Clean up any existing abort file before test
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
@@ -2156,6 +2158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_abort_action_with_variable_substitution() {
+        let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Clean up any existing abort file before test
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
@@ -2184,6 +2187,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_end_to_end_error_propagation() {
+        let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
         // Clean up any existing abort file before test
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
