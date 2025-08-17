@@ -268,7 +268,7 @@ impl DuckDuckGoClient {
                 .await
                 .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
 
-            tracing::info!(
+            tracing::debug!(
                 "Retrieved HTML content of {} characters from DuckDuckGo page",
                 html_content.len()
             );
@@ -294,11 +294,11 @@ impl DuckDuckGoClient {
             }
 
             // Parse results using existing HTML parsing logic
-            tracing::info!("Starting to parse HTML results from DuckDuckGo page");
+            tracing::debug!("Starting to parse HTML results from DuckDuckGo page");
             let results =
                 self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
 
-            tracing::info!("DuckDuckGo search found {} results", results.len());
+            tracing::debug!("DuckDuckGo search found {} results", results.len());
 
             Ok(results)
         }
@@ -330,7 +330,7 @@ impl DuckDuckGoClient {
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
         use scraper::{Html, Selector};
 
-        tracing::info!(
+        tracing::debug!(
             "Parsing HTML content of {} characters for search results",
             html_content.len()
         );
@@ -377,11 +377,11 @@ impl DuckDuckGoClient {
             let result_elements: Vec<_> = document.select(&result_selector).collect();
 
             if result_elements.is_empty() {
-                tracing::info!("No results found with selector: {}", result_selector_str);
+                tracing::debug!("No results found with selector: {}", result_selector_str);
                 continue; // Try next selector
             }
 
-            tracing::info!(
+            tracing::debug!(
                 "Found {} potential results with selector: {}",
                 result_elements.len(),
                 result_selector_str
@@ -438,7 +438,7 @@ impl DuckDuckGoClient {
                     };
 
                 if title.is_empty() || final_url.is_empty() || !final_url.starts_with("http") {
-                    tracing::info!(
+                    tracing::debug!(
                         "Skipping invalid result: title='{}', url='{}'",
                         title,
                         final_url
@@ -450,7 +450,7 @@ impl DuckDuckGoClient {
                     } else {
                         &element_html
                     };
-                    tracing::info!("Invalid result element HTML: {}", sample_html);
+                    tracing::debug!("Invalid result element HTML: {}", sample_html);
                     continue; // Skip invalid results
                 }
 
