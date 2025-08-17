@@ -37,7 +37,7 @@ impl InteractivePrompts {
         parameters: &[Parameter],
         existing_values: &HashMap<String, serde_json::Value>,
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
-        let mut resolved = existing_values.clone();
+        let resolved = existing_values.clone();
 
         // Handle conditional parameters with iterative approach
         self.prompt_conditional_parameters(parameters, resolved)
@@ -653,12 +653,11 @@ mod tests {
         
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("deploy_env").unwrap(), &serde_json::Value::String("dev".to_string()));
-        assert!(result.get("prod_confirmation").is_none());
+        assert!(!result.contains_key("prod_confirmation"));
     }
 
     #[test]
     fn test_prompt_conditional_parameters_with_defaults() {
-        use crate::common::parameter_conditions::ParameterCondition;
         
         let prompts = InteractivePrompts::new(true);
         
@@ -679,7 +678,7 @@ mod tests {
         
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(false));
-        assert!(result.get("cert_path").is_none());
+        assert!(!result.contains_key("cert_path"));
 
         // Test 2: enable_ssl = true provided, should use cert_path default
         let mut existing = HashMap::new();

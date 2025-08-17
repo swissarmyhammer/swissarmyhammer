@@ -39,20 +39,25 @@ pub enum ConditionError {
     /// The condition expression could not be parsed
     #[error("Failed to parse condition expression '{expression}': {details}")]
     ParseError {
+        /// The condition expression that failed to parse
         expression: String,
+        /// Detailed error message explaining the parsing failure
         details: String,
     },
 
     /// A parameter referenced in the condition is not available
     #[error("Parameter '{parameter}' referenced in condition is not available")]
     ParameterNotAvailable {
+        /// The parameter name that is not available
         parameter: String,
     },
 
     /// The condition evaluation failed
     #[error("Failed to evaluate condition '{expression}': {details}")]
     EvaluationError {
+        /// The condition expression that failed to evaluate
         expression: String,
+        /// Detailed error message explaining the evaluation failure
         details: String,
     },
 }
@@ -62,24 +67,34 @@ pub enum ConditionError {
 pub enum ConditionAst {
     /// Comparison operation (parameter == value, parameter != value, etc.)
     Comparison {
+        /// The parameter name to compare
         parameter: String,
+        /// The comparison operator to use
         operator: ComparisonOp,
+        /// The value to compare the parameter against
         value: serde_json::Value,
     },
     /// Logical operation (condition && condition, condition || condition)
     Logical {
+        /// The left-hand side condition
         left: Box<ConditionAst>,
+        /// The logical operator (AND/OR)
         operator: LogicalOp,
+        /// The right-hand side condition
         right: Box<ConditionAst>,
     },
     /// In operation (parameter in [value1, value2, ...])
     In {
+        /// The parameter name to check
         parameter: String,
+        /// The list of values to check membership in
         values: Vec<serde_json::Value>,
     },
     /// Contains operation (parameter contains "substring")
     Contains {
+        /// The parameter name to check
         parameter: String,
+        /// The substring to search for
         substring: String,
     },
 }
@@ -87,19 +102,27 @@ pub enum ConditionAst {
 /// Comparison operators supported in condition expressions
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComparisonOp {
-    Equal,    // ==
-    NotEqual, // !=
-    Less,     // <
-    Greater,  // >
-    LessEq,   // <=
-    GreaterEq,// >=
+    /// Equality operator (==)
+    Equal,
+    /// Inequality operator (!=)
+    NotEqual,
+    /// Less than operator (<)
+    Less,
+    /// Greater than operator (>)
+    Greater,
+    /// Less than or equal operator (<=)
+    LessEq,
+    /// Greater than or equal operator (>=)
+    GreaterEq,
 }
 
 /// Logical operators supported in condition expressions
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalOp {
-    And, // &&
-    Or,  // ||
+    /// Logical AND operator (&&)
+    And,
+    /// Logical OR operator (||)
+    Or,
 }
 
 /// Parser for condition expressions
@@ -142,7 +165,7 @@ impl ConditionParser {
         if parts.len() != 2 {
             return Err(ConditionError::ParseError {
                 expression: expression.to_string(),
-                details: format!("Invalid logical expression, expected '{}'", operator_str),
+                details: format!("Invalid logical expression, expected '{operator_str}'"),
             });
         }
         
