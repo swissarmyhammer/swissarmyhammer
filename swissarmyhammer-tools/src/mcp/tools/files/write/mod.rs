@@ -50,7 +50,7 @@ impl McpTool for WriteFileTool {
         arguments: serde_json::Map<String, serde_json::Value>,
         _context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
-        use crate::mcp::tools::files::shared_utils;
+        use crate::mcp::tools::files::shared_utils::SecureFileAccess;
         use serde::Deserialize;
 
         #[derive(Deserialize)]
@@ -62,19 +62,13 @@ impl McpTool for WriteFileTool {
         // Parse arguments
         let request: WriteRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        // Validate file path
-        let validated_path = shared_utils::validate_file_path(&request.file_path)?;
+        // Create secure file access with enhanced security validation
+        let secure_access = SecureFileAccess::default_secure();
+        
+        // Perform secure write operation
+        secure_access.write(&request.file_path, &request.content)?;
 
-        // Ensure parent directory exists
-        if let Some(parent_dir) = validated_path.parent() {
-            shared_utils::ensure_directory_exists(parent_dir)?;
-        }
-
-        // Write content to file
-        std::fs::write(&validated_path, &request.content)
-            .map_err(|e| shared_utils::handle_file_error(e, "write", &validated_path))?;
-
-        let success_message = format!("File written successfully: {}", validated_path.display());
+        let success_message = format!("File written successfully: {}", request.file_path);
         Ok(BaseToolImpl::create_success_response(success_message))
     }
 }
