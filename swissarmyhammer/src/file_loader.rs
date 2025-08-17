@@ -314,7 +314,11 @@ impl VirtualFileSystem {
         // Note: Builtin files are typically added via add_builtin method
 
         // Load user files from home directory
-        if let Some(home) = Self::get_home_dir() {
+        if let Ok(home_str) = std::env::var("HOME") {
+            let home = PathBuf::from(home_str);
+            let user_dir = home.join(".swissarmyhammer");
+            self.load_directory(&user_dir, FileSource::User)?;
+        } else if let Some(home) = dirs::home_dir() {
             let user_dir = home.join(".swissarmyhammer");
             self.load_directory(&user_dir, FileSource::User)?;
         }
@@ -345,7 +349,13 @@ impl VirtualFileSystem {
         let mut directories = Vec::new();
 
         // User directory
-        if let Some(home) = Self::get_home_dir() {
+        if let Ok(home_str) = std::env::var("HOME") {
+            let home = PathBuf::from(home_str);
+            let user_dir = home.join(".swissarmyhammer").join(&self.subdirectory);
+            if user_dir.exists() {
+                directories.push(user_dir);
+            }
+        } else if let Some(home) = dirs::home_dir() {
             let user_dir = home.join(".swissarmyhammer").join(&self.subdirectory);
             if user_dir.exists() {
                 directories.push(user_dir);
