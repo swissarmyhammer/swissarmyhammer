@@ -41,6 +41,124 @@ pub fn generate_parameter_help_text(param: &WorkflowParameter) -> String {
     help
 }
 
+/// Generate help text for a parameter with support for shared Parameter type
+pub fn generate_parameter_help_text_shared(param: &crate::common::Parameter) -> String {
+    let mut help = param.description.clone();
+
+    // Add default value if present
+    if let Some(default) = &param.default {
+        let default_str = match default {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => default.to_string(),
+        };
+        help = format!("{help} [default: {default_str}]");
+    }
+
+    // Add choices if present
+    if let Some(choices) = &param.choices {
+        let choices_str = choices.join(", ");
+        help = format!("{help} [possible values: {choices_str}]");
+    }
+
+    // Add validation hints
+    if let Some(validation) = &param.validation {
+        if let (Some(min), Some(max)) = (validation.min, validation.max) {
+            help = format!("{help} [range: {min}-{max}]");
+        } else if let Some(min) = validation.min {
+            help = format!("{help} [min: {min}]");
+        } else if let Some(max) = validation.max {
+            help = format!("{help} [max: {max}]");
+        }
+
+        if let (Some(min_len), Some(max_len)) = (validation.min_length, validation.max_length) {
+            help = format!("{help} [length: {min_len}-{max_len}]");
+        }
+    }
+
+    help
+}
+
+/// Generate grouped help text for parameters
+pub fn generate_grouped_help_text(
+    workflow_name: &str,
+    workflow_description: &str,
+    provider: &dyn crate::common::ParameterProvider,
+) -> String {
+    let mut help = String::new();
+
+    help.push_str(&format!("Execute workflow: {workflow_name}\n\n"));
+    help.push_str(&format!("{workflow_description}\n\n"));
+
+    let grouped_params = provider.get_parameters_by_group();
+
+    // Sort groups to ensure consistent output: general group last
+    let mut group_names: Vec<_> = grouped_params.keys().collect();
+    group_names.sort_by(|a, b| {
+        if *a == "general" {
+            std::cmp::Ordering::Greater
+        } else if *b == "general" {
+            std::cmp::Ordering::Less
+        } else {
+            a.cmp(b)
+        }
+    });
+
+    for group_name in group_names {
+        if let Some(group_params) = grouped_params.get(group_name) {
+            if group_params.is_empty() {
+                continue;
+            }
+
+            // Find group metadata for custom description
+            let group_title = if let Some(groups) = provider.get_parameter_groups() {
+                if let Some(group) = groups.iter().find(|g| &g.name == group_name) {
+                    format!("{}:", capitalize_words(&group.name))
+                } else {
+                    format!("{}:", capitalize_words(group_name))
+                }
+            } else {
+                format!("{}:", capitalize_words(group_name))
+            };
+
+            help.push_str(&format!("{group_title}\n"));
+
+            // List parameters in group
+            for param in group_params {
+                let switch_name = parameter_name_to_cli_switch(&param.name);
+                let param_help = generate_parameter_help_text_shared(param);
+                let required_indicator = if param.required { " (required)" } else { "" };
+
+                help.push_str(&format!(
+                    "  {:<20} {}{}\n",
+                    switch_name, param_help, required_indicator
+                ));
+            }
+
+            help.push('\n');
+        }
+    }
+
+    help
+}
+
+/// Capitalize words in a string (e.g., "deployment_config" -> "Deployment Config")
+fn capitalize_words(s: &str) -> String {
+    s.replace('_', " ")
+        .replace('-', " ")
+        .split_whitespace()
+        .map(|word| {
+            let mut chars: Vec<char> = word.chars().collect();
+            if let Some(first_char) = chars.get_mut(0) {
+                *first_char = first_char.to_ascii_uppercase();
+            }
+            chars.into_iter().collect::<String>()
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
 /// Discover workflow parameters for CLI argument generation
 ///
 /// This function loads a workflow by name and returns its parameter definitions

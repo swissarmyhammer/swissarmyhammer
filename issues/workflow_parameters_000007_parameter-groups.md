@@ -406,3 +406,143 @@ After completion, enables:
 - Builtin workflow migration to new parameter format
 - Comprehensive testing across all parameter features
 - Documentation updates with examples
+
+## Proposed Solution
+
+Based on my analysis of the existing parameter system, I will implement parameter groups as follows:
+
+### Architecture Overview
+
+The parameter system already has a solid foundation with:
+- `Parameter` struct in `common/parameters.rs` with validation and conditional logic
+- `WorkflowParameter` in `workflow/definition.rs` with conversion to shared Parameter type
+- Interactive prompting system in `common/interactive_prompts.rs`
+- CLI integration in `common/parameter_cli.rs`
+
+### Implementation Plan
+
+1. **Create ParameterGroup data structure** in `common/parameters.rs`:
+   - Add `ParameterGroup` struct with name, description, parameters list, and optional fields
+   - Include optional `collapsed` and `condition` fields for advanced UI control
+
+2. **Extend existing structures**:
+   - Add `parameter_groups: Option<Vec<ParameterGroup>>` to shared parameters system
+   - Add conversion methods to organize parameters by groups
+   - Maintain backward compatibility with existing workflows
+
+3. **Group organization methods**:
+   - `get_parameters_by_group()` - returns HashMap mapping group names to parameter lists
+   - `is_parameter_in_any_group()` - checks if parameter belongs to a group
+   - Handle ungrouped parameters in a default "general" group
+
+4. **Enhanced CLI help generation**:
+   - Update help text to display parameters organized by groups
+   - Add group headers with descriptions
+   - Maintain flat parameter list as fallback
+
+5. **Interactive prompting with groups**:
+   - Display group headers during interactive prompting
+   - Process parameters group by group for better UX
+   - Show group context for conditional parameters
+
+6. **Validation enhancements**:
+   - Validate that grouped parameters exist in the parameter list
+   - Prevent duplicate parameter assignments across groups
+   - Validate group-level conditions if implemented
+
+### Key Design Decisions
+
+- **Backward Compatibility**: Existing workflows without groups continue to work unchanged
+- **Optional Groups**: Groups are optional - parameters without groups go to "general" 
+- **Shared Parameter System**: Build on existing `Parameter` struct rather than duplicating
+- **Lazy Loading**: Use existing pattern of converting WorkflowParameter to Parameter as needed
+- **CLI Integration**: Extend existing help generation rather than replacing
+
+### File Changes
+
+- `swissarmyhammer/src/common/parameters.rs` - Add ParameterGroup struct and organization methods
+- `swissarmyhammer/src/common/parameter_cli.rs` - Update help generation for groups
+- `swissarmyhammer/src/common/interactive_prompts.rs` - Add group header display
+- `swissarmyhammer/src/workflow/definition.rs` - Add parameter_groups field to workflow metadata
+- Tests in all modified files
+
+This approach builds incrementally on the existing system and maintains full backward compatibility while adding the requested grouping functionality.
+
+## Implementation Notes
+
+Successfully completed the parameter groups implementation with the following features:
+
+### Core Implementation
+
+1. **ParameterGroup Structure** - Added `ParameterGroup` struct with:
+   - `name` and `description` fields
+   - `parameters` list for group membership
+   - Optional `collapsed` field for UI control
+   - Optional `condition` field for conditional groups
+   - Builder pattern methods for fluent API
+
+2. **ParameterProvider Enhancement** - Extended trait with:
+   - `get_parameter_groups()` method for group access
+   - `get_parameters_by_group()` for organized parameter lists
+   - `is_parameter_in_any_group()` for membership checks
+   - Automatic "general" group for ungrouped parameters
+
+3. **Workflow Integration** - Updated `Workflow` struct with:
+   - `parameter_groups: Option<Vec<ParameterGroup>>` field
+   - Proper serialization/deserialization support
+   - ParameterProvider trait implementation
+   - Backward compatibility maintained
+
+4. **Validation System** - Comprehensive validation including:
+   - Group name and description requirements
+   - Duplicate parameter assignment detection
+   - Non-existent parameter reference detection
+   - Integration with existing workflow validation
+
+5. **CLI Help Generation** - Enhanced help display with:
+   - `generate_grouped_help_text()` function
+   - Organized parameter display by groups
+   - Proper group headers and descriptions
+   - Fallback to flat display for ungrouped workflows
+
+6. **Interactive Prompting** - Improved UX with:
+   - `prompt_parameters_by_groups()` method
+   - Group headers during interactive prompting
+   - Conditional parameter handling within groups
+   - Clean separation between parameter groups
+
+### Testing Coverage
+
+- ParameterGroup creation and builder methods
+- ParameterProvider trait group functionality
+- Workflow validation with parameter groups
+- CLI help text generation with groups
+- Interactive prompting organization
+- Error handling for validation failures
+- Backward compatibility with existing workflows
+
+### Key Design Decisions
+
+- **Backward Compatibility**: All existing workflows continue to work unchanged
+- **Optional Groups**: Groups are entirely optional - workflows without groups work normally
+- **General Group**: Ungrouped parameters automatically go to a "general" group
+- **Shared Parameter System**: Built on existing Parameter infrastructure
+- **Validation Integration**: Group validation integrated into workflow validation pipeline
+
+### File Changes
+
+- `swissarmyhammer/src/common/parameters.rs` - ParameterGroup struct and trait methods
+- `swissarmyhammer/src/workflow/definition.rs` - Workflow integration and validation
+- `swissarmyhammer/src/common/parameter_cli.rs` - Grouped help generation
+- `swissarmyhammer/src/common/interactive_prompts.rs` - Group-aware prompting
+- `swissarmyhammer/src/common/mod.rs` - Module exports
+
+### Successful Test Results
+
+All tests pass including:
+- 4 parameter group workflow validation tests
+- 8 parameter group core functionality tests  
+- Full backward compatibility with existing parameter tests
+- Complete test coverage of the new functionality
+
+The implementation successfully meets all requirements from the issue specification and maintains full backward compatibility while providing the new parameter grouping functionality.

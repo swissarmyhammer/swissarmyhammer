@@ -494,10 +494,110 @@ impl Parameter {
     }
 }
 
+/// Parameter group for organizing related parameters
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParameterGroup {
+    /// The group name used for display
+    pub name: String,
+
+    /// Human-readable description of this group's purpose
+    pub description: String,
+
+    /// List of parameter names that belong to this group
+    pub parameters: Vec<String>,
+
+    /// Whether this group starts collapsed in UI (optional, defaults to false)
+    pub collapsed: Option<bool>,
+
+    /// Condition that determines when this group is shown (optional)
+    pub condition: Option<String>,
+}
+
+impl ParameterGroup {
+    /// Create a new parameter group
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters: Vec::new(),
+            collapsed: None,
+            condition: None,
+        }
+    }
+
+    /// Add a parameter to this group
+    pub fn with_parameter(mut self, parameter_name: impl Into<String>) -> Self {
+        self.parameters.push(parameter_name.into());
+        self
+    }
+
+    /// Add multiple parameters to this group
+    pub fn with_parameters(mut self, parameter_names: Vec<String>) -> Self {
+        self.parameters.extend(parameter_names);
+        self
+    }
+
+    /// Set whether this group should start collapsed
+    pub fn collapsed(mut self, collapsed: bool) -> Self {
+        self.collapsed = Some(collapsed);
+        self
+    }
+
+    /// Set a condition for when this group should be shown
+    pub fn with_condition(mut self, condition: impl Into<String>) -> Self {
+        self.condition = Some(condition.into());
+        self
+    }
+}
+
 /// Trait for types that can provide parameters
 pub trait ParameterProvider {
     /// Get the parameters defined for this provider
     fn get_parameters(&self) -> &[Parameter];
+
+    /// Get the parameter groups defined for this provider (optional)
+    fn get_parameter_groups(&self) -> Option<&[ParameterGroup]> {
+        None
+    }
+
+    /// Organize parameters by their groups
+    fn get_parameters_by_group(&self) -> HashMap<String, Vec<&Parameter>> {
+        let mut grouped = HashMap::new();
+        let parameters = self.get_parameters();
+
+        if let Some(groups) = self.get_parameter_groups() {
+            for group in groups {
+                let group_params: Vec<&Parameter> = parameters
+                    .iter()
+                    .filter(|p| group.parameters.contains(&p.name))
+                    .collect();
+                grouped.insert(group.name.clone(), group_params);
+            }
+        }
+
+        // Add ungrouped parameters to default group
+        let ungrouped: Vec<&Parameter> = parameters
+            .iter()
+            .filter(|p| !self.is_parameter_in_any_group(&p.name))
+            .collect();
+
+        if !ungrouped.is_empty() {
+            grouped.insert("general".to_string(), ungrouped);
+        }
+
+        grouped
+    }
+
+    /// Check if a parameter is in any group
+    fn is_parameter_in_any_group(&self, param_name: &str) -> bool {
+        if let Some(groups) = self.get_parameter_groups() {
+            groups
+                .iter()
+                .any(|g| g.parameters.contains(&param_name.to_string()))
+        } else {
+            false
+        }
+    }
 
     /// Validate that the provided context satisfies all parameter requirements
     fn validate_context(
@@ -571,7 +671,7 @@ impl ParameterResolver for DefaultParameterResolver {
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         // Parse CLI arguments
         let resolved = self.parse_cli_args(cli_args);
-        
+
         // Handle conditional parameters with iterative resolution
         self.resolve_conditional_parameters(parameters, resolved, interactive)
     }
@@ -586,20 +686,20 @@ impl DefaultParameterResolver {
         interactive: bool,
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         use crate::common::parameter_conditions::ConditionEvaluator;
-        
+
         let mut changed = true;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
-        
+
         while changed && iterations < MAX_ITERATIONS {
             changed = false;
             iterations += 1;
-            
+
             for param in parameters {
                 if resolved.contains_key(&param.name) {
                     continue; // Already resolved
                 }
-                
+
                 // Check if this parameter should be included based on its condition
                 let should_include = if let Some(condition) = &param.condition {
                     let evaluator = ConditionEvaluator::new(resolved.clone());
@@ -613,7 +713,7 @@ impl DefaultParameterResolver {
                 } else {
                     true // No condition means always include
                 };
-                
+
                 if should_include {
                     // Check if we can use a default value, regardless of whether it's required
                     if let Some(default) = &param.default {
@@ -626,12 +726,14 @@ impl DefaultParameterResolver {
                             // We'll use the original prompting system for now
                             let interactive_prompts =
                                 crate::common::interactive_prompts::InteractivePrompts::new(false);
-                            
+
                             // Create a temporary parameter list with just this parameter
                             let temp_params = vec![param.clone()];
                             let temp_resolved = HashMap::new(); // Start fresh for prompting
-                            
-                            match interactive_prompts.prompt_for_parameters(&temp_params, &temp_resolved) {
+
+                            match interactive_prompts
+                                .prompt_for_parameters(&temp_params, &temp_resolved)
+                            {
                                 Ok(prompted_values) => {
                                     if let Some(value) = prompted_values.get(&param.name) {
                                         resolved.insert(param.name.clone(), value.clone());
@@ -661,16 +763,17 @@ impl DefaultParameterResolver {
                 }
             }
         }
-        
+
         if iterations >= MAX_ITERATIONS {
             return Err(ParameterError::ValidationFailed {
                 message: "Too many iterations resolving conditional parameters - possible circular dependency".to_string(),
             });
         }
-        
+
         // Final validation pass to ensure all required parameters are present
         for param in parameters {
-            if self.is_parameter_required(param, &resolved)? && !resolved.contains_key(&param.name) {
+            if self.is_parameter_required(param, &resolved)? && !resolved.contains_key(&param.name)
+            {
                 if param.condition.is_some() {
                     return Err(ParameterError::ConditionalParameterMissing {
                         parameter: param.name.clone(),
@@ -683,22 +786,26 @@ impl DefaultParameterResolver {
                 }
             }
         }
-        
+
         Ok(resolved)
     }
-    
+
     /// Check if a parameter is required given the current context
-    fn is_parameter_required(&self, param: &Parameter, context: &HashMap<String, serde_json::Value>) -> ParameterResult<bool> {
+    fn is_parameter_required(
+        &self,
+        param: &Parameter,
+        context: &HashMap<String, serde_json::Value>,
+    ) -> ParameterResult<bool> {
         if let Some(condition) = &param.condition {
             use crate::common::parameter_conditions::ConditionEvaluator;
-            
+
             let evaluator = ConditionEvaluator::new(context.clone());
             match evaluator.evaluate(&condition.expression) {
                 Ok(condition_met) => Ok(param.required && condition_met),
                 Err(_) => {
                     // If condition can't be evaluated (missing params), assume not required for now
                     Ok(false)
-                },
+                }
             }
         } else {
             Ok(param.required)
@@ -1719,10 +1826,14 @@ mod tests {
     #[test]
     fn test_parameter_with_condition() {
         use crate::common::parameter_conditions::ParameterCondition;
-        
-        let param = Parameter::new("prod_confirmation", "Production confirmation", ParameterType::Boolean)
-            .required(true)
-            .with_condition(ParameterCondition::new("deploy_env == 'prod'"));
+
+        let param = Parameter::new(
+            "prod_confirmation",
+            "Production confirmation",
+            ParameterType::Boolean,
+        )
+        .required(true)
+        .with_condition(ParameterCondition::new("deploy_env == 'prod'"));
 
         assert!(param.condition.is_some());
         let condition = param.condition.unwrap();
@@ -1743,40 +1854,60 @@ mod tests {
     fn test_conditional_parameter_resolver() {
         // Test that the existing resolver still works
         let resolver = DefaultParameterResolver::new();
-        
+
         // Parameter without condition should work as before
-        let param = Parameter::new("normal_param", "Normal parameter", ParameterType::String).required(true);
+        let param = Parameter::new("normal_param", "Normal parameter", ParameterType::String)
+            .required(true);
         let parameters = vec![param];
 
         let mut cli_args = HashMap::new();
         cli_args.insert("normal_param".to_string(), "value".to_string());
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result.get("normal_param").unwrap(), &serde_json::json!("value"));
+        assert_eq!(
+            result.get("normal_param").unwrap(),
+            &serde_json::json!("value")
+        );
     }
 
     #[test]
     fn test_conditional_parameter_basic_scenario() {
         let resolver = DefaultParameterResolver::new();
-        
+
         // Base parameter that determines condition
-        let deploy_env = Parameter::new("deploy_env", "Deployment environment", ParameterType::Choice)
-            .with_choices(vec!["dev".to_string(), "staging".to_string(), "prod".to_string()])
-            .required(true);
-            
+        let deploy_env = Parameter::new(
+            "deploy_env",
+            "Deployment environment",
+            ParameterType::Choice,
+        )
+        .with_choices(vec![
+            "dev".to_string(),
+            "staging".to_string(),
+            "prod".to_string(),
+        ])
+        .required(true);
+
         // Conditional parameter that appears only for prod
-        let prod_confirmation = Parameter::new("prod_confirmation", "Production confirmation", ParameterType::Boolean)
-            .required(true)
-            .when("deploy_env == 'prod'");
-            
+        let prod_confirmation = Parameter::new(
+            "prod_confirmation",
+            "Production confirmation",
+            ParameterType::Boolean,
+        )
+        .required(true)
+        .when("deploy_env == 'prod'");
+
         let parameters = vec![deploy_env, prod_confirmation];
 
         // Test 1: deploy_env = dev, should not require prod_confirmation
         let mut cli_args = HashMap::new();
         cli_args.insert("deploy_env".to_string(), "dev".to_string());
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("deploy_env").unwrap(), &serde_json::json!("dev"));
         assert!(!result.contains_key("prod_confirmation"));
@@ -1787,8 +1918,12 @@ mod tests {
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false);
         assert!(result.is_err());
-        
-        if let Err(ParameterError::ConditionalParameterMissing { parameter, condition }) = result {
+
+        if let Err(ParameterError::ConditionalParameterMissing {
+            parameter,
+            condition,
+        }) = result
+        {
             assert_eq!(parameter, "prod_confirmation");
             assert_eq!(condition, "deploy_env == 'prod'");
         } else {
@@ -1800,31 +1935,41 @@ mod tests {
         cli_args.insert("deploy_env".to_string(), "prod".to_string());
         cli_args.insert("prod_confirmation".to_string(), "true".to_string());
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get("deploy_env").unwrap(), &serde_json::json!("prod"));
-        assert_eq!(result.get("prod_confirmation").unwrap(), &serde_json::json!(true));
+        assert_eq!(
+            result.get("deploy_env").unwrap(),
+            &serde_json::json!("prod")
+        );
+        assert_eq!(
+            result.get("prod_confirmation").unwrap(),
+            &serde_json::json!(true)
+        );
     }
 
     #[test]
     fn test_conditional_parameter_with_defaults() {
         let resolver = DefaultParameterResolver::new();
-        
+
         let enable_ssl = Parameter::new("enable_ssl", "Enable SSL", ParameterType::Boolean)
             .with_default(serde_json::json!(false))
             .required(false);
-            
+
         let cert_path = Parameter::new("cert_path", "SSL certificate path", ParameterType::String)
             .required(true)
             .when("enable_ssl == true")
             .with_default(serde_json::json!("/etc/ssl/cert.pem"));
-            
+
         let parameters = vec![enable_ssl, cert_path];
 
         // Test 1: No CLI args, should use defaults and not require cert_path
         let cli_args = HashMap::new();
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
-        
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
+
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(false));
         assert!(!result.contains_key("cert_path"));
@@ -1833,34 +1978,41 @@ mod tests {
         let mut cli_args = HashMap::new();
         cli_args.insert("enable_ssl".to_string(), "true".to_string());
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(true));
-        assert_eq!(result.get("cert_path").unwrap(), &serde_json::json!("/etc/ssl/cert.pem"));
+        assert_eq!(
+            result.get("cert_path").unwrap(),
+            &serde_json::json!("/etc/ssl/cert.pem")
+        );
     }
 
     #[test]
     fn test_conditional_parameter_complex_logic() {
         let resolver = DefaultParameterResolver::new();
-        
-        let env = Parameter::new("env", "Environment", ParameterType::String)
-            .required(true);
-            
+
+        let env = Parameter::new("env", "Environment", ParameterType::String).required(true);
+
         let urgent = Parameter::new("urgent", "Urgent deployment", ParameterType::Boolean)
             .with_default(serde_json::json!(false));
-            
+
         // Complex condition: show this parameter if env is prod OR urgent is true
-        let approval_token = Parameter::new("approval_token", "Approval token", ParameterType::String)
-            .required(true)
-            .when("env == 'prod' || urgent == true");
-            
+        let approval_token =
+            Parameter::new("approval_token", "Approval token", ParameterType::String)
+                .required(true)
+                .when("env == 'prod' || urgent == true");
+
         let parameters = vec![env, urgent, approval_token];
 
         // Test 1: env = dev, urgent = false -> no approval_token needed
         let mut cli_args = HashMap::new();
         cli_args.insert("env".to_string(), "dev".to_string());
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 2);
         assert!(!result.contains_key("approval_token"));
 
@@ -1883,29 +2035,38 @@ mod tests {
     #[test]
     fn test_conditional_parameter_dependency_chain() {
         let resolver = DefaultParameterResolver::new();
-        
+
         // Chain: database_type -> requires_ssl -> cert_path
         let database_type = Parameter::new("database_type", "Database type", ParameterType::Choice)
-            .with_choices(vec!["mysql".to_string(), "postgres".to_string(), "redis".to_string()])
+            .with_choices(vec![
+                "mysql".to_string(),
+                "postgres".to_string(),
+                "redis".to_string(),
+            ])
             .required(true);
-            
+
         let requires_ssl = Parameter::new("requires_ssl", "SSL required", ParameterType::Boolean)
             .when("database_type in [\"mysql\", \"postgres\"]")
             .with_default(serde_json::json!(true));
-            
+
         let cert_path = Parameter::new("cert_path", "Certificate path", ParameterType::String)
             .required(true)
             .when("requires_ssl == true");
-            
+
         let parameters = vec![database_type, requires_ssl, cert_path];
 
         // Test 1: database_type = redis -> no SSL needed, no cert needed
         let mut cli_args = HashMap::new();
         cli_args.insert("database_type".to_string(), "redis".to_string());
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result.get("database_type").unwrap(), &serde_json::json!("redis"));
+        assert_eq!(
+            result.get("database_type").unwrap(),
+            &serde_json::json!("redis")
+        );
         assert!(!result.contains_key("requires_ssl"));
         assert!(!result.contains_key("cert_path"));
 
@@ -1919,12 +2080,212 @@ mod tests {
         // Test 3: database_type = mysql, cert_path provided -> should work
         let mut cli_args = HashMap::new();
         cli_args.insert("database_type".to_string(), "mysql".to_string());
-        cli_args.insert("cert_path".to_string(), "/etc/mysql/ssl/cert.pem".to_string());
+        cli_args.insert(
+            "cert_path".to_string(),
+            "/etc/mysql/ssl/cert.pem".to_string(),
+        );
 
-        let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
+        let result = resolver
+            .resolve_parameters(&parameters, &cli_args, false)
+            .unwrap();
         assert_eq!(result.len(), 3);
-        assert_eq!(result.get("database_type").unwrap(), &serde_json::json!("mysql"));
-        assert_eq!(result.get("requires_ssl").unwrap(), &serde_json::json!(true));
-        assert_eq!(result.get("cert_path").unwrap(), &serde_json::json!("/etc/mysql/ssl/cert.pem"));
+        assert_eq!(
+            result.get("database_type").unwrap(),
+            &serde_json::json!("mysql")
+        );
+        assert_eq!(
+            result.get("requires_ssl").unwrap(),
+            &serde_json::json!(true)
+        );
+        assert_eq!(
+            result.get("cert_path").unwrap(),
+            &serde_json::json!("/etc/mysql/ssl/cert.pem")
+        );
+    }
+
+    // Tests for ParameterGroup
+
+    #[test]
+    fn test_parameter_group_creation() {
+        let group = ParameterGroup::new("deployment", "Deployment settings")
+            .with_parameter("env")
+            .with_parameter("region")
+            .collapsed(true)
+            .with_condition("mode == 'advanced'");
+
+        assert_eq!(group.name, "deployment");
+        assert_eq!(group.description, "Deployment settings");
+        assert_eq!(group.parameters, vec!["env", "region"]);
+        assert_eq!(group.collapsed, Some(true));
+        assert_eq!(group.condition, Some("mode == 'advanced'".to_string()));
+    }
+
+    #[test]
+    fn test_parameter_group_with_parameters() {
+        let group = ParameterGroup::new("security", "Security configuration")
+            .with_parameters(vec!["enable_ssl".to_string(), "cert_path".to_string()]);
+
+        assert_eq!(group.name, "security");
+        assert_eq!(group.description, "Security configuration");
+        assert_eq!(group.parameters, vec!["enable_ssl", "cert_path"]);
+        assert_eq!(group.collapsed, None);
+        assert_eq!(group.condition, None);
+    }
+
+    // Tests for ParameterProvider trait with groups
+
+    #[derive(Debug)]
+    struct TestParameterProvider {
+        parameters: Vec<Parameter>,
+        groups: Option<Vec<ParameterGroup>>,
+    }
+
+    impl ParameterProvider for TestParameterProvider {
+        fn get_parameters(&self) -> &[Parameter] {
+            &self.parameters
+        }
+
+        fn get_parameter_groups(&self) -> Option<&[ParameterGroup]> {
+            self.groups.as_ref().map(|g| g.as_slice())
+        }
+    }
+
+    #[test]
+    fn test_parameter_provider_with_groups() {
+        let parameters = vec![
+            Parameter::new(
+                "deploy_env",
+                "Deployment environment",
+                ParameterType::Choice,
+            )
+            .with_choices(vec!["dev".to_string(), "prod".to_string()]),
+            Parameter::new("region", "AWS region", ParameterType::String),
+            Parameter::new("enable_ssl", "Enable SSL", ParameterType::Boolean),
+            Parameter::new("debug", "Enable debug mode", ParameterType::Boolean),
+        ];
+
+        let groups = vec![
+            ParameterGroup::new("deployment", "Deployment settings")
+                .with_parameters(vec!["deploy_env".to_string(), "region".to_string()]),
+            ParameterGroup::new("security", "Security settings").with_parameter("enable_ssl"),
+        ];
+
+        let provider = TestParameterProvider {
+            parameters,
+            groups: Some(groups),
+        };
+
+        // Test get_parameter_groups
+        let retrieved_groups = provider.get_parameter_groups().unwrap();
+        assert_eq!(retrieved_groups.len(), 2);
+        assert_eq!(retrieved_groups[0].name, "deployment");
+        assert_eq!(retrieved_groups[1].name, "security");
+
+        // Test get_parameters_by_group
+        let grouped = provider.get_parameters_by_group();
+        assert_eq!(grouped.len(), 3); // deployment, security, general
+
+        // Check deployment group
+        let deployment_params = grouped.get("deployment").unwrap();
+        assert_eq!(deployment_params.len(), 2);
+        assert!(deployment_params.iter().any(|p| p.name == "deploy_env"));
+        assert!(deployment_params.iter().any(|p| p.name == "region"));
+
+        // Check security group
+        let security_params = grouped.get("security").unwrap();
+        assert_eq!(security_params.len(), 1);
+        assert_eq!(security_params[0].name, "enable_ssl");
+
+        // Check general group (ungrouped parameters)
+        let general_params = grouped.get("general").unwrap();
+        assert_eq!(general_params.len(), 1);
+        assert_eq!(general_params[0].name, "debug");
+
+        // Test is_parameter_in_any_group
+        assert!(provider.is_parameter_in_any_group("deploy_env"));
+        assert!(provider.is_parameter_in_any_group("enable_ssl"));
+        assert!(!provider.is_parameter_in_any_group("debug")); // Not in any explicit group
+        assert!(!provider.is_parameter_in_any_group("nonexistent"));
+    }
+
+    #[test]
+    fn test_parameter_provider_without_groups() {
+        let parameters = vec![
+            Parameter::new("param1", "Parameter 1", ParameterType::String),
+            Parameter::new("param2", "Parameter 2", ParameterType::Boolean),
+        ];
+
+        let provider = TestParameterProvider {
+            parameters,
+            groups: None,
+        };
+
+        // Test get_parameter_groups
+        assert!(provider.get_parameter_groups().is_none());
+
+        // Test get_parameters_by_group - should put all parameters in general group
+        let grouped = provider.get_parameters_by_group();
+        assert_eq!(grouped.len(), 1);
+
+        let general_params = grouped.get("general").unwrap();
+        assert_eq!(general_params.len(), 2);
+        assert!(general_params.iter().any(|p| p.name == "param1"));
+        assert!(general_params.iter().any(|p| p.name == "param2"));
+
+        // Test is_parameter_in_any_group
+        assert!(!provider.is_parameter_in_any_group("param1"));
+        assert!(!provider.is_parameter_in_any_group("param2"));
+    }
+
+    #[test]
+    fn test_parameter_provider_empty_groups() {
+        let parameters = vec![Parameter::new(
+            "param1",
+            "Parameter 1",
+            ParameterType::String,
+        )];
+
+        let provider = TestParameterProvider {
+            parameters,
+            groups: Some(vec![]), // Empty groups
+        };
+
+        // Test get_parameters_by_group - should put all parameters in general group
+        let grouped = provider.get_parameters_by_group();
+        assert_eq!(grouped.len(), 1);
+
+        let general_params = grouped.get("general").unwrap();
+        assert_eq!(general_params.len(), 1);
+        assert_eq!(general_params[0].name, "param1");
+    }
+
+    #[test]
+    fn test_parameter_provider_group_ordering() {
+        let parameters = vec![
+            Parameter::new("a", "Parameter A", ParameterType::String),
+            Parameter::new("b", "Parameter B", ParameterType::String),
+            Parameter::new("c", "Parameter C", ParameterType::String),
+            Parameter::new("d", "Parameter D", ParameterType::String), // ungrouped
+        ];
+
+        let groups = vec![
+            ParameterGroup::new("zebra", "Z group").with_parameter("a"),
+            ParameterGroup::new("alpha", "A group").with_parameter("b"),
+            ParameterGroup::new("beta", "B group").with_parameter("c"),
+        ];
+
+        let provider = TestParameterProvider {
+            parameters,
+            groups: Some(groups),
+        };
+
+        let grouped = provider.get_parameters_by_group();
+        assert_eq!(grouped.len(), 4); // alpha, beta, zebra, general
+
+        // Verify all groups are present
+        assert!(grouped.contains_key("alpha"));
+        assert!(grouped.contains_key("beta"));
+        assert!(grouped.contains_key("zebra"));
+        assert!(grouped.contains_key("general"));
     }
 }
