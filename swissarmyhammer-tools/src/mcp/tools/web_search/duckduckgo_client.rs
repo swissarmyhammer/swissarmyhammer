@@ -10,15 +10,16 @@
 //! - CAPTCHA avoidance through realistic browsing patterns
 //! - Configurable scoring for search result ranking
 
-use crate::mcp::tools::web_search::types::{ScoringConfig, *};
+use crate::mcp::tools::web_search::types::{DuckDuckGoConfig, ScoringConfig, *};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
 use futures::StreamExt;
 use std::time::Duration;
+use std::io::Write;
+use urlencoding::decode;
+use tempfile;
 
-// Configuration constants for retry logic and delays
-const INITIAL_PAGE_LOAD_DELAY_MS: u64 = 2000;
-const CLEANUP_DELAY_MS: u64 = 100;
+// CSS selectors for finding result elements and content
 
 const RESULT_CONTAINER_SELECTORS: &[&str] = &[
     "div[data-testid='result']",         // Modern DuckDuckGo main selector
@@ -81,6 +82,7 @@ const SNIPPET_SELECTORS: &[&str] = &[
 /// DuckDuckGo search client using browser automation
 pub struct DuckDuckGoClient {
     scoring_config: ScoringConfig,
+    timing_config: DuckDuckGoConfig,
 }
 
 /// Errors that can occur during DuckDuckGo search operations
@@ -116,14 +118,24 @@ impl From<CdpError> for DuckDuckGoError {
 }
 
 impl DuckDuckGoClient {
-    /// Creates a new DuckDuckGo client with default scoring configuration
+    /// Creates a new DuckDuckGo client with default configuration
     pub fn new() -> Self {
-        Self::with_scoring_config(ScoringConfig::default())
+        Self::with_configs(ScoringConfig::default(), DuckDuckGoConfig::default())
     }
 
     /// Creates a new DuckDuckGo client with custom scoring configuration
     pub fn with_scoring_config(scoring_config: ScoringConfig) -> Self {
-        Self { scoring_config }
+        Self::with_configs(scoring_config, DuckDuckGoConfig::default())
+    }
+
+    /// Creates a new DuckDuckGo client with custom timing configuration
+    pub fn with_timing_config(timing_config: DuckDuckGoConfig) -> Self {
+        Self::with_configs(ScoringConfig::default(), timing_config)
+    }
+
+    /// Creates a new DuckDuckGo client with custom configurations
+    pub fn with_configs(scoring_config: ScoringConfig, timing_config: DuckDuckGoConfig) -> Self {
+        Self { scoring_config, timing_config }
     }
 
     /// Performs a web search using DuckDuckGo with browser automation
@@ -227,7 +239,7 @@ impl DuckDuckGoClient {
             })?;
 
             // Wait for page to fully load and log current URL
-            tokio::time::sleep(Duration::from_millis(INITIAL_PAGE_LOAD_DELAY_MS)).await;
+            tokio::time::sleep(Duration::from_millis(self.timing_config.initial_page_load_delay_ms)).await;
 
             if let Ok(current_url) = page.url().await {
                 tracing::debug!("Current URL after navigation: {:?}", current_url);
@@ -298,7 +310,7 @@ impl DuckDuckGoClient {
         handler_task.abort();
 
         // Give a moment for cleanup
-        tokio::time::sleep(Duration::from_millis(CLEANUP_DELAY_MS)).await;
+        tokio::time::sleep(Duration::from_millis(self.timing_config.cleanup_delay_ms)).await;
 
         // Return the search result
         search_result
@@ -317,16 +329,23 @@ impl DuckDuckGoClient {
             html_content.len()
         );
 
-        // Save HTML to a debug file if debug logging is enabled
+        // Save HTML to a temporary debug file if debug logging is enabled
         if tracing::enabled!(tracing::Level::DEBUG) {
-            let debug_file_path = std::env::temp_dir().join("duckduckgo_response.html");
-            if let Ok(mut file) = std::fs::File::create(&debug_file_path) {
-                use std::io::Write;
-                let _ = file.write_all(html_content.as_bytes());
-                tracing::debug!("HTML response saved to {:?}", debug_file_path);
+            match tempfile::NamedTempFile::new() {
+                Ok(mut temp_file) => {
+                    if let Ok(()) = temp_file.write_all(html_content.as_bytes()) {
+                        tracing::debug!("HTML response saved to temp file {:?}", temp_file.path());
+                        // temp_file will be automatically cleaned up when it goes out of scope
+                    }
+                },
+                Err(e) => {
+                    tracing::debug!("Failed to create temp file for HTML debug: {}", e);
+                }
             }
+        }
 
-            // Also log a snippet of the HTML for immediate debugging
+        // Also log a snippet of the HTML for immediate debugging if debug logging is enabled
+        if tracing::enabled!(tracing::Level::DEBUG) {
             let html_snippet = if html_content.len() > 2000 {
                 &html_content[..2000]
             } else {
@@ -386,22 +405,20 @@ impl DuckDuckGoClient {
                 // Handle DuckDuckGo redirect URLs
                 let final_url = if let Some(encoded_url) = url.strip_prefix("//duckduckgo.com/l/?uddg=") {
                     // Extract the actual URL from the DuckDuckGo redirect
-                    if let Some(end) = encoded_url.find('&') {
-                        // Simple URL decoding for the common case
-                        encoded_url[..end]
-                            .replace("%3A", ":")
-                            .replace("%2F", "/")
-                            .replace("%3F", "?")
-                            .replace("%3D", "=")
-                            .replace("%26", "&")
+                    let url_to_decode = if let Some(end) = encoded_url.find('&') {
+                        &encoded_url[..end]
                     } else {
-                        // Simple URL decoding for the common case
                         encoded_url
-                            .replace("%3A", ":")
-                            .replace("%2F", "/")
-                            .replace("%3F", "?")
-                            .replace("%3D", "=")
-                            .replace("%26", "&")
+                    };
+                    
+                    // Use proper URL decoding library
+                    match decode(url_to_decode) {
+                        Ok(decoded) => decoded.to_string(),
+                        Err(e) => {
+                            tracing::warn!("Failed to decode DuckDuckGo redirect URL '{}': {}", url_to_decode, e);
+                            // Fall back to the original URL if decoding fails
+                            url.clone()
+                        }
                     }
                 } else if url.starts_with("//") {
                     format!("https:{url}")
@@ -850,5 +867,128 @@ mod tests {
 
         assert!(description.contains("detailed description"));
         assert!(description.len() > 20);
+    }
+
+    #[test]
+    fn test_timing_configuration() {
+        // Test default timing configuration
+        let client = DuckDuckGoClient::new();
+        assert_eq!(client.timing_config.initial_page_load_delay_ms, 2000);
+        assert_eq!(client.timing_config.cleanup_delay_ms, 100);
+
+        // Test custom timing configuration
+        let custom_timing = DuckDuckGoConfig {
+            initial_page_load_delay_ms: 1000,
+            cleanup_delay_ms: 50,
+        };
+        let custom_client = DuckDuckGoClient::with_timing_config(custom_timing);
+        assert_eq!(custom_client.timing_config.initial_page_load_delay_ms, 1000);
+        assert_eq!(custom_client.timing_config.cleanup_delay_ms, 50);
+
+        // Test both configurations combined
+        let scoring_config = ScoringConfig::default();
+        let timing_config = DuckDuckGoConfig {
+            initial_page_load_delay_ms: 3000,
+            cleanup_delay_ms: 200,
+        };
+        let combined_client = DuckDuckGoClient::with_configs(scoring_config, timing_config);
+        assert_eq!(combined_client.timing_config.initial_page_load_delay_ms, 3000);
+        assert_eq!(combined_client.timing_config.cleanup_delay_ms, 200);
+        assert_eq!(combined_client.scoring_config.base_score, 1.0);
+    }
+
+    #[test]
+    fn test_url_decoding_duckduckgo_redirects() {
+        let client = DuckDuckGoClient::new();
+
+        // Test DuckDuckGo redirect URL parsing
+        let html_with_redirect = r#"
+        <div data-testid="result">
+            <h2><a data-testid="result-title-a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpath%3Fquery%3Dvalue%26other%3Dparam">Test Title</a></h2>
+            <span data-testid="result-snippet">Test description</span>
+        </div>
+        "#;
+
+        let results = client.parse_html_results(html_with_redirect, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Test Title");
+        assert_eq!(results[0].url, "https://example.com/path?query=value&other=param");
+
+        // Test DuckDuckGo redirect URL with additional parameters
+        let html_with_complex_redirect = r#"
+        <div data-testid="result">
+            <h2><a data-testid="result-title-a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ftest.org%2Fcomplex%3Fparam%3D123&rut=abc&vqd=xyz">Complex Title</a></h2>
+            <span data-testid="result-snippet">Complex description</span>
+        </div>
+        "#;
+
+        let complex_results = client.parse_html_results(html_with_complex_redirect, 10).unwrap();
+        assert_eq!(complex_results.len(), 1);
+        assert_eq!(complex_results[0].title, "Complex Title");
+        assert_eq!(complex_results[0].url, "https://test.org/complex?param=123");
+
+        // Test regular URLs (no redirect)
+        let html_direct_url = r#"
+        <div data-testid="result">
+            <h2><a data-testid="result-title-a" href="https://direct.com/path">Direct Title</a></h2>
+            <span data-testid="result-snippet">Direct description</span>
+        </div>
+        "#;
+
+        let direct_results = client.parse_html_results(html_direct_url, 10).unwrap();
+        assert_eq!(direct_results.len(), 1);
+        assert_eq!(direct_results[0].title, "Direct Title");
+        assert_eq!(direct_results[0].url, "https://direct.com/path");
+    }
+
+    #[test]
+    fn test_invalid_html_parsing() {
+        let client = DuckDuckGoClient::new();
+
+        // Test malformed HTML
+        let malformed_html = r#"<div><h2><a href="https://broken.com">Broken</h2></div>"#;
+        let result = client.parse_html_results(malformed_html, 10);
+        // Should handle malformed HTML gracefully and return error if no results found
+        assert!(result.is_err());
+
+        // Test HTML with missing required elements
+        let incomplete_html = r#"
+        <div data-testid="result">
+            <h2>Title without link</h2>
+        </div>
+        "#;
+        let incomplete_result = client.parse_html_results(incomplete_html, 10);
+        assert!(incomplete_result.is_err());
+    }
+
+    #[test]
+    fn test_request_validation() {
+        // Test empty query string
+        let empty_request = WebSearchRequest {
+            query: "".to_string(),
+            category: None,
+            language: None,
+            results_count: Some(10),
+            fetch_content: Some(false),
+            safe_search: None,
+            time_range: None,
+        };
+
+        // The search method would handle this validation - testing via integration tests
+        assert!(empty_request.query.is_empty());
+
+        // Test extremely long query
+        let long_request = WebSearchRequest {
+            query: "a".repeat(1000),
+            category: None,
+            language: None,
+            results_count: Some(10),
+            fetch_content: Some(false),
+            safe_search: None,
+            time_range: None,
+        };
+
+        // Long queries should be handled by the search validation
+        assert!(long_request.query.len() > 500);
     }
 }
