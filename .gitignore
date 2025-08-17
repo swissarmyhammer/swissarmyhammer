@@ -70,3 +70,7 @@ doc/book
 
 # Test home directories (temporary test fixtures)
 tests/test-home/
+
+# Test workflow files (not part of the project source)
+builtin/workflows/*-test.md
+.swissarmyhammer/workflows/

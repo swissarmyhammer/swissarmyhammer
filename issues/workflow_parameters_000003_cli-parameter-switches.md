@@ -174,3 +174,182 @@ After completion, enables:
 - Interactive parameter prompting for missing parameters
 - Enhanced help text with parameter documentation
 - Parameter completion support in shells
+
+## Proposed Solution
+
+After analyzing the codebase, I will implement CLI parameter switch generation using a **two-pass parsing approach** that:
+
+### 1. Two-Pass CLI Parsing Strategy
+
+**Pass 1**: Parse the workflow name from arguments (minimal parsing)
+- Use a simplified parser to extract workflow name
+- Load workflow and discover parameters
+- Generate dynamic CLI arguments
+
+**Pass 2**: Re-parse with complete argument definitions
+- Include both static arguments (`--var`, `--set`, etc.) 
+- Include dynamically generated workflow parameter switches
+- Perform full validation and parameter resolution
+
+### 2. Implementation Architecture
+
+**New Files to Create:**
+- `swissarmyhammer-cli/src/parameter_cli.rs` - CLI integration helpers
+- `swissarmyhammer/src/common/parameter_cli.rs` - Shared CLI utilities
+
+**Modified Files:**
+- `swissarmyhammer-cli/src/cli.rs` - Enhanced FlowRun command with dynamic parsing
+- `swissarmyhammer-cli/src/flow.rs` - Parameter resolution integration
+
+### 3. Technical Implementation Details
+
+**WorkflowParameter Extensions:**
+```rust
+impl WorkflowParameter {
+    pub fn to_cli_arg_name(&self) -> String {
+        format!("--{}", self.name.replace('_', "-"))
+    }
+    
+    pub fn to_clap_arg(&self) -> clap::Arg {
+        // Convert parameter to clap::Arg with proper validation
+    }
+}
+```
+
+**Dynamic Command Structure:**
+```rust
+pub struct DynamicFlowRunCommand {
+    // Static fields
+    pub workflow: String,
+    pub vars: Vec<String>,
+    pub set: Vec<String>,
+    pub interactive: bool,
+    // ... other existing fields
+    
+    // Dynamic parameter storage
+    pub workflow_params: HashMap<String, serde_json::Value>,
+}
+```
+
+**Parameter Resolution Order:**
+1. Dedicated parameter switches (`--person-name "John"`)
+2. Variable switches (`--var person_name=John`) 
+3. Default values from parameter definitions
+4. Interactive prompting (if missing and required)
+
+### 4. Help Text Generation
+
+Generate comprehensive help dynamically:
+
+```bash
+$ sah flow run greeting --help
+
+Execute the 'greeting' workflow
+
+Usage: sah flow run greeting [OPTIONS]
+
+Workflow Parameters:
+  --person-name <PERSON_NAME>    The name of the person to greet [required]
+  --language <LANGUAGE>          Language for greeting [default: English]
+                                 [possible values: English, Spanish, French]
+  --enthusiastic                 Use enthusiastic greeting style
+
+General Options:  
+  --var <KEY=VALUE>             Set workflow variable
+  --set <KEY=VALUE>             Set liquid template variable
+  --interactive                 Run in interactive mode
+  --help                        Print help
+```
+
+### 5. Backward Compatibility
+
+- Existing `--var` and `--set` continue to work unchanged
+- New parameter switches take precedence over `--var`
+- No breaking changes to existing workflows or scripts
+- Clear migration path with both approaches supported
+
+### 6. Testing Strategy
+
+- Two-pass parsing validation tests
+- Parameter precedence resolution tests  
+- Dynamic help text generation tests
+- CLI argument conversion tests
+- Integration tests with real workflow files
+- Backward compatibility regression tests
+
+This approach provides the full requested functionality while maintaining clean architecture and complete backward compatibility.
+## Implementation Progress Update
+
+I have successfully implemented the core infrastructure for CLI parameter switch generation from workflow parameter definitions. Here's what has been completed:
+
+### ✅ Completed Components
+
+**1. Parameter Discovery System** (`swissarmyhammer/src/common/parameter_cli.rs`):
+- `discover_workflow_parameters()` - Loads workflow and extracts parameter definitions
+- `resolve_parameters_from_vars()` - Resolves parameters from --var arguments with type validation
+- `generate_parameter_help_text()` - Generates formatted help text for parameters
+- `parameter_name_to_cli_switch()` - Converts parameter names to CLI switch format
+
+**2. CLI Integration** (`swissarmyhammer-cli/src/parameter_cli.rs`):
+- `resolve_workflow_parameters()` - Main integration function for workflow parameter resolution
+- `get_workflow_parameters_for_help()` - Helper for dynamic help text generation
+
+**3. Flow Command Integration** (`swissarmyhammer-cli/src/flow.rs`):
+- Integrated parameter resolution into the existing `flow run` command
+- Maintains backward compatibility with existing `--var` and `--set` approaches
+- Parameters resolved with proper precedence: workflow parameters → defaults → --var fallback
+
+### ✅ Key Features Implemented
+
+**Parameter Resolution with Precedence**:
+1. Workflow parameter definitions (from frontmatter) - highest precedence
+2. `--var` arguments for parameters - medium precedence
+3. Default values from parameter schema - low precedence
+4. Required parameter validation with clear error messages
+
+**Type-Safe Parameter Processing**:
+- String, Boolean, Number, Choice, and MultiChoice parameter types
+- Proper JSON value conversion for workflow execution
+- Type validation with descriptive error messages
+
+**Backward Compatibility**:
+- Existing `--var key=value` approach continues to work unchanged
+- Additional variables not defined in workflow schema still processed normally
+- No breaking changes to existing workflows
+
+### 🏗️ Architecture Decisions
+
+**Two-Pass Parsing Approach**: While the full dynamic CLI argument generation with clap proved complex due to lifetime requirements, I implemented a practical approach that:
+- Discovers workflow parameters when the workflow is loaded (not during CLI parsing)
+- Resolves parameters from existing CLI arguments and defaults
+- Provides the foundation for future dynamic CLI argument generation
+
+**Graceful Degradation**: The system gracefully handles:
+- Workflows without parameter definitions
+- Missing or invalid workflow files
+- Parameter resolution errors (with warnings)
+
+### 🧪 Testing Status
+
+- Basic unit tests for parameter utilities
+- Integration with existing flow command
+- Compilation and basic functionality verified
+
+### 📝 Next Steps for Full Implementation
+
+The remaining work to complete the original vision includes:
+
+1. **Dynamic CLI Argument Generation**: Implement actual dynamic `--parameter-name` switches (requires solving clap lifetime issues)
+2. **Enhanced Help Text**: Generate dynamic help showing workflow-specific parameters  
+3. **Comprehensive Testing**: Full test coverage for all parameter types and edge cases
+4. **CLI Help Integration**: Show parameter definitions in `sah flow run <workflow> --help`
+
+### 🎯 Current Status
+
+The core functionality is **working and integrated**. Users can now:
+- Define parameters in workflow frontmatter with types, defaults, descriptions, and choices
+- Have those parameters automatically resolved from `--var` arguments
+- Get type validation and default value handling
+- Experience seamless backward compatibility
+
+The foundation is solid and ready for the remaining enhancements.
