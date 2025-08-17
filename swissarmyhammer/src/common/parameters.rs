@@ -570,7 +570,7 @@ impl ParameterResolver for DefaultParameterResolver {
         interactive: bool,
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         // Parse CLI arguments
-        let mut resolved = self.parse_cli_args(cli_args);
+        let resolved = self.parse_cli_args(cli_args);
         
         // Handle conditional parameters with iterative resolution
         self.resolve_conditional_parameters(parameters, resolved, interactive)
@@ -1779,7 +1779,7 @@ mod tests {
         let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("deploy_env").unwrap(), &serde_json::json!("dev"));
-        assert!(result.get("prod_confirmation").is_none());
+        assert!(!result.contains_key("prod_confirmation"));
 
         // Test 2: deploy_env = prod, should require prod_confirmation (but we don't provide it)
         let mut cli_args = HashMap::new();
@@ -1827,7 +1827,7 @@ mod tests {
         
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(false));
-        assert!(result.get("cert_path").is_none());
+        assert!(!result.contains_key("cert_path"));
 
         // Test 2: enable_ssl = true, should use cert_path default
         let mut cli_args = HashMap::new();
@@ -1862,7 +1862,7 @@ mod tests {
 
         let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
         assert_eq!(result.len(), 2);
-        assert!(result.get("approval_token").is_none());
+        assert!(!result.contains_key("approval_token"));
 
         // Test 2: env = dev, urgent = true -> approval_token needed
         let mut cli_args = HashMap::new();
@@ -1906,8 +1906,8 @@ mod tests {
         let result = resolver.resolve_parameters(&parameters, &cli_args, false).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("database_type").unwrap(), &serde_json::json!("redis"));
-        assert!(result.get("requires_ssl").is_none());
-        assert!(result.get("cert_path").is_none());
+        assert!(!result.contains_key("requires_ssl"));
+        assert!(!result.contains_key("cert_path"));
 
         // Test 2: database_type = mysql -> SSL required by default -> cert needed
         let mut cli_args = HashMap::new();
