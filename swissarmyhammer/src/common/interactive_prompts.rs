@@ -4,7 +4,8 @@
 //! It handles different parameter types with appropriate UI controls and validation.
 
 use crate::common::parameters::{
-    CommonPatterns, Parameter, ParameterError, ParameterResult, ParameterType, ParameterValidator,
+    CommonPatterns, Parameter, ParameterError, ParameterGroup, ParameterResult, ParameterType,
+    ParameterValidator,
 };
 use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input, MultiSelect};
 use std::collections::HashMap;
@@ -43,6 +44,123 @@ impl InteractivePrompts {
         self.prompt_conditional_parameters(parameters, resolved)
     }
 
+    /// Prompt for parameters organized by groups
+    ///
+    /// This method provides a better user experience by presenting parameters
+    /// organized into logical groups with clear headers and context.
+    pub fn prompt_parameters_by_groups(
+        &self,
+        provider: &dyn crate::common::ParameterProvider,
+        existing_values: &HashMap<String, serde_json::Value>,
+    ) -> ParameterResult<HashMap<String, serde_json::Value>> {
+        let mut resolved = existing_values.clone();
+        let grouped_params = provider.get_parameters_by_group();
+
+        // Process groups in a stable order (general group last)
+        let mut group_names: Vec<_> = grouped_params.keys().collect();
+        group_names.sort_by(|a, b| {
+            if *a == "general" {
+                std::cmp::Ordering::Greater
+            } else if *b == "general" {
+                std::cmp::Ordering::Less
+            } else {
+                a.cmp(b)
+            }
+        });
+
+        for group_name in group_names {
+            if let Some(group_params) = grouped_params.get(group_name) {
+                if group_params.is_empty() {
+                    continue;
+                }
+
+                // Check if any parameters in this group need prompting
+                let needs_prompting = group_params.iter().any(|p| {
+                    !resolved.contains_key(&p.name) && self.should_prompt_parameter(p, &resolved)
+                });
+
+                if !needs_prompting {
+                    continue;
+                }
+
+                // Display group header
+                self.display_group_header(group_name, provider.get_parameter_groups());
+
+                // Process parameters in this group with conditional logic
+                let group_param_slice: Vec<Parameter> =
+                    group_params.iter().map(|&p| p.clone()).collect();
+                let group_resolved =
+                    self.prompt_conditional_parameters(&group_param_slice, resolved)?;
+                resolved = group_resolved;
+
+                if !self.non_interactive {
+                    println!(); // Blank line after group
+                }
+            }
+        }
+
+        Ok(resolved)
+    }
+
+    /// Check if a parameter should be prompted for
+    fn should_prompt_parameter(
+        &self,
+        param: &Parameter,
+        context: &HashMap<String, serde_json::Value>,
+    ) -> bool {
+        // Check if parameter has a condition
+        if let Some(condition) = &param.condition {
+            use crate::common::parameter_conditions::ConditionEvaluator;
+            let evaluator = ConditionEvaluator::new(context.clone());
+            match evaluator.evaluate(&condition.expression) {
+                Ok(condition_met) => condition_met && (param.required || param.default.is_none()),
+                Err(_) => param.required || param.default.is_none(), // Conservative approach if condition can't be evaluated
+            }
+        } else {
+            param.required || param.default.is_none()
+        }
+    }
+
+    /// Display a group header with appropriate formatting
+    fn display_group_header(&self, group_name: &str, groups: Option<&[ParameterGroup]>) {
+        if self.non_interactive {
+            return;
+        }
+
+        if let Some(groups) = groups {
+            if let Some(group) = groups.iter().find(|g| g.name == group_name) {
+                println!("┌─ {} Configuration", self.capitalize_words(&group.name));
+                println!("│  {}", group.description);
+                println!("└─");
+                return;
+            }
+        }
+
+        // Fallback for ungrouped parameters or missing group metadata
+        let display_name = if group_name == "general" {
+            "General Options"
+        } else {
+            &self.capitalize_words(group_name)
+        };
+        println!("┌─ {display_name}");
+        println!("└─");
+    }
+
+    /// Capitalize words in a string for display
+    fn capitalize_words(&self, s: &str) -> String {
+        s.replace(['_', '-'], " ")
+            .split_whitespace()
+            .map(|word| {
+                let mut chars: Vec<char> = word.chars().collect();
+                if let Some(first_char) = chars.get_mut(0) {
+                    *first_char = first_char.to_ascii_uppercase();
+                }
+                chars.into_iter().collect::<String>()
+            })
+            .collect::<Vec<String>>()
+            .join(" ")
+    }
+
     /// Prompt for conditional parameters using iterative resolution
     pub fn prompt_conditional_parameters(
         &self,
@@ -50,15 +168,15 @@ impl InteractivePrompts {
         mut resolved: HashMap<String, serde_json::Value>,
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         use crate::common::parameter_conditions::ConditionEvaluator;
-        
+
         let mut changed = true;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
-        
+
         while changed && iterations < MAX_ITERATIONS {
             changed = false;
             iterations += 1;
-            
+
             for param in parameters {
                 if resolved.contains_key(&param.name) {
                     // Parameter already provided, validate it
@@ -92,11 +210,13 @@ impl InteractivePrompts {
                         // Only prompt for required parameters without defaults
                         // Show conditional explanation if available
                         if let Some(condition) = &param.condition {
-                            println!("📋 {} (required because: {})", 
-                                param.description, 
-                                self.format_condition_explanation(condition));
+                            println!(
+                                "📋 {} (required because: {})",
+                                param.description,
+                                self.format_condition_explanation(condition)
+                            );
                         }
-                        
+
                         let value = self.prompt_for_parameter(param)?;
                         resolved.insert(param.name.clone(), value);
                         changed = true;
@@ -109,7 +229,7 @@ impl InteractivePrompts {
                 }
             }
         }
-        
+
         if iterations >= MAX_ITERATIONS {
             return Err(ParameterError::ValidationFailed {
                 message: "Too many iterations resolving conditional parameters - possible circular dependency".to_string(),
@@ -120,7 +240,10 @@ impl InteractivePrompts {
     }
 
     /// Format a condition explanation for user display
-    fn format_condition_explanation(&self, condition: &crate::common::parameter_conditions::ParameterCondition) -> String {
+    fn format_condition_explanation(
+        &self,
+        condition: &crate::common::parameter_conditions::ParameterCondition,
+    ) -> String {
         if let Some(desc) = &condition.description {
             desc.clone()
         } else {
@@ -629,53 +752,78 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test] 
+    #[test]
     fn test_prompt_conditional_parameters_basic() {
         use crate::common::parameter_conditions::ParameterCondition;
-        
+
         let prompts = InteractivePrompts::new(true);
-        
+
         // Create conditional parameters
-        let deploy_env = Parameter::new("deploy_env", "Deployment environment", crate::common::parameters::ParameterType::String)
-            .required(true);
-            
-        let prod_confirmation = Parameter::new("prod_confirmation", "Production confirmation", crate::common::parameters::ParameterType::Boolean)
-            .required(true)
-            .with_condition(ParameterCondition::new("deploy_env == 'prod'"));
-            
+        let deploy_env = Parameter::new(
+            "deploy_env",
+            "Deployment environment",
+            crate::common::parameters::ParameterType::String,
+        )
+        .required(true);
+
+        let prod_confirmation = Parameter::new(
+            "prod_confirmation",
+            "Production confirmation",
+            crate::common::parameters::ParameterType::Boolean,
+        )
+        .required(true)
+        .with_condition(ParameterCondition::new("deploy_env == 'prod'"));
+
         let parameters = vec![deploy_env, prod_confirmation];
 
         // Test with existing deploy_env = dev (should not require prod_confirmation)
         let mut existing = HashMap::new();
-        existing.insert("deploy_env".to_string(), serde_json::Value::String("dev".to_string()));
+        existing.insert(
+            "deploy_env".to_string(),
+            serde_json::Value::String("dev".to_string()),
+        );
 
-        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
-        
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
+
         assert_eq!(result.len(), 1);
-        assert_eq!(result.get("deploy_env").unwrap(), &serde_json::Value::String("dev".to_string()));
+        assert_eq!(
+            result.get("deploy_env").unwrap(),
+            &serde_json::Value::String("dev".to_string())
+        );
         assert!(!result.contains_key("prod_confirmation"));
     }
 
     #[test]
     fn test_prompt_conditional_parameters_with_defaults() {
-        
         let prompts = InteractivePrompts::new(true);
-        
-        let enable_ssl = Parameter::new("enable_ssl", "Enable SSL", crate::common::parameters::ParameterType::Boolean)
-            .with_default(serde_json::json!(false))
-            .required(false);
-            
-        let cert_path = Parameter::new("cert_path", "SSL certificate path", crate::common::parameters::ParameterType::String)
-            .required(true)
-            .when("enable_ssl == true")
-            .with_default(serde_json::json!("/etc/ssl/cert.pem"));
-            
+
+        let enable_ssl = Parameter::new(
+            "enable_ssl",
+            "Enable SSL",
+            crate::common::parameters::ParameterType::Boolean,
+        )
+        .with_default(serde_json::json!(false))
+        .required(false);
+
+        let cert_path = Parameter::new(
+            "cert_path",
+            "SSL certificate path",
+            crate::common::parameters::ParameterType::String,
+        )
+        .required(true)
+        .when("enable_ssl == true")
+        .with_default(serde_json::json!("/etc/ssl/cert.pem"));
+
         let parameters = vec![enable_ssl, cert_path];
 
         // Test 1: No existing values, should use defaults and not require cert_path
         let existing = HashMap::new();
-        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
-        
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
+
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(false));
         assert!(!result.contains_key("cert_path"));
@@ -684,24 +832,29 @@ mod tests {
         let mut existing = HashMap::new();
         existing.insert("enable_ssl".to_string(), serde_json::Value::Bool(true));
 
-        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
+        let result = prompts
+            .prompt_for_parameters(&parameters, &existing)
+            .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(true));
-        assert_eq!(result.get("cert_path").unwrap(), &serde_json::json!("/etc/ssl/cert.pem"));
+        assert_eq!(
+            result.get("cert_path").unwrap(),
+            &serde_json::json!("/etc/ssl/cert.pem")
+        );
     }
 
     #[test]
     fn test_format_condition_explanation() {
         use crate::common::parameter_conditions::ParameterCondition;
-        
+
         let prompts = InteractivePrompts::new(true);
-        
+
         // Test with custom description
         let condition_with_desc = ParameterCondition::new("env == 'prod'")
             .with_description("production environment is selected");
         let explanation = prompts.format_condition_explanation(&condition_with_desc);
         assert_eq!(explanation, "production environment is selected");
-        
+
         // Test without description
         let condition_without_desc = ParameterCondition::new("enable_ssl == true");
         let explanation = prompts.format_condition_explanation(&condition_without_desc);
