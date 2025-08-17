@@ -87,7 +87,7 @@ impl InteractivePrompts {
                 serde_json::Value::Number(
                     serde_json::Number::from_f64(value)
                         .ok_or_else(|| ParameterError::ValidationFailed {
-                            message: format!("Invalid number value: {}", value),
+                            message: format!("Invalid number value: {value}"),
                         })?,
                 )
             }
@@ -123,7 +123,7 @@ impl InteractivePrompts {
         
         loop {
             let mut input_prompt = Input::<String>::with_theme(&theme)
-                .with_prompt(&format!("Enter {} ({})", param.name, param.description));
+                .with_prompt(format!("Enter {} ({})", param.name, param.description));
 
             // Add default value if available
             if let Some(default) = &param.default {
@@ -134,7 +134,7 @@ impl InteractivePrompts {
 
             let input = input_prompt.interact().map_err(|e| {
                 ParameterError::ValidationFailed {
-                    message: format!("Failed to read input: {}", e),
+                    message: format!("Failed to read input: {e}"),
                 }
             })?;
 
@@ -143,7 +143,7 @@ impl InteractivePrompts {
             match self.validator.validate_parameter(param, &value) {
                 Ok(_) => return Ok(input),
                 Err(e) => {
-                    println!("❌ {}", e);
+                    println!("❌ {e}");
                     println!("Please try again.");
                 }
             }
@@ -160,7 +160,7 @@ impl InteractivePrompts {
 
         let theme = ColorfulTheme::default();
         let mut confirm_prompt = Confirm::with_theme(&theme)
-            .with_prompt(&format!("{} ({})", param.name, param.description));
+            .with_prompt(format!("{} ({})", param.name, param.description));
 
         // Set default value if available
         if let Some(default) = &param.default {
@@ -171,7 +171,7 @@ impl InteractivePrompts {
 
         confirm_prompt.interact().map_err(|e| {
             ParameterError::ValidationFailed {
-                message: format!("Failed to read input: {}", e),
+                message: format!("Failed to read input: {e}"),
             }
         })
     }
@@ -189,15 +189,15 @@ impl InteractivePrompts {
         loop {
             let mut prompt_text = format!("Enter {} ({})", param.name, param.description);
             if let (Some(min), Some(max)) = (&param.min, &param.max) {
-                prompt_text = format!("{} [{}-{}]", prompt_text, min, max);
+                prompt_text = format!("{prompt_text} [{min}-{max}]");
             } else if let Some(min) = &param.min {
-                prompt_text = format!("{} [>= {}]", prompt_text, min);
+                prompt_text = format!("{prompt_text} [>= {min}]");
             } else if let Some(max) = &param.max {
-                prompt_text = format!("{} [<= {}]", prompt_text, max);
+                prompt_text = format!("{prompt_text} [<= {max}]");
             }
             
             let mut input_prompt = Input::<String>::with_theme(&theme)
-                .with_prompt(&prompt_text);
+                .with_prompt(prompt_text);
 
             // Add default value if available
             if let Some(default) = &param.default {
@@ -208,7 +208,7 @@ impl InteractivePrompts {
 
             let input = input_prompt.interact().map_err(|e| {
                 ParameterError::ValidationFailed {
-                    message: format!("Failed to read input: {}", e),
+                    message: format!("Failed to read input: {e}"),
                 }
             })?;
 
@@ -219,7 +219,7 @@ impl InteractivePrompts {
                     let value = serde_json::Value::Number(
                         serde_json::Number::from_f64(num).ok_or_else(|| {
                             ParameterError::ValidationFailed {
-                                message: format!("Invalid number value: {}", num),
+                                message: format!("Invalid number value: {num}"),
                             }
                         })?,
                     );
@@ -227,7 +227,7 @@ impl InteractivePrompts {
                     match self.validator.validate_parameter(param, &value) {
                         Ok(_) => return Ok(num),
                         Err(e) => {
-                            println!("❌ {}", e);
+                            println!("❌ {e}");
                             println!("Please try again.");
                         }
                     }
@@ -262,7 +262,7 @@ impl InteractivePrompts {
 
         let theme = ColorfulTheme::default();
         let mut select_prompt = FuzzySelect::with_theme(&theme)
-            .with_prompt(&format!("Select {} ({})", param.name, param.description))
+            .with_prompt(format!("Select {} ({})", param.name, param.description))
             .items(choices);
 
         // Set default selection if available
@@ -276,7 +276,7 @@ impl InteractivePrompts {
 
         let selection = select_prompt.interact().map_err(|e| {
             ParameterError::ValidationFailed {
-                message: format!("Failed to read selection: {}", e),
+                message: format!("Failed to read selection: {e}"),
             }
         })?;
 
@@ -311,7 +311,7 @@ impl InteractivePrompts {
 
         let theme = ColorfulTheme::default();
         let mut multi_select = MultiSelect::with_theme(&theme)
-            .with_prompt(&format!(
+            .with_prompt(format!(
                 "Select {} (use space to select, enter to confirm) ({})",
                 param.name, param.description
             ))
@@ -334,7 +334,7 @@ impl InteractivePrompts {
 
         let selections = multi_select.interact().map_err(|e| {
             ParameterError::ValidationFailed {
-                message: format!("Failed to read selections: {}", e),
+                message: format!("Failed to read selections: {e}"),
             }
         })?;
 

@@ -48,7 +48,7 @@ pub fn resolve_workflow_parameters_interactive(
             .collect();
         
         resolver.resolve_parameters(&parameters, &cli_args, interactive)
-            .map_err(|e| swissarmyhammer::SwissArmyHammerError::Other(format!("Parameter resolution failed: {}", e)))
+            .map_err(|e| swissarmyhammer::SwissArmyHammerError::Other(format!("Parameter resolution failed: {e}")))
     } else {
         // Phase 2: Use legacy parameter resolution (non-interactive)
         resolve_parameters_from_vars(&workflow_params, var_args, false)

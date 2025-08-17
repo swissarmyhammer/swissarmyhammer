@@ -43,7 +43,7 @@ fn test_backward_compatibility() {
     assert!(result.is_ok());
     if let Ok(resolved) = result {
         // Should contain the resolved variables
-        assert!(resolved.get("name").is_some() || resolved.is_empty());
+        assert!(resolved.contains_key("name") || resolved.is_empty());
     }
 }
 
