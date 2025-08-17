@@ -461,6 +461,12 @@ pub fn register_abort_tools(registry: &mut ToolRegistry) {
     abort::register_abort_tools(registry);
 }
 
+/// Register all file-related tools with the registry
+pub fn register_file_tools(registry: &mut ToolRegistry) {
+    use super::tools::files;
+    files::register_file_tools(registry);
+}
+
 /// Register all issue-related tools with the registry
 pub fn register_issue_tools(registry: &mut ToolRegistry) {
     use super::tools::issues;

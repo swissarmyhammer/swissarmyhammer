@@ -35,6 +35,10 @@ regex = { workspace = true }
 schemars = "0.8"
 thiserror = "1.0"
 
+# File tools dependencies
+glob = { workspace = true }
+walkdir = { workspace = true }
+
 # Web fetch functionality
 markdowndown = { workspace = true }
 url = { workspace = true }

@@ -36,6 +36,7 @@
 //! - **Type Safety**: Strong typing through schema validation and Rust's type system
 
 pub mod abort;
+pub mod files;
 pub mod issues;
 pub mod memoranda;
 pub mod notify;
