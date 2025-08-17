@@ -65,6 +65,38 @@ impl std::fmt::Display for WorkflowName {
     }
 }
 
+/// Types of parameters supported in workflow schemas
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ParameterType {
+    /// String text input
+    String,
+    /// Boolean true/false values
+    Boolean,
+    /// Numeric values (integers and floats)
+    Number,
+    /// Selection from predefined options
+    Choice,
+    /// Multiple selections from predefined options
+    MultiChoice,
+}
+
+/// Specification for a workflow parameter
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowParameter {
+    /// The parameter name used in templates
+    pub name: String,
+    /// Human-readable description of the parameter's purpose
+    pub description: String,
+    /// Whether this parameter must be provided
+    pub required: bool,
+    /// The type of parameter value expected
+    pub parameter_type: ParameterType,
+    /// Default value to use if parameter is not provided
+    pub default: Option<serde_json::Value>,
+    /// Available choices for Choice and MultiChoice types
+    pub choices: Option<Vec<String>>,
+}
+
 /// Main workflow representation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workflow {
@@ -72,6 +104,8 @@ pub struct Workflow {
     pub name: WorkflowName,
     /// Workflow description
     pub description: String,
+    /// Parameter schema for this workflow
+    pub parameters: Vec<WorkflowParameter>,
     /// All states in the workflow
     pub states: HashMap<StateId, State>,
     /// All transitions in the workflow
@@ -88,6 +122,7 @@ impl Workflow {
         Self {
             name,
             description,
+            parameters: Vec::new(),
             states: Default::default(),
             transitions: Vec::new(),
             initial_state,
@@ -143,6 +178,11 @@ impl Workflow {
             errors.push("Workflow must have at least one terminal state. Add 'is_terminal: true' to at least one state or create a transition to [*]".to_string());
         }
 
+        // Validate parameters
+        if let Err(param_errors) = self.validate_parameters() {
+            errors.extend(param_errors);
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -158,6 +198,119 @@ impl Workflow {
     /// Add a transition to the workflow
     pub fn add_transition(&mut self, transition: Transition) {
         self.transitions.push(transition);
+    }
+
+    /// Validate workflow parameters
+    pub fn validate_parameters(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        for parameter in &self.parameters {
+            // Check parameter name is not empty
+            if parameter.name.trim().is_empty() {
+                errors.push("Parameter name cannot be empty".to_string());
+                continue;
+            }
+
+            // Check parameter description is not empty
+            if parameter.description.trim().is_empty() {
+                errors.push(format!("Parameter '{}' must have a description", parameter.name));
+            }
+
+            // Validate choices for Choice and MultiChoice types
+            match parameter.parameter_type {
+                ParameterType::Choice | ParameterType::MultiChoice => {
+                    if parameter.choices.is_none() || parameter.choices.as_ref().unwrap().is_empty() {
+                        errors.push(format!(
+                            "Parameter '{}' with type {:?} must have choices defined",
+                            parameter.name, parameter.parameter_type
+                        ));
+                    }
+                }
+                ParameterType::String => {
+                    // String parameters can optionally have choices for UI hints
+                    // No validation needed - choices are optional
+                }
+                ParameterType::Boolean | ParameterType::Number => {
+                    // For Boolean and Number types, choices should not be defined
+                    if parameter.choices.is_some() && !parameter.choices.as_ref().unwrap().is_empty() {
+                        errors.push(format!(
+                            "Parameter '{}' with type {:?} should not have choices defined",
+                            parameter.name, parameter.parameter_type
+                        ));
+                    }
+                }
+            }
+
+            // Validate default value type matches parameter type
+            if let Some(default_value) = &parameter.default {
+                let type_matches = match parameter.parameter_type {
+                    ParameterType::String => {
+                        // For string types, check if it's a valid string
+                        if !default_value.is_string() {
+                            false
+                        } else if let Some(choices) = &parameter.choices {
+                            // If choices are provided, default must be in the choices
+                            if let Some(default_str) = default_value.as_str() {
+                                choices.contains(&default_str.to_string())
+                            } else {
+                                false
+                            }
+                        } else {
+                            true // String without choices is valid
+                        }
+                    }
+                    ParameterType::Boolean => default_value.is_boolean(),
+                    ParameterType::Number => default_value.is_number(),
+                    ParameterType::Choice => {
+                        // For choice, default must be a string and in the choices list
+                        if let Some(default_str) = default_value.as_str() {
+                            if let Some(choices) = &parameter.choices {
+                                choices.contains(&default_str.to_string())
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    ParameterType::MultiChoice => {
+                        // For multi-choice, default must be an array of strings from choices
+                        if let Some(default_array) = default_value.as_array() {
+                            if let Some(choices) = &parameter.choices {
+                                default_array.iter().all(|v| {
+                                    v.as_str().map_or(false, |s| choices.contains(&s.to_string()))
+                                })
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                };
+
+                if !type_matches {
+                    errors.push(format!(
+                        "Parameter '{}' default value does not match parameter type {:?}",
+                        parameter.name, parameter.parameter_type
+                    ));
+                }
+            }
+        }
+
+        // Check for duplicate parameter names
+        let mut seen_names = std::collections::HashSet::new();
+        for parameter in &self.parameters {
+            if !seen_names.insert(&parameter.name) {
+                errors.push(format!("Duplicate parameter name: '{}'", parameter.name));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -226,5 +379,133 @@ mod tests {
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.contains("terminal state")));
+    }
+
+    #[test]
+    fn test_workflow_parameter_validation() {
+        use crate::workflow::test_helpers::*;
+
+        let mut workflow = create_basic_workflow();
+        
+        // Add valid parameters
+        workflow.parameters.push(WorkflowParameter {
+            name: "valid_string".to_string(),
+            description: "A valid string parameter".to_string(),
+            required: true,
+            parameter_type: ParameterType::String,
+            default: None,
+            choices: None,
+        });
+
+        workflow.parameters.push(WorkflowParameter {
+            name: "valid_choice".to_string(),
+            description: "A valid choice parameter".to_string(),
+            required: false,
+            parameter_type: ParameterType::Choice,
+            default: Some(serde_json::Value::String("option1".to_string())),
+            choices: Some(vec!["option1".to_string(), "option2".to_string()]),
+        });
+
+        // Should pass validation
+        let result = workflow.validate_parameters();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_workflow_parameter_validation_errors() {
+        use crate::workflow::test_helpers::*;
+
+        let mut workflow = create_basic_workflow();
+        
+        // Add invalid parameters
+        workflow.parameters.push(WorkflowParameter {
+            name: "".to_string(), // Empty name
+            description: "Parameter with empty name".to_string(),
+            required: true,
+            parameter_type: ParameterType::String,
+            default: None,
+            choices: None,
+        });
+
+        workflow.parameters.push(WorkflowParameter {
+            name: "no_description".to_string(),
+            description: "".to_string(), // Empty description
+            required: true,
+            parameter_type: ParameterType::String,
+            default: None,
+            choices: None,
+        });
+
+        workflow.parameters.push(WorkflowParameter {
+            name: "choice_without_choices".to_string(),
+            description: "Choice parameter without choices".to_string(),
+            required: true,
+            parameter_type: ParameterType::Choice,
+            default: None,
+            choices: None, // No choices for choice type
+        });
+
+        workflow.parameters.push(WorkflowParameter {
+            name: "boolean_with_choices".to_string(),
+            description: "Boolean parameter with choices".to_string(),
+            required: false,
+            parameter_type: ParameterType::Boolean,
+            default: None,
+            choices: Some(vec!["choice1".to_string()]), // Boolean should not have choices
+        });
+
+        workflow.parameters.push(WorkflowParameter {
+            name: "wrong_default_type".to_string(),
+            description: "Boolean with string default".to_string(),
+            required: false,
+            parameter_type: ParameterType::Boolean,
+            default: Some(serde_json::Value::String("not_a_bool".to_string())), // Wrong type
+            choices: None,
+        });
+
+        // Add duplicate parameter name
+        workflow.parameters.push(WorkflowParameter {
+            name: "boolean_with_choices".to_string(), // Duplicate name
+            description: "Duplicate parameter name".to_string(),
+            required: false,
+            parameter_type: ParameterType::String,
+            default: None,
+            choices: None,
+        });
+
+        let result = workflow.validate_parameters();
+        assert!(result.is_err());
+        
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("Parameter name cannot be empty")));
+        assert!(errors.iter().any(|e| e.contains("must have a description")));
+        assert!(errors.iter().any(|e| e.contains("must have choices defined")));
+        assert!(errors.iter().any(|e| e.contains("should not have choices defined")));
+        assert!(errors.iter().any(|e| e.contains("default value does not match parameter type")));
+        assert!(errors.iter().any(|e| e.contains("Duplicate parameter name")));
+    }
+
+    #[test]
+    fn test_workflow_validation_includes_parameters() {
+        use crate::workflow::test_helpers::*;
+
+        let mut workflow = create_basic_workflow();
+        
+        // Add invalid parameter that should cause workflow validation to fail
+        workflow.parameters.push(WorkflowParameter {
+            name: "invalid".to_string(),
+            description: "".to_string(), // Empty description
+            required: true,
+            parameter_type: ParameterType::Choice,
+            default: None,
+            choices: None, // No choices
+        });
+
+        let result = workflow.validate_structure();
+        assert!(result.is_err());
+        
+        let errors = result.unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("must have a description")));
+        assert!(errors.iter().any(|e| e.contains("must have choices defined")));
     }
 }

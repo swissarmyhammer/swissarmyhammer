@@ -120,16 +120,20 @@ impl MermaidParser {
         // Extract actions from the markdown content
         let actions = Self::extract_actions_from_markdown(input);
 
+        // Extract parameters from frontmatter
+        let parameters = Self::extract_parameters_from_frontmatter(input)?;
+
         // Attempt to parse the diagram
         match parse_diagram(&mermaid_content) {
             Ok(diagram) => match diagram {
                 DiagramType::State(state_diagram) => {
-                    Self::convert_state_diagram_with_actions_and_metadata(
+                    Self::convert_state_diagram_with_actions_metadata_and_parameters(
                         state_diagram,
                         workflow_name.into(),
                         actions,
                         title,
                         description,
+                        parameters,
                     )
                 }
                 _ => Err(ParseError::WrongDiagramType {
@@ -188,6 +192,97 @@ impl MermaidParser {
         }
 
         Ok(mermaid_lines.join("\n"))
+    }
+
+    /// Parse frontmatter and extract workflow parameters
+    fn extract_parameters_from_frontmatter(input: &str) -> ParseResult<Vec<crate::workflow::WorkflowParameter>> {
+        let mut parameters = Vec::new();
+
+        // Check if input has frontmatter
+        if !input.starts_with("---\n") {
+            return Ok(parameters);
+        }
+
+        let parts: Vec<&str> = input.splitn(3, "---\n").collect();
+        if parts.len() < 3 {
+            return Ok(parameters);
+        }
+
+        let yaml_content = parts[1];
+        
+        // Parse YAML frontmatter
+        let frontmatter: serde_yaml::Value = serde_yaml::from_str(yaml_content)
+            .map_err(|e| ParseError::InvalidStructure { 
+                message: format!("Invalid YAML frontmatter: {}", e)
+            })?;
+
+        // Extract parameters from frontmatter if present
+        if let Some(params_value) = frontmatter.get("parameters") {
+            if let Some(params_array) = params_value.as_sequence() {
+                for param_value in params_array {
+                    if let Some(param_obj) = param_value.as_mapping() {
+                        let name = param_obj
+                            .get(&serde_yaml::Value::String("name".to_string()))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let description = param_obj
+                            .get(&serde_yaml::Value::String("description".to_string()))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let required = param_obj
+                            .get(&serde_yaml::Value::String("required".to_string()))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        // Parse parameter type
+                        let type_str = param_obj
+                            .get(&serde_yaml::Value::String("type".to_string()))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("string");
+                        
+                        let parameter_type = match type_str.to_lowercase().as_str() {
+                            "string" => crate::workflow::ParameterType::String,
+                            "boolean" | "bool" => crate::workflow::ParameterType::Boolean,
+                            "number" | "numeric" | "int" | "integer" | "float" => crate::workflow::ParameterType::Number,
+                            "choice" | "select" => crate::workflow::ParameterType::Choice,
+                            "multi_choice" | "multichoice" | "multiselect" => crate::workflow::ParameterType::MultiChoice,
+                            _ => crate::workflow::ParameterType::String, // Default to string for unknown types
+                        };
+
+                        // Parse default value
+                        let default = param_obj
+                            .get(&serde_yaml::Value::String("default".to_string()))
+                            .and_then(|v| serde_json::to_value(v).ok());
+
+                        // Parse choices if present
+                        let choices = param_obj
+                            .get(&serde_yaml::Value::String("choices".to_string()))
+                            .and_then(|v| v.as_sequence())
+                            .map(|seq| {
+                                seq.iter()
+                                    .filter_map(|choice| choice.as_str())
+                                    .map(String::from)
+                                    .collect::<Vec<String>>()
+                            });
+
+                        parameters.push(crate::workflow::WorkflowParameter {
+                            name,
+                            description,
+                            required,
+                            parameter_type,
+                            default,
+                            choices,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(parameters)
     }
 
     /// Extract actions from markdown content
@@ -336,13 +431,14 @@ impl MermaidParser {
         Ok(workflow)
     }
 
-    /// Convert a parsed state diagram to our Workflow type with actions and metadata
-    fn convert_state_diagram_with_actions_and_metadata(
+    /// Convert a parsed state diagram to our Workflow type with actions, metadata, and parameters
+    fn convert_state_diagram_with_actions_metadata_and_parameters(
         state_diagram: StateDiagram,
         workflow_name: WorkflowName,
         actions: HashMap<String, String>,
         title: Option<String>,
         description: Option<String>,
+        parameters: Vec<crate::workflow::WorkflowParameter>,
     ) -> ParseResult<Workflow> {
         // Use provided description or title, or fall back to default
         let workflow_description = description
@@ -358,6 +454,9 @@ impl MermaidParser {
             workflow_description,
             initial_state_id.clone(),
         );
+
+        // Set parameters from frontmatter
+        workflow.parameters = parameters;
 
         // Convert all states from mermaid to our format
         for (state_id, mermaid_state) in state_diagram.states {
@@ -979,5 +1078,275 @@ stateDiagram-v2
         assert!(workflow.states.contains_key(&StateId::new("OuterJoin")));
         assert!(workflow.states.contains_key(&StateId::new("InnerFork")));
         assert!(workflow.states.contains_key(&StateId::new("InnerJoin")));
+    }
+
+    #[test]
+    fn test_parse_workflow_with_parameters() {
+        let input = r#"---
+title: Greeting Workflow
+description: A workflow that greets someone
+parameters:
+  - name: person_name
+    description: The name of the person to greet
+    required: true
+    type: string
+  - name: language
+    description: The language to use for greeting
+    required: false
+    type: string
+    default: English
+    choices:
+      - English
+      - Spanish
+      - French
+  - name: formal
+    description: Use formal greeting
+    required: false
+    type: boolean
+    default: false
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Start
+    Start --> Greet
+    Greet --> [*]
+```
+"#;
+
+        let result = MermaidParser::parse_with_metadata(
+            input,
+            "greeting_workflow",
+            Some("Greeting Workflow".to_string()),
+            Some("A workflow that greets someone".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert_eq!(workflow.name.as_str(), "greeting_workflow");
+        
+        // Check parameters
+        assert_eq!(workflow.parameters.len(), 3);
+        
+        // Check first parameter
+        let param1 = &workflow.parameters[0];
+        assert_eq!(param1.name, "person_name");
+        assert_eq!(param1.description, "The name of the person to greet");
+        assert!(param1.required);
+        assert!(matches!(param1.parameter_type, crate::workflow::ParameterType::String));
+        assert!(param1.default.is_none());
+        assert!(param1.choices.is_none());
+        
+        // Check second parameter (with choices)
+        let param2 = &workflow.parameters[1];
+        assert_eq!(param2.name, "language");
+        assert_eq!(param2.description, "The language to use for greeting");
+        assert!(!param2.required);
+        assert!(matches!(param2.parameter_type, crate::workflow::ParameterType::String));
+        assert_eq!(param2.default.as_ref().unwrap().as_str().unwrap(), "English");
+        assert!(param2.choices.is_some());
+        let choices = param2.choices.as_ref().unwrap();
+        assert_eq!(choices.len(), 3);
+        assert!(choices.contains(&"English".to_string()));
+        assert!(choices.contains(&"Spanish".to_string()));
+        assert!(choices.contains(&"French".to_string()));
+        
+        // Check third parameter (boolean)
+        let param3 = &workflow.parameters[2];
+        assert_eq!(param3.name, "formal");
+        assert_eq!(param3.description, "Use formal greeting");
+        assert!(!param3.required);
+        assert!(matches!(param3.parameter_type, crate::workflow::ParameterType::Boolean));
+        assert_eq!(param3.default.as_ref().unwrap().as_bool().unwrap(), false);
+        assert!(param3.choices.is_none());
+    }
+
+    #[test]
+    fn test_parse_workflow_with_different_parameter_types() {
+        let input = r#"---
+title: Mixed Parameter Types
+description: Tests different parameter types
+parameters:
+  - name: count
+    description: Number of items
+    required: true
+    type: number
+  - name: enabled
+    description: Feature enabled
+    required: false
+    type: bool
+    default: true
+  - name: priority
+    description: Priority level
+    required: true
+    type: choice
+    choices:
+      - low
+      - medium
+      - high
+  - name: tags
+    description: Multiple tags
+    required: false
+    type: multi_choice
+    choices:
+      - urgent
+      - important
+      - review
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Process
+    Process --> [*]
+```
+"#;
+
+        let result = MermaidParser::parse_with_metadata(
+            input,
+            "mixed_params_workflow",
+            Some("Mixed Parameter Types".to_string()),
+            Some("Tests different parameter types".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert_eq!(workflow.parameters.len(), 4);
+        
+        // Check number parameter
+        let number_param = &workflow.parameters[0];
+        assert_eq!(number_param.name, "count");
+        assert!(matches!(number_param.parameter_type, crate::workflow::ParameterType::Number));
+        assert!(number_param.required);
+        
+        // Check boolean parameter
+        let bool_param = &workflow.parameters[1];
+        assert_eq!(bool_param.name, "enabled");
+        assert!(matches!(bool_param.parameter_type, crate::workflow::ParameterType::Boolean));
+        assert!(!bool_param.required);
+        assert_eq!(bool_param.default.as_ref().unwrap().as_bool().unwrap(), true);
+        
+        // Check choice parameter
+        let choice_param = &workflow.parameters[2];
+        assert_eq!(choice_param.name, "priority");
+        assert!(matches!(choice_param.parameter_type, crate::workflow::ParameterType::Choice));
+        assert!(choice_param.required);
+        let choices = choice_param.choices.as_ref().unwrap();
+        assert_eq!(choices.len(), 3);
+        assert!(choices.contains(&"low".to_string()));
+        assert!(choices.contains(&"medium".to_string()));
+        assert!(choices.contains(&"high".to_string()));
+        
+        // Check multi-choice parameter
+        let multi_choice_param = &workflow.parameters[3];
+        assert_eq!(multi_choice_param.name, "tags");
+        assert!(matches!(multi_choice_param.parameter_type, crate::workflow::ParameterType::MultiChoice));
+        assert!(!multi_choice_param.required);
+        let multi_choices = multi_choice_param.choices.as_ref().unwrap();
+        assert_eq!(multi_choices.len(), 3);
+        assert!(multi_choices.contains(&"urgent".to_string()));
+        assert!(multi_choices.contains(&"important".to_string()));
+        assert!(multi_choices.contains(&"review".to_string()));
+    }
+
+    #[test]
+    fn test_parse_workflow_without_parameters() {
+        let input = r#"---
+title: Simple Workflow
+description: A workflow without parameters
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Process
+    Process --> [*]
+```
+"#;
+
+        let result = MermaidParser::parse_with_metadata(
+            input,
+            "simple_workflow",
+            Some("Simple Workflow".to_string()),
+            Some("A workflow without parameters".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert!(workflow.parameters.is_empty());
+    }
+
+    #[test]
+    fn test_parse_workflow_with_unknown_parameter_type() {
+        let input = r#"---
+title: Unknown Type Workflow
+description: Tests fallback to string for unknown types
+parameters:
+  - name: custom_field
+    description: A field with unknown type
+    required: false
+    type: unknown_type
+---
+
+```mermaid
+stateDiagram-v2
+    [*] --> Process
+    Process --> [*]
+```
+"#;
+
+        let result = MermaidParser::parse_with_metadata(
+            input,
+            "unknown_type_workflow",
+            Some("Unknown Type Workflow".to_string()),
+            Some("Tests fallback to string for unknown types".to_string()),
+        );
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert_eq!(workflow.parameters.len(), 1);
+        
+        let param = &workflow.parameters[0];
+        assert_eq!(param.name, "custom_field");
+        // Should fallback to String type for unknown types
+        assert!(matches!(param.parameter_type, crate::workflow::ParameterType::String));
+    }
+
+    #[test]
+    fn test_extract_parameters_from_frontmatter_empty() {
+        let input = "No frontmatter here";
+        let result = MermaidParser::extract_parameters_from_frontmatter(input);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_extract_parameters_from_frontmatter_no_parameters() {
+        let input = r#"---
+title: Test
+description: No parameters
+---
+Content here
+"#;
+        let result = MermaidParser::extract_parameters_from_frontmatter(input);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test] 
+    fn test_backward_compatibility() {
+        // Test that workflows without parameters still work
+        let input = r"
+        stateDiagram-v2
+            [*] --> State1
+            State1 --> State2: condition
+            State2 --> [*]
+        ";
+
+        let result = MermaidParser::parse(input, "test_workflow");
+        assert!(result.is_ok());
+
+        let workflow = result.unwrap();
+        assert_eq!(workflow.name.as_str(), "test_workflow");
+        assert!(workflow.parameters.is_empty()); // No parameters
+        assert_eq!(workflow.states.len(), 2); // State1 and State2 (not [*])
     }
 }

@@ -1403,6 +1403,7 @@ stateDiagram-v2
         let workflow = Workflow {
             name: WorkflowName::from(""),
             description: "Test workflow".to_string(),
+            parameters: Vec::new(),
             states: HashMap::new(),
             transitions: vec![],
             initial_state: StateId::new("start"),
@@ -1431,6 +1432,7 @@ stateDiagram-v2
         let mut workflow = Workflow {
             name: WorkflowName::from("test@workflow!"),
             description: "Test workflow".to_string(),
+            parameters: Vec::new(),
             states: HashMap::new(),
             transitions: vec![],
             initial_state: StateId::new("start"),
@@ -1481,6 +1483,7 @@ stateDiagram-v2
             let mut workflow = Workflow {
                 name: WorkflowName::from(name),
                 description: "Test workflow".to_string(),
+                parameters: Vec::new(),
                 states: HashMap::new(),
                 transitions: vec![],
                 initial_state: StateId::new("start"),
