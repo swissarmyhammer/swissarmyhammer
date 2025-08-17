@@ -132,10 +132,11 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     let workflow = workflow_storage.get_workflow(&workflow_name_typed)?;
 
     // Resolve workflow parameters with enhanced parameter system
-    let workflow_variables = parameter_cli::resolve_workflow_parameters(
+    let workflow_variables = parameter_cli::resolve_workflow_parameters_interactive(
         &config.workflow_name,
         &config.vars,
         &config.set,
+        config.interactive && !config.dry_run && !config.test_mode,
     ).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to resolve workflow parameters: {e}");
         HashMap::new()

@@ -99,6 +99,8 @@ indicatif = { workspace = true }
 
 # CLI argument parsing
 clap = { workspace = true }
+dialoguer = { workspace = true }
+is-terminal = { workspace = true }
 
 
 [features]
