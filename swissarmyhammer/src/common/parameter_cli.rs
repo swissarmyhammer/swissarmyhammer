@@ -131,8 +131,7 @@ pub fn generate_grouped_help_text(
                 let required_indicator = if param.required { " (required)" } else { "" };
 
                 help.push_str(&format!(
-                    "  {:<20} {}{}\n",
-                    switch_name, param_help, required_indicator
+                    "  {switch_name:<20} {param_help}{required_indicator}\n"
                 ));
             }
 
@@ -145,8 +144,7 @@ pub fn generate_grouped_help_text(
 
 /// Capitalize words in a string (e.g., "deployment_config" -> "Deployment Config")
 fn capitalize_words(s: &str) -> String {
-    s.replace('_', " ")
-        .replace('-', " ")
+    s.replace(['_', '-'], " ")
         .split_whitespace()
         .map(|word| {
             let mut chars: Vec<char> = word.chars().collect();
