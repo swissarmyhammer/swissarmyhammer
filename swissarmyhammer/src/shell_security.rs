@@ -206,7 +206,7 @@ impl ShellSecurityValidator {
                     .canonicalize()
                     .map_err(|e| ShellSecurityError::InvalidDirectory {
                         directory: directory.display().to_string(),
-                        reason: format!("Cannot canonicalize: {}", e),
+                        reason: format!("Cannot canonicalize: {e}"),
                     })?;
 
             let is_allowed = allowed_dirs.iter().any(|allowed| {
@@ -306,8 +306,7 @@ impl ShellSecurityValidator {
         for pattern in patterns {
             compiled.push(Regex::new(pattern).map_err(|e| {
                 SwissArmyHammerError::Other(format!(
-                    "Failed to compile blocked pattern '{}': {}",
-                    pattern, e
+                    "Failed to compile blocked pattern '{pattern}': {e}"
                 ))
             })?);
         }
@@ -405,7 +404,7 @@ impl ShellAuditEvent {
 
     /// Update the audit event with validation failure
     pub fn with_validation_failure(mut self, error: &str) -> Self {
-        self.validation_result = format!("failed: {}", error);
+        self.validation_result = format!("failed: {error}");
         self
     }
 }
@@ -428,7 +427,7 @@ pub fn get_validator() -> &'static ShellSecurityValidator {
             }
             Err(e) => {
                 // This is a critical error - invalid security configuration could be a security risk
-                panic!("Critical security error: {}. Application cannot start with invalid security configuration.", e);
+                panic!("Critical security error: {e}. Application cannot start with invalid security configuration.");
             }
         };
 
@@ -461,7 +460,7 @@ fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
                     match serde_json::from_value(json_value) {
                         Ok(policy) => Ok(Some(policy)),
                         Err(e) => {
-                            let error_msg = format!("Invalid shell security policy configuration: {}. Security configuration must be valid to prevent security vulnerabilities.", e);
+                            let error_msg = format!("Invalid shell security policy configuration: {e}. Security configuration must be valid to prevent security vulnerabilities.");
                             error!(target: "shell_security", "Failed to deserialize shell security policy: {}", e);
                             Err(SwissArmyHammerError::Other(error_msg))
                         }
@@ -608,7 +607,7 @@ mod tests {
 
         for cmd in &allowed_commands {
             let result = validator.validate_command(cmd);
-            assert!(result.is_ok(), "Command should be allowed: {}", cmd);
+            assert!(result.is_ok(), "Command should be allowed: {cmd}");
         }
 
         // But commands with blocked patterns should still be blocked
@@ -621,8 +620,7 @@ mod tests {
             let result = validator.validate_command(cmd);
             assert!(
                 result.is_err(),
-                "Command should still be blocked by blocked patterns: {}",
-                cmd
+                "Command should still be blocked by blocked patterns: {cmd}"
             );
             assert!(matches!(
                 result.unwrap_err(),

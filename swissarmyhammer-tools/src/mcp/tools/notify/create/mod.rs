@@ -506,7 +506,7 @@ mod tests {
             let mut arguments = serde_json::Map::new();
             arguments.insert(
                 "message".to_string(),
-                serde_json::Value::String(format!("Message with {} level", level)),
+                serde_json::Value::String(format!("Message with {level} level")),
             );
             arguments.insert(
                 "level".to_string(),

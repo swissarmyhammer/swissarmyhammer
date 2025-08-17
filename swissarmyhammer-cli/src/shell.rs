@@ -94,13 +94,12 @@ fn parse_environment_variables(
     for env_arg in env_args {
         if let Some((key, value)) = env_arg.split_once('=') {
             if key.is_empty() {
-                return Err(format!("Empty environment variable name in: {}", env_arg).into());
+                return Err(format!("Empty environment variable name in: {env_arg}").into());
             }
             env_vars.insert(key.to_string(), value.to_string());
         } else {
             return Err(format!(
-                "Invalid environment variable format '{}'. Expected KEY=VALUE format.",
-                env_arg
+                "Invalid environment variable format '{env_arg}'. Expected KEY=VALUE format."
             )
             .into());
         }
@@ -143,7 +142,7 @@ fn extract_shell_json_response(
 
     // Try to parse as JSON - shell execution results should always be JSON
     let json_data: serde_json::Value = serde_json::from_str(&text_content)
-        .map_err(|e| format!("Failed to parse shell response as JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse shell response as JSON: {e}"))?;
 
     // Check if this looks like a valid shell execution result by checking for required fields
     if json_data.get("command").is_some() && json_data.get("exit_code").is_some() {
@@ -185,7 +184,7 @@ fn display_human_format(
         Ok(data) => data,
         Err(e) => {
             // This is likely a true tool error (security validation, etc.)
-            eprintln!("Shell execution error: {}", e);
+            eprintln!("Shell execution error: {e}");
             process::exit(2); // Use CLI error code for tool failures
         }
     };
@@ -253,10 +252,10 @@ fn display_human_format(
     // Display command output unless quiet mode is enabled
     if !quiet {
         if !stdout.is_empty() {
-            print!("{}", stdout);
+            print!("{stdout}");
         }
         if !stderr.is_empty() {
-            eprint!("{}", stderr);
+            eprint!("{stderr}");
         }
     }
 
@@ -264,19 +263,19 @@ fn display_human_format(
     if show_metadata {
         eprintln!();
         eprintln!("=== Execution Metadata ===");
-        eprintln!("Command: {}", command);
-        eprintln!("Working Directory: {}", working_directory);
+        eprintln!("Command: {command}");
+        eprintln!("Working Directory: {working_directory}");
 
         if is_timeout {
             let timeout_seconds = json_response["timeout_seconds"].as_u64().unwrap_or(0);
-            eprintln!("Status: Timed out after {} seconds", timeout_seconds);
+            eprintln!("Status: Timed out after {timeout_seconds} seconds");
             eprintln!(
                 "Partial Output: {} bytes captured",
                 stdout.len() + stderr.len()
             );
         } else {
-            eprintln!("Exit Code: {}", exit_code);
-            eprintln!("Execution Time: {}ms", execution_time_ms);
+            eprintln!("Exit Code: {exit_code}");
+            eprintln!("Execution Time: {execution_time_ms}ms");
 
             if output_truncated {
                 eprintln!("Output Truncated: Yes (exceeded size limits)");
@@ -333,7 +332,7 @@ fn display_yaml_format(
         Ok(json_response) => {
             // Command executed successfully, display the YAML response
             let yaml_output = serde_yaml::to_string(&json_response)?;
-            print!("{}", yaml_output);
+            print!("{yaml_output}");
         }
         Err(e) => {
             // True tool error (security validation, etc.)
@@ -341,7 +340,7 @@ fn display_yaml_format(
                 "error": true,
                 "message": e
             }))?;
-            print!("{}", error_response);
+            print!("{error_response}");
             process::exit(2); // Use CLI error code for tool failures
         }
     }

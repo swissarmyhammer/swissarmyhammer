@@ -493,10 +493,10 @@ impl fmt::Display for ShellError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ShellError::CommandSpawnError { command, source } => {
-                write!(f, "Failed to spawn command '{}': {}", command, source)
+                write!(f, "Failed to spawn command '{command}': {source}")
             }
             ShellError::ExecutionError { command, message } => {
-                write!(f, "Command '{}' execution failed: {}", command, message)
+                write!(f, "Command '{command}' execution failed: {message}")
             }
             ShellError::TimeoutError {
                 command,
@@ -505,18 +505,17 @@ impl fmt::Display for ShellError {
             } => {
                 write!(
                     f,
-                    "Command '{}' timed out after {} seconds",
-                    command, timeout_seconds
+                    "Command '{command}' timed out after {timeout_seconds} seconds"
                 )
             }
             ShellError::InvalidCommand { message } => {
-                write!(f, "Invalid command: {}", message)
+                write!(f, "Invalid command: {message}")
             }
             ShellError::SystemError { message } => {
-                write!(f, "System error during command execution: {}", message)
+                write!(f, "System error during command execution: {message}")
             }
             ShellError::WorkingDirectoryError { message } => {
-                write!(f, "Working directory error: {}", message)
+                write!(f, "Working directory error: {message}")
             }
         }
     }
@@ -814,7 +813,7 @@ async fn process_child_output_with_limits(
                     Err(e) => {
                         return Err(ShellError::ExecutionError {
                             command: "child process".to_string(),
-                            message: format!("Failed to wait for process: {}", e),
+                            message: format!("Failed to wait for process: {e}"),
                         });
                     }
                 }
@@ -832,7 +831,7 @@ async fn process_child_output_with_limits(
     // Wait for the process to complete, but don't capture more output
     let exit_status = child.wait().await.map_err(|e| ShellError::ExecutionError {
         command: "child process".to_string(),
-        message: format!("Failed to wait for process: {}", e),
+        message: format!("Failed to wait for process: {e}"),
     })?;
 
     // Add truncation marker
@@ -1006,7 +1005,7 @@ async fn execute_shell_command(
 
     // Create output limits configuration from shell config
     let output_limits = OutputLimits::from_config(config).map_err(|e| ShellError::SystemError {
-        message: format!("Invalid output configuration: {}", e),
+        message: format!("Invalid output configuration: {e}"),
     })?;
 
     // Execute with timeout
@@ -1237,12 +1236,12 @@ impl McpTool for ShellExecuteTool {
         // Load shell configuration
         let config_loader = ConfigurationLoader::new().map_err(|e| {
             tracing::error!("Failed to create configuration loader: {}", e);
-            McpError::internal_error(format!("Configuration system error: {}", e), None)
+            McpError::internal_error(format!("Configuration system error: {e}"), None)
         })?;
 
         let shell_config = config_loader.load_shell_config().map_err(|e| {
             tracing::error!("Failed to load shell configuration: {}", e);
-            McpError::internal_error(format!("Failed to load shell configuration: {}", e), None)
+            McpError::internal_error(format!("Failed to load shell configuration: {e}"), None)
         })?;
 
         // Validate command is not empty
@@ -1252,7 +1251,7 @@ impl McpTool for ShellExecuteTool {
         // Apply comprehensive command security validation from workflow system
         swissarmyhammer::workflow::validate_command(&request.command).map_err(|e| {
             tracing::warn!("Command security validation failed: {}", e);
-            McpError::invalid_params(format!("Command security check failed: {}", e), None)
+            McpError::invalid_params(format!("Command security check failed: {e}"), None)
         })?;
 
         // Validate timeout if provided
@@ -1275,7 +1274,7 @@ impl McpTool for ShellExecuteTool {
                 |e| {
                     tracing::warn!("Working directory security validation failed: {}", e);
                     McpError::invalid_params(
-                        format!("Working directory security check failed: {}", e),
+                        format!("Working directory security check failed: {e}"),
                         None,
                     )
                 },
@@ -1288,7 +1287,7 @@ impl McpTool for ShellExecuteTool {
                 |e| {
                     tracing::warn!("Environment variables security validation failed: {}", e);
                     McpError::invalid_params(
-                        format!("Environment variables security check failed: {}", e),
+                        format!("Environment variables security check failed: {e}"),
                         None,
                     )
                 },
@@ -1345,7 +1344,7 @@ impl McpTool for ShellExecuteTool {
                 // Serialize the result as JSON for the response
                 let json_response = serde_json::to_string_pretty(&result).map_err(|e| {
                     tracing::error!("Failed to serialize shell result: {}", e);
-                    McpError::internal_error(format!("Serialization failed: {}", e), None)
+                    McpError::internal_error(format!("Serialization failed: {e}"), None)
                 })?;
 
                 tracing::info!(
@@ -1386,7 +1385,7 @@ impl McpTool for ShellExecuteTool {
                         });
 
                         let response_text =
-                            format!("Command timed out after {} seconds", timeout_seconds);
+                            format!("Command timed out after {timeout_seconds} seconds");
                         tracing::warn!(
                             "Command '{}' timed out after {}s",
                             command,
@@ -1416,7 +1415,7 @@ impl McpTool for ShellExecuteTool {
                     }
                     _ => {
                         // Other error types - return standard error response
-                        let error_message = format!("Shell execution failed: {}", shell_error);
+                        let error_message = format!("Shell execution failed: {shell_error}");
                         tracing::error!("{}", error_message);
 
                         Ok(CallToolResult {
@@ -2010,8 +2009,7 @@ mod tests {
             let result = tool.execute(args, &context).await;
             assert!(
                 result.is_err(),
-                "Command injection pattern '{}' should be blocked",
-                cmd
+                "Command injection pattern '{cmd}' should be blocked"
             );
 
             // Verify the error message contains security-related information
@@ -2019,8 +2017,7 @@ mod tests {
                 let error_str = mcp_error.to_string();
                 assert!(
                     error_str.contains("security") || error_str.contains("unsafe"),
-                    "Error should mention security concern for command: {}",
-                    cmd
+                    "Error should mention security concern for command: {cmd}"
                 );
             }
         }
@@ -2048,8 +2045,7 @@ mod tests {
             let result = tool.execute(args, &context).await;
             assert!(
                 result.is_err(),
-                "Path traversal attempt '{}' should be blocked",
-                path
+                "Path traversal attempt '{path}' should be blocked"
             );
 
             // Verify the error message mentions security
@@ -2057,8 +2053,7 @@ mod tests {
                 let error_str = mcp_error.to_string();
                 assert!(
                     error_str.contains("security") || error_str.contains("directory"),
-                    "Error should mention security/directory concern for path: {}",
-                    path
+                    "Error should mention security/directory concern for path: {path}"
                 );
             }
         }
@@ -2183,8 +2178,7 @@ mod tests {
             let result = tool.execute(args, &context).await;
             assert!(
                 result.is_ok(),
-                "Valid command '{}' should not be blocked by security validation",
-                cmd
+                "Valid command '{cmd}' should not be blocked by security validation"
             );
 
             if let Ok(call_result) = result {
@@ -2234,8 +2228,7 @@ mod tests {
             let total_size = response_json["total_output_size"].as_u64().unwrap();
             assert!(
                 total_size > 0 && total_size < 100,
-                "Output size should be reasonable: {}",
-                total_size
+                "Output size should be reasonable: {total_size}"
             );
         }
     }
@@ -2392,7 +2385,7 @@ mod tests {
 
         // Add data incrementally
         for i in 0..10 {
-            let data = format!("{}\n", i);
+            let data = format!("{i}\n");
             let data_bytes = data.as_bytes();
             let written = buffer.append_stdout(data_bytes);
 
@@ -2675,16 +2668,13 @@ mod tests {
 
                     // For this amount of output, truncation depends on the actual size vs limit
                     let truncated = response_json["output_truncated"].as_bool().unwrap();
-                    println!(
-                        "Large output test: {} bytes, truncated: {}",
-                        total_size, truncated
-                    );
+                    println!("Large output test: {total_size} bytes, truncated: {truncated}");
                 }
             }
             Err(e) => {
                 // If command is blocked by security validation, that's acceptable for this test
                 // The main goal is to test that our output handling works
-                println!("Command blocked by security validation: {}", e);
+                println!("Command blocked by security validation: {e}");
                 println!("This is acceptable - the security system is working");
             }
         }
@@ -2865,8 +2855,7 @@ mod tests {
         // Termination should succeed
         assert!(
             result.is_ok(),
-            "Graceful termination should succeed: {:?}",
-            result
+            "Graceful termination should succeed: {result:?}"
         );
 
         // Process should no longer be running
@@ -2896,7 +2885,7 @@ mod tests {
         assert!(elapsed < Duration::from_secs(1));
 
         // Kill should succeed
-        assert!(result.is_ok(), "Force kill should succeed: {:?}", result);
+        assert!(result.is_ok(), "Force kill should succeed: {result:?}");
 
         // Process should no longer be running
         assert!(!guard.is_running());
@@ -3067,8 +3056,7 @@ mod tests {
             let result = validator.validate_command(pattern);
             assert!(
                 result.is_err(),
-                "Blocked pattern should be blocked: '{}'",
-                pattern
+                "Blocked pattern should be blocked: '{pattern}'"
             );
 
             // Verify the error type is correct
@@ -3076,10 +3064,9 @@ mod tests {
                 swissarmyhammer::shell_security::ShellSecurityError::BlockedCommandPattern {
                     ..
                 } => (),
-                other_error => panic!(
-                    "Expected blocked pattern error for '{}', got: {:?}",
-                    pattern, other_error
-                ),
+                other_error => {
+                    panic!("Expected blocked pattern error for '{pattern}', got: {other_error:?}")
+                }
             }
         }
     }
@@ -3133,9 +3120,7 @@ mod tests {
             let result = validator.validate_command(command);
             assert!(
                 result.is_ok(),
-                "Safe command should pass validation: '{}', error: {:?}",
-                command,
-                result
+                "Safe command should pass validation: '{command}', error: {result:?}"
             );
         }
     }
@@ -3177,8 +3162,7 @@ mod tests {
             let result = validator.validate_command(command);
             assert!(
                 result.is_err(),
-                "Blocked command should fail validation: '{}'",
-                command
+                "Blocked command should fail validation: '{command}'"
             );
 
             // Verify the error type is correct
@@ -3186,10 +3170,9 @@ mod tests {
                 swissarmyhammer::shell_security::ShellSecurityError::BlockedCommandPattern {
                     ..
                 } => (),
-                other_error => panic!(
-                    "Expected blocked pattern error for '{}', got: {:?}",
-                    command, other_error
-                ),
+                other_error => {
+                    panic!("Expected blocked pattern error for '{command}', got: {other_error:?}")
+                }
             }
         }
     }
@@ -3227,7 +3210,7 @@ mod tests {
                 assert_eq!(length, 101);
                 assert_eq!(limit, 100);
             }
-            other_error => panic!("Expected command too long error, got: {:?}", other_error),
+            other_error => panic!("Expected command too long error, got: {other_error:?}"),
         }
     }
 
@@ -3268,10 +3251,7 @@ mod tests {
             } => {
                 assert_eq!(directory, forbidden_path);
             }
-            other_error => panic!(
-                "Expected directory access denied error, got: {:?}",
-                other_error
-            ),
+            other_error => panic!("Expected directory access denied error, got: {other_error:?}"),
         }
     }
 
@@ -3315,13 +3295,12 @@ mod tests {
             let result = validator.validate_environment_variables(&env);
             assert!(
                 result.is_err(),
-                "Invalid variable name '{}' should fail",
-                name
+                "Invalid variable name '{name}' should fail"
             );
 
             match result.unwrap_err() {
                 swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariable { .. } => (),
-                other_error => panic!("Expected invalid env var error for '{}', got: {:?}", name, other_error),
+                other_error => panic!("Expected invalid env var error for '{name}', got: {other_error:?}"),
             }
         }
 
@@ -3340,7 +3319,7 @@ mod tests {
                 assert_eq!(name, "LONG_VAR");
                 assert!(reason.contains("exceeds maximum"));
             }
-            other_error => panic!("Expected long value error, got: {:?}", other_error),
+            other_error => panic!("Expected long value error, got: {other_error:?}"),
         }
 
         // Invalid characters in values
@@ -3357,13 +3336,12 @@ mod tests {
             let result = validator.validate_environment_variables(&env);
             assert!(
                 result.is_err(),
-                "Invalid character in value for '{}' should fail",
-                name
+                "Invalid character in value for '{name}' should fail"
             );
 
             match result.unwrap_err() {
                 swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariableValue { .. } => (),
-                other_error => panic!("Expected invalid value error for '{}', got: {:?}", name, other_error),
+                other_error => panic!("Expected invalid value error for '{name}', got: {other_error:?}"),
             }
         }
     }
@@ -3392,8 +3370,7 @@ mod tests {
             let result = validator.validate_command(command);
             assert!(
                 result.is_ok(),
-                "Command should pass when validation disabled: '{}'",
-                command
+                "Command should pass when validation disabled: '{command}'"
             );
         }
     }

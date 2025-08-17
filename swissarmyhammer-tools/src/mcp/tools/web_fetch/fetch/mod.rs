@@ -41,7 +41,10 @@ impl WebFetchTool {
     }
 
     /// Validates request parameters including URL security and parameter ranges
-    async fn validate_request_parameters(&self, request: &WebFetchRequest) -> Result<String, McpError> {
+    async fn validate_request_parameters(
+        &self,
+        request: &WebFetchRequest,
+    ) -> Result<String, McpError> {
         // Comprehensive URL security validation
         let validated_url = match self.security_validator.validate_url(&request.url) {
             Ok(url) => url,
@@ -76,8 +79,11 @@ impl WebFetchTool {
                 ));
             }
             Err(e) => {
-                self.security_validator
-                    .log_security_event("SECURITY_VALIDATION_FAILED", &request.url, &e.to_string());
+                self.security_validator.log_security_event(
+                    "SECURITY_VALIDATION_FAILED",
+                    &request.url,
+                    &e.to_string(),
+                );
                 return Err(McpError::invalid_params(
                     format!("Security validation failed: {e}"),
                     None,
@@ -91,10 +97,10 @@ impl WebFetchTool {
     /// Converts WebFetchRequest parameters to markdowndown Config
     fn create_markdowndown_config(&self, request: &WebFetchRequest) -> Config {
         let mut config = Config::default();
-        
+
         // HTTP configuration
         config.http.timeout = std::time::Duration::from_secs(
-            request.timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS) as u64
+            request.timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS) as u64,
         );
         config.http.user_agent = request
             .user_agent
@@ -105,7 +111,7 @@ impl WebFetchTool {
         } else {
             0
         };
-        
+
         // Note: markdowndown doesn't expose max_response_size in HttpConfig
         // Content size limits are handled internally by markdowndown
 
@@ -135,7 +141,8 @@ impl WebFetchTool {
         markdown_content: String,
         response_time_ms: u64,
     ) -> Result<CallToolResult, McpError> {
-        let title = self.extract_title_from_markdown(&markdown_content)
+        let title = self
+            .extract_title_from_markdown(&markdown_content)
             .unwrap_or_else(|| "Web Content".to_string());
         let word_count = self.count_words(&markdown_content);
         let content_length = markdown_content.len();
@@ -249,17 +256,19 @@ impl WebFetchTool {
     /// Categorizes errors for proper error handling and response formatting
     fn categorize_error(&self, error: &dyn std::error::Error) -> &'static str {
         let error_str = error.to_string().to_lowercase();
-        
+
         if error_str.contains("timeout") || error_str.contains("timed out") {
             "timeout"
-        } else if error_str.contains("connection") 
-            || error_str.contains("network") 
-            || error_str.contains("dns") 
-            || error_str.contains("resolve") {
+        } else if error_str.contains("connection")
+            || error_str.contains("network")
+            || error_str.contains("dns")
+            || error_str.contains("resolve")
+        {
             "network_error"
-        } else if error_str.contains("ssl") 
-            || error_str.contains("tls") 
-            || error_str.contains("certificate") {
+        } else if error_str.contains("ssl")
+            || error_str.contains("tls")
+            || error_str.contains("certificate")
+        {
             "ssl_error"
         } else if error_str.contains("redirect") {
             "redirect_error"
@@ -269,13 +278,15 @@ impl WebFetchTool {
             "not_found"
         } else if error_str.contains("400") {
             "client_error"
-        } else if error_str.contains("500") 
-            || error_str.contains("502") 
-            || error_str.contains("503") {
+        } else if error_str.contains("500")
+            || error_str.contains("502")
+            || error_str.contains("503")
+        {
             "server_error"
-        } else if error_str.contains("parse") 
-            || error_str.contains("encoding") 
-            || error_str.contains("invalid") {
+        } else if error_str.contains("parse")
+            || error_str.contains("encoding")
+            || error_str.contains("invalid")
+        {
             "content_error"
         } else if error_str.contains("too large") || error_str.contains("size") {
             "size_limit_error"
@@ -341,7 +352,7 @@ impl McpTool for WebFetchTool {
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: WebFetchRequest = BaseToolImpl::parse_arguments(arguments)?;
-        
+
         // Apply rate limiting for web fetch operations
         context
             .rate_limiter
@@ -399,30 +410,34 @@ mod tests {
     fn test_web_fetch_tool_schema() {
         let tool = WebFetchTool::new();
         let schema = tool.schema();
-        
+
         assert!(schema.is_object());
         let obj = schema.as_object().expect("Schema should be an object");
-        
+
         // Test required properties
         assert!(obj.contains_key("type"));
         assert!(obj.contains_key("properties"));
         assert!(obj.contains_key("required"));
-        
-        let properties = obj["properties"].as_object().expect("Properties should be an object");
+
+        let properties = obj["properties"]
+            .as_object()
+            .expect("Properties should be an object");
         assert!(properties.contains_key("url"));
         assert!(properties.contains_key("timeout"));
         assert!(properties.contains_key("follow_redirects"));
         assert!(properties.contains_key("max_content_length"));
         assert!(properties.contains_key("user_agent"));
-        
-        let required = obj["required"].as_array().expect("Required should be an array");
+
+        let required = obj["required"]
+            .as_array()
+            .expect("Required should be an array");
         assert!(required.contains(&serde_json::Value::String("url".to_string())));
     }
 
     #[test]
     fn test_create_markdowndown_config() {
         let tool = WebFetchTool::new();
-        
+
         // Test with default values
         let request = WebFetchRequest {
             url: "https://example.com".to_string(),
@@ -431,12 +446,12 @@ mod tests {
             max_content_length: None,
             user_agent: None,
         };
-        
+
         let config = tool.create_markdowndown_config(&request);
         assert_eq!(config.http.timeout, std::time::Duration::from_secs(30));
         assert_eq!(config.http.user_agent, "SwissArmyHammer-Bot/1.0");
         assert_eq!(config.http.max_redirects, 10);
-        
+
         // Test with custom values
         let request = WebFetchRequest {
             url: "https://example.com".to_string(),
@@ -445,7 +460,7 @@ mod tests {
             max_content_length: Some(2_097_152),
             user_agent: Some("CustomAgent/1.0".to_string()),
         };
-        
+
         let config = tool.create_markdowndown_config(&request);
         assert_eq!(config.http.timeout, std::time::Duration::from_secs(60));
         assert_eq!(config.http.user_agent, "CustomAgent/1.0");
@@ -455,43 +470,54 @@ mod tests {
     #[test]
     fn test_extract_title_from_markdown() {
         let tool = WebFetchTool::new();
-        
+
         // Test with title
         let markdown = "# Main Title\n\nSome content here.";
-        assert_eq!(tool.extract_title_from_markdown(markdown), Some("Main Title".to_string()));
-        
+        assert_eq!(
+            tool.extract_title_from_markdown(markdown),
+            Some("Main Title".to_string())
+        );
+
         // Test without title
         let markdown = "Just some content without title.";
         assert_eq!(tool.extract_title_from_markdown(markdown), None);
-        
+
         // Test with multiple headings (should return first)
         let markdown = "# First Title\n\n## Second Title\n\n# Third Title";
-        assert_eq!(tool.extract_title_from_markdown(markdown), Some("First Title".to_string()));
+        assert_eq!(
+            tool.extract_title_from_markdown(markdown),
+            Some("First Title".to_string())
+        );
     }
 
     #[test]
     fn test_count_words() {
         let tool = WebFetchTool::new();
-        
+
         assert_eq!(tool.count_words("Hello world"), 2);
         assert_eq!(tool.count_words(""), 0);
-        assert_eq!(tool.count_words("   Multiple   spaces   between   words   "), 4);
+        assert_eq!(
+            tool.count_words("   Multiple   spaces   between   words   "),
+            4
+        );
         assert_eq!(tool.count_words("Single"), 1);
     }
 
     #[test]
     fn test_categorize_error() {
         let tool = WebFetchTool::new();
-        
-        let timeout_error = std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection timed out");
+
+        let timeout_error =
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "Connection timed out");
         assert_eq!(tool.categorize_error(&timeout_error), "timeout");
-        
-        let network_error = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
+
+        let network_error =
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused");
         assert_eq!(tool.categorize_error(&network_error), "network_error");
-        
+
         let ssl_error = std::io::Error::new(std::io::ErrorKind::Other, "SSL certificate error");
         assert_eq!(tool.categorize_error(&ssl_error), "ssl_error");
-        
+
         let parse_error = std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid encoding");
         assert_eq!(tool.categorize_error(&parse_error), "content_error");
     }
