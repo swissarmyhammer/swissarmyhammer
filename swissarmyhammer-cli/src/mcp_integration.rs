@@ -8,8 +8,8 @@ use rmcp::Error as McpError;
 use serde_json::Map;
 use std::sync::Arc;
 use swissarmyhammer_tools::{
-    register_issue_tools, register_memo_tools, register_search_tools, register_shell_tools,
-    register_web_fetch_tools, register_web_search_tools,
+    register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
+    register_shell_tools, register_web_fetch_tools, register_web_search_tools,
 };
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
@@ -105,6 +105,7 @@ impl CliToolContext {
     /// Create and populate tool registry
     fn create_tool_registry() -> ToolRegistry {
         let mut tool_registry = ToolRegistry::new();
+        register_file_tools(&mut tool_registry);
         register_issue_tools(&mut tool_registry);
         register_memo_tools(&mut tool_registry);
         register_search_tools(&mut tool_registry);
