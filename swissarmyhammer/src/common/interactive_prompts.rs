@@ -3,7 +3,7 @@
 //! This module provides interactive prompting capabilities for parameters using the dialoguer crate.
 //! It handles different parameter types with appropriate UI controls and validation.
 
-use crate::common::parameters::{Parameter, ParameterError, ParameterResult, ParameterType, ParameterValidator};
+use crate::common::parameters::{CommonPatterns, Parameter, ParameterError, ParameterResult, ParameterType, ParameterValidator};
 use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input, MultiSelect};
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
@@ -144,6 +144,7 @@ impl InteractivePrompts {
                 Ok(_) => return Ok(input),
                 Err(e) => {
                     println!("❌ {e}");
+                    self.print_validation_hints(param);
                     println!("Please try again.");
                 }
             }
@@ -188,12 +189,14 @@ impl InteractivePrompts {
         
         loop {
             let mut prompt_text = format!("Enter {} ({})", param.name, param.description);
-            if let (Some(min), Some(max)) = (&param.min, &param.max) {
-                prompt_text = format!("{prompt_text} [{min}-{max}]");
-            } else if let Some(min) = &param.min {
-                prompt_text = format!("{prompt_text} [>= {min}]");
-            } else if let Some(max) = &param.max {
-                prompt_text = format!("{prompt_text} [<= {max}]");
+            if let Some(validation) = &param.validation {
+                if let (Some(min), Some(max)) = (validation.min, validation.max) {
+                    prompt_text = format!("{prompt_text} [{min}-{max}]");
+                } else if let Some(min) = validation.min {
+                    prompt_text = format!("{prompt_text} [>= {min}]");
+                } else if let Some(max) = validation.max {
+                    prompt_text = format!("{prompt_text} [<= {max}]");
+                }
             }
             
             let mut input_prompt = Input::<String>::with_theme(&theme)
@@ -228,6 +231,7 @@ impl InteractivePrompts {
                         Ok(_) => return Ok(num),
                         Err(e) => {
                             println!("❌ {e}");
+                            self.print_validation_hints(param);
                             println!("Please try again.");
                         }
                     }
@@ -344,6 +348,61 @@ impl InteractivePrompts {
             .collect();
 
         Ok(selected_values)
+    }
+
+    /// Print helpful validation hints for a parameter
+    fn print_validation_hints(&self, param: &Parameter) {
+        if let Some(validation) = &param.validation {
+            match param.parameter_type {
+                ParameterType::String => {
+                    if let Some(pattern) = &validation.pattern {
+                        let hint = CommonPatterns::hint_for_pattern(pattern);
+                        let description = CommonPatterns::description_for_pattern(pattern);
+                        println!("💡 Expected format: {hint} ({description})");
+                    }
+                    
+                    if let (Some(min), Some(max)) = (validation.min_length, validation.max_length) {
+                        println!("💡 Length must be between {min} and {max} characters");
+                    } else if let Some(min) = validation.min_length {
+                        println!("💡 Must be at least {min} characters long");
+                    } else if let Some(max) = validation.max_length {
+                        println!("💡 Must be at most {max} characters long");
+                    }
+                }
+                ParameterType::Number => {
+                    if let (Some(min), Some(max)) = (validation.min, validation.max) {
+                        println!("💡 Value must be between {min} and {max}");
+                    } else if let Some(min) = validation.min {
+                        println!("💡 Value must be at least {min}");
+                    } else if let Some(max) = validation.max {
+                        println!("💡 Value must be at most {max}");
+                    }
+                    
+                    if let Some(step) = validation.step {
+                        println!("💡 Value must be a multiple of {step}");
+                    }
+                }
+                ParameterType::MultiChoice => {
+                    if let (Some(min), Some(max)) = (validation.min_selections, validation.max_selections) {
+                        println!("💡 Must select between {min} and {max} options");
+                    } else if let Some(min) = validation.min_selections {
+                        println!("💡 Must select at least {min} options");
+                    } else if let Some(max) = validation.max_selections {
+                        println!("💡 Must select at most {max} options");
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // Show choices hint for choice/multichoice parameters
+        if let Some(choices) = &param.choices {
+            if !choices.is_empty() && choices.len() <= 5 {
+                println!("💡 Available options: {}", choices.join(", "));
+            } else if !choices.is_empty() {
+                println!("💡 {} available options", choices.len());
+            }
+        }
     }
 }
 

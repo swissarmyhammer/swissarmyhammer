@@ -71,6 +71,87 @@ pub enum ParameterError {
         /// Required pattern that the value should match
         pattern: String,
     },
+
+    /// String length validation failed
+    #[error("Parameter '{name}' must be between {min_length} and {max_length} characters (got: {actual_length})")]
+    StringLengthOutOfRange {
+        /// Name of the parameter with invalid length
+        name: String,
+        /// Minimum required length
+        min_length: usize,
+        /// Maximum allowed length  
+        max_length: usize,
+        /// Actual string length
+        actual_length: usize,
+    },
+
+    /// String too short
+    #[error("Parameter '{name}' must be at least {min_length} characters long (got: {actual_length})")]
+    StringTooShort {
+        /// Name of the parameter with invalid length
+        name: String,
+        /// Minimum required length
+        min_length: usize,
+        /// Actual string length
+        actual_length: usize,
+    },
+
+    /// String too long
+    #[error("Parameter '{name}' must be at most {max_length} characters long (got: {actual_length})")]
+    StringTooLong {
+        /// Name of the parameter with invalid length
+        name: String,
+        /// Maximum allowed length
+        max_length: usize,
+        /// Actual string length
+        actual_length: usize,
+    },
+
+    /// Numeric step validation failed
+    #[error("Parameter '{name}' value {value} must be a multiple of {step}")]
+    InvalidStep {
+        /// Name of the parameter with invalid step
+        name: String,
+        /// Value that was provided
+        value: f64,
+        /// Required step/increment
+        step: f64,
+    },
+
+    /// Multi-choice selection count validation failed
+    #[error("Parameter '{name}' requires between {min_selections} and {max_selections} selections (got: {actual_selections})")]
+    InvalidSelectionCount {
+        /// Name of the parameter with invalid selection count
+        name: String,
+        /// Minimum required selections
+        min_selections: usize,
+        /// Maximum allowed selections
+        max_selections: usize,
+        /// Actual number of selections
+        actual_selections: usize,
+    },
+
+    /// Multi-choice too few selections
+    #[error("Parameter '{name}' requires at least {min_selections} selections (got: {actual_selections})")]
+    TooFewSelections {
+        /// Name of the parameter with too few selections
+        name: String,
+        /// Minimum required selections
+        min_selections: usize,
+        /// Actual number of selections
+        actual_selections: usize,
+    },
+
+    /// Multi-choice too many selections
+    #[error("Parameter '{name}' allows at most {max_selections} selections (got: {actual_selections})")]
+    TooManySelections {
+        /// Name of the parameter with too many selections
+        name: String,
+        /// Maximum allowed selections
+        max_selections: usize,
+        /// Actual number of selections
+        actual_selections: usize,
+    },
 }
 
 /// Result type for parameter operations
@@ -120,6 +201,131 @@ impl FromStr for ParameterType {
     }
 }
 
+/// Advanced validation rules for parameters
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
+pub struct ValidationRules {
+    /// Minimum string length for string parameters
+    pub min_length: Option<usize>,
+    
+    /// Maximum string length for string parameters
+    pub max_length: Option<usize>,
+    
+    /// Regex pattern for string validation
+    pub pattern: Option<String>,
+    
+    /// Minimum numeric value for number parameters
+    pub min: Option<f64>,
+    
+    /// Maximum numeric value for number parameters
+    pub max: Option<f64>,
+    
+    /// Step/increment for numeric values
+    pub step: Option<f64>,
+    
+    /// Allow values not in choices list for choice parameters
+    pub allow_custom: Option<bool>,
+    
+    /// Minimum number of selections for multi-choice parameters
+    pub min_selections: Option<usize>,
+    
+    /// Maximum number of selections for multi-choice parameters
+    pub max_selections: Option<usize>,
+    
+    /// Custom validation expression (future extension)
+    pub custom_validator: Option<String>,
+}
+
+
+impl ValidationRules {
+    /// Create new empty validation rules
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// Set string length constraints
+    pub fn with_length_range(mut self, min_length: Option<usize>, max_length: Option<usize>) -> Self {
+        self.min_length = min_length;
+        self.max_length = max_length;
+        self
+    }
+    
+    /// Set regex pattern validation
+    pub fn with_pattern(mut self, pattern: impl Into<String>) -> Self {
+        self.pattern = Some(pattern.into());
+        self
+    }
+    
+    /// Set numeric range constraints  
+    pub fn with_numeric_range(mut self, min: Option<f64>, max: Option<f64>) -> Self {
+        self.min = min;
+        self.max = max;
+        self
+    }
+    
+    /// Set numeric step constraint
+    pub fn with_step(mut self, step: f64) -> Self {
+        self.step = Some(step);
+        self
+    }
+    
+    /// Set selection count constraints for multi-choice parameters
+    pub fn with_selection_range(mut self, min_selections: Option<usize>, max_selections: Option<usize>) -> Self {
+        self.min_selections = min_selections;
+        self.max_selections = max_selections;
+        self
+    }
+}
+
+/// Common validation patterns and utilities
+pub struct CommonPatterns;
+
+impl CommonPatterns {
+    /// Email address pattern
+    pub const EMAIL: &'static str = r"^[^@\s]+@[^@\s]+\.[^@\s]+$";
+    
+    /// HTTP/HTTPS URL pattern
+    pub const URL: &'static str = r"^https?://[^\s]+$";
+    
+    /// IPv4 address pattern
+    pub const IPV4: &'static str = r"^(\d{1,3}\.){3}\d{1,3}$";
+    
+    /// Semantic version pattern
+    pub const SEMVER: &'static str = r"^\d+\.\d+\.\d+$";
+    
+    /// UUID pattern
+    pub const UUID: &'static str = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
+    
+    /// ULID pattern
+    pub const ULID: &'static str = r"^[0-7][0-9A-HJKMNP-TV-Z]{25}$";
+    
+    /// Get a user-friendly hint for a given pattern
+    pub fn hint_for_pattern(pattern: &str) -> String {
+        match pattern {
+            Self::EMAIL => "example@domain.com".to_string(),
+            Self::URL => "https://example.com".to_string(),
+            Self::IPV4 => "192.168.1.1".to_string(),
+            Self::SEMVER => "1.2.3".to_string(),
+            Self::UUID => "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            Self::ULID => "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            _ => pattern.to_string(),
+        }
+    }
+    
+    /// Get a description for a given pattern
+    pub fn description_for_pattern(pattern: &str) -> &'static str {
+        match pattern {
+            Self::EMAIL => "Valid email address",
+            Self::URL => "Valid HTTP or HTTPS URL",
+            Self::IPV4 => "Valid IPv4 address",
+            Self::SEMVER => "Semantic version (major.minor.patch)",
+            Self::UUID => "Valid UUID v4 identifier",
+            Self::ULID => "Valid ULID identifier",
+            _ => "Custom pattern",
+        }
+    }
+}
+
 /// Unified parameter specification that works for both prompts and workflows
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
@@ -141,14 +347,8 @@ pub struct Parameter {
     /// Available choices for Choice and MultiChoice types
     pub choices: Option<Vec<String>>,
 
-    /// Validation pattern (regex) for string parameters
-    pub pattern: Option<String>,
-
-    /// Minimum value for number parameters
-    pub min: Option<f64>,
-
-    /// Maximum value for number parameters  
-    pub max: Option<f64>,
+    /// Advanced validation rules for this parameter
+    pub validation: Option<ValidationRules>,
 }
 
 impl Parameter {
@@ -165,9 +365,7 @@ impl Parameter {
             parameter_type,
             default: None,
             choices: None,
-            pattern: None,
-            min: None,
-            max: None,
+            validation: None,
         }
     }
 
@@ -189,16 +387,44 @@ impl Parameter {
         self
     }
 
-    /// Set validation pattern for string parameters
-    pub fn with_pattern(mut self, pattern: impl Into<String>) -> Self {
-        self.pattern = Some(pattern.into());
+    /// Set validation rules for this parameter
+    pub fn with_validation(mut self, validation: ValidationRules) -> Self {
+        self.validation = Some(validation);
         self
     }
 
-    /// Set numeric range constraints
+    /// Set validation pattern for string parameters (convenience method)
+    pub fn with_pattern(mut self, pattern: impl Into<String>) -> Self {
+        let validation = self.validation.unwrap_or_default().with_pattern(pattern);
+        self.validation = Some(validation);
+        self
+    }
+
+    /// Set numeric range constraints (convenience method)
     pub fn with_range(mut self, min: Option<f64>, max: Option<f64>) -> Self {
-        self.min = min;
-        self.max = max;
+        let validation = self.validation.unwrap_or_default().with_numeric_range(min, max);
+        self.validation = Some(validation);
+        self
+    }
+
+    /// Set string length constraints (convenience method)
+    pub fn with_length_range(mut self, min_length: Option<usize>, max_length: Option<usize>) -> Self {
+        let validation = self.validation.unwrap_or_default().with_length_range(min_length, max_length);
+        self.validation = Some(validation);
+        self
+    }
+
+    /// Set numeric step constraint (convenience method)
+    pub fn with_step(mut self, step: f64) -> Self {
+        let validation = self.validation.unwrap_or_default().with_step(step);
+        self.validation = Some(validation);
+        self
+    }
+
+    /// Set selection count constraints for multi-choice parameters (convenience method)
+    pub fn with_selection_range(mut self, min_selections: Option<usize>, max_selections: Option<usize>) -> Self {
+        let validation = self.validation.unwrap_or_default().with_selection_range(min_selections, max_selections);
+        self.validation = Some(validation);
         self
     }
 }
@@ -313,17 +539,9 @@ impl ParameterValidator {
 
                 let str_value = value.as_str().unwrap();
 
-                // Pattern validation
-                if let Some(pattern) = &param.pattern {
-                    if let Ok(regex) = regex::Regex::new(pattern) {
-                        if !regex.is_match(str_value) {
-                            return Err(ParameterError::PatternMismatch {
-                                name: param.name.clone(),
-                                value: str_value.to_string(),
-                                pattern: pattern.clone(),
-                            });
-                        }
-                    }
+                // Advanced validation rules
+                if let Some(validation) = &param.validation {
+                    self.validate_string_with_rules(param, str_value, validation)?;
                 }
 
                 // Choice validation for string parameters with choices
@@ -359,27 +577,9 @@ impl ParameterValidator {
 
                 let num_value = value.as_f64().unwrap();
 
-                // Range validation
-                if let Some(min) = param.min {
-                    if num_value < min {
-                        return Err(ParameterError::OutOfRange {
-                            name: param.name.clone(),
-                            value: num_value,
-                            min: Some(min),
-                            max: param.max,
-                        });
-                    }
-                }
-
-                if let Some(max) = param.max {
-                    if num_value > max {
-                        return Err(ParameterError::OutOfRange {
-                            name: param.name.clone(),
-                            value: num_value,
-                            min: param.min,
-                            max: Some(max),
-                        });
-                    }
+                // Advanced validation rules
+                if let Some(validation) = &param.validation {
+                    self.validate_number_with_rules(param, num_value, validation)?;
                 }
             }
 
@@ -415,6 +615,13 @@ impl ParameterValidator {
                 }
 
                 let array = value.as_array().unwrap();
+                
+                // Advanced validation rules for selection count
+                if let Some(validation) = &param.validation {
+                    self.validate_multi_choice_with_rules(param, array, validation)?;
+                }
+                
+                // Choice validation for multi-choice parameters
                 if let Some(choices) = &param.choices {
                     for item in array {
                         if let Some(str_item) = item.as_str() {
@@ -454,6 +661,134 @@ impl ParameterValidator {
                 // Check if parameter is required but not provided
                 return Err(ParameterError::MissingRequired {
                     name: param.name.clone(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate string parameter with advanced rules
+    fn validate_string_with_rules(
+        &self,
+        param: &Parameter,
+        str_value: &str,
+        validation: &ValidationRules,
+    ) -> ParameterResult<()> {
+        // Pattern validation
+        if let Some(pattern) = &validation.pattern {
+            if let Ok(regex) = regex::Regex::new(pattern) {
+                if !regex.is_match(str_value) {
+                    return Err(ParameterError::PatternMismatch {
+                        name: param.name.clone(),
+                        value: str_value.to_string(),
+                        pattern: pattern.clone(),
+                    });
+                }
+            }
+        }
+
+        // Length validation
+        let str_len = str_value.chars().count(); // Use char count for proper Unicode handling
+        
+        if let Some(min_len) = validation.min_length {
+            if str_len < min_len {
+                return Err(ParameterError::StringTooShort {
+                    name: param.name.clone(),
+                    min_length: min_len,
+                    actual_length: str_len,
+                });
+            }
+        }
+
+        if let Some(max_len) = validation.max_length {
+            if str_len > max_len {
+                return Err(ParameterError::StringTooLong {
+                    name: param.name.clone(),
+                    max_length: max_len,
+                    actual_length: str_len,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate number parameter with advanced rules
+    fn validate_number_with_rules(
+        &self,
+        param: &Parameter,
+        num_value: f64,
+        validation: &ValidationRules,
+    ) -> ParameterResult<()> {
+        // Range validation
+        if let Some(min) = validation.min {
+            if num_value < min {
+                return Err(ParameterError::OutOfRange {
+                    name: param.name.clone(),
+                    value: num_value,
+                    min: Some(min),
+                    max: validation.max,
+                });
+            }
+        }
+
+        if let Some(max) = validation.max {
+            if num_value > max {
+                return Err(ParameterError::OutOfRange {
+                    name: param.name.clone(),
+                    value: num_value,
+                    min: validation.min,
+                    max: Some(max),
+                });
+            }
+        }
+
+        // Step validation
+        if let Some(step) = validation.step {
+            if step > 0.0 {
+                let remainder = (num_value % step).abs();
+                // Use epsilon for floating point comparison
+                if remainder > f64::EPSILON && (step - remainder) > f64::EPSILON {
+                    return Err(ParameterError::InvalidStep {
+                        name: param.name.clone(),
+                        value: num_value,
+                        step,
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate multi-choice parameter with advanced rules
+    fn validate_multi_choice_with_rules(
+        &self,
+        param: &Parameter,
+        array: &[serde_json::Value],
+        validation: &ValidationRules,
+    ) -> ParameterResult<()> {
+        let selection_count = array.len();
+
+        // Minimum selections validation
+        if let Some(min_selections) = validation.min_selections {
+            if selection_count < min_selections {
+                return Err(ParameterError::TooFewSelections {
+                    name: param.name.clone(),
+                    min_selections,
+                    actual_selections: selection_count,
+                });
+            }
+        }
+
+        // Maximum selections validation
+        if let Some(max_selections) = validation.max_selections {
+            if selection_count > max_selections {
+                return Err(ParameterError::TooManySelections {
+                    name: param.name.clone(),
+                    max_selections,
+                    actual_selections: selection_count,
                 });
             }
         }
@@ -724,5 +1059,367 @@ mod tests {
         
         assert_eq!(result.len(), 1);
         assert_eq!(result.get("optional_param").unwrap(), &serde_json::json!("default_value"));
+    }
+    
+    // Tests for ValidationRules
+    
+    #[test]
+    fn test_validation_rules_creation() {
+        let rules = ValidationRules::new()
+            .with_length_range(Some(5), Some(20))
+            .with_pattern(r"^test.*")
+            .with_numeric_range(Some(1.0), Some(100.0))
+            .with_step(0.5)
+            .with_selection_range(Some(1), Some(3));
+            
+        assert_eq!(rules.min_length, Some(5));
+        assert_eq!(rules.max_length, Some(20));
+        assert_eq!(rules.pattern, Some("^test.*".to_string()));
+        assert_eq!(rules.min, Some(1.0));
+        assert_eq!(rules.max, Some(100.0));
+        assert_eq!(rules.step, Some(0.5));
+        assert_eq!(rules.min_selections, Some(1));
+        assert_eq!(rules.max_selections, Some(3));
+    }
+    
+    #[test]
+    fn test_parameter_with_validation_rules() {
+        let param = Parameter::new("email", "Email address", ParameterType::String)
+            .with_pattern(CommonPatterns::EMAIL)
+            .with_length_range(Some(5), Some(100));
+            
+        assert!(param.validation.is_some());
+        let validation = param.validation.unwrap();
+        assert_eq!(validation.pattern, Some(CommonPatterns::EMAIL.to_string()));
+        assert_eq!(validation.min_length, Some(5));
+        assert_eq!(validation.max_length, Some(100));
+    }
+    
+    // Tests for string length validation
+    
+    #[test]
+    fn test_string_length_validation_success() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("text", "Text parameter", ParameterType::String)
+            .with_length_range(Some(3), Some(10));
+            
+        let value = serde_json::Value::String("hello".to_string());
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+    }
+    
+    #[test]
+    fn test_string_too_short_validation() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("text", "Text parameter", ParameterType::String)
+            .with_length_range(Some(5), None);
+            
+        let value = serde_json::Value::String("hi".to_string());
+        let result = validator.validate_parameter(&param, &value);
+        
+        assert!(result.is_err());
+        if let Err(ParameterError::StringTooShort { name, min_length, actual_length }) = result {
+            assert_eq!(name, "text");
+            assert_eq!(min_length, 5);
+            assert_eq!(actual_length, 2);
+        } else {
+            panic!("Expected StringTooShort error");
+        }
+    }
+    
+    #[test]
+    fn test_string_too_long_validation() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("text", "Text parameter", ParameterType::String)
+            .with_length_range(None, Some(5));
+            
+        let value = serde_json::Value::String("this is too long".to_string());
+        let result = validator.validate_parameter(&param, &value);
+        
+        assert!(result.is_err());
+        if let Err(ParameterError::StringTooLong { name, max_length, actual_length }) = result {
+            assert_eq!(name, "text");
+            assert_eq!(max_length, 5);
+            assert_eq!(actual_length, 16);
+        } else {
+            panic!("Expected StringTooLong error");
+        }
+    }
+    
+    #[test]
+    fn test_pattern_validation_success() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("email", "Email parameter", ParameterType::String)
+            .with_pattern(CommonPatterns::EMAIL);
+            
+        let value = serde_json::Value::String("test@example.com".to_string());
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+    }
+    
+    #[test]
+    fn test_pattern_validation_failure() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("email", "Email parameter", ParameterType::String)
+            .with_pattern(CommonPatterns::EMAIL);
+            
+        let value = serde_json::Value::String("invalid-email".to_string());
+        let result = validator.validate_parameter(&param, &value);
+        
+        assert!(result.is_err());
+        if let Err(ParameterError::PatternMismatch { name, value: val, pattern }) = result {
+            assert_eq!(name, "email");
+            assert_eq!(val, "invalid-email");
+            assert_eq!(pattern, CommonPatterns::EMAIL);
+        } else {
+            panic!("Expected PatternMismatch error");
+        }
+    }
+    
+    // Tests for numeric validation
+    
+    #[test]
+    fn test_numeric_step_validation_success() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("percentage", "Percentage", ParameterType::Number)
+            .with_step(0.5);
+            
+        let value = serde_json::Value::Number(serde_json::Number::from_f64(2.5).unwrap());
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+    }
+    
+    #[test]
+    fn test_numeric_step_validation_failure() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("percentage", "Percentage", ParameterType::Number)
+            .with_step(0.5);
+            
+        let value = serde_json::Value::Number(serde_json::Number::from_f64(2.3).unwrap());
+        let result = validator.validate_parameter(&param, &value);
+        
+        assert!(result.is_err());
+        if let Err(ParameterError::InvalidStep { name, value: val, step }) = result {
+            assert_eq!(name, "percentage");
+            assert_eq!(val, 2.3);
+            assert_eq!(step, 0.5);
+        } else {
+            panic!("Expected InvalidStep error");
+        }
+    }
+    
+    #[test]
+    fn test_numeric_range_validation_with_validation_rules() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("port", "Port number", ParameterType::Number)
+            .with_range(Some(1.0), Some(65535.0));
+            
+        // Valid value
+        let value = serde_json::Value::Number(serde_json::Number::from(8080));
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+        
+        // Too low
+        let value = serde_json::Value::Number(serde_json::Number::from(0));
+        let result = validator.validate_parameter(&param, &value);
+        assert!(result.is_err());
+        
+        // Too high
+        let value = serde_json::Value::Number(serde_json::Number::from(70000));
+        let result = validator.validate_parameter(&param, &value);
+        assert!(result.is_err());
+    }
+    
+    // Tests for multi-choice selection count validation
+    
+    #[test]
+    fn test_multi_choice_selection_count_success() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("tags", "Tags", ParameterType::MultiChoice)
+            .with_choices(vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()])
+            .with_selection_range(Some(2), Some(3));
+            
+        let value = serde_json::Value::Array(vec![
+            serde_json::Value::String("a".to_string()),
+            serde_json::Value::String("b".to_string()),
+        ]);
+        
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+    }
+    
+    #[test]
+    fn test_multi_choice_too_few_selections() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("tags", "Tags", ParameterType::MultiChoice)
+            .with_choices(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+            .with_selection_range(Some(2), Some(3));
+            
+        let value = serde_json::Value::Array(vec![
+            serde_json::Value::String("a".to_string()),
+        ]);
+        
+        let result = validator.validate_parameter(&param, &value);
+        assert!(result.is_err());
+        
+        if let Err(ParameterError::TooFewSelections { name, min_selections, actual_selections }) = result {
+            assert_eq!(name, "tags");
+            assert_eq!(min_selections, 2);
+            assert_eq!(actual_selections, 1);
+        } else {
+            panic!("Expected TooFewSelections error");
+        }
+    }
+    
+    #[test]
+    fn test_multi_choice_too_many_selections() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("tags", "Tags", ParameterType::MultiChoice)
+            .with_choices(vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()])
+            .with_selection_range(Some(1), Some(2));
+            
+        let value = serde_json::Value::Array(vec![
+            serde_json::Value::String("a".to_string()),
+            serde_json::Value::String("b".to_string()),
+            serde_json::Value::String("c".to_string()),
+        ]);
+        
+        let result = validator.validate_parameter(&param, &value);
+        assert!(result.is_err());
+        
+        if let Err(ParameterError::TooManySelections { name, max_selections, actual_selections }) = result {
+            assert_eq!(name, "tags");
+            assert_eq!(max_selections, 2);
+            assert_eq!(actual_selections, 3);
+        } else {
+            panic!("Expected TooManySelections error");
+        }
+    }
+    
+    // Tests for CommonPatterns
+    
+    #[test]
+    fn test_common_patterns_hints() {
+        assert_eq!(CommonPatterns::hint_for_pattern(CommonPatterns::EMAIL), "example@domain.com");
+        assert_eq!(CommonPatterns::hint_for_pattern(CommonPatterns::URL), "https://example.com");
+        assert_eq!(CommonPatterns::hint_for_pattern(CommonPatterns::IPV4), "192.168.1.1");
+        assert_eq!(CommonPatterns::hint_for_pattern(CommonPatterns::SEMVER), "1.2.3");
+        assert_eq!(CommonPatterns::hint_for_pattern("custom"), "custom");
+    }
+    
+    #[test]
+    fn test_common_patterns_descriptions() {
+        assert_eq!(CommonPatterns::description_for_pattern(CommonPatterns::EMAIL), "Valid email address");
+        assert_eq!(CommonPatterns::description_for_pattern(CommonPatterns::URL), "Valid HTTP or HTTPS URL");
+        assert_eq!(CommonPatterns::description_for_pattern("custom"), "Custom pattern");
+    }
+    
+    #[test]
+    fn test_email_pattern_validation() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("email", "Email", ParameterType::String)
+            .with_pattern(CommonPatterns::EMAIL);
+            
+        // Valid emails
+        let valid_emails = vec![
+            "test@example.com",
+            "user.name@domain.org", 
+            "user+tag@example.co.uk"
+        ];
+        
+        for email in valid_emails {
+            let value = serde_json::Value::String(email.to_string());
+            assert!(validator.validate_parameter(&param, &value).is_ok(), "Email should be valid: {email}");
+        }
+        
+        // Invalid emails
+        let invalid_emails = vec![
+            "not-an-email",
+            "@example.com",
+            "user@",
+            "user name@example.com", // space in local part
+        ];
+        
+        for email in invalid_emails {
+            let value = serde_json::Value::String(email.to_string());
+            assert!(validator.validate_parameter(&param, &value).is_err(), "Email should be invalid: {email}");
+        }
+    }
+    
+    #[test] 
+    fn test_url_pattern_validation() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("url", "URL", ParameterType::String)
+            .with_pattern(CommonPatterns::URL);
+            
+        // Valid URLs
+        let valid_urls = vec![
+            "https://example.com",
+            "http://test.org/path",
+            "https://api.example.com/v1/users"
+        ];
+        
+        for url in valid_urls {
+            let value = serde_json::Value::String(url.to_string());
+            assert!(validator.validate_parameter(&param, &value).is_ok(), "URL should be valid: {url}");
+        }
+        
+        // Invalid URLs
+        let invalid_urls = vec![
+            "not-a-url",
+            "ftp://example.com",
+            "just-text"
+        ];
+        
+        for url in invalid_urls {
+            let value = serde_json::Value::String(url.to_string());
+            assert!(validator.validate_parameter(&param, &value).is_err(), "URL should be invalid: {url}");
+        }
+    }
+    
+    #[test]
+    fn test_unicode_string_length_validation() {
+        let validator = ParameterValidator::new();
+        let param = Parameter::new("text", "Unicode text", ParameterType::String)
+            .with_length_range(Some(3), Some(6));
+            
+        // Unicode characters should be counted properly
+        let value = serde_json::Value::String("你好世界".to_string()); // 4 Chinese characters
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+        
+        // Emoji should be counted as single characters
+        let value = serde_json::Value::String("😀🎉🚀".to_string()); // 3 emoji
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+    }
+    
+    #[test]
+    fn test_password_pattern_debug() {
+        // Simpler pattern that works with Rust regex - just check for containing special chars
+        let pattern = r".*[@$!%*?&].*";
+        let regex = regex::Regex::new(pattern).unwrap();
+        
+        // This should match (has special character)
+        assert!(regex.is_match("MyPassword123!"));
+        
+        // This should NOT match (no special character)
+        assert!(!regex.is_match("MyPassword123"));
+    }
+    
+    #[test]
+    fn test_complex_validation_rules_combination() {
+        let validator = ParameterValidator::new();
+        // Use a simpler pattern that requires at least one special character
+        let param = Parameter::new("password", "Strong password", ParameterType::String)
+            .with_length_range(Some(8), Some(128))
+            .with_pattern(r".*[@$!%*?&].*");
+            
+        // Valid password with special character and correct length
+        let value = serde_json::Value::String("MyPassword123!".to_string());
+        assert!(validator.validate_parameter(&param, &value).is_ok());
+        
+        // Too short (fails length validation)
+        let value = serde_json::Value::String("Pass1!".to_string());
+        let result = validator.validate_parameter(&param, &value);
+        assert!(result.is_err());
+        
+        // Doesn't match pattern (no special character)
+        let value = serde_json::Value::String("MyPassword123".to_string());
+        let result = validator.validate_parameter(&param, &value);
+        assert!(result.is_err(), "Password without special character should fail validation");
     }
 }
