@@ -27,6 +27,9 @@ pub mod ulid_generator;
 /// Abort file utilities for consistent abort handling
 pub mod abort_utils;
 
+/// Shared parameter system for prompts and workflows
+pub mod parameters;
+
 // Re-export commonly used items
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
@@ -38,6 +41,10 @@ pub use file_types::{
     extract_base_name, is_any_prompt_file, is_prompt_file, ExtensionMatcher, PROMPT_EXTENSIONS,
 };
 pub use mcp_errors::{mcp, McpResultExt, ToSwissArmyHammerError};
+pub use parameters::{
+    Parameter, ParameterError, ParameterProvider, ParameterResolver, ParameterResult,
+    ParameterType, ParameterValidator,
+};
 pub use rate_limiter::{
     get_rate_limiter, init_rate_limiter, RateLimitStatus, RateLimiter, RateLimiterConfig,
 };

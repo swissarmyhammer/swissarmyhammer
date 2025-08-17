@@ -195,7 +195,9 @@ impl MermaidParser {
     }
 
     /// Parse frontmatter and extract workflow parameters
-    fn extract_parameters_from_frontmatter(input: &str) -> ParseResult<Vec<crate::workflow::WorkflowParameter>> {
+    fn extract_parameters_from_frontmatter(
+        input: &str,
+    ) -> ParseResult<Vec<crate::workflow::WorkflowParameter>> {
         let mut parameters = Vec::new();
 
         // Check if input has frontmatter
@@ -209,11 +211,11 @@ impl MermaidParser {
         }
 
         let yaml_content = parts[1];
-        
+
         // Parse YAML frontmatter
-        let frontmatter: serde_yaml::Value = serde_yaml::from_str(yaml_content)
-            .map_err(|e| ParseError::InvalidStructure { 
-                message: format!("Invalid YAML frontmatter: {e}")
+        let frontmatter: serde_yaml::Value =
+            serde_yaml::from_str(yaml_content).map_err(|e| ParseError::InvalidStructure {
+                message: format!("Invalid YAML frontmatter: {e}"),
             })?;
 
         // Extract parameters from frontmatter if present
@@ -243,13 +245,17 @@ impl MermaidParser {
                             .get(serde_yaml::Value::String("type".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("string");
-                        
+
                         let parameter_type = match type_str.to_lowercase().as_str() {
                             "string" => crate::workflow::ParameterType::String,
                             "boolean" | "bool" => crate::workflow::ParameterType::Boolean,
-                            "number" | "numeric" | "int" | "integer" | "float" => crate::workflow::ParameterType::Number,
+                            "number" | "numeric" | "int" | "integer" | "float" => {
+                                crate::workflow::ParameterType::Number
+                            }
                             "choice" | "select" => crate::workflow::ParameterType::Choice,
-                            "multi_choice" | "multichoice" | "multiselect" => crate::workflow::ParameterType::MultiChoice,
+                            "multi_choice" | "multichoice" | "multiselect" => {
+                                crate::workflow::ParameterType::MultiChoice
+                            }
                             _ => crate::workflow::ParameterType::String, // Default to string for unknown types
                         };
 
@@ -1124,39 +1130,51 @@ stateDiagram-v2
 
         let workflow = result.unwrap();
         assert_eq!(workflow.name.as_str(), "greeting_workflow");
-        
+
         // Check parameters
         assert_eq!(workflow.parameters.len(), 3);
-        
+
         // Check first parameter
         let param1 = &workflow.parameters[0];
         assert_eq!(param1.name, "person_name");
         assert_eq!(param1.description, "The name of the person to greet");
         assert!(param1.required);
-        assert!(matches!(param1.parameter_type, crate::workflow::ParameterType::String));
+        assert!(matches!(
+            param1.parameter_type,
+            crate::workflow::ParameterType::String
+        ));
         assert!(param1.default.is_none());
         assert!(param1.choices.is_none());
-        
+
         // Check second parameter (with choices)
         let param2 = &workflow.parameters[1];
         assert_eq!(param2.name, "language");
         assert_eq!(param2.description, "The language to use for greeting");
         assert!(!param2.required);
-        assert!(matches!(param2.parameter_type, crate::workflow::ParameterType::String));
-        assert_eq!(param2.default.as_ref().unwrap().as_str().unwrap(), "English");
+        assert!(matches!(
+            param2.parameter_type,
+            crate::workflow::ParameterType::String
+        ));
+        assert_eq!(
+            param2.default.as_ref().unwrap().as_str().unwrap(),
+            "English"
+        );
         assert!(param2.choices.is_some());
         let choices = param2.choices.as_ref().unwrap();
         assert_eq!(choices.len(), 3);
         assert!(choices.contains(&"English".to_string()));
         assert!(choices.contains(&"Spanish".to_string()));
         assert!(choices.contains(&"French".to_string()));
-        
+
         // Check third parameter (boolean)
         let param3 = &workflow.parameters[2];
         assert_eq!(param3.name, "formal");
         assert_eq!(param3.description, "Use formal greeting");
         assert!(!param3.required);
-        assert!(matches!(param3.parameter_type, crate::workflow::ParameterType::Boolean));
+        assert!(matches!(
+            param3.parameter_type,
+            crate::workflow::ParameterType::Boolean
+        ));
         assert!(!param3.default.as_ref().unwrap().as_bool().unwrap());
         assert!(param3.choices.is_none());
     }
@@ -1211,35 +1229,47 @@ stateDiagram-v2
 
         let workflow = result.unwrap();
         assert_eq!(workflow.parameters.len(), 4);
-        
+
         // Check number parameter
         let number_param = &workflow.parameters[0];
         assert_eq!(number_param.name, "count");
-        assert!(matches!(number_param.parameter_type, crate::workflow::ParameterType::Number));
+        assert!(matches!(
+            number_param.parameter_type,
+            crate::workflow::ParameterType::Number
+        ));
         assert!(number_param.required);
-        
+
         // Check boolean parameter
         let bool_param = &workflow.parameters[1];
         assert_eq!(bool_param.name, "enabled");
-        assert!(matches!(bool_param.parameter_type, crate::workflow::ParameterType::Boolean));
+        assert!(matches!(
+            bool_param.parameter_type,
+            crate::workflow::ParameterType::Boolean
+        ));
         assert!(!bool_param.required);
         assert!(bool_param.default.as_ref().unwrap().as_bool().unwrap());
-        
+
         // Check choice parameter
         let choice_param = &workflow.parameters[2];
         assert_eq!(choice_param.name, "priority");
-        assert!(matches!(choice_param.parameter_type, crate::workflow::ParameterType::Choice));
+        assert!(matches!(
+            choice_param.parameter_type,
+            crate::workflow::ParameterType::Choice
+        ));
         assert!(choice_param.required);
         let choices = choice_param.choices.as_ref().unwrap();
         assert_eq!(choices.len(), 3);
         assert!(choices.contains(&"low".to_string()));
         assert!(choices.contains(&"medium".to_string()));
         assert!(choices.contains(&"high".to_string()));
-        
+
         // Check multi-choice parameter
         let multi_choice_param = &workflow.parameters[3];
         assert_eq!(multi_choice_param.name, "tags");
-        assert!(matches!(multi_choice_param.parameter_type, crate::workflow::ParameterType::MultiChoice));
+        assert!(matches!(
+            multi_choice_param.parameter_type,
+            crate::workflow::ParameterType::MultiChoice
+        ));
         assert!(!multi_choice_param.required);
         let multi_choices = multi_choice_param.choices.as_ref().unwrap();
         assert_eq!(multi_choices.len(), 3);
@@ -1303,11 +1333,14 @@ stateDiagram-v2
 
         let workflow = result.unwrap();
         assert_eq!(workflow.parameters.len(), 1);
-        
+
         let param = &workflow.parameters[0];
         assert_eq!(param.name, "custom_field");
         // Should fallback to String type for unknown types
-        assert!(matches!(param.parameter_type, crate::workflow::ParameterType::String));
+        assert!(matches!(
+            param.parameter_type,
+            crate::workflow::ParameterType::String
+        ));
     }
 
     #[test]
@@ -1331,7 +1364,7 @@ Content here
         assert!(result.unwrap().is_empty());
     }
 
-    #[test] 
+    #[test]
     fn test_backward_compatibility() {
         // Test that workflows without parameters still work
         let input = r"
