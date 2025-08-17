@@ -43,7 +43,7 @@ pub use cache::{
     CacheStats, CelProgramCache, TransitionCache, TransitionPath, WorkflowCache,
     WorkflowCacheManager,
 };
-pub use definition::{Workflow, WorkflowError, WorkflowName, WorkflowResult};
+pub use definition::{ParameterType, Workflow, WorkflowError, WorkflowName, WorkflowParameter, WorkflowResult};
 pub use error_utils::{
     command_succeeded, extract_stderr, extract_stdout, handle_claude_command_error,
     handle_command_error, handle_command_error_with_mapper,
