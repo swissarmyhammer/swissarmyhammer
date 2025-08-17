@@ -31,6 +31,7 @@ impl InteractivePrompts {
     ///
     /// This method will prompt for any required parameters that are missing from existing_values.
     /// Optional parameters with defaults are automatically resolved.
+    /// Supports conditional parameters by evaluating conditions dynamically.
     pub fn prompt_for_parameters(
         &self,
         parameters: &[Parameter],
@@ -38,33 +39,93 @@ impl InteractivePrompts {
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         let mut resolved = existing_values.clone();
 
-        for param in parameters {
-            if resolved.contains_key(&param.name) {
-                // Parameter already provided, validate it
-                if let Some(value) = resolved.get(&param.name) {
-                    self.validator.validate_parameter(param, value)?;
-                }
-                continue;
-            }
+        // Handle conditional parameters with iterative approach
+        self.prompt_conditional_parameters(parameters, resolved)
+    }
 
-            // Parameter is missing, check if we need to prompt or use default
-            if param.required {
-                if self.non_interactive {
-                    return Err(ParameterError::MissingRequired {
-                        name: param.name.clone(),
-                    });
+    /// Prompt for conditional parameters using iterative resolution
+    pub fn prompt_conditional_parameters(
+        &self,
+        parameters: &[Parameter],
+        mut resolved: HashMap<String, serde_json::Value>,
+    ) -> ParameterResult<HashMap<String, serde_json::Value>> {
+        use crate::common::parameter_conditions::ConditionEvaluator;
+        
+        let mut changed = true;
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
+        
+        while changed && iterations < MAX_ITERATIONS {
+            changed = false;
+            iterations += 1;
+            
+            for param in parameters {
+                if resolved.contains_key(&param.name) {
+                    // Parameter already provided, validate it
+                    if let Some(value) = resolved.get(&param.name) {
+                        self.validator.validate_parameter(param, value)?;
+                    }
+                    continue;
                 }
-                // Prompt for required parameter
-                let value = self.prompt_for_parameter(param)?;
-                resolved.insert(param.name.clone(), value);
-            } else if let Some(default) = &param.default {
-                // Use default value for optional parameter
-                resolved.insert(param.name.clone(), default.clone());
+
+                // Check if this parameter should be included based on its condition
+                let should_include = if let Some(condition) = &param.condition {
+                    let evaluator = ConditionEvaluator::new(resolved.clone());
+                    match evaluator.evaluate(&condition.expression) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            // Condition references parameters we don't have yet, skip for now
+                            continue;
+                        }
+                    }
+                } else {
+                    true // No condition means always include
+                };
+
+                if should_include {
+                    // Check if we can use a default value first, regardless of whether it's required
+                    if let Some(default) = &param.default {
+                        // Use default value for parameters when condition is met
+                        resolved.insert(param.name.clone(), default.clone());
+                        changed = true;
+                    } else if param.required && !self.non_interactive {
+                        // Only prompt for required parameters without defaults
+                        // Show conditional explanation if available
+                        if let Some(condition) = &param.condition {
+                            println!("📋 {} (required because: {})", 
+                                param.description, 
+                                self.format_condition_explanation(condition));
+                        }
+                        
+                        let value = self.prompt_for_parameter(param)?;
+                        resolved.insert(param.name.clone(), value);
+                        changed = true;
+                    } else if param.required && self.non_interactive {
+                        return Err(ParameterError::MissingRequired {
+                            name: param.name.clone(),
+                        });
+                    }
+                    // If it's not required and has no default, we simply don't include it
+                }
             }
-            // Optional parameters without defaults are left unset
+        }
+        
+        if iterations >= MAX_ITERATIONS {
+            return Err(ParameterError::ValidationFailed {
+                message: "Too many iterations resolving conditional parameters - possible circular dependency".to_string(),
+            });
         }
 
         Ok(resolved)
+    }
+
+    /// Format a condition explanation for user display
+    fn format_condition_explanation(&self, condition: &crate::common::parameter_conditions::ParameterCondition) -> String {
+        if let Some(desc) = &condition.description {
+            desc.clone()
+        } else {
+            format!("condition '{}' is met", condition.expression)
+        }
     }
 
     /// Prompt for a single parameter based on its type
@@ -566,5 +627,85 @@ mod tests {
 
         let result = prompts.prompt_multi_choice(&param);
         assert!(result.is_err());
+    }
+
+    #[test] 
+    fn test_prompt_conditional_parameters_basic() {
+        use crate::common::parameter_conditions::ParameterCondition;
+        
+        let prompts = InteractivePrompts::new(true);
+        
+        // Create conditional parameters
+        let deploy_env = Parameter::new("deploy_env", "Deployment environment", crate::common::parameters::ParameterType::String)
+            .required(true);
+            
+        let prod_confirmation = Parameter::new("prod_confirmation", "Production confirmation", crate::common::parameters::ParameterType::Boolean)
+            .required(true)
+            .with_condition(ParameterCondition::new("deploy_env == 'prod'"));
+            
+        let parameters = vec![deploy_env, prod_confirmation];
+
+        // Test with existing deploy_env = dev (should not require prod_confirmation)
+        let mut existing = HashMap::new();
+        existing.insert("deploy_env".to_string(), serde_json::Value::String("dev".to_string()));
+
+        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("deploy_env").unwrap(), &serde_json::Value::String("dev".to_string()));
+        assert!(result.get("prod_confirmation").is_none());
+    }
+
+    #[test]
+    fn test_prompt_conditional_parameters_with_defaults() {
+        use crate::common::parameter_conditions::ParameterCondition;
+        
+        let prompts = InteractivePrompts::new(true);
+        
+        let enable_ssl = Parameter::new("enable_ssl", "Enable SSL", crate::common::parameters::ParameterType::Boolean)
+            .with_default(serde_json::json!(false))
+            .required(false);
+            
+        let cert_path = Parameter::new("cert_path", "SSL certificate path", crate::common::parameters::ParameterType::String)
+            .required(true)
+            .when("enable_ssl == true")
+            .with_default(serde_json::json!("/etc/ssl/cert.pem"));
+            
+        let parameters = vec![enable_ssl, cert_path];
+
+        // Test 1: No existing values, should use defaults and not require cert_path
+        let existing = HashMap::new();
+        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
+        
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(false));
+        assert!(result.get("cert_path").is_none());
+
+        // Test 2: enable_ssl = true provided, should use cert_path default
+        let mut existing = HashMap::new();
+        existing.insert("enable_ssl".to_string(), serde_json::Value::Bool(true));
+
+        let result = prompts.prompt_for_parameters(&parameters, &existing).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("enable_ssl").unwrap(), &serde_json::json!(true));
+        assert_eq!(result.get("cert_path").unwrap(), &serde_json::json!("/etc/ssl/cert.pem"));
+    }
+
+    #[test]
+    fn test_format_condition_explanation() {
+        use crate::common::parameter_conditions::ParameterCondition;
+        
+        let prompts = InteractivePrompts::new(true);
+        
+        // Test with custom description
+        let condition_with_desc = ParameterCondition::new("env == 'prod'")
+            .with_description("production environment is selected");
+        let explanation = prompts.format_condition_explanation(&condition_with_desc);
+        assert_eq!(explanation, "production environment is selected");
+        
+        // Test without description
+        let condition_without_desc = ParameterCondition::new("enable_ssl == true");
+        let explanation = prompts.format_condition_explanation(&condition_without_desc);
+        assert_eq!(explanation, "condition 'enable_ssl == true' is met");
     }
 }
