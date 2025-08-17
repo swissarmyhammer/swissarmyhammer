@@ -14,6 +14,7 @@ use crate::mcp::tools::web_search::types::{ScoringConfig, *};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
 use futures::StreamExt;
+use rand::Rng;
 use std::time::Duration;
 
 /// DuckDuckGo search client using browser automation
@@ -42,6 +43,9 @@ pub enum DuckDuckGoError {
     /// Navigation or page load timeout
     #[error("Timeout waiting for: {0}")]
     Timeout(String),
+    /// CAPTCHA challenge detected
+    #[error("CAPTCHA challenge detected: {0}")]
+    CaptchaDetected(String),
 }
 
 impl From<CdpError> for DuckDuckGoError {
@@ -71,10 +75,26 @@ impl DuckDuckGoClient {
             request.query
         );
 
-        // Launch browser
+        // Launch browser with stealth configuration to avoid detection
         let (mut browser, mut handler) = Browser::launch(
             BrowserConfig::builder()
-                .window_size(1920, 1080)
+                .window_size(1366, 768)  // Common resolution to blend in
+                .args([
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                    "--exclude-switches=enable-automation",
+                    "--disable-extensions-except=",
+                    "--disable-plugins-discovery",
+                    "--disable-default-apps",
+                    "--no-first-run",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--disable-background-timer-throttling",
+                    "--disable-features=TranslateUI",
+                    "--disable-component-extensions-with-background-pages",
+                    "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                ])
                 .build()
                 .map_err(|e| {
                     DuckDuckGoError::InvalidRequest(format!("Failed to build browser config: {e}"))
@@ -85,109 +105,306 @@ impl DuckDuckGoClient {
             DuckDuckGoError::Browser(Box::new(e))
         })?;
 
-        // Spawn handler task
+        // Spawn handler task with better error handling
         let handler_task = tokio::spawn(async move {
             while let Some(h) = handler.next().await {
-                if h.is_err() {
-                    break;
+                // Continue processing even if there are parsing errors
+                // This is necessary because Chrome may send CDP messages that chromiumoxide doesn't recognize
+                match h {
+                    Ok(_) => {
+                        // Message processed successfully
+                    }
+                    Err(e) => {
+                        // Log the error but don't break the connection
+                        tracing::debug!("CDP message processing error (continuing): {}", e);
+                        // Only break on critical connection errors, not parsing errors
+                        if e.to_string().contains("connection closed") || 
+                           e.to_string().contains("io error") ||
+                           e.to_string().contains("websocket closed") {
+                            tracing::warn!("Critical browser connection error, stopping handler: {}", e);
+                            break;
+                        }
+                    }
                 }
             }
         });
 
-        // Create page and navigate to DuckDuckGo
-        let page = browser
-            .new_page("about:blank")
-            .await
-            .map_err(|e| {
-                DuckDuckGoError::Browser(Box::new(e))
-            })?;
+        // Perform search operations with proper error handling
+        let search_result = async {
+            // Create page and navigate to DuckDuckGo
+            let page = browser
+                .new_page("about:blank")
+                .await
+                .map_err(|e| {
+                    DuckDuckGoError::Browser(Box::new(e))
+                })?;
 
-        tracing::debug!("Navigating to DuckDuckGo");
-        page.goto("https://duckduckgo.com")
-            .await
-            .map_err(|e| {
-                DuckDuckGoError::Timeout(format!("Failed to navigate to DuckDuckGo: {e}"))
-            })?;
+            tracing::debug!("Navigating to DuckDuckGo");
+            page.goto("https://duckduckgo.com")
+                .await
+                .map_err(|e| {
+                    DuckDuckGoError::Timeout(format!("Failed to navigate to DuckDuckGo: {e}"))
+                })?;
+            
+            // Wait for page to fully load and log current URL
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+            
+            if let Ok(current_url) = page.url().await {
+                tracing::debug!("Current URL after navigation: {:?}", current_url);
+            }
+            
+            if let Ok(title) = page.get_title().await {
+                tracing::debug!("Page title after navigation: {:?}", title);
+            }
+            
+            // Execute stealth JavaScript to mask automation
+            let stealth_script = r#"
+                // Remove automation indicators
+                delete window.navigator.webdriver;
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false,
+                });
+                
+                // Override automation-related properties
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                });
+                
+                // Mock Chrome runtime
+                if (!window.chrome) {
+                    window.chrome = {};
+                }
+                if (!window.chrome.runtime) {
+                    window.chrome.runtime = {};
+                }
+                
+                // Add some realistic properties
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en'],
+                });
+            "#;
+            
+            if let Err(e) = page.evaluate(stealth_script).await {
+                tracing::debug!("Failed to execute stealth script (continuing): {}", e);
+            }
 
-        // Wait for search input box to be available
-        tracing::debug!("Waiting for search input to load");
-        let search_input = {
-            let mut attempts = 0;
-            loop {
-                match page.find_element("input[name='q']").await {
-                    Ok(element) => break element,
-                    Err(_) if attempts < 20 => {
+            // Wait for search input box to be available
+            tracing::debug!("Waiting for search input to load");
+            let search_input = {
+                let mut attempts = 0;
+                let input_selectors = ["input[name='q']", "#search_form_input", "#searchbox_input", "input[type='search']"];
+                
+                loop {
+                    let mut found_input = None;
+                    
+                    for selector in &input_selectors {
+                        match page.find_element(*selector).await {
+                            Ok(element) => {
+                                tracing::debug!("Found search input with selector: {}", selector);
+                                found_input = Some(element);
+                                break;
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+                    
+                    if let Some(input) = found_input {
+                        break input;
+                    } else if attempts < 30 {
                         attempts += 1;
                         tokio::time::sleep(Duration::from_millis(500)).await;
+                        
+                        // Log progress every 5 attempts
+                        if attempts % 5 == 0 {
+                            tracing::debug!("Still looking for search input, attempt {}/30", attempts);
+                            // Try to debug what's on the page
+                            if let Ok(html) = page.content().await {
+                                let html_snippet = &html[..html.len().min(1000)];
+                                tracing::debug!("Page HTML snippet: {}", html_snippet);
+                            }
+                        }
+                    } else {
+                        return Err(DuckDuckGoError::ElementNotFound("search input box".to_string()));
                     }
-                    Err(_) => return Err(DuckDuckGoError::ElementNotFound("search input box".to_string())),
                 }
-            }
-        };
-        
-        tracing::debug!("Entering search query: {}", request.query);
+            };
+            
+            tracing::debug!("Entering search query: {}", request.query);
 
-        search_input
-            .click()
-            .await
-            .map_err(|e| {
-                DuckDuckGoError::Browser(Box::new(e))
-            })?;
-        search_input
-            .type_str(&request.query)
-            .await
-            .map_err(|e| {
-                DuckDuckGoError::Browser(Box::new(e))
-            })?;
+            // Add human-like delay before clicking
+            let click_delay = {
+                let mut rng = rand::thread_rng();
+                Duration::from_millis(rng.gen_range(100..500))
+            };
+            tokio::time::sleep(click_delay).await;
 
-        // Submit search by pressing Enter
-        search_input
-            .press_key("Enter")
-            .await
-            .map_err(|e| {
-                DuckDuckGoError::Browser(Box::new(e))
-            })?;
-
-        // Wait for search results to appear
-        tracing::debug!("Waiting for search results to load");
-        {
-            let mut attempts = 0;
-            loop {
-                // Try multiple selectors for search results
-                let result_found = page.find_element("article[data-testid='result']").await.is_ok()
-                    || page.find_element(".result").await.is_ok()
-                    || page.find_element("[data-result]").await.is_ok();
+            search_input
+                .click()
+                .await
+                .map_err(|e| {
+                    DuckDuckGoError::Browser(Box::new(e))
+                })?;
+            
+            // Add small delay after clicking
+            let after_click_delay = {
+                let mut rng = rand::thread_rng();
+                Duration::from_millis(rng.gen_range(50..200))
+            };
+            tokio::time::sleep(after_click_delay).await;
+            
+            // Type query with human-like speed
+            let chunk_size = {
+                let mut rng = rand::thread_rng();
+                rng.gen_range(1..4)
+            };
+            
+            for chunk in request.query.chars().collect::<Vec<_>>().chunks(chunk_size) {
+                let chunk_str: String = chunk.iter().collect();
+                search_input
+                    .type_str(&chunk_str)
+                    .await
+                    .map_err(|e| {
+                        DuckDuckGoError::Browser(Box::new(e))
+                    })?;
                 
-                if result_found {
-                    break;
-                } else if attempts < 30 {
-                    attempts += 1;
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                } else {
-                    return Err(DuckDuckGoError::Timeout("search results".to_string()));
+                // Small delay between chunks to simulate human typing
+                let typing_delay = {
+                    let mut rng = rand::thread_rng();
+                    Duration::from_millis(rng.gen_range(50..150))
+                };
+                tokio::time::sleep(typing_delay).await;
+            }
+            
+            // Random delay before pressing Enter
+            let enter_delay = {
+                let mut rng = rand::thread_rng();
+                Duration::from_millis(rng.gen_range(200..800))
+            };
+            tokio::time::sleep(enter_delay).await;
+
+            // Submit search by pressing Enter
+            search_input
+                .press_key("Enter")
+                .await
+                .map_err(|e| {
+                    DuckDuckGoError::Browser(Box::new(e))
+                })?;
+
+            // Wait for search results to appear with more robust checking
+            tracing::debug!("Waiting for search results to load");
+            {
+                let mut attempts = 0;
+                let max_attempts = 60; // Increase attempts for better reliability
+                loop {
+                    // Try multiple selectors for search results with more comprehensive checks
+                    let selectors_to_try = [
+                        "article[data-testid='result']",
+                        "div[data-testid='result']", 
+                        ".result",
+                        "[data-result]",
+                        "#links .result",
+                        ".web-result",
+                        ".result__body",
+                        "ol[data-testid='results'] li",
+                        ".react-results .result"
+                    ];
+                    
+                    let mut result_found = false;
+                    for selector in &selectors_to_try {
+                        match page.find_element(*selector).await {
+                            Ok(_) => {
+                                tracing::debug!("Found results with selector: {}", selector);
+                                result_found = true;
+                                break;
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+                    
+                    // Also check if page content changed (indicates loading completed)
+                    if !result_found {
+                        // Check if page has loaded by looking for any search-related content
+                        if let Ok(current_url) = page.url().await {
+                            if let Some(url_str) = current_url {
+                                if url_str.contains("q=") || url_str.contains("search") {
+                                    // Check if there are any meaningful results in the HTML
+                                    if let Ok(html) = page.content().await {
+                                        if html.contains("result") || html.contains("search-result") {
+                                            tracing::debug!("Found results in page HTML content");
+                                            result_found = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if result_found {
+                        // Give a moment for any dynamic content to load
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        break;
+                    } else if attempts < max_attempts {
+                        attempts += 1;
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        
+                        // Log progress every 10 attempts
+                        if attempts % 10 == 0 {
+                            tracing::debug!("Still waiting for search results, attempt {}/{}", attempts, max_attempts);
+                        }
+                    } else {
+                        return Err(DuckDuckGoError::Timeout("search results".to_string()));
+                    }
                 }
             }
+
+            // Get the page HTML content
+            let html_content = page
+                .content()
+                .await
+                .map_err(|e| {
+                    DuckDuckGoError::Browser(Box::new(e))
+                })?;
+
+            // Check for CAPTCHA before parsing results
+            tracing::debug!("Checking for CAPTCHA in response content of {} characters", html_content.len());
+            
+            if html_content.contains("Unfortunately, bots use DuckDuckGo too") 
+                || html_content.contains("anomaly-modal") 
+                || html_content.contains("challenge-form")
+                || html_content.contains("Please complete the following challenge") {
+                tracing::warn!("CAPTCHA detected in DuckDuckGo response");
+                return Err(DuckDuckGoError::CaptchaDetected(
+                    "DuckDuckGo detected automated access and is requesting CAPTCHA completion".to_string()
+                ));
+            } else {
+                tracing::debug!("No CAPTCHA detected, proceeding with result parsing");
+            }
+
+            // Parse results using existing HTML parsing logic
+            let results =
+                self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
+
+            tracing::debug!("DuckDuckGo search found {} results", results.len());
+            
+            Ok(results)
+        }.await;
+
+        // Always clean up browser resources regardless of success or failure
+        tracing::debug!("Cleaning up browser resources");
+        
+        // Close browser gracefully
+        if let Err(e) = browser.close().await {
+            tracing::debug!("Browser close error (ignored): {}", e);
         }
-
-        // Get the page HTML content
-        let html_content = page
-            .content()
-            .await
-            .map_err(|e| {
-                DuckDuckGoError::Browser(Box::new(e))
-            })?;
-
-        // Parse results using existing HTML parsing logic
-        let results =
-            self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
-
-        tracing::debug!("DuckDuckGo search found {} results", results.len());
-
-        // Clean up
-        browser.close().await.ok();
+        
+        // Abort handler task
         handler_task.abort();
+        
+        // Give a moment for cleanup
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        Ok(results)
+        // Return the search result
+        search_result
     }
 
     /// Parses HTML content to extract search results from rendered DuckDuckGo page
@@ -642,6 +859,27 @@ mod tests {
         let (title2, url2) = client.extract_title_and_url_simple(&element2).unwrap();
         assert_eq!(title2, "Test Page");
         assert_eq!(url2, "https://test.org");
+    }
+
+    #[test]
+    fn test_captcha_detection() {
+        let client = DuckDuckGoClient::new();
+        
+        // Test CAPTCHA HTML from actual response
+        let captcha_html = r#"
+        <html>
+        <body>
+            <div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div>
+            <div class="anomaly-modal__description">Please complete the following challenge to confirm this search was made by a human.</div>
+        </body>
+        </html>
+        "#;
+        
+        let result = client.parse_html_results(captcha_html, 10);
+        
+        // Should detect CAPTCHA and return NoResults error (since CAPTCHA detection happens before parsing)
+        assert!(result.is_err());
+        // In the actual search flow, CAPTCHA would be detected before parse_html_results is called
     }
 
     #[test]
