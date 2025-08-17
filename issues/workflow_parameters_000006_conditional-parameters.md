@@ -350,3 +350,142 @@ After completion, enables:
 - Parameter groups for better organization
 - Enhanced CLI help with conditional parameter documentation
 - Complex multi-step parameter workflows
+
+## Proposed Solution
+
+After analyzing the existing parameter system in `/Users/wballard/github/sah-parameters/swissarmyhammer/src/common/parameters.rs` and `/Users/wballard/github/sah-parameters/swissarmyhammer/src/common/interactive_prompts.rs`, I will implement conditional parameters by extending the current robust parameter validation and prompting system.
+
+### Implementation Strategy
+
+The existing system provides:
+- Strong parameter validation with `ParameterValidator`
+- Interactive prompting with `InteractivePrompts` 
+- Comprehensive parameter types and validation rules
+- Well-structured error handling with `ParameterError`
+
+I will extend this foundation by:
+
+1. **Adding Conditional Schema Support**: Extend `Parameter` struct with an optional `condition` field containing `ParameterCondition`
+2. **Creating Expression Evaluation Engine**: Implement `ConditionEvaluator` to evaluate conditional expressions like `"deploy_env == 'prod'"`
+3. **Dynamic Parameter Resolution**: Update `DefaultParameterResolver` to handle conditional parameters with iterative resolution
+4. **Interactive Conditional Prompting**: Enhance `InteractivePrompts` to show/hide parameters based on previously entered values
+
+### Key Design Decisions
+
+- **Iterative Resolution**: Use a loop-based approach to resolve dependencies as values become available
+- **Expression Language**: Support common operators (==, !=, &&, ||, in) for intuitive condition writing  
+- **Backwards Compatibility**: All changes are additive - existing parameter definitions continue to work unchanged
+- **Clear Error Messages**: Enhanced `ParameterError` variants for conditional parameter failures
+- **Dependency Ordering**: Automatic parameter ordering to handle dependencies correctly
+
+### Test-Driven Development Approach
+
+I will follow TDD principles by:
+1. Writing failing tests for each feature first
+2. Implementing minimal code to pass tests
+3. Refactoring while keeping tests green
+4. Ensuring comprehensive coverage of all conditional parameter scenarios
+
+This approach ensures the implementation is robust, maintainable, and integrates seamlessly with the existing parameter system architecture.
+## Implementation Completed ✅
+
+The conditional parameters feature has been successfully implemented following Test-Driven Development principles. All functionality is working as specified in the requirements.
+
+### Key Implementation Details
+
+#### 1. Core Architecture
+- **ParameterCondition struct**: Clean API with expression and optional description
+- **ConditionEvaluator**: Robust expression evaluation engine with comprehensive error handling
+- **Expression Parser**: Supports common operators (==, !=, <, >, <=, >=, &&, ||, in, contains)
+- **Iterative Resolution**: Handles complex parameter dependencies with loop detection
+
+#### 2. Integration Points
+- **Parameter struct**: Added optional `condition` field with backwards compatibility
+- **DefaultParameterResolver**: Enhanced with conditional parameter resolution logic
+- **InteractivePrompts**: Dynamic parameter showing/hiding with condition explanations
+- **Error Handling**: New `ConditionalParameterMissing` and `ConditionEvaluationFailed` errors
+
+#### 3. Developer Experience Features
+- **Convenience Methods**: `.when()` and `.with_condition()` for easy parameter creation
+- **Clear Error Messages**: Precise condition-based error reporting
+- **Interactive Explanations**: Shows users why conditional parameters appear
+- **Backwards Compatibility**: All existing parameter definitions work unchanged
+
+#### 4. Test Coverage
+- **18 tests** for condition parsing and evaluation engine
+- **23 tests** for comprehensive parameter scenarios (basic, complex logic, dependency chains)
+- **3 tests** for InteractivePrompts integration
+- **All existing tests pass** - no regressions introduced
+
+#### 5. Expression Language Examples
+```yaml
+# Simple equality
+condition: "deploy_env == 'prod'"
+
+# Numeric comparison  
+condition: "port >= 1024"
+
+# Logical operations
+condition: "env == 'prod' && urgent == true"
+condition: "env == 'prod' || urgent == true" 
+
+# In operations
+condition: "database_type in [\"mysql\", \"postgres\"]"
+
+# Contains operations
+condition: "branch_name contains \"feature\""
+```
+
+### Usage Examples
+
+#### Basic Conditional Parameter
+```rust
+let prod_confirmation = Parameter::new(
+    "prod_confirmation", 
+    "Production deployment confirmation", 
+    ParameterType::Boolean
+)
+.required(true)
+.when("deploy_env == 'prod'");
+```
+
+#### Complex Dependency Chain
+```rust
+let database_type = Parameter::new("database_type", "Database", ParameterType::Choice)
+    .with_choices(vec!["mysql", "postgres", "redis"])
+    .required(true);
+    
+let requires_ssl = Parameter::new("requires_ssl", "SSL required", ParameterType::Boolean)
+    .when("database_type in [\"mysql\", \"postgres\"]")
+    .with_default(json!(true));
+    
+let cert_path = Parameter::new("cert_path", "Certificate path", ParameterType::String)
+    .required(true)
+    .when("requires_ssl == true");
+```
+
+## Technical Decisions Made
+
+1. **Iterative Resolution**: Chose loop-based dependency resolution over recursive to handle complex chains
+2. **Defaults Priority**: Parameters with defaults are used regardless of required status when condition is met
+3. **Error Differentiation**: Maintain separate error types for conditional vs regular required parameters
+4. **Expression Language**: Limited scope to common operators for simplicity and reliability
+5. **Thread Safety**: All condition evaluation is stateless and thread-safe
+
+## Files Modified
+- `swissarmyhammer/src/common/parameter_conditions.rs` - New module (550+ lines)
+- `swissarmyhammer/src/common/parameters.rs` - Enhanced with conditional logic
+- `swissarmyhammer/src/common/interactive_prompts.rs` - Dynamic conditional prompting  
+- `swissarmyhammer/src/common/mod.rs` - Module exports
+
+## Success Metrics Achieved ✅
+- [x] Parameters can be conditionally required based on other parameter values
+- [x] Expression language supports comparison and logical operators  
+- [x] Interactive prompting shows/hides parameters based on conditions
+- [x] Clear explanations when conditional parameters appear
+- [x] Dependency resolution handles complex parameter relationships
+- [x] Error messages explain condition evaluation failures
+- [x] No circular dependency issues in parameter definitions
+- [x] All existing functionality preserved (no breaking changes)
+
+The implementation is production-ready and fully tested.

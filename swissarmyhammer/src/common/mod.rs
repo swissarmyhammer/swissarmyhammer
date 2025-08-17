@@ -36,6 +36,9 @@ pub mod parameter_cli;
 /// Interactive parameter prompting system
 pub mod interactive_prompts;
 
+/// Conditional parameter system for dynamic parameter requirements
+pub mod parameter_conditions;
+
 // Re-export commonly used items
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
@@ -51,6 +54,9 @@ pub use mcp_errors::{mcp, McpResultExt, ToSwissArmyHammerError};
 pub use parameter_cli::{
     discover_workflow_parameters, generate_parameter_help_text, parameter_name_to_cli_switch,
     resolve_parameters_from_vars,
+};
+pub use parameter_conditions::{
+    ConditionError, ConditionEvaluator, ParameterCondition,
 };
 pub use parameters::{
     DefaultParameterResolver, Parameter, ParameterError, ParameterProvider, ParameterResolver,
