@@ -80,3 +80,67 @@ The fix will focus on making the browser automation more resilient to CDP messag
 3. Using proxy rotation or residential IP addresses
 
 The core chromiumoxide issue has been **resolved** - searches no longer fail due to WebSocket errors.
+
+## Code Review Fixes Applied
+
+### Completed Tasks ✅
+
+1. **Fixed collapsible match pattern lint warning** at line 327-328
+   - Collapsed nested `if let` statements into a single pattern match
+   - Changed `if let Ok(current_url) = page.url().await { if let Some(url_str) = current_url` to `if let Ok(Some(url_str)) = page.url().await`
+
+2. **Extracted hard-coded retry constants to module level**
+   - Added configuration constants:
+     - `MAX_SEARCH_INPUT_ATTEMPTS: usize = 30`
+     - `MAX_RESULTS_WAIT_ATTEMPTS: usize = 60` 
+     - `ATTEMPT_DELAY_MS: u64 = 500`
+     - `RESULTS_WAIT_DELAY_MS: u64 = 250`
+     - `INITIAL_PAGE_LOAD_DELAY_MS: u64 = 2000`
+     - `CLEANUP_DELAY_MS: u64 = 100`
+   - Replaced all hardcoded values with these constants throughout the code
+
+3. **Defined selector constants at module level**
+   - Created comprehensive selector constant arrays:
+     - `SEARCH_INPUT_SELECTORS` for search input elements
+     - `SEARCH_RESULT_SELECTORS` for waiting for search results  
+     - `RESULT_CONTAINER_SELECTORS` for parsing result containers
+     - `TITLE_LINK_SELECTORS` for extracting titles from results
+     - `URL_SELECTORS` for extracting URLs from results  
+     - `SNIPPET_SELECTORS` for extracting description snippets
+   - Replaced all inline selector arrays with these constants
+   - Fixed iterator issues that occurred during refactoring
+
+4. **Verified all lint issues are resolved**
+   - Ran `cargo clippy --all-targets --all-features` successfully with no warnings
+   - Fixed compilation errors related to iterator usage
+
+5. **Formatted all code**
+   - Ran `cargo fmt --all` to ensure consistent code formatting
+   - All code now follows standard Rust formatting conventions
+
+6. **Cleaned up**
+   - Removed CODE_REVIEW.md file after completing all required tasks
+
+### Remaining Work (Not Critical) 
+
+**Refactor monolithic search method** - This was identified as an improvement opportunity but not a critical lint issue. The search method is large (~320 lines) and could be broken down into smaller methods like:
+- `setup_browser()`
+- `navigate_to_search()`  
+- `perform_search_input()`
+- `wait_for_results()`
+- `extract_page_content()`
+- `cleanup_resources()`
+
+However, this refactoring is a larger architectural change that would require careful testing and is beyond the scope of the immediate lint fixes.
+
+### Summary
+
+All critical code review items have been successfully addressed:
+- ✅ Lint warning fixed
+- ✅ Code quality improved with constants  
+- ✅ Duplication eliminated with shared selectors
+- ✅ No clippy warnings remain
+- ✅ Code properly formatted
+- ✅ Build passes successfully
+
+The WebSocket deserialization issue mentioned in the original problem has been resolved, and the DuckDuckGo search implementation is now more maintainable with better separation of configuration and reduced code duplication.

@@ -236,7 +236,6 @@ impl ContentFetcher {
         Self::new(ContentFetchConfig::default())
     }
 
-
     /// Fetch content from multiple search results concurrently (backward compatibility)
     pub async fn fetch_search_results(
         &self,
@@ -295,7 +294,6 @@ impl ContentFetcher {
 
         (processed_results, stats)
     }
-
 
     /// Fetch content from a single search result (backward compatibility)
     async fn fetch_single_result(
