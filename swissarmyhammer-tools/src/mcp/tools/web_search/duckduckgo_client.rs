@@ -14,52 +14,48 @@ use crate::mcp::tools::web_search::types::{ScoringConfig, *};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::error::CdpError;
 use futures::StreamExt;
-use rand::Rng;
 use std::time::Duration;
 
 // Configuration constants for retry logic and delays
-const MAX_SEARCH_INPUT_ATTEMPTS: usize = 30;
-const MAX_RESULTS_WAIT_ATTEMPTS: usize = 60;
-const ATTEMPT_DELAY_MS: u64 = 500;
-const RESULTS_WAIT_DELAY_MS: u64 = 250;
 const INITIAL_PAGE_LOAD_DELAY_MS: u64 = 2000;
 const CLEANUP_DELAY_MS: u64 = 100;
 
-// Selector constants for various page elements
-const SEARCH_INPUT_SELECTORS: &[&str] = &[
-    "input[name='q']",
-    "#search_form_input",
-    "#searchbox_input",
-    "input[type='search']",
-];
-
-const SEARCH_RESULT_SELECTORS: &[&str] = &[
-    "article[data-testid='result']",
-    "div[data-testid='result']",
-    ".result",
-    "[data-result]",
-    "#links .result",
-    ".web-result",
-    ".result__body",
-    "ol[data-testid='results'] li",
-    ".react-results .result",
-];
-
 const RESULT_CONTAINER_SELECTORS: &[&str] = &[
-    "div[data-testid='result']",     // Modern DuckDuckGo main selector
-    "article[data-testid='result']", // Article-based results
-    "div.result",                    // Classic result container
-    "div[class*='result']",          // Any div with result in class
+    "div[data-testid='result']",         // Modern DuckDuckGo main selector
+    "article[data-testid='result']",     // Article-based results
+    "div.result",                        // Classic result container
+    "div[class*='result']",              // Any div with result in class
+    "article[data-layout='organic']",    // New DuckDuckGo organic results
+    "div[data-layout='organic']",        // Div-based organic results
+    "[data-testid*='result']",           // Any element with result testid
+    "li[data-testid*='result']",         // List item results
+    "div.results_links",                 // Alternative result container
+    "div.web-result",                    // Web result container
+    ".result__body",                     // Result body class
+    "div.serp__results > div",           // SERP results children
+    "div.js-react-on-rails-component",   // React component results
+    "div.links_main",                    // HTML version main links container
+    "div.result.results_links",          // HTML version result links
+    "div.result.results_links_deep",     // HTML version deep links
+    ".result.result--url-above-snippet", // HTML version URL above snippet
+    "div.b_algo",                        // Bing-style results (fallback)
 ];
 
 const TITLE_LINK_SELECTORS: &[&str] = &[
     "h2 a[data-testid='result-title-a']", // Modern testid-based title link
     "h3 a[data-testid='result-title-a']", // H3 variant
-    "h2 a",                               // Fallback: any link in h2
-    "h3 a",                               // Fallback: any link in h3
     "a[data-testid='result-title-a']",    // Direct title link
+    "h2 > a",                             // Direct h2 child link
+    "h3 > a",                             // Direct h3 child link
+    "h2 a",                               // Any link in h2
+    "h3 a",                               // Any link in h3
+    "a[class*='result-title']",           // Title class patterns
+    "a[class*='title']",                  // Generic title patterns
+    ".result__title a",                   // Classic result title
+    ".result-title",                      // Direct title class
     "h2",                                 // Title text only
     "h3",                                 // H3 title text only
+    "h4 a",                               // H4 variant
 ];
 
 const URL_SELECTORS: &[&str] = &[
@@ -70,11 +66,16 @@ const URL_SELECTORS: &[&str] = &[
 
 const SNIPPET_SELECTORS: &[&str] = &[
     "[data-testid='result-snippet']",     // Modern testid-based snippet
+    "span[data-testid='result-snippet']", // Span-based snippet
     ".result__snippet",                   // Classic snippet class
     "[class*='snippet']",                 // Any element with snippet in class
     "div[data-result='snippet']",         // Data attribute variant
     "div.snippet",                        // Simple snippet div
-    "span[data-testid='result-snippet']", // Span-based snippet
+    ".result__body",                      // Result body content
+    ".result-description",                // Description class
+    "p",                                  // Generic paragraph content
+    "div > span",                         // Nested span content
+    ".result-content",                    // Result content class
 ];
 
 /// DuckDuckGo search client using browser automation
@@ -165,22 +166,34 @@ impl DuckDuckGoClient {
             DuckDuckGoError::Browser(Box::new(e))
         })?;
 
-        // Spawn handler task with better error handling
+        // Spawn handler task with better error handling for CDP message deserialization
         let handler_task = tokio::spawn(async move {
             while let Some(h) = handler.next().await {
                 // Continue processing even if there are parsing errors
                 // This is necessary because Chrome may send CDP messages that chromiumoxide doesn't recognize
                 match h {
                     Ok(_) => {
-                        // Message processed successfully
+                        // Message processed successfully - continue silently
                     }
                     Err(e) => {
-                        // Log the error but don't break the connection
+                        let error_str = e.to_string();
+                        // Handle deserialization errors gracefully - these are common with newer Chrome versions
+                        if error_str
+                            .contains("data did not match any variant of untagged enum Message")
+                        {
+                            // This is a known issue with chromiumoxide not recognizing all CDP messages
+                            // We can safely ignore these and continue processing
+                            continue;
+                        }
+
+                        // Only log other types of errors for debugging
                         tracing::debug!("CDP message processing error (continuing): {}", e);
+
                         // Only break on critical connection errors, not parsing errors
-                        if e.to_string().contains("connection closed")
-                            || e.to_string().contains("io error")
-                            || e.to_string().contains("websocket closed")
+                        if error_str.contains("connection closed")
+                            || error_str.contains("io error")
+                            || error_str.contains("websocket closed")
+                            || error_str.contains("transport error")
                         {
                             tracing::warn!(
                                 "Critical browser connection error, stopping handler: {}",
@@ -188,9 +201,11 @@ impl DuckDuckGoClient {
                             );
                             break;
                         }
+                        // For all other errors, continue processing to keep the connection alive
                     }
                 }
             }
+            tracing::debug!("CDP handler task completed");
         });
 
         // Perform search operations with proper error handling
@@ -201,8 +216,13 @@ impl DuckDuckGoClient {
                 .await
                 .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
 
-            tracing::debug!("Navigating to DuckDuckGo");
-            page.goto("https://duckduckgo.com").await.map_err(|e| {
+            tracing::debug!("Navigating to DuckDuckGo HTML search page");
+            // Navigate directly to the HTML version to avoid JavaScript detection issues
+            let encoded_query = request.query.replace(" ", "+");
+            let search_url = format!("https://duckduckgo.com/html?q={encoded_query}");
+            tracing::debug!("Using search URL: {}", search_url);
+
+            page.goto(&search_url).await.map_err(|e| {
                 DuckDuckGoError::Timeout(format!("Failed to navigate to DuckDuckGo: {e}"))
             })?;
 
@@ -217,203 +237,23 @@ impl DuckDuckGoClient {
                 tracing::debug!("Page title after navigation: {:?}", title);
             }
 
-            // Execute stealth JavaScript to mask automation
-            let stealth_script = r#"
-                // Remove automation indicators
-                delete window.navigator.webdriver;
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => false,
-                });
-                
-                // Override automation-related properties
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5],
-                });
-                
-                // Mock Chrome runtime
-                if (!window.chrome) {
-                    window.chrome = {};
-                }
-                if (!window.chrome.runtime) {
-                    window.chrome.runtime = {};
-                }
-                
-                // Add some realistic properties
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                });
-            "#;
+            // Since we're navigating directly to search results, skip form interaction
+            tracing::debug!("Skipping search form interaction - using direct URL navigation");
 
-            if let Err(e) = page.evaluate(stealth_script).await {
-                tracing::debug!("Failed to execute stealth script (continuing): {}", e);
-            }
-
-            // Wait for search input box to be available
-            tracing::debug!("Waiting for search input to load");
-            let search_input = {
-                let mut attempts = 0;
-                let input_selectors = SEARCH_INPUT_SELECTORS;
-
-                loop {
-                    let mut found_input = None;
-
-                    for selector in input_selectors {
-                        match page.find_element(*selector).await {
-                            Ok(element) => {
-                                tracing::debug!("Found search input with selector: {}", selector);
-                                found_input = Some(element);
-                                break;
-                            }
-                            Err(_) => continue,
-                        }
-                    }
-
-                    if let Some(input) = found_input {
-                        break input;
-                    } else if attempts < MAX_SEARCH_INPUT_ATTEMPTS {
-                        attempts += 1;
-                        tokio::time::sleep(Duration::from_millis(ATTEMPT_DELAY_MS)).await;
-
-                        // Log progress every 5 attempts
-                        if attempts % 5 == 0 {
-                            tracing::debug!(
-                                "Still looking for search input, attempt {}/{}",
-                                attempts,
-                                MAX_SEARCH_INPUT_ATTEMPTS
-                            );
-                            // Try to debug what's on the page
-                            if let Ok(html) = page.content().await {
-                                let html_snippet = &html[..html.len().min(1000)];
-                                tracing::debug!("Page HTML snippet: {}", html_snippet);
-                            }
-                        }
-                    } else {
-                        return Err(DuckDuckGoError::ElementNotFound(
-                            "search input box".to_string(),
-                        ));
-                    }
-                }
-            };
-
-            tracing::debug!("Entering search query: {}", request.query);
-
-            // Add human-like delay before clicking
-            let click_delay = {
-                let mut rng = rand::thread_rng();
-                Duration::from_millis(rng.gen_range(100..500))
-            };
-            tokio::time::sleep(click_delay).await;
-
-            search_input
-                .click()
-                .await
-                .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
-
-            // Add small delay after clicking
-            let after_click_delay = {
-                let mut rng = rand::thread_rng();
-                Duration::from_millis(rng.gen_range(50..200))
-            };
-            tokio::time::sleep(after_click_delay).await;
-
-            // Type query with human-like speed
-            let chunk_size = {
-                let mut rng = rand::thread_rng();
-                rng.gen_range(1..4)
-            };
-
-            for chunk in request.query.chars().collect::<Vec<_>>().chunks(chunk_size) {
-                let chunk_str: String = chunk.iter().collect();
-                search_input
-                    .type_str(&chunk_str)
-                    .await
-                    .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
-
-                // Small delay between chunks to simulate human typing
-                let typing_delay = {
-                    let mut rng = rand::thread_rng();
-                    Duration::from_millis(rng.gen_range(50..150))
-                };
-                tokio::time::sleep(typing_delay).await;
-            }
-
-            // Random delay before pressing Enter
-            let enter_delay = {
-                let mut rng = rand::thread_rng();
-                Duration::from_millis(rng.gen_range(200..800))
-            };
-            tokio::time::sleep(enter_delay).await;
-
-            // Submit search by pressing Enter
-            search_input
-                .press_key("Enter")
-                .await
-                .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
-
-            // Wait for search results to appear with more robust checking
-            tracing::debug!("Waiting for search results to load");
-            {
-                let mut attempts = 0;
-                let max_attempts = MAX_RESULTS_WAIT_ATTEMPTS; // Increase attempts for better reliability
-                loop {
-                    // Try multiple selectors for search results with more comprehensive checks
-                    let selectors_to_try = SEARCH_RESULT_SELECTORS;
-
-                    let mut result_found = false;
-                    for selector in selectors_to_try {
-                        match page.find_element(*selector).await {
-                            Ok(_) => {
-                                tracing::debug!("Found results with selector: {}", selector);
-                                result_found = true;
-                                break;
-                            }
-                            Err(_) => continue,
-                        }
-                    }
-
-                    // Also check if page content changed (indicates loading completed)
-                    if !result_found {
-                        // Check if page has loaded by looking for any search-related content
-                        if let Ok(Some(url_str)) = page.url().await {
-                            if url_str.contains("q=") || url_str.contains("search") {
-                                // Check if there are any meaningful results in the HTML
-                                if let Ok(html) = page.content().await {
-                                    if html.contains("result") || html.contains("search-result") {
-                                        tracing::debug!("Found results in page HTML content");
-                                        result_found = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if result_found {
-                        // Give a moment for any dynamic content to load
-                        tokio::time::sleep(Duration::from_millis(ATTEMPT_DELAY_MS)).await;
-                        break;
-                    } else if attempts < max_attempts {
-                        attempts += 1;
-                        tokio::time::sleep(Duration::from_millis(RESULTS_WAIT_DELAY_MS)).await;
-
-                        // Log progress every 10 attempts
-                        if attempts % 10 == 0 {
-                            tracing::debug!(
-                                "Still waiting for search results, attempt {}/{}",
-                                attempts,
-                                max_attempts
-                            );
-                        }
-                    } else {
-                        return Err(DuckDuckGoError::Timeout("search results".to_string()));
-                    }
-                }
-            }
+            // Wait for HTML search results to load (simplified since we're using direct URL)
+            tracing::debug!("Waiting for HTML search results to load");
+            tokio::time::sleep(Duration::from_millis(1000)).await; // Give HTML page time to load
 
             // Get the page HTML content
             let html_content = page
                 .content()
                 .await
                 .map_err(|e| DuckDuckGoError::Browser(Box::new(e)))?;
+
+            tracing::info!(
+                "Retrieved HTML content of {} characters from DuckDuckGo page",
+                html_content.len()
+            );
 
             // Check for CAPTCHA before parsing results
             tracing::debug!(
@@ -436,10 +276,11 @@ impl DuckDuckGoClient {
             }
 
             // Parse results using existing HTML parsing logic
+            tracing::info!("Starting to parse HTML results from DuckDuckGo page");
             let results =
                 self.parse_html_results(&html_content, request.results_count.unwrap_or(10))?;
 
-            tracing::debug!("DuckDuckGo search found {} results", results.len());
+            tracing::info!("DuckDuckGo search found {} results", results.len());
 
             Ok(results)
         }
@@ -471,7 +312,7 @@ impl DuckDuckGoClient {
     ) -> Result<Vec<SearchResult>, DuckDuckGoError> {
         use scraper::{Html, Selector};
 
-        tracing::debug!(
+        tracing::info!(
             "Parsing HTML content of {} characters for search results",
             html_content.len()
         );
@@ -484,6 +325,14 @@ impl DuckDuckGoClient {
                 let _ = file.write_all(html_content.as_bytes());
                 tracing::debug!("HTML response saved to {:?}", debug_file_path);
             }
+
+            // Also log a snippet of the HTML for immediate debugging
+            let html_snippet = if html_content.len() > 2000 {
+                &html_content[..2000]
+            } else {
+                html_content
+            };
+            tracing::debug!("HTML snippet for debugging: {}", html_snippet);
         }
 
         // Parse the HTML document
@@ -503,15 +352,28 @@ impl DuckDuckGoClient {
             let result_elements: Vec<_> = document.select(&result_selector).collect();
 
             if result_elements.is_empty() {
-                tracing::debug!("No results found with selector: {}", result_selector_str);
+                tracing::info!("No results found with selector: {}", result_selector_str);
                 continue; // Try next selector
             }
 
-            tracing::debug!(
+            tracing::info!(
                 "Found {} potential results with selector: {}",
                 result_elements.len(),
                 result_selector_str
             );
+
+            // If this is the first selector that found results, log some sample HTML
+            if all_results.is_empty() && !result_elements.is_empty() {
+                if let Some(first_element) = result_elements.first() {
+                    let element_html = first_element.html();
+                    let sample_html = if element_html.len() > 500 {
+                        &element_html[..500]
+                    } else {
+                        &element_html
+                    };
+                    tracing::debug!("Sample result element HTML: {}", sample_html);
+                }
+            }
 
             for result_element in result_elements.iter() {
                 if all_results.len() >= max_results {
@@ -521,10 +383,50 @@ impl DuckDuckGoClient {
                 // Extract title and URL
                 let (title, url) = self.extract_title_and_url_simple(result_element)?;
 
-                if title.is_empty() || url.is_empty() || !url.starts_with("http") {
-                    tracing::debug!("Skipping invalid result: title='{}', url='{}'", title, url);
+                // Handle DuckDuckGo redirect URLs
+                let final_url = if let Some(encoded_url) = url.strip_prefix("//duckduckgo.com/l/?uddg=") {
+                    // Extract the actual URL from the DuckDuckGo redirect
+                    if let Some(end) = encoded_url.find('&') {
+                        // Simple URL decoding for the common case
+                        encoded_url[..end]
+                            .replace("%3A", ":")
+                            .replace("%2F", "/")
+                            .replace("%3F", "?")
+                            .replace("%3D", "=")
+                            .replace("%26", "&")
+                    } else {
+                        // Simple URL decoding for the common case
+                        encoded_url
+                            .replace("%3A", ":")
+                            .replace("%2F", "/")
+                            .replace("%3F", "?")
+                            .replace("%3D", "=")
+                            .replace("%26", "&")
+                    }
+                } else if url.starts_with("//") {
+                    format!("https:{url}")
+                } else {
+                    url.to_string()
+                };
+
+                if title.is_empty() || final_url.is_empty() || !final_url.starts_with("http") {
+                    tracing::info!(
+                        "Skipping invalid result: title='{}', url='{}'",
+                        title,
+                        final_url
+                    );
+                    // Log some HTML from this element to understand what we're missing
+                    let element_html = result_element.html();
+                    let sample_html = if element_html.len() > 300 {
+                        &element_html[..300]
+                    } else {
+                        &element_html
+                    };
+                    tracing::info!("Invalid result element HTML: {}", sample_html);
                     continue; // Skip invalid results
                 }
+
+                let url = final_url; // Use the processed URL
 
                 // Skip duplicates based on URL
                 if processed_urls.contains(&url) {
@@ -584,17 +486,30 @@ impl DuckDuckGoClient {
                         .trim()
                         .to_string();
 
+                    tracing::debug!(
+                        "Trying selector '{}', found element '{}', extracted title: '{}'",
+                        selector_str,
+                        title_element.value().name(),
+                        extracted_title
+                    );
+
                     // If this is an 'a' element, also extract href
                     if title_element.value().name() == "a" {
                         if let Some(href) = title_element.value().attr("href") {
                             url = href.to_string();
                             title = extracted_title;
+                            tracing::debug!(
+                                "Found link element with title '{}' and URL '{}'",
+                                title,
+                                url
+                            );
                             if !title.is_empty() && !url.is_empty() {
                                 break;
                             }
                         }
                     } else if !extracted_title.is_empty() {
                         title = extracted_title;
+                        tracing::debug!("Found title text without link: '{}'", title);
                     }
                 }
             }
