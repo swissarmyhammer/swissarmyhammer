@@ -172,7 +172,7 @@ impl PrivacyHeaders {
     }
 
     /// Applies privacy headers to a request builder
-    pub fn apply_privacy_headers(&self, mut request: RequestBuilder) -> RequestBuilder {
+    pub fn apply_privacy_headers(&self, request: RequestBuilder) -> RequestBuilder {
         request
     }
 }

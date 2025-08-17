@@ -7,7 +7,6 @@
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::tools::web_search::content_fetcher::{ContentFetchConfig, ContentFetcher};
 use crate::mcp::tools::web_search::duckduckgo_client::{DuckDuckGoClient, DuckDuckGoError};
-use crate::mcp::tools::web_search::privacy::{PrivacyConfig, PrivacyManager};
 use crate::mcp::tools::web_search::types::ScoringConfig;
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
@@ -134,113 +133,6 @@ impl WebSearchTool {
         })
     }
 
-    /// Loads configuration for privacy features
-    fn load_privacy_config() -> PrivacyConfig {
-        Self::load_config_with_callback(PrivacyConfig::default(), |config, repo_config| {
-            // User-Agent rotation settings
-            if let Some(swissarmyhammer::ConfigValue::Boolean(rotate)) =
-                repo_config.get("web_search.privacy.rotate_user_agents")
-            {
-                config.rotate_user_agents = *rotate;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Boolean(randomize)) =
-                repo_config.get("web_search.privacy.randomize_user_agents")
-            {
-                config.randomize_user_agents = *randomize;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Array(agents)) =
-                repo_config.get("web_search.privacy.custom_user_agents")
-            {
-                let custom_agents: Vec<String> = agents
-                    .iter()
-                    .filter_map(|v| {
-                        if let swissarmyhammer::ConfigValue::String(s) = v {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !custom_agents.is_empty() {
-                    config.custom_user_agents = Some(custom_agents);
-                }
-            }
-
-            // Request anonymization settings
-            if let Some(swissarmyhammer::ConfigValue::Boolean(enable_dnt)) =
-                repo_config.get("web_search.privacy.enable_dnt")
-            {
-                config.enable_dnt = *enable_dnt;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Boolean(strip_referrer)) =
-                repo_config.get("web_search.privacy.strip_referrer")
-            {
-                config.strip_referrer = *strip_referrer;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Boolean(disable_cache)) =
-                repo_config.get("web_search.privacy.disable_cache")
-            {
-                config.disable_cache = *disable_cache;
-            }
-
-            // Request timing settings
-            if let Some(swissarmyhammer::ConfigValue::Boolean(enable_jitter)) =
-                repo_config.get("web_search.privacy.enable_request_jitter")
-            {
-                config.enable_request_jitter = *enable_jitter;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Integer(min_delay)) =
-                repo_config.get("web_search.privacy.min_request_delay_ms")
-            {
-                if *min_delay > 0 {
-                    config.min_request_delay_ms = *min_delay as u64;
-                }
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_delay)) =
-                repo_config.get("web_search.privacy.max_request_delay_ms")
-            {
-                if *max_delay > 0 {
-                    config.max_request_delay_ms = *max_delay as u64;
-                }
-            }
-
-            // Instance distribution settings
-            if let Some(swissarmyhammer::ConfigValue::Boolean(distribute)) =
-                repo_config.get("web_search.privacy.distribute_requests")
-            {
-                config.distribute_requests = *distribute;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Integer(avoid_repeat)) =
-                repo_config.get("web_search.privacy.avoid_repeat_instances")
-            {
-                if *avoid_repeat > 0 {
-                    config.avoid_repeat_instances = *avoid_repeat as usize;
-                }
-            }
-
-            // Content fetching privacy settings
-            if let Some(swissarmyhammer::ConfigValue::Boolean(anonymize_content)) =
-                repo_config.get("web_search.privacy.anonymize_content_requests")
-            {
-                config.anonymize_content_requests = *anonymize_content;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Integer(content_delay)) =
-                repo_config.get("web_search.privacy.content_request_delay_ms")
-            {
-                if *content_delay > 0 {
-                    config.content_request_delay_ms = *content_delay as u64;
-                }
-            }
-        })
-    }
 
     /// Loads configuration for DuckDuckGo scoring algorithm
     fn load_scoring_config() -> ScoringConfig {
@@ -369,13 +261,9 @@ impl McpTool for WebSearchTool {
         let start_time = Instant::now();
         let mut search_tool = WebSearchTool::new();
 
-        // Load privacy configuration and create privacy manager
-        let privacy_config = Self::load_privacy_config();
-        let privacy_manager = PrivacyManager::new(privacy_config);
-
-        // Perform search using DuckDuckGo web scraping
+        // Perform search using DuckDuckGo browser automation
         let duckduckgo_client = search_tool.get_duckduckgo_client();
-        let mut results = match duckduckgo_client.search(&request, &privacy_manager).await {
+        let mut results = match duckduckgo_client.search(&request).await {
             Ok(results) => results,
             Err(DuckDuckGoError::NoResults) => {
                 // No web results found - provide informative response
@@ -385,7 +273,7 @@ impl McpTool for WebSearchTool {
                         "No web search results found for '{}'. The search may be too specific or the terms may not match any web pages.",
                         request.query
                     ),
-                    attempted_instances: vec!["https://html.duckduckgo.com".to_string()],
+                    attempted_instances: vec!["https://duckduckgo.com".to_string()],
                     retry_after: None,
                 };
 
@@ -395,25 +283,11 @@ impl McpTool for WebSearchTool {
                     None,
                 ));
             }
-            Err(DuckDuckGoError::CaptchaRequired) => {
-                let error = WebSearchError {
-                    error_type: "captcha_required".to_string(),
-                    error_details: "DuckDuckGo is requesting CAPTCHA verification. This is a bot protection measure. Please try again later or reduce request frequency.".to_string(),
-                    attempted_instances: vec!["https://html.duckduckgo.com".to_string()],
-                    retry_after: Some(60), // Suggest retry after 60 seconds for CAPTCHA
-                };
-
-                return Err(McpError::internal_error(
-                    serde_json::to_string_pretty(&error)
-                        .unwrap_or_else(|_| "CAPTCHA required".to_string()),
-                    None,
-                ));
-            }
             Err(e) => {
                 let error = WebSearchError {
                     error_type: "search_failed".to_string(),
                     error_details: format!("DuckDuckGo web search failed: {e}"),
-                    attempted_instances: vec!["https://html.duckduckgo.com".to_string()],
+                    attempted_instances: vec!["https://duckduckgo.com".to_string()],
                     retry_after: Some(10), // Suggest retry after 10 seconds for general issues
                 };
 
@@ -435,7 +309,7 @@ impl McpTool for WebSearchTool {
             let content_fetcher = ContentFetcher::new(content_config);
 
             let (processed_results, stats) = content_fetcher
-                .fetch_search_results_with_privacy(results, &privacy_manager)
+                .fetch_search_results(results)
                 .await;
 
             results = processed_results;
@@ -456,7 +330,7 @@ impl McpTool for WebSearchTool {
                 language: request.language.unwrap_or_else(|| "en".to_string()),
                 results_count: results.len(),
                 search_time_ms: search_time.as_millis() as u64,
-                instance_used: "https://html.duckduckgo.com".to_string(),
+                instance_used: "https://duckduckgo.com".to_string(),
                 total_results: results.len(),
                 engines_used: vec!["duckduckgo".to_string()],
                 content_fetch_stats,

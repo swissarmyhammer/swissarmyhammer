@@ -938,6 +938,7 @@ impl WorkflowStorage {
 mod tests {
     use super::*;
     use crate::workflow::{State, StateId, StateType};
+    use crate::test_utils::IsolatedTestEnvironment;
     use serial_test::serial;
 
     fn create_test_workflow() -> Workflow {
@@ -1210,21 +1211,20 @@ stateDiagram-v2
     #[test]
     #[serial]
     fn test_workflow_resolver_precedence() {
-        use crate::test_utils::IsolatedTestHome;
         use std::fs;
-        use tempfile::TempDir;
 
-        let _env = IsolatedTestHome::new();
+        // Use isolated test environment to safely manage both HOME and current working directory
+        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        
+        // Get the isolated home directory (managed by IsolatedTestEnvironment)
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());
 
-        // Create user workflow directory
+        // Create user workflow directory in the isolated home
         let user_workflows_dir = test_home.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
-        // Create a temporary project directory for local workflows
-        let temp_project = TempDir::new().unwrap();
-        let project_dir = temp_project.path();
-        let local_workflows_dir = project_dir.join(".swissarmyhammer").join("workflows");
+        // Create local workflows directory in the current working directory (also managed by IsolatedTestEnvironment)
+        let local_workflows_dir = PathBuf::from(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create same-named workflow in both locations
@@ -1253,15 +1253,8 @@ stateDiagram-v2
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
 
-        // Change to project directory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(project_dir).unwrap();
-
         // Load all workflows (user first, then local to test precedence)
         resolver.load_all_workflows(&mut storage).unwrap();
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
 
         // Check that at least one workflow was loaded
         let workflows = storage.list_workflows().unwrap();

@@ -43,7 +43,8 @@ libc = "0.2.175"
 thiserror = "1.0"
 
 # Web search dependencies
-reqwest = { workspace = true }
+chromiumoxide = "0.7"
+futures = "0.3"
 html2text = { workspace = true }
 html2md = "0.2"
 html-escape = "0.2"
@@ -51,7 +52,7 @@ scraper = "0.20"
 futures-util = { workspace = true }
 rand = { workspace = true }
 dashmap = { workspace = true }
-urlencoding = "2.1"
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

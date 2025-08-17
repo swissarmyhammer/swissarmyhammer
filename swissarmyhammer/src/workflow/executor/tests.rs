@@ -10,45 +10,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 #[cfg(test)]
-use crate::test_utils::IsolatedTestHome;
+use crate::test_utils::IsolatedTestEnvironment;
 use serial_test::serial;
 
-/// RAII helper that isolates both HOME directory and current working directory for tests
-/// This prevents abort file pollution between tests by ensuring each test runs in its own environment
-#[cfg(test)]
-struct IsolatedTestEnvironment {
-    _home_guard: IsolatedTestHome,
-    _temp_dir: tempfile::TempDir,
-    original_cwd: std::path::PathBuf,
-}
-
-#[cfg(test)]
-impl IsolatedTestEnvironment {
-    fn new() -> std::io::Result<Self> {
-        let original_cwd = std::env::current_dir()?;
-        let home_guard = IsolatedTestHome::new();
-        let temp_dir = tempfile::TempDir::new()?;
-        std::env::set_current_dir(temp_dir.path())?;
-
-        Ok(Self {
-            _home_guard: home_guard,
-            _temp_dir: temp_dir,
-            original_cwd,
-        })
-    }
-
-    fn swissarmyhammer_dir(&self) -> std::path::PathBuf {
-        self._home_guard.swissarmyhammer_dir()
-    }
-}
-
-#[cfg(test)]
-impl Drop for IsolatedTestEnvironment {
-    fn drop(&mut self) {
-        // Restore original working directory
-        let _ = std::env::set_current_dir(&self.original_cwd);
-    }
-}
 
 fn create_test_workflow() -> Workflow {
     let mut workflow = Workflow::new(
