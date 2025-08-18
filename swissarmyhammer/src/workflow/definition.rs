@@ -66,7 +66,6 @@ impl std::fmt::Display for WorkflowName {
     }
 }
 
-
 /// Main workflow representation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workflow {
@@ -372,15 +371,23 @@ mod tests {
 
         // Add valid parameters
         workflow.parameters.push(
-            Parameter::new("valid_string", "A valid string parameter", ParameterType::String)
-                .required(true)
+            Parameter::new(
+                "valid_string",
+                "A valid string parameter",
+                ParameterType::String,
+            )
+            .required(true),
         );
 
         workflow.parameters.push(
-            Parameter::new("valid_choice", "A valid choice parameter", ParameterType::Choice)
-                .required(false)
-                .with_default(serde_json::Value::String("option1".to_string()))
-                .with_choices(vec!["option1".to_string(), "option2".to_string()])
+            Parameter::new(
+                "valid_choice",
+                "A valid choice parameter",
+                ParameterType::Choice,
+            )
+            .required(false)
+            .with_default(serde_json::Value::String("option1".to_string()))
+            .with_choices(vec!["option1".to_string(), "option2".to_string()]),
         );
 
         // Should pass validation
@@ -396,36 +403,50 @@ mod tests {
 
         // Add invalid parameters
         workflow.parameters.push(
-            Parameter::new("", "Parameter with empty name", ParameterType::String)
-                .required(true)
+            Parameter::new("", "Parameter with empty name", ParameterType::String).required(true),
+        );
+
+        workflow
+            .parameters
+            .push(Parameter::new("no_description", "", ParameterType::String).required(true));
+
+        workflow.parameters.push(
+            Parameter::new(
+                "choice_without_choices",
+                "Choice parameter without choices",
+                ParameterType::Choice,
+            )
+            .required(true),
         );
 
         workflow.parameters.push(
-            Parameter::new("no_description", "", ParameterType::String)
-                .required(true)
+            Parameter::new(
+                "boolean_with_choices",
+                "Boolean parameter with choices",
+                ParameterType::Boolean,
+            )
+            .required(false)
+            .with_choices(vec!["choice1".to_string()]),
         );
 
         workflow.parameters.push(
-            Parameter::new("choice_without_choices", "Choice parameter without choices", ParameterType::Choice)
-                .required(true)
-        );
-
-        workflow.parameters.push(
-            Parameter::new("boolean_with_choices", "Boolean parameter with choices", ParameterType::Boolean)
-                .required(false)
-                .with_choices(vec!["choice1".to_string()])
-        );
-
-        workflow.parameters.push(
-            Parameter::new("wrong_default_type", "Boolean with string default", ParameterType::Boolean)
-                .required(false)
-                .with_default(serde_json::Value::String("not_a_bool".to_string()))
+            Parameter::new(
+                "wrong_default_type",
+                "Boolean with string default",
+                ParameterType::Boolean,
+            )
+            .required(false)
+            .with_default(serde_json::Value::String("not_a_bool".to_string())),
         );
 
         // Add duplicate parameter name
         workflow.parameters.push(
-            Parameter::new("boolean_with_choices", "Duplicate parameter name", ParameterType::String)
-                .required(false)
+            Parameter::new(
+                "boolean_with_choices",
+                "Duplicate parameter name",
+                ParameterType::String,
+            )
+            .required(false),
         );
 
         let result = workflow.validate_parameters();
@@ -457,10 +478,9 @@ mod tests {
         let mut workflow = create_basic_workflow();
 
         // Add invalid parameter that should cause workflow validation to fail
-        workflow.parameters.push(
-            Parameter::new("invalid", "", ParameterType::Choice)
-                .required(true)
-        );
+        workflow
+            .parameters
+            .push(Parameter::new("invalid", "", ParameterType::Choice).required(true));
 
         let result = workflow.validate_structure();
         assert!(result.is_err());
@@ -481,15 +501,14 @@ mod tests {
 
         // Add workflow parameters
         workflow.parameters.push(
-            Parameter::new("input_file", "Input file path", ParameterType::String)
-                .required(true)
+            Parameter::new("input_file", "Input file path", ParameterType::String).required(true),
         );
 
         workflow.parameters.push(
             Parameter::new("mode", "Processing mode", ParameterType::Choice)
                 .required(false)
                 .with_default(serde_json::Value::String("fast".to_string()))
-                .with_choices(vec!["fast".to_string(), "thorough".to_string()])
+                .with_choices(vec!["fast".to_string(), "thorough".to_string()]),
         );
 
         // Test that ParameterProvider trait works

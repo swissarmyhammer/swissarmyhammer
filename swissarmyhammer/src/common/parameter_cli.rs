@@ -3,8 +3,8 @@
 //! This module provides utilities for parameter resolution from multiple sources
 //! and CLI argument name conversion.
 
-use crate::workflow::{WorkflowName, WorkflowStorage};
 use crate::common::{Parameter, ParameterType};
+use crate::workflow::{WorkflowName, WorkflowStorage};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -189,10 +189,7 @@ fn parse_var_arguments(var_args: &[String]) -> crate::Result<HashMap<String, Str
 }
 
 /// Parse a string value according to the parameter type
-fn parse_parameter_value(
-    value: &str,
-    param_type: &ParameterType,
-) -> crate::Result<Value> {
+fn parse_parameter_value(value: &str, param_type: &ParameterType) -> crate::Result<Value> {
     match param_type {
         ParameterType::String => Ok(Value::String(value.to_string())),
         ParameterType::Boolean => {
