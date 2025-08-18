@@ -38,6 +38,7 @@ thiserror = "1.0"
 # File tools dependencies
 glob = { workspace = true }
 walkdir = { workspace = true }
+ignore = { workspace = true }
 
 # File editing enhanced dependencies
 encoding_rs = "0.8"
