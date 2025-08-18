@@ -90,8 +90,8 @@ impl McpTool for AbortCreateTool {
 mod tests {
     use super::*;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
-    use serial_test::serial;
     use swissarmyhammer::common::create_abort_file;
+    use swissarmyhammer::test_utils::IsolatedTestHome;
     use tempfile::TempDir;
 
     #[test]
@@ -144,8 +144,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_create_abort_file() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -169,8 +169,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_creates_sah_directory() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -198,8 +198,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_concurrent_abort_file_creation() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -234,8 +234,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_abort_file_overwrite() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -324,8 +324,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_create_abort_file_with_unicode() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -347,8 +347,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_create_abort_file_when_directory_already_exists() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
@@ -375,8 +375,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_abort_file_operations_idempotent() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 

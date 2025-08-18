@@ -85,6 +85,7 @@ once_cell = { workspace = true }
 liquid = { workspace = true }
 
 [dev-dependencies]
+swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
