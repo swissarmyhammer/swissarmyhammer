@@ -72,6 +72,9 @@ pub mod plugins;
 /// Workflow system for state-based execution
 pub mod workflow;
 
+/// Shared frontmatter parsing functionality
+pub mod frontmatter;
+
 /// Issue tracking and management
 pub mod issues;
 

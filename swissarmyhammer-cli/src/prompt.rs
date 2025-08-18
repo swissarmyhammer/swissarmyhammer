@@ -26,7 +26,7 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             debug,
         } => {
             let all_vars = vars;
-            
+
             let mut runner = test::TestRunner::new();
             let config = test::TestConfig {
                 prompt_name,

@@ -200,49 +200,44 @@ impl MermaidParser {
     ) -> ParseResult<Vec<crate::workflow::WorkflowParameter>> {
         let mut parameters = Vec::new();
 
-        // Check if input has frontmatter
-        if !input.starts_with("---\n") {
-            return Ok(parameters);
-        }
-
-        let parts: Vec<&str> = input.splitn(3, "---\n").collect();
-        if parts.len() < 3 {
-            return Ok(parameters);
-        }
-
-        let yaml_content = parts[1];
-
-        // Parse YAML frontmatter
-        let frontmatter: serde_yaml::Value =
-            serde_yaml::from_str(yaml_content).map_err(|e| ParseError::InvalidStructure {
-                message: format!("Invalid YAML frontmatter: {e}"),
-            })?;
+        // Use shared frontmatter parsing
+        let frontmatter = crate::frontmatter::parse_frontmatter(input).map_err(|e| {
+            ParseError::InvalidStructure {
+                message: e.to_string(),
+            }
+        })?;
 
         // Extract parameters from frontmatter if present
-        if let Some(params_value) = frontmatter.get("parameters") {
-            if let Some(params_array) = params_value.as_sequence() {
+        let frontmatter_value = match frontmatter.metadata {
+            Some(value) => value,
+            None => return Ok(parameters),
+        };
+
+        // Extract parameters from frontmatter if present
+        if let Some(params_value) = frontmatter_value.get("parameters") {
+            if let Some(params_array) = params_value.as_array() {
                 for param_value in params_array {
-                    if let Some(param_obj) = param_value.as_mapping() {
+                    if let Some(param_obj) = param_value.as_object() {
                         let name = param_obj
-                            .get(serde_yaml::Value::String("name".to_string()))
+                            .get("name")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let description = param_obj
-                            .get(serde_yaml::Value::String("description".to_string()))
+                            .get("description")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let required = param_obj
-                            .get(serde_yaml::Value::String("required".to_string()))
+                            .get("required")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 
                         // Parse parameter type
                         let type_str = param_obj
-                            .get(serde_yaml::Value::String("type".to_string()))
+                            .get("type")
                             .and_then(|v| v.as_str())
                             .unwrap_or("string");
 
@@ -260,20 +255,19 @@ impl MermaidParser {
                         };
 
                         // Parse default value
-                        let default = param_obj
-                            .get(serde_yaml::Value::String("default".to_string()))
-                            .and_then(|v| serde_json::to_value(v).ok());
+                        let default = param_obj.get("default").cloned();
 
                         // Parse choices if present
-                        let choices = param_obj
-                            .get(serde_yaml::Value::String("choices".to_string()))
-                            .and_then(|v| v.as_sequence())
-                            .map(|seq| {
-                                seq.iter()
-                                    .filter_map(|choice| choice.as_str())
-                                    .map(String::from)
-                                    .collect::<Vec<String>>()
-                            });
+                        let choices =
+                            param_obj
+                                .get("choices")
+                                .and_then(|v| v.as_array())
+                                .map(|seq| {
+                                    seq.iter()
+                                        .filter_map(|choice| choice.as_str())
+                                        .map(String::from)
+                                        .collect::<Vec<String>>()
+                                });
 
                         parameters.push(crate::workflow::WorkflowParameter {
                             name,

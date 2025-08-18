@@ -133,7 +133,7 @@ Test workflow content.
         let result = resolve_workflow_parameters_interactive(
             "test",
             &["test_param=value".to_string()],
-                false,
+            false,
         );
 
         // Should handle gracefully regardless of workflow existence

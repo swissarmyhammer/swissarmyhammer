@@ -1590,27 +1590,9 @@ impl PromptLoader {
 
     /// Parse front matter from content
     fn parse_front_matter(content: &str) -> Result<(Option<serde_json::Value>, String)> {
-        // Check for partial marker first
-        if content.trim_start().starts_with("{% partial %}") {
-            // This is a partial template, no front matter expected
-            return Ok((None, content.to_string()));
-        }
-
-        if content.starts_with("---\n") {
-            let parts: Vec<&str> = content.splitn(3, "---\n").collect();
-            if parts.len() >= 3 {
-                let yaml_content = parts[1];
-                let template = parts[2].trim_start().to_string();
-
-                let metadata: serde_yaml::Value = serde_yaml::from_str(yaml_content)?;
-                let json_value = serde_json::to_value(metadata)
-                    .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
-
-                return Ok((Some(json_value), template));
-            }
-        }
-
-        Ok((None, content.to_string()))
+        // Use shared frontmatter parsing
+        let frontmatter = crate::frontmatter::parse_frontmatter(content)?;
+        Ok((frontmatter.metadata, frontmatter.content))
     }
 
     /// Extract prompt name from file path, handling compound extensions
