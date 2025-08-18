@@ -239,7 +239,6 @@ impl Workflow {
             errors.extend(param_errors);
         }
 
-
         if errors.is_empty() {
             Ok(())
         } else {
@@ -375,7 +374,6 @@ impl Workflow {
             Err(errors)
         }
     }
-
 }
 
 impl ParameterProvider for Workflow {
@@ -388,7 +386,6 @@ impl ParameterProvider for Workflow {
                 .collect()
         })
     }
-
 }
 
 impl Validatable for Workflow {
@@ -648,9 +645,4 @@ mod tests {
             Some(serde_json::Value::String("fast".to_string()))
         );
     }
-
-
-
-
-
 }

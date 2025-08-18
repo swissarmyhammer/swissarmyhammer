@@ -4,8 +4,8 @@
 //! It handles different parameter types with appropriate UI controls and validation.
 
 use crate::common::parameters::{
-    ErrorMessageEnhancer, Parameter, ParameterError, ParameterResult,
-    ParameterType, ParameterValidator,
+    ErrorMessageEnhancer, Parameter, ParameterError, ParameterResult, ParameterType,
+    ParameterValidator,
 };
 use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input, MultiSelect};
 use std::collections::HashMap;
@@ -70,42 +70,6 @@ impl InteractivePrompts {
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
         let parameters = provider.get_parameters();
         self.prompt_conditional_parameters(parameters, existing_values.clone())
-    }
-
-    /// Check if a parameter should be prompted for
-    fn should_prompt_parameter(
-        &self,
-        param: &Parameter,
-        context: &HashMap<String, serde_json::Value>,
-    ) -> bool {
-        // Check if parameter has a condition
-        if let Some(condition) = &param.condition {
-            use crate::common::parameter_conditions::ConditionEvaluator;
-            let evaluator = ConditionEvaluator::new(context.clone());
-            match evaluator.evaluate(&condition.expression) {
-                Ok(condition_met) => condition_met && (param.required || param.default.is_none()),
-                Err(_) => param.required || param.default.is_none(), // Conservative approach if condition can't be evaluated
-            }
-        } else {
-            param.required || param.default.is_none()
-        }
-    }
-
-    /// Display a group header with appropriate formatting
-
-    /// Capitalize words in a string for display
-    fn capitalize_words(&self, s: &str) -> String {
-        s.replace(['_', '-'], " ")
-            .split_whitespace()
-            .map(|word| {
-                let mut chars: Vec<char> = word.chars().collect();
-                if let Some(first_char) = chars.get_mut(0) {
-                    *first_char = first_char.to_ascii_uppercase();
-                }
-                chars.into_iter().collect::<String>()
-            })
-            .collect::<Vec<String>>()
-            .join(" ")
     }
 
     /// Prompt for conditional parameters using iterative resolution

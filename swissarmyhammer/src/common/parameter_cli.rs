@@ -92,10 +92,10 @@ pub fn generate_grouped_help_text(
     help.push_str(&format!("{workflow_description}\n\n"));
 
     let parameters = provider.get_parameters();
-    
+
     if !parameters.is_empty() {
         help.push_str("Parameters:\n");
-        
+
         // List all parameters in a flat list
         for param in parameters {
             let switch_name = parameter_name_to_cli_switch(&param.name);
@@ -106,26 +106,11 @@ pub fn generate_grouped_help_text(
                 "  {switch_name:<20} {param_help}{required_indicator}\n"
             ));
         }
-        
+
         help.push('\n');
     }
 
     help
-}
-
-/// Capitalize words in a string (e.g., "deployment_config" -> "Deployment Config")
-fn capitalize_words(s: &str) -> String {
-    s.replace(['_', '-'], " ")
-        .split_whitespace()
-        .map(|word| {
-            let mut chars: Vec<char> = word.chars().collect();
-            if let Some(first_char) = chars.get_mut(0) {
-                *first_char = first_char.to_ascii_uppercase();
-            }
-            chars.into_iter().collect::<String>()
-        })
-        .collect::<Vec<String>>()
-        .join(" ")
 }
 
 /// Discover workflow parameters for CLI argument generation

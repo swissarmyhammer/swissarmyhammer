@@ -868,12 +868,10 @@ impl Parameter {
     }
 }
 
-
 /// Trait for types that can provide parameters
 pub trait ParameterProvider {
     /// Get the parameters defined for this provider
     fn get_parameters(&self) -> &[Parameter];
-
 
     /// Validate that the provided context satisfies all parameter requirements
     fn validate_context(
@@ -2570,6 +2568,4 @@ mod tests {
             &serde_json::json!("/etc/mysql/ssl/cert.pem")
         );
     }
-
-
 }
