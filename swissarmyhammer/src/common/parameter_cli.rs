@@ -3,7 +3,8 @@
 //! This module provides utilities for parameter resolution from multiple sources
 //! and CLI argument name conversion.
 
-use crate::workflow::{WorkflowName, WorkflowParameter, WorkflowStorage};
+use crate::workflow::{WorkflowName, WorkflowStorage};
+use crate::common::{Parameter, ParameterType};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -18,7 +19,7 @@ pub fn parameter_name_to_cli_switch(name: &str) -> String {
 }
 
 /// Generate help text for a workflow parameter
-pub fn generate_parameter_help_text(param: &WorkflowParameter) -> String {
+pub fn generate_parameter_help_text(param: &Parameter) -> String {
     let mut help = param.description.clone();
 
     // Add default value if present
@@ -117,7 +118,7 @@ pub fn generate_grouped_help_text(
 ///
 /// This function loads a workflow by name and returns its parameter definitions
 /// for use in dynamic CLI argument generation.
-pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<WorkflowParameter>> {
+pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<Parameter>> {
     let storage = WorkflowStorage::file_system()?;
     let name = WorkflowName::new(workflow_name.to_string());
     let workflow = storage.get_workflow(&name)?;
@@ -131,7 +132,7 @@ pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<Wo
 /// 2. Default values from parameter definitions
 /// 3. Interactive prompting (if enabled and required)
 pub fn resolve_parameters_from_vars(
-    workflow_params: &[WorkflowParameter],
+    workflow_params: &[Parameter],
     var_args: &[String],
     _interactive: bool, // Reserved for future interactive prompting when parameters are missing
 ) -> crate::Result<HashMap<String, Value>> {
@@ -190,11 +191,11 @@ fn parse_var_arguments(var_args: &[String]) -> crate::Result<HashMap<String, Str
 /// Parse a string value according to the parameter type
 fn parse_parameter_value(
     value: &str,
-    param_type: &crate::workflow::ParameterType,
+    param_type: &ParameterType,
 ) -> crate::Result<Value> {
     match param_type {
-        crate::workflow::ParameterType::String => Ok(Value::String(value.to_string())),
-        crate::workflow::ParameterType::Boolean => {
+        ParameterType::String => Ok(Value::String(value.to_string())),
+        ParameterType::Boolean => {
             let parsed = value.parse::<bool>().map_err(|_| {
                 crate::SwissArmyHammerError::Config(format!(
                     "Invalid boolean value '{value}'. Expected true/false"
@@ -202,7 +203,7 @@ fn parse_parameter_value(
             })?;
             Ok(Value::Bool(parsed))
         }
-        crate::workflow::ParameterType::Number => {
+        ParameterType::Number => {
             // Try parsing as integer first, then float
             if let Ok(int_val) = value.parse::<i64>() {
                 Ok(Value::Number(int_val.into()))
@@ -220,8 +221,8 @@ fn parse_parameter_value(
                 )))
             }
         }
-        crate::workflow::ParameterType::Choice => Ok(Value::String(value.to_string())),
-        crate::workflow::ParameterType::MultiChoice => {
+        ParameterType::Choice => Ok(Value::String(value.to_string())),
+        ParameterType::MultiChoice => {
             // For multi-choice, split by comma and create array
             let choices: Vec<Value> = value
                 .split(',')
@@ -235,7 +236,7 @@ fn parse_parameter_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::ParameterType;
+    use crate::common::ParameterType;
 
     #[test]
     fn test_parameter_name_to_cli_switch() {

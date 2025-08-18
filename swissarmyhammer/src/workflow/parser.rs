@@ -197,7 +197,7 @@ impl MermaidParser {
     /// Parse frontmatter and extract workflow parameters
     fn extract_parameters_from_frontmatter(
         input: &str,
-    ) -> ParseResult<Vec<crate::workflow::WorkflowParameter>> {
+    ) -> ParseResult<Vec<crate::common::Parameter>> {
         let mut parameters = Vec::new();
 
         // Use shared frontmatter parsing
@@ -242,16 +242,16 @@ impl MermaidParser {
                             .unwrap_or("string");
 
                         let parameter_type = match type_str.to_lowercase().as_str() {
-                            "string" => crate::workflow::ParameterType::String,
-                            "boolean" | "bool" => crate::workflow::ParameterType::Boolean,
+                            "string" => crate::common::ParameterType::String,
+                            "boolean" | "bool" => crate::common::ParameterType::Boolean,
                             "number" | "numeric" | "int" | "integer" | "float" => {
-                                crate::workflow::ParameterType::Number
+                                crate::common::ParameterType::Number
                             }
-                            "choice" | "select" => crate::workflow::ParameterType::Choice,
+                            "choice" | "select" => crate::common::ParameterType::Choice,
                             "multi_choice" | "multichoice" | "multiselect" => {
-                                crate::workflow::ParameterType::MultiChoice
+                                crate::common::ParameterType::MultiChoice
                             }
-                            _ => crate::workflow::ParameterType::String, // Default to string for unknown types
+                            _ => crate::common::ParameterType::String, // Default to string for unknown types
                         };
 
                         // Parse default value
@@ -269,14 +269,21 @@ impl MermaidParser {
                                         .collect::<Vec<String>>()
                                 });
 
-                        parameters.push(crate::workflow::WorkflowParameter {
+                        let mut param = crate::common::Parameter::new(
                             name,
                             description,
-                            required,
                             parameter_type,
-                            default,
-                            choices,
-                        });
+                        ).required(required);
+                        
+                        if let Some(default_value) = default {
+                            param = param.with_default(default_value);
+                        }
+                        
+                        if let Some(choices_vec) = choices {
+                            param = param.with_choices(choices_vec);
+                        }
+                        
+                        parameters.push(param);
                     }
                 }
             }
@@ -438,7 +445,7 @@ impl MermaidParser {
         actions: HashMap<String, String>,
         title: Option<String>,
         description: Option<String>,
-        parameters: Vec<crate::workflow::WorkflowParameter>,
+        parameters: Vec<crate::common::Parameter>,
     ) -> ParseResult<Workflow> {
         // Use provided description or title, or fall back to default
         let workflow_description = description
@@ -1135,7 +1142,7 @@ stateDiagram-v2
         assert!(param1.required);
         assert!(matches!(
             param1.parameter_type,
-            crate::workflow::ParameterType::String
+            crate::common::ParameterType::String
         ));
         assert!(param1.default.is_none());
         assert!(param1.choices.is_none());
@@ -1147,7 +1154,7 @@ stateDiagram-v2
         assert!(!param2.required);
         assert!(matches!(
             param2.parameter_type,
-            crate::workflow::ParameterType::String
+            crate::common::ParameterType::String
         ));
         assert_eq!(
             param2.default.as_ref().unwrap().as_str().unwrap(),
@@ -1167,7 +1174,7 @@ stateDiagram-v2
         assert!(!param3.required);
         assert!(matches!(
             param3.parameter_type,
-            crate::workflow::ParameterType::Boolean
+            crate::common::ParameterType::Boolean
         ));
         assert!(!param3.default.as_ref().unwrap().as_bool().unwrap());
         assert!(param3.choices.is_none());
@@ -1229,7 +1236,7 @@ stateDiagram-v2
         assert_eq!(number_param.name, "count");
         assert!(matches!(
             number_param.parameter_type,
-            crate::workflow::ParameterType::Number
+            crate::common::ParameterType::Number
         ));
         assert!(number_param.required);
 
@@ -1238,7 +1245,7 @@ stateDiagram-v2
         assert_eq!(bool_param.name, "enabled");
         assert!(matches!(
             bool_param.parameter_type,
-            crate::workflow::ParameterType::Boolean
+            crate::common::ParameterType::Boolean
         ));
         assert!(!bool_param.required);
         assert!(bool_param.default.as_ref().unwrap().as_bool().unwrap());
@@ -1248,7 +1255,7 @@ stateDiagram-v2
         assert_eq!(choice_param.name, "priority");
         assert!(matches!(
             choice_param.parameter_type,
-            crate::workflow::ParameterType::Choice
+            crate::common::ParameterType::Choice
         ));
         assert!(choice_param.required);
         let choices = choice_param.choices.as_ref().unwrap();
@@ -1262,7 +1269,7 @@ stateDiagram-v2
         assert_eq!(multi_choice_param.name, "tags");
         assert!(matches!(
             multi_choice_param.parameter_type,
-            crate::workflow::ParameterType::MultiChoice
+            crate::common::ParameterType::MultiChoice
         ));
         assert!(!multi_choice_param.required);
         let multi_choices = multi_choice_param.choices.as_ref().unwrap();
@@ -1333,7 +1340,7 @@ stateDiagram-v2
         // Should fallback to String type for unknown types
         assert!(matches!(
             param.parameter_type,
-            crate::workflow::ParameterType::String
+            crate::common::ParameterType::String
         ));
     }
 

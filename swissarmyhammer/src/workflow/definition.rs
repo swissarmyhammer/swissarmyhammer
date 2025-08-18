@@ -1,6 +1,6 @@
 //! Main workflow type and validation
 
-use crate::common::{Parameter, ParameterProvider};
+use crate::common::{Parameter, ParameterProvider, ParameterType};
 use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::workflow::{State, StateId, Transition};
 use serde::{Deserialize, Serialize};
@@ -66,85 +66,6 @@ impl std::fmt::Display for WorkflowName {
     }
 }
 
-/// Types of parameters supported in workflow schemas
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ParameterType {
-    /// String text input
-    String,
-    /// Boolean true/false values
-    Boolean,
-    /// Numeric values (integers and floats)
-    Number,
-    /// Selection from predefined options
-    Choice,
-    /// Multiple selections from predefined options
-    MultiChoice,
-}
-
-/// Specification for a workflow parameter
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WorkflowParameter {
-    /// The parameter name used in templates
-    pub name: String,
-    /// Human-readable description of the parameter's purpose
-    pub description: String,
-    /// Whether this parameter must be provided
-    pub required: bool,
-    /// The type of parameter value expected
-    pub parameter_type: ParameterType,
-    /// Default value to use if parameter is not provided
-    pub default: Option<serde_json::Value>,
-    /// Available choices for Choice and MultiChoice types
-    pub choices: Option<Vec<String>>,
-}
-
-impl WorkflowParameter {
-    /// Convert this WorkflowParameter to the shared Parameter type
-    pub fn to_parameter(&self) -> Parameter {
-        let shared_type = match self.parameter_type {
-            ParameterType::String => crate::common::ParameterType::String,
-            ParameterType::Boolean => crate::common::ParameterType::Boolean,
-            ParameterType::Number => crate::common::ParameterType::Number,
-            ParameterType::Choice => crate::common::ParameterType::Choice,
-            ParameterType::MultiChoice => crate::common::ParameterType::MultiChoice,
-        };
-
-        let mut param =
-            Parameter::new(&self.name, &self.description, shared_type).required(self.required);
-
-        if let Some(default) = &self.default {
-            param = param.with_default(default.clone());
-        }
-
-        if let Some(choices) = &self.choices {
-            param = param.with_choices(choices.clone());
-        }
-
-        param
-    }
-}
-
-impl From<Parameter> for WorkflowParameter {
-    /// Convert a shared Parameter back to WorkflowParameter for backward compatibility
-    fn from(param: Parameter) -> Self {
-        let workflow_type = match param.parameter_type {
-            crate::common::ParameterType::String => ParameterType::String,
-            crate::common::ParameterType::Boolean => ParameterType::Boolean,
-            crate::common::ParameterType::Number => ParameterType::Number,
-            crate::common::ParameterType::Choice => ParameterType::Choice,
-            crate::common::ParameterType::MultiChoice => ParameterType::MultiChoice,
-        };
-
-        Self {
-            name: param.name,
-            description: param.description,
-            required: param.required,
-            parameter_type: workflow_type,
-            default: param.default,
-            choices: param.choices,
-        }
-    }
-}
 
 /// Main workflow representation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,13 +75,7 @@ pub struct Workflow {
     /// Workflow description
     pub description: String,
     /// Parameter schema for this workflow
-    pub parameters: Vec<WorkflowParameter>,
-    /// Cached shared parameters converted from WorkflowParameters.
-    ///
-    /// This field is lazily populated to provide efficient access to the shared
-    /// parameter system without breaking backward compatibility.
-    #[serde(skip)]
-    cached_parameters: std::sync::OnceLock<Vec<Parameter>>,
+    pub parameters: Vec<Parameter>,
     /// All states in the workflow
     pub states: HashMap<StateId, State>,
     /// All transitions in the workflow
@@ -178,7 +93,6 @@ impl Workflow {
             name,
             description,
             parameters: Vec::new(),
-            cached_parameters: std::sync::OnceLock::new(),
             states: Default::default(),
             transitions: Vec::new(),
             initial_state,
@@ -377,14 +291,9 @@ impl Workflow {
 }
 
 impl ParameterProvider for Workflow {
-    /// Get the parameters for this workflow by converting from WorkflowParameter
+    /// Get the parameters for this workflow
     fn get_parameters(&self) -> &[Parameter] {
-        self.cached_parameters.get_or_init(|| {
-            self.parameters
-                .iter()
-                .map(|workflow_param| workflow_param.to_parameter())
-                .collect()
-        })
+        &self.parameters
     }
 }
 
@@ -462,23 +371,17 @@ mod tests {
         let mut workflow = create_basic_workflow();
 
         // Add valid parameters
-        workflow.parameters.push(WorkflowParameter {
-            name: "valid_string".to_string(),
-            description: "A valid string parameter".to_string(),
-            required: true,
-            parameter_type: ParameterType::String,
-            default: None,
-            choices: None,
-        });
+        workflow.parameters.push(
+            Parameter::new("valid_string", "A valid string parameter", ParameterType::String)
+                .required(true)
+        );
 
-        workflow.parameters.push(WorkflowParameter {
-            name: "valid_choice".to_string(),
-            description: "A valid choice parameter".to_string(),
-            required: false,
-            parameter_type: ParameterType::Choice,
-            default: Some(serde_json::Value::String("option1".to_string())),
-            choices: Some(vec!["option1".to_string(), "option2".to_string()]),
-        });
+        workflow.parameters.push(
+            Parameter::new("valid_choice", "A valid choice parameter", ParameterType::Choice)
+                .required(false)
+                .with_default(serde_json::Value::String("option1".to_string()))
+                .with_choices(vec!["option1".to_string(), "option2".to_string()])
+        );
 
         // Should pass validation
         let result = workflow.validate_parameters();
@@ -492,60 +395,38 @@ mod tests {
         let mut workflow = create_basic_workflow();
 
         // Add invalid parameters
-        workflow.parameters.push(WorkflowParameter {
-            name: "".to_string(), // Empty name
-            description: "Parameter with empty name".to_string(),
-            required: true,
-            parameter_type: ParameterType::String,
-            default: None,
-            choices: None,
-        });
+        workflow.parameters.push(
+            Parameter::new("", "Parameter with empty name", ParameterType::String)
+                .required(true)
+        );
 
-        workflow.parameters.push(WorkflowParameter {
-            name: "no_description".to_string(),
-            description: "".to_string(), // Empty description
-            required: true,
-            parameter_type: ParameterType::String,
-            default: None,
-            choices: None,
-        });
+        workflow.parameters.push(
+            Parameter::new("no_description", "", ParameterType::String)
+                .required(true)
+        );
 
-        workflow.parameters.push(WorkflowParameter {
-            name: "choice_without_choices".to_string(),
-            description: "Choice parameter without choices".to_string(),
-            required: true,
-            parameter_type: ParameterType::Choice,
-            default: None,
-            choices: None, // No choices for choice type
-        });
+        workflow.parameters.push(
+            Parameter::new("choice_without_choices", "Choice parameter without choices", ParameterType::Choice)
+                .required(true)
+        );
 
-        workflow.parameters.push(WorkflowParameter {
-            name: "boolean_with_choices".to_string(),
-            description: "Boolean parameter with choices".to_string(),
-            required: false,
-            parameter_type: ParameterType::Boolean,
-            default: None,
-            choices: Some(vec!["choice1".to_string()]), // Boolean should not have choices
-        });
+        workflow.parameters.push(
+            Parameter::new("boolean_with_choices", "Boolean parameter with choices", ParameterType::Boolean)
+                .required(false)
+                .with_choices(vec!["choice1".to_string()])
+        );
 
-        workflow.parameters.push(WorkflowParameter {
-            name: "wrong_default_type".to_string(),
-            description: "Boolean with string default".to_string(),
-            required: false,
-            parameter_type: ParameterType::Boolean,
-            default: Some(serde_json::Value::String("not_a_bool".to_string())), // Wrong type
-            choices: None,
-        });
+        workflow.parameters.push(
+            Parameter::new("wrong_default_type", "Boolean with string default", ParameterType::Boolean)
+                .required(false)
+                .with_default(serde_json::Value::String("not_a_bool".to_string()))
+        );
 
         // Add duplicate parameter name
-        workflow.parameters.push(WorkflowParameter {
-            name: "boolean_with_choices".to_string(), // Duplicate name
-            description: "Duplicate parameter name".to_string(),
-            required: false,
-            parameter_type: ParameterType::String,
-            default: None,
-            choices: None,
-        });
+        workflow.parameters.push(
+            Parameter::new("boolean_with_choices", "Duplicate parameter name", ParameterType::String)
+                .required(false)
+        );
 
         let result = workflow.validate_parameters();
         assert!(result.is_err());
@@ -576,14 +457,10 @@ mod tests {
         let mut workflow = create_basic_workflow();
 
         // Add invalid parameter that should cause workflow validation to fail
-        workflow.parameters.push(WorkflowParameter {
-            name: "invalid".to_string(),
-            description: "".to_string(), // Empty description
-            required: true,
-            parameter_type: ParameterType::Choice,
-            default: None,
-            choices: None, // No choices
-        });
+        workflow.parameters.push(
+            Parameter::new("invalid", "", ParameterType::Choice)
+                .required(true)
+        );
 
         let result = workflow.validate_structure();
         assert!(result.is_err());
@@ -603,23 +480,17 @@ mod tests {
         let mut workflow = create_basic_workflow();
 
         // Add workflow parameters
-        workflow.parameters.push(WorkflowParameter {
-            name: "input_file".to_string(),
-            description: "Input file path".to_string(),
-            required: true,
-            parameter_type: ParameterType::String,
-            default: None,
-            choices: None,
-        });
+        workflow.parameters.push(
+            Parameter::new("input_file", "Input file path", ParameterType::String)
+                .required(true)
+        );
 
-        workflow.parameters.push(WorkflowParameter {
-            name: "mode".to_string(),
-            description: "Processing mode".to_string(),
-            required: false,
-            parameter_type: ParameterType::Choice,
-            default: Some(serde_json::Value::String("fast".to_string())),
-            choices: Some(vec!["fast".to_string(), "thorough".to_string()]),
-        });
+        workflow.parameters.push(
+            Parameter::new("mode", "Processing mode", ParameterType::Choice)
+                .required(false)
+                .with_default(serde_json::Value::String("fast".to_string()))
+                .with_choices(vec!["fast".to_string(), "thorough".to_string()])
+        );
 
         // Test that ParameterProvider trait works
         let parameters = workflow.get_parameters();
