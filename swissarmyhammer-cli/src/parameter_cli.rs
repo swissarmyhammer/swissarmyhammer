@@ -62,6 +62,7 @@ pub fn resolve_workflow_parameters_interactive(
 
 /// Get workflow parameters for help text generation (best effort)
 /// Used for future dynamic help text generation implementation
+/// Currently only used in tests, hence the allow attribute
 #[allow(dead_code)]
 pub fn get_workflow_parameters_for_help(workflow_name: &str) -> Vec<WorkflowParameter> {
     discover_workflow_parameters(workflow_name).unwrap_or_default()
