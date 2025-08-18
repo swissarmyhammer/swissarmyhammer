@@ -58,7 +58,7 @@ pub use parameter_cli::{
 };
 pub use parameter_conditions::{ConditionError, ConditionEvaluator, ParameterCondition};
 pub use parameters::{
-    DefaultParameterResolver, Parameter, ParameterError, ParameterGroup, ParameterProvider,
+    DefaultParameterResolver, Parameter, ParameterError, ParameterProvider,
     ParameterResolver, ParameterResult, ParameterType, ParameterValidator,
 };
 pub use rate_limiter::{
