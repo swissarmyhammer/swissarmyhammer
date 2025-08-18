@@ -26,6 +26,7 @@ Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_ste
 
 - DO Follow the Coding Standards
 - DO NOT code at this step, we are just creating the plan
+- DO make sure to review the existing codebase and architecture before creating the implementation plan
 - DO make sure each step file is a single focused task
 - DO create many, small step files. Ideally each step should result in less than 500 lines of code changed
 - Any time you create a step file, it should use the next number larger than all other issues
@@ -52,7 +53,7 @@ Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_ste
 {% endif %}
 - Use git to determine what has changed in the specification compared to what has already been planned.
 - Review the existing memos and think deeply about how they apply to the plan.
-- Review the existing code to determine what parts of the specification might already be implemented.
+- Review the existing code to determine what parts of the specification might already be implemented.  Unless explicitly instructed otherwise in the specification, do not add new systems/services when existing patterns and systems can be extended to achieve the goals.
 - Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory.
 - Then, once you have a draft plan, break it down into small, iterative chunks that build on each other incrementally.
 - Look at these chunks and then go another round to break it into small steps.
