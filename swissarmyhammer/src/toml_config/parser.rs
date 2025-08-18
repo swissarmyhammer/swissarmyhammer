@@ -366,6 +366,8 @@ mod tests {
 
     #[test]
     fn test_load_from_repo_root() {
+        use std::panic;
+        
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
@@ -377,18 +379,23 @@ mod tests {
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        // Temporarily change directory for test
+        // Temporarily change directory for test with proper RAII cleanup
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&sub_dir).unwrap();
 
-        let parser = ConfigParser::new();
-        let result = parser.load_from_repo_root();
+        // Use panic::catch_unwind to ensure directory is restored even on panic
+        let result = panic::catch_unwind(|| {
+            let parser = ConfigParser::new();
+            parser.load_from_repo_root()
+        });
 
-        // Restore original directory
+        // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
+        
+        let config_result = result.unwrap();
 
-        assert!(result.is_ok());
-        let config = result.unwrap();
+        assert!(config_result.is_ok());
+        let config = config_result.unwrap();
         assert!(config.is_some());
         let config = config.unwrap();
         assert_eq!(

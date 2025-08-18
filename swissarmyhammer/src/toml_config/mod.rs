@@ -260,6 +260,8 @@ mod module_tests {
 
     #[test]
     fn test_load_repo_config_wrapper() {
+        use std::panic;
+        
         // This test creates a temporary directory structure and tests repo config loading
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
@@ -268,18 +270,24 @@ mod module_tests {
         let config_path = temp_dir.path().join("sah.toml");
         fs::write(&config_path, "name = \"repo_config_test\"").unwrap();
 
-        // Test from subdirectory
+        // Test from subdirectory with proper RAII cleanup
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&sub_dir).unwrap();
 
-        let result = load_repo_config_wrapper();
+        // Use panic::catch_unwind to ensure directory is restored even on panic
+        let result = panic::catch_unwind(|| {
+            load_repo_config_wrapper()
+        });
+        
+        // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
 
-        assert!(result.is_ok());
-        let config = result.unwrap();
+        let config_result = result.unwrap();
+        assert!(config_result.is_ok());
+        let config = config_result.unwrap();
         assert!(config.is_some());
 
         let config = config.unwrap();

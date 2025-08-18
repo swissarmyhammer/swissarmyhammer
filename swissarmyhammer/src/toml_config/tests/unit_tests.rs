@@ -1097,6 +1097,8 @@ mod parser_tests {
 
     #[test]
     fn test_parser_load_from_repo_root() {
+        use std::panic;
+        
         let temp_dir = TempDir::new().unwrap();
 
         // Create .git directory to simulate repository root
@@ -1115,17 +1117,22 @@ mod parser_tests {
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        // Change to subdirectory and test loading
+        // Change to subdirectory and test loading with proper cleanup
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&sub_dir).unwrap();
 
-        let parser = ConfigParser::new();
-        let result = parser.load_from_repo_root().unwrap();
+        // Use panic::catch_unwind to ensure directory is restored even on panic
+        let result = panic::catch_unwind(|| {
+            let parser = ConfigParser::new();
+            parser.load_from_repo_root()
+        });
 
+        // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
 
-        assert!(result.is_some());
-        let config = result.unwrap();
+        let config_result = result.unwrap().unwrap();
+        assert!(config_result.is_some());
+        let config = config_result.unwrap();
         assert_eq!(
             config.get("name"),
             Some(&ConfigValue::String("RepoTest".to_string()))

@@ -93,7 +93,7 @@ impl EditFileTool {
         file_path: &str,
         content: &str,
         old_string: &str,
-        replace_all: bool,
+        _replace_all: bool,
     ) -> Result<EditValidation, McpError> {
         use crate::mcp::tools::files::shared_utils::validate_file_path;
 
@@ -116,15 +116,6 @@ impl EditFileTool {
             ));
         }
 
-        if !replace_all && old_string_count > 1 {
-            return Err(McpError::invalid_request(
-                format!(
-                    "String '{}' appears {} times in file. Use replace_all=true for multiple replacements",
-                    old_string, old_string_count
-                ),
-                None,
-            ));
-        }
 
         Ok(EditValidation { old_string_count })
     }
@@ -667,15 +658,11 @@ mod tests {
         );
 
         let result = tool.execute(args, &context).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
 
-        let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("appears 3 times"));
-        assert!(format!("{:?}", error).contains("Use replace_all=true"));
-
-        // Verify file was not modified
-        let unchanged_content = fs::read_to_string(&test_file).unwrap();
-        assert_eq!(unchanged_content, initial_content);
+        // Verify only the first occurrence was replaced
+        let edited_content = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(edited_content, "unique duplicate duplicate");
     }
 
     #[tokio::test]

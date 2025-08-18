@@ -273,6 +273,8 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
     std::fs::create_dir_all(sah_dir.join("prompts")).expect("Failed to create prompts directory");
     std::fs::create_dir_all(sah_dir.join("workflows"))
         .expect("Failed to create workflows directory");
+    std::fs::create_dir_all(sah_dir.join("todo"))
+        .expect("Failed to create todo directory");
 
     (temp_dir, home_path)
 }

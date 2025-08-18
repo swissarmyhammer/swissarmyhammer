@@ -39,6 +39,7 @@ tests/test-home
 
 # PropTest regression files
 proptest-regressions/
+*.proptest-regressions
 
 # FastEmbed cache
 .fastembed_cache/

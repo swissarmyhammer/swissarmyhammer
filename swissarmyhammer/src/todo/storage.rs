@@ -231,7 +231,12 @@ mod tests {
     #[tokio::test]
     async fn test_create_todo_item() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         let test_list = format!("test_create_{}", ulid::Ulid::new());
         let item = storage
@@ -251,7 +256,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_next_todo_item() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         // Create two items with unique test list name
         let test_list = format!("test_get_next_{}", ulid::Ulid::new());
@@ -279,7 +289,12 @@ mod tests {
     #[tokio::test]
     async fn test_mark_complete() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         let test_list = format!("test_mark_complete_{}", ulid::Ulid::new());
         let item = storage
@@ -301,7 +316,12 @@ mod tests {
     #[tokio::test]
     async fn test_mark_complete_partial() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         let test_list = format!("test_mark_partial_{}", ulid::Ulid::new());
         let item1 = storage
@@ -337,7 +357,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_specific_item() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         let test_list = format!("test_get_specific_{}", ulid::Ulid::new());
         let item = storage
@@ -384,7 +409,12 @@ mod tests {
     #[tokio::test]
     async fn test_validation_errors() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         // Empty todo list name
         let result = storage.create_todo_item("", "Task".to_string(), None).await;
@@ -406,7 +436,12 @@ mod tests {
     #[tokio::test]
     async fn test_nonexistent_list() {
         let _guard = IsolatedTestHome::new();
-        let storage = TodoStorage::new_default().unwrap();
+        
+        // Create a temporary directory for todo storage instead of using default
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let todo_dir = temp_dir.path().join("todo");
+        fs::create_dir_all(&todo_dir).unwrap();
+        let storage = TodoStorage::new(todo_dir);
 
         // Get from nonexistent list
         let result = storage.get_todo_item("nonexistent", "next").await.unwrap();

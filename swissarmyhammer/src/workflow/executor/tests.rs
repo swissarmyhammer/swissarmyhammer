@@ -143,9 +143,14 @@ async fn test_max_transition_limit() {
     });
 
     let result = executor.start_and_execute_workflow(workflow).await;
-    assert!(
-        matches!(result, Err(ExecutorError::TransitionLimitExceeded { limit }) if limit == MAX_TRANSITIONS)
-    );
+    match result {
+        Err(ExecutorError::TransitionLimitExceeded { limit }) if limit == MAX_TRANSITIONS => {
+            // Test passed
+        }
+        other => {
+            panic!("Expected TransitionLimitExceeded with limit {}, but got: {:?}", MAX_TRANSITIONS, other);
+        }
+    }
 }
 
 #[test]
@@ -1347,7 +1352,9 @@ async fn test_error_context_capture() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_manual_intervention_recovery() {
+    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
     let mut workflow = Workflow::new(
         WorkflowName::new("Manual Recovery Test"),

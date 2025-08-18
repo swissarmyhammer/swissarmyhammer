@@ -318,6 +318,8 @@ fn test_template_integration() {
 /// Test file discovery from different directory structures
 #[test]
 fn test_file_discovery_from_different_directories() {
+    use std::panic;
+    
     let temp_dir = TempDir::new().unwrap();
 
     // Create repository structure
@@ -353,14 +355,23 @@ fn test_file_discovery_from_different_directories() {
     let integration_dir = tests_dir.join("integration");
     fs::create_dir(&integration_dir).unwrap();
 
-    // Test discovery from different directories
+    // Test discovery from different directories with proper cleanup
     let original_dir = std::env::current_dir().unwrap();
 
+    // Helper function to run test and ensure directory cleanup
+    let run_test = |test_dir: &std::path::Path| {
+        panic::catch_unwind(|| {
+            std::env::set_current_dir(test_dir).unwrap();
+            load_repo_config()
+        })
+    };
+
     // Test from repository root
-    std::env::set_current_dir(repo_root).unwrap();
-    let result = load_repo_config();
-    assert!(result.is_ok());
-    if let Ok(Some(config)) = result {
+    let result = run_test(repo_root);
+    std::env::set_current_dir(&original_dir).unwrap();
+    let config_result = result.unwrap();
+    assert!(config_result.is_ok());
+    if let Ok(Some(config)) = config_result {
         assert_eq!(
             config.get("name"),
             Some(&ConfigValue::String("DiscoveryTest".to_string()))
@@ -370,10 +381,11 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from src directory
-    std::env::set_current_dir(&src_dir).unwrap();
-    let result = load_repo_config();
-    assert!(result.is_ok());
-    if let Ok(Some(config)) = result {
+    let result = run_test(&src_dir);
+    std::env::set_current_dir(&original_dir).unwrap();
+    let config_result = result.unwrap();
+    assert!(config_result.is_ok());
+    if let Ok(Some(config)) = config_result {
         assert_eq!(
             config.get("name"),
             Some(&ConfigValue::String("DiscoveryTest".to_string()))
@@ -383,10 +395,11 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from deeply nested directory
-    std::env::set_current_dir(&deep_dir).unwrap();
-    let result = load_repo_config();
-    assert!(result.is_ok());
-    if let Ok(Some(config)) = result {
+    let result = run_test(&deep_dir);
+    std::env::set_current_dir(&original_dir).unwrap();
+    let config_result = result.unwrap();
+    assert!(config_result.is_ok());
+    if let Ok(Some(config)) = config_result {
         assert_eq!(
             config.get("name"),
             Some(&ConfigValue::String("DiscoveryTest".to_string()))
@@ -396,10 +409,11 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from tests directory
-    std::env::set_current_dir(&tests_dir).unwrap();
-    let result = load_repo_config();
-    assert!(result.is_ok());
-    if let Ok(Some(config)) = result {
+    let result = run_test(&tests_dir);
+    std::env::set_current_dir(&original_dir).unwrap();
+    let config_result = result.unwrap();
+    assert!(config_result.is_ok());
+    if let Ok(Some(config)) = config_result {
         assert_eq!(
             config.get("name"),
             Some(&ConfigValue::String("DiscoveryTest".to_string()))
@@ -409,10 +423,11 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from integration tests directory
-    std::env::set_current_dir(&integration_dir).unwrap();
-    let result = load_repo_config();
-    assert!(result.is_ok());
-    if let Ok(Some(config)) = result {
+    let result = run_test(&integration_dir);
+    std::env::set_current_dir(&original_dir).unwrap();
+    let config_result = result.unwrap();
+    assert!(config_result.is_ok());
+    if let Ok(Some(config)) = config_result {
         assert_eq!(
             config.get("name"),
             Some(&ConfigValue::String("DiscoveryTest".to_string()))
@@ -423,11 +438,11 @@ fn test_file_discovery_from_different_directories() {
 
     // Test from directory without .git (should return None)
     let non_repo_dir = TempDir::new().unwrap();
-    std::env::set_current_dir(non_repo_dir.path()).unwrap();
-    let result = load_repo_config();
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_none());
+    let result = run_test(non_repo_dir.path());
+    std::env::set_current_dir(&original_dir).unwrap();
+    let config_result = result.unwrap();
+    assert!(config_result.is_ok());
+    assert!(config_result.unwrap().is_none());
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+    // Directory is restored to original at this point
 }

@@ -1194,7 +1194,7 @@ PARAMETERS:
 FUNCTIONALITY:
 - Performs exact string matching and replacement
 - Maintains file encoding and line endings
-- Validates that old_string exists and is unique (unless replace_all is true)
+- Validates that old_string exists in the file
 - Provides atomic operations (all or nothing replacement)
 - Preserves file permissions and metadata
 
