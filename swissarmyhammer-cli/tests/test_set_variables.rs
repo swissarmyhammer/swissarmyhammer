@@ -684,7 +684,7 @@ Version: {{ version | default: "1.0" }}
     cmd.arg("prompt")
         .arg("test")
         .arg("empty-test")
-        .arg("--arg")
+        .arg("--var")
         .arg("content=Main content")
         .arg("--set")
         .arg("author=")
@@ -724,12 +724,12 @@ Message: {{ message }}
     )
     .unwrap();
 
-    // Test with --set overriding --arg
+    // Test with --set overriding --var
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("prompt")
         .arg("test")
         .arg("override-test")
-        .arg("--arg")
+        .arg("--var")
         .arg("message=Original message")
         .arg("--set")
         .arg("message=Overridden message")

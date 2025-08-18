@@ -36,7 +36,7 @@ fn test_command_with_invalid_file() {
 #[test]
 fn test_command_with_invalid_arguments() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
-    cmd.arg("test").arg("help").arg("--arg").arg("invalid");
+    cmd.arg("test").arg("help").arg("--var").arg("invalid");
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Invalid argument format"));
@@ -73,7 +73,7 @@ fn test_command_with_builtin_prompt_non_interactive() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("help")
-        .arg("--arg")
+        .arg("--var")
         .arg("topic=testing")
         .arg("--raw");
     cmd.assert()
@@ -105,7 +105,7 @@ Hello, {{name}}! This is a test."#,
     cmd.arg("test")
         .arg("-f")
         .arg(temp_file.to_str().unwrap())
-        .arg("--arg")
+        .arg("--var")
         .arg("name=World")
         .arg("--raw");
     cmd.assert()
@@ -118,7 +118,7 @@ fn test_command_with_debug_flag() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("help")
-        .arg("--arg")
+        .arg("--var")
         .arg("topic=debugging")
         .arg("--debug")
         .arg("--raw");
@@ -138,7 +138,7 @@ fn test_command_with_save_flag() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("help")
-        .arg("--arg")
+        .arg("--var")
         .arg("topic=save-test")
         .arg("--save")
         .arg(output_file.to_str().unwrap())
@@ -182,9 +182,9 @@ arguments:
     cmd.arg("test")
         .arg("-f")
         .arg(temp_file.to_str().unwrap())
-        .arg("--arg")
+        .arg("--var")
         .arg("items=apple,banana,cherry")
-        .arg("--arg")
+        .arg("--var")
         .arg("prefix=* ")
         .arg("--raw");
     cmd.assert()
@@ -260,7 +260,7 @@ fn test_command_output_formatting() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("help")
-        .arg("--arg")
+        .arg("--var")
         .arg("topic=formatting");
 
     // Without --raw, should include formatting
@@ -275,7 +275,7 @@ fn test_command_raw_output() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("help")
-        .arg("--arg")
+        .arg("--var")
         .arg("topic=formatting")
         .arg("--raw");
 
@@ -293,13 +293,13 @@ fn test_array_processor_with_break_continue() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("data/array-processor")
-        .arg("--arg")
+        .arg("--var")
         .arg("items=one,skip_me,two,stop_here,three")
-        .arg("--arg")
+        .arg("--var")
         .arg("skip_pattern=skip")
-        .arg("--arg")
+        .arg("--var")
         .arg("stop_pattern=stop")
-        .arg("--arg")
+        .arg("--var")
         .arg("show_skipped=true")
         .arg("--raw");
     cmd.assert()
@@ -318,13 +318,13 @@ fn test_table_generator_with_cycle() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("formatting/table-generator")
-        .arg("--arg")
+        .arg("--var")
         .arg("headers=Name,Age,City")
-        .arg("--arg")
+        .arg("--var")
         .arg("rows=Alice,25,NYC;Bob,30,LA;Carol,28,Chicago")
-        .arg("--arg")
+        .arg("--var")
         .arg("style=html")
-        .arg("--arg")
+        .arg("--var")
         .arg("zebra=true")
         .arg("--raw");
     cmd.assert()
@@ -341,15 +341,15 @@ fn test_email_composer_with_capture() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("communication/email-composer")
-        .arg("--arg")
+        .arg("--var")
         .arg("recipient_name=John")
-        .arg("--arg")
+        .arg("--var")
         .arg("sender_name=Jane")
-        .arg("--arg")
+        .arg("--var")
         .arg("email_type=welcome")
-        .arg("--arg")
+        .arg("--var")
         .arg("formal=true")
-        .arg("--arg")
+        .arg("--var")
         .arg("time_of_day=morning")
         .arg("--raw");
     cmd.assert()
@@ -367,13 +367,13 @@ fn test_statistics_calculator_with_math() {
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
         .arg("analysis/statistics-calculator")
-        .arg("--arg")
+        .arg("--var")
         .arg("numbers=5,10,15,20,25")
-        .arg("--arg")
+        .arg("--var")
         .arg("precision=1")
-        .arg("--arg")
+        .arg("--var")
         .arg("show_outliers=false")
-        .arg("--arg")
+        .arg("--var")
         .arg("visualization=false")
         .arg("--raw");
     cmd.assert()
@@ -410,7 +410,7 @@ But {{undefined}} should remain as-is."#,
     cmd.arg("test")
         .arg("-f")
         .arg(temp_file.to_str().unwrap())
-        .arg("--arg")
+        .arg("--var")
         .arg("name=World")
         .arg("--raw");
     cmd.assert()

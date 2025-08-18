@@ -140,7 +140,7 @@ Basic usage:
 Examples:
   swissarmyhammer prompt list --source builtin
   swissarmyhammer prompt validate --quiet
-  swissarmyhammer prompt test code-review --arg file=main.rs
+  swissarmyhammer prompt test code-review --var file=main.rs
   swissarmyhammer prompt search \"python code\"
 ")]
     Prompt {
