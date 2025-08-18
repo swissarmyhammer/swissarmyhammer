@@ -269,20 +269,18 @@ impl MermaidParser {
                                         .collect::<Vec<String>>()
                                 });
 
-                        let mut param = crate::common::Parameter::new(
-                            name,
-                            description,
-                            parameter_type,
-                        ).required(required);
-                        
+                        let mut param =
+                            crate::common::Parameter::new(name, description, parameter_type)
+                                .required(required);
+
                         if let Some(default_value) = default {
                             param = param.with_default(default_value);
                         }
-                        
+
                         if let Some(choices_vec) = choices {
                             param = param.with_choices(choices_vec);
                         }
-                        
+
                         parameters.push(param);
                     }
                 }

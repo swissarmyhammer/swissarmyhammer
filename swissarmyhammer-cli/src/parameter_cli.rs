@@ -5,11 +5,11 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
+use swissarmyhammer::common::Parameter;
 use swissarmyhammer::common::{
     discover_workflow_parameters, resolve_parameters_from_vars, DefaultParameterResolver,
     ParameterResolver,
 };
-use swissarmyhammer::common::Parameter;
 use swissarmyhammer::Result;
 
 /// Resolve workflow parameters with optional interactive prompting
