@@ -118,27 +118,24 @@ fn format_enhanced_parameter_error(
     match error {
         ParameterError::ValidationFailedWithContext {
             parameter,
-            message,
-            explanation,
-            examples,
-            suggestions,
+            details,
             ..
         } => {
             let mut output = format!(
                 "❌ Parameter '{}' validation failed: {}",
-                parameter, message
+                parameter, details.message
             );
 
-            if let Some(explanation) = explanation {
-                output.push_str(&format!("\n   {}", explanation));
+            if let Some(explanation) = &details.explanation {
+                output.push_str(&format!("\n   {explanation}"));
             }
 
-            if !examples.is_empty() {
-                output.push_str(&format!("\n   Examples: {}", examples.join(", ")));
+            if !details.examples.is_empty() {
+                output.push_str(&format!("\n   Examples: {}", details.examples.join(", ")));
             }
 
-            for suggestion in suggestions {
-                output.push_str(&format!("\n💡 {}", suggestion));
+            for suggestion in &details.suggestions {
+                output.push_str(&format!("\n💡 {suggestion}"));
             }
 
             output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
@@ -149,21 +146,19 @@ fn format_enhanced_parameter_error(
 
         ParameterError::PatternMismatchEnhanced {
             parameter,
-            value,
-            pattern_description,
-            examples,
+            details,
             ..
         } => {
             let mut output = format!(
                 "❌ Parameter '{}' format is invalid: '{}'",
-                parameter, value
+                parameter, details.value
             );
-            output.push_str(&format!("\n   {}", pattern_description));
+            output.push_str(&format!("\n   {}", details.pattern_description));
 
-            if !examples.is_empty() && examples.len() <= 3 {
-                output.push_str(&format!("\n   Examples: {}", examples.join(", ")));
-            } else if !examples.is_empty() {
-                output.push_str(&format!("\n   Examples: {}", examples[..2].join(", ")));
+            if !details.examples.is_empty() && details.examples.len() <= 3 {
+                output.push_str(&format!("\n   Examples: {}", details.examples.join(", ")));
+            } else if !details.examples.is_empty() {
+                output.push_str(&format!("\n   Examples: {}", details.examples[..2].join(", ")));
             }
 
             output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
@@ -174,22 +169,20 @@ fn format_enhanced_parameter_error(
 
         ParameterError::InvalidChoiceEnhanced {
             parameter,
-            value,
-            choices,
-            did_you_mean,
+            details,
             ..
         } => {
             let mut output = format!(
                 "❌ Parameter '{}' has invalid value: '{}'",
-                parameter, value
+                parameter, details.value
             );
 
-            if let Some(suggestion) = did_you_mean {
-                output.push_str(&format!("\n💡 Did you mean '{}'?", suggestion));
-            } else if choices.len() <= 5 {
-                output.push_str(&format!("\n💡 Valid options: {}", choices.join(", ")));
+            if let Some(suggestion) = &details.did_you_mean {
+                output.push_str(&format!("\n💡 Did you mean '{suggestion}'?"));
+            } else if details.choices.len() <= 5 {
+                output.push_str(&format!("\n💡 Valid options: {}", details.choices.join(", ")));
             } else {
-                output.push_str(&format!("\n💡 {} options available", choices.len()));
+                output.push_str(&format!("\n💡 {} options available", details.choices.len()));
             }
 
             output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
@@ -202,13 +195,11 @@ fn format_enhanced_parameter_error(
             parameter,
             attempts,
         } => {
-            format!("❌ Maximum retry attempts exceeded for parameter '{}' ({} attempts)\n\n📖 Use --help to see parameter requirements\n🔄 Check your input format and try again",
-                   parameter, attempts)
+            format!("❌ Maximum retry attempts exceeded for parameter '{parameter}' ({attempts} attempts)\n\n📖 Use --help to see parameter requirements\n🔄 Check your input format and try again")
         }
 
         _ => {
-            format!("❌ Workflow parameter error: {}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive",
-                   error)
+            format!("❌ Workflow parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
         }
     }
 }

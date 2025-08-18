@@ -343,59 +343,52 @@ impl InteractivePrompts {
     fn display_enhanced_error(&self, error: &ParameterError) {
         match error {
             ParameterError::ValidationFailedWithContext {
-                message,
-                explanation,
-                examples,
-                suggestions,
+                details,
                 ..
             } => {
-                println!("❌ {message}");
+                println!("❌ {}", details.message);
 
-                if let Some(explanation) = explanation {
+                if let Some(explanation) = &details.explanation {
                     println!("   {explanation}");
                 }
 
-                if !examples.is_empty() {
-                    println!("   Examples: {}", examples.join(", "));
+                if !details.examples.is_empty() {
+                    println!("   Examples: {}", details.examples.join(", "));
                 }
 
-                for suggestion in suggestions {
+                for suggestion in &details.suggestions {
                     println!("💡 {suggestion}");
                 }
             }
 
             ParameterError::PatternMismatchEnhanced {
                 parameter,
-                value,
-                pattern_description,
-                examples,
+                details,
                 ..
             } => {
-                println!("❌ Parameter '{parameter}' format is invalid: '{value}'");
-                println!("   {pattern_description}");
+                println!("❌ Parameter '{parameter}' format is invalid: '{}'", details.value);
+                println!("   {}", details.pattern_description);
 
-                if !examples.is_empty() && examples.len() <= 3 {
-                    println!("   Examples: {}", examples.join(", "));
-                } else if !examples.is_empty() {
-                    println!("   Examples: {}", examples[..2].join(", "));
+                if !details.examples.is_empty() && details.examples.len() <= 3 {
+                    println!("   Examples: {}", details.examples.join(", "));
+                } else if !details.examples.is_empty() {
+                    println!("   Examples: {}", details.examples[..2].join(", "));
                 }
             }
 
             ParameterError::InvalidChoiceEnhanced {
                 parameter,
-                value,
-                choices,
-                did_you_mean,
+                details,
                 ..
             } => {
-                println!("❌ Parameter '{parameter}' has invalid value: '{value}'");
+                println!("❌ Parameter '{parameter}' has invalid value: '{}'", details.value);
 
-                if let Some(suggestion) = did_you_mean {
+                if let Some(suggestion) = &details.did_you_mean {
                     println!("💡 Did you mean '{suggestion}'?");
-                } else if choices.len() <= 5 {
-                    println!("💡 Valid options: {}", choices.join(", "));
+                } else if details.choices.len() <= 5 {
+                    println!("💡 Valid options: {}", details.choices.join(", "));
                 } else {
-                    println!("💡 {} options available", choices.len());
+                    println!("💡 {} options available", details.choices.len());
                 }
             }
 
