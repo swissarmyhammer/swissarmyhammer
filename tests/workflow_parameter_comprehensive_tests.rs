@@ -39,6 +39,10 @@ mod legacy_var_argument_tests;
 #[path = "workflow_parameters/cli_tests/help_generation_tests.rs"]
 mod help_generation_tests;
 
+// Add specification compliance tests module
+#[path = "workflow_parameters/specification_compliance_tests.rs"]
+mod specification_compliance_tests;
+
 #[cfg(test)]
 mod comprehensive_integration_tests {
     use std::collections::HashMap;
