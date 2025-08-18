@@ -71,7 +71,9 @@ impl Validator {
                 .or_else(|| Some(prompt.name.clone()));
 
             // Check if this prompt is builtin
-            let is_builtin = resolver.prompt_sources.get(&prompt.name)
+            let is_builtin = resolver
+                .prompt_sources
+                .get(&prompt.name)
                 .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
                 .unwrap_or(false);
 
@@ -89,13 +91,13 @@ impl Validator {
 
             // Use the Validatable trait to validate the prompt
             let validation_issues = prompt.validate(prompt.source.as_deref());
-            
+
             for issue in validation_issues {
                 // Skip undefined template variable errors for builtin prompts
                 // Builtin prompts are designed to be used with parameters provided at runtime
-                if is_builtin 
-                    && issue.level == ValidationLevel::Error 
-                    && issue.message.starts_with("Undefined template variable:") 
+                if is_builtin
+                    && issue.level == ValidationLevel::Error
+                    && issue.message.starts_with("Undefined template variable:")
                 {
                     continue;
                 }
@@ -137,7 +139,9 @@ impl Validator {
                 .or_else(|| Some(prompt.name.clone()));
 
             // Check if this prompt is builtin
-            let is_builtin = resolver.prompt_sources.get(&prompt.name)
+            let is_builtin = resolver
+                .prompt_sources
+                .get(&prompt.name)
                 .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
                 .unwrap_or(false);
 
@@ -155,13 +159,13 @@ impl Validator {
 
             // Use the Validatable trait to validate the prompt
             let validation_issues = prompt.validate(prompt.source.as_deref());
-            
+
             for issue in validation_issues {
                 // Skip undefined template variable errors for builtin prompts
                 // Builtin prompts are designed to be used with parameters provided at runtime
-                if is_builtin 
-                    && issue.level == ValidationLevel::Error 
-                    && issue.message.starts_with("Undefined template variable:") 
+                if is_builtin
+                    && issue.level == ValidationLevel::Error
+                    && issue.message.starts_with("Undefined template variable:")
                 {
                     continue;
                 }
