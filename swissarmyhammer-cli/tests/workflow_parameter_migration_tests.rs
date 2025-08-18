@@ -293,8 +293,8 @@ mod integration_workflow_tests {
         let greeting_path = repo_root.join("builtin/workflows/greeting.md");
         let plan_path = repo_root.join("builtin/workflows/plan.md");
         
-        assert!(greeting_path.exists(), "greeting.md workflow should exist at {:?}", greeting_path);
-        assert!(plan_path.exists(), "plan.md workflow should exist at {:?}", plan_path);
+        assert!(greeting_path.exists(), "greeting.md workflow should exist at {greeting_path:?}");
+        assert!(plan_path.exists(), "plan.md workflow should exist at {plan_path:?}");
     }
 
     #[test]
