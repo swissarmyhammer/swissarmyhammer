@@ -4,25 +4,52 @@ use serde_json::json;
 use std::io::{self, Read};
 
 /// Handle file-related CLI commands
-pub async fn handle_file_command(
-    command: FileCommands,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_file_command(command: FileCommands) -> Result<(), Box<dyn std::error::Error>> {
     let context = CliToolContext::new().await?;
 
     match command {
-        FileCommands::Read { path, offset, limit } => {
+        FileCommands::Read {
+            path,
+            offset,
+            limit,
+        } => {
             read_file(&context, &path, offset, limit).await?;
         }
         FileCommands::Write { path, content } => {
             write_file(&context, &path, &content).await?;
         }
-        FileCommands::Edit { path, old_string, new_string, replace_all } => {
+        FileCommands::Edit {
+            path,
+            old_string,
+            new_string,
+            replace_all,
+        } => {
             edit_file(&context, &path, &old_string, &new_string, replace_all).await?;
         }
-        FileCommands::Glob { pattern, path, case_sensitive, no_git_ignore } => {
-            glob_files(&context, &pattern, path.as_deref(), case_sensitive, !no_git_ignore).await?;
+        FileCommands::Glob {
+            pattern,
+            path,
+            case_sensitive,
+            no_git_ignore,
+        } => {
+            glob_files(
+                &context,
+                &pattern,
+                path.as_deref(),
+                case_sensitive,
+                !no_git_ignore,
+            )
+            .await?;
         }
-        FileCommands::Grep { pattern, path, glob, file_type, case_insensitive, context_lines, output_mode } => {
+        FileCommands::Grep {
+            pattern,
+            path,
+            glob,
+            file_type,
+            case_insensitive,
+            context_lines,
+            output_mode,
+        } => {
             let params = GrepParams {
                 pattern: &pattern,
                 path: path.as_deref(),
@@ -47,7 +74,7 @@ async fn read_file(
     limit: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = vec![("absolute_path", json!(path))];
-    
+
     if let Some(offset_val) = offset {
         args.push(("offset", json!(offset_val)));
     }
@@ -115,7 +142,7 @@ async fn glob_files(
     respect_git_ignore: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = vec![("pattern", json!(pattern))];
-    
+
     if let Some(search_path) = path {
         args.push(("path", json!(search_path)));
     }
@@ -149,7 +176,7 @@ async fn grep_files(
     params: GrepParams<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut args = vec![("pattern", json!(params.pattern))];
-    
+
     if let Some(search_path) = params.path {
         args.push(("path", json!(search_path)));
     }
@@ -190,9 +217,14 @@ mod tests {
     fn test_file_read_command_basic() {
         let result = TestCli::try_parse_from(["test", "read", "/path/to/file.txt"]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Read { path, offset, limit } = cli.command {
+        if let FileCommands::Read {
+            path,
+            offset,
+            limit,
+        } = cli.command
+        {
             assert_eq!(path, "/path/to/file.txt");
             assert_eq!(offset, None);
             assert_eq!(limit, None);
@@ -204,12 +236,23 @@ mod tests {
     #[test]
     fn test_file_read_command_with_options() {
         let result = TestCli::try_parse_from([
-            "test", "read", "/path/to/file.txt", "--offset", "10", "--limit", "50"
+            "test",
+            "read",
+            "/path/to/file.txt",
+            "--offset",
+            "10",
+            "--limit",
+            "50",
         ]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Read { path, offset, limit } = cli.command {
+        if let FileCommands::Read {
+            path,
+            offset,
+            limit,
+        } = cli.command
+        {
             assert_eq!(path, "/path/to/file.txt");
             assert_eq!(offset, Some(10));
             assert_eq!(limit, Some(50));
@@ -222,7 +265,7 @@ mod tests {
     fn test_file_write_command() {
         let result = TestCli::try_parse_from(["test", "write", "/path/to/file.txt", "Hello World"]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
         if let FileCommands::Write { path, content } = cli.command {
             assert_eq!(path, "/path/to/file.txt");
@@ -236,7 +279,7 @@ mod tests {
     fn test_file_write_command_stdin() {
         let result = TestCli::try_parse_from(["test", "write", "/path/to/file.txt", "-"]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
         if let FileCommands::Write { path, content } = cli.command {
             assert_eq!(path, "/path/to/file.txt");
@@ -248,13 +291,18 @@ mod tests {
 
     #[test]
     fn test_file_edit_command_basic() {
-        let result = TestCli::try_parse_from([
-            "test", "edit", "/path/to/file.rs", "old_code", "new_code"
-        ]);
+        let result =
+            TestCli::try_parse_from(["test", "edit", "/path/to/file.rs", "old_code", "new_code"]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Edit { path, old_string, new_string, replace_all } = cli.command {
+        if let FileCommands::Edit {
+            path,
+            old_string,
+            new_string,
+            replace_all,
+        } = cli.command
+        {
             assert_eq!(path, "/path/to/file.rs");
             assert_eq!(old_string, "old_code");
             assert_eq!(new_string, "new_code");
@@ -267,12 +315,23 @@ mod tests {
     #[test]
     fn test_file_edit_command_replace_all() {
         let result = TestCli::try_parse_from([
-            "test", "edit", "/path/to/file.rs", "old_code", "new_code", "--replace-all"
+            "test",
+            "edit",
+            "/path/to/file.rs",
+            "old_code",
+            "new_code",
+            "--replace-all",
         ]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Edit { path, old_string, new_string, replace_all } = cli.command {
+        if let FileCommands::Edit {
+            path,
+            old_string,
+            new_string,
+            replace_all,
+        } = cli.command
+        {
             assert_eq!(path, "/path/to/file.rs");
             assert_eq!(old_string, "old_code");
             assert_eq!(new_string, "new_code");
@@ -286,9 +345,15 @@ mod tests {
     fn test_file_glob_command_basic() {
         let result = TestCli::try_parse_from(["test", "glob", "**/*.rs"]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Glob { pattern, path, case_sensitive, no_git_ignore } = cli.command {
+        if let FileCommands::Glob {
+            pattern,
+            path,
+            case_sensitive,
+            no_git_ignore,
+        } = cli.command
+        {
             assert_eq!(pattern, "**/*.rs");
             assert_eq!(path, None);
             assert!(!case_sensitive);
@@ -301,12 +366,24 @@ mod tests {
     #[test]
     fn test_file_glob_command_with_options() {
         let result = TestCli::try_parse_from([
-            "test", "glob", "*.json", "--path", "/search/dir", "--case-sensitive", "--no-git-ignore"
+            "test",
+            "glob",
+            "*.json",
+            "--path",
+            "/search/dir",
+            "--case-sensitive",
+            "--no-git-ignore",
         ]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Glob { pattern, path, case_sensitive, no_git_ignore } = cli.command {
+        if let FileCommands::Glob {
+            pattern,
+            path,
+            case_sensitive,
+            no_git_ignore,
+        } = cli.command
+        {
             assert_eq!(pattern, "*.json");
             assert_eq!(path, Some("/search/dir".to_string()));
             assert!(case_sensitive);
@@ -320,9 +397,18 @@ mod tests {
     fn test_file_grep_command_basic() {
         let result = TestCli::try_parse_from(["test", "grep", "search_pattern"]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Grep { pattern, path, glob, file_type, case_insensitive, context_lines, output_mode } = cli.command {
+        if let FileCommands::Grep {
+            pattern,
+            path,
+            glob,
+            file_type,
+            case_insensitive,
+            context_lines,
+            output_mode,
+        } = cli.command
+        {
             assert_eq!(pattern, "search_pattern");
             assert_eq!(path, None);
             assert_eq!(glob, None);
@@ -338,18 +424,34 @@ mod tests {
     #[test]
     fn test_file_grep_command_with_options() {
         let result = TestCli::try_parse_from([
-            "test", "grep", "error.*handling", 
-            "--path", "/src", 
-            "--glob", "*.rs", 
-            "--type", "rust",
+            "test",
+            "grep",
+            "error.*handling",
+            "--path",
+            "/src",
+            "--glob",
+            "*.rs",
+            "--type",
+            "rust",
             "-i",
-            "-C", "3",
-            "--output-mode", "content"
+            "-C",
+            "3",
+            "--output-mode",
+            "content",
         ]);
         assert!(result.is_ok());
-        
+
         let cli = result.unwrap();
-        if let FileCommands::Grep { pattern, path, glob, file_type, case_insensitive, context_lines, output_mode } = cli.command {
+        if let FileCommands::Grep {
+            pattern,
+            path,
+            glob,
+            file_type,
+            case_insensitive,
+            context_lines,
+            output_mode,
+        } = cli.command
+        {
             assert_eq!(pattern, "error.*handling");
             assert_eq!(path, Some("/src".to_string()));
             assert_eq!(glob, Some("*.rs".to_string()));
@@ -377,7 +479,10 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 
     #[test]
@@ -386,6 +491,9 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 }

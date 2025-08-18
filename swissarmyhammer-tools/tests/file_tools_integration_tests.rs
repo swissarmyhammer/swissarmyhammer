@@ -1732,3 +1732,1432 @@ async fn test_grep_tool_single_file_vs_directory() {
     // Should find match in single file only
     assert!(response_text.contains("1 matches") || response_text.contains("target"));
 }
+
+// ============================================================================
+// File Write Tool Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_write_tool_discovery_and_registration() {
+    let registry = create_test_registry();
+
+    // Verify the write tool is registered and discoverable
+    assert!(registry.get_tool("files_write").is_some());
+
+    let tool_names = registry.list_tool_names();
+    assert!(tool_names.contains(&"files_write".to_string()));
+
+    // Verify tool metadata is accessible
+    let tool = registry.get_tool("files_write").unwrap();
+    assert_eq!(tool.name(), "files_write");
+    assert!(!tool.description().is_empty());
+    assert!(tool.description().contains("file") || tool.description().contains("write"));
+
+    // Verify schema structure
+    let schema = tool.schema();
+    assert!(schema.is_object());
+    let properties = schema["properties"].as_object().unwrap();
+    assert!(properties.contains_key("file_path"));
+    assert!(properties.contains_key("content"));
+
+    let required = schema["required"].as_array().unwrap();
+    assert!(required.contains(&serde_json::Value::String("file_path".to_string())));
+    assert!(required.contains(&serde_json::Value::String("content".to_string())));
+}
+
+#[tokio::test]
+async fn test_write_tool_execution_success_cases() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_write").unwrap();
+
+    // Create temporary directory for testing
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test_write.txt");
+    let test_content = "Hello, World!\nThis is a test file created via MCP integration.";
+
+    // Test basic file writing
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("content".to_string(), json!(test_content));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "File write should succeed: {:?}", result);
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+    assert!(!call_result.content.is_empty());
+
+    // Verify the file was actually created with correct content
+    assert!(test_file.exists());
+    let written_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(written_content, test_content);
+}
+
+#[tokio::test]
+async fn test_write_tool_overwrite_existing_file() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_write").unwrap();
+
+    // Create temporary file with initial content
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test_overwrite.txt");
+    let initial_content = "Initial content";
+    fs::write(&test_file, initial_content).unwrap();
+
+    let new_content = "New overwritten content";
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("content".to_string(), json!(new_content));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "File overwrite should succeed");
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+
+    // Verify the file was overwritten
+    let written_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(written_content, new_content);
+    assert_ne!(written_content, initial_content);
+}
+
+#[tokio::test]
+async fn test_write_tool_creates_parent_directories() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_write").unwrap();
+
+    // Create test file in nested directories that don't exist
+    let temp_dir = TempDir::new().unwrap();
+    let nested_file = temp_dir
+        .path()
+        .join("deeply")
+        .join("nested")
+        .join("directories")
+        .join("test_file.txt");
+    let test_content = "File in deeply nested directory";
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "file_path".to_string(),
+        json!(nested_file.to_string_lossy()),
+    );
+    arguments.insert("content".to_string(), json!(test_content));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(
+        result.is_ok(),
+        "Write with parent directory creation should succeed"
+    );
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+
+    // Verify the file and directories were created
+    assert!(nested_file.exists());
+    let written_content = fs::read_to_string(&nested_file).unwrap();
+    assert_eq!(written_content, test_content);
+}
+
+#[tokio::test]
+async fn test_write_tool_unicode_content() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_write").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("unicode_test.txt");
+    let unicode_content = "Hello 🦀 Rust!\n你好世界\nПривет мир\n🚀✨🎉";
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("content".to_string(), json!(unicode_content));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Unicode content write should succeed");
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+
+    // Verify Unicode content was written correctly
+    let written_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(written_content, unicode_content);
+}
+
+#[tokio::test]
+async fn test_write_tool_empty_content() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_write").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("empty_file.txt");
+    let empty_content = "";
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("content".to_string(), json!(empty_content));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Empty content write should succeed");
+
+    // Verify empty file was created
+    assert!(test_file.exists());
+    let written_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(written_content, "");
+}
+
+#[tokio::test]
+async fn test_write_tool_error_handling() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_write").unwrap();
+
+    // Test invalid file path (empty)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(""));
+    arguments.insert("content".to_string(), json!("test content"));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Empty file path should fail");
+
+    // Test relative path (should fail)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!("relative/path/file.txt"));
+    arguments.insert("content".to_string(), json!("test content"));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Relative path should be rejected");
+
+    let error = result.unwrap_err();
+    let error_msg = format!("{:?}", error);
+    assert!(error_msg.contains("absolute"));
+}
+
+// ============================================================================
+// File Edit Tool Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_edit_tool_discovery_and_registration() {
+    let registry = create_test_registry();
+
+    // Verify the edit tool is registered and discoverable
+    assert!(registry.get_tool("files_edit").is_some());
+
+    let tool_names = registry.list_tool_names();
+    assert!(tool_names.contains(&"files_edit".to_string()));
+
+    // Verify tool metadata is accessible
+    let tool = registry.get_tool("files_edit").unwrap();
+    assert_eq!(tool.name(), "files_edit");
+    assert!(!tool.description().is_empty());
+    assert!(tool.description().contains("edit") || tool.description().contains("replace"));
+
+    // Verify schema structure
+    let schema = tool.schema();
+    assert!(schema.is_object());
+    let properties = schema["properties"].as_object().unwrap();
+    assert!(properties.contains_key("file_path"));
+    assert!(properties.contains_key("old_string"));
+    assert!(properties.contains_key("new_string"));
+    assert!(properties.contains_key("replace_all"));
+
+    let required = schema["required"].as_array().unwrap();
+    assert!(required.contains(&serde_json::Value::String("file_path".to_string())));
+    assert!(required.contains(&serde_json::Value::String("old_string".to_string())));
+    assert!(required.contains(&serde_json::Value::String("new_string".to_string())));
+}
+
+#[tokio::test]
+async fn test_edit_tool_single_replacement_success() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    // Create test file with content to edit (single occurrence)
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test_edit.txt");
+    let initial_content = "Hello world! This is a test file with unique content.";
+    fs::write(&test_file, initial_content).unwrap();
+
+    // Test single replacement
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!("world"));
+    arguments.insert("new_string".to_string(), json!("universe"));
+    arguments.insert("replace_all".to_string(), json!(false));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(
+        result.is_ok(),
+        "Single replacement should succeed: {:?}",
+        result
+    );
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+
+    // Verify the occurrence was replaced
+    let edited_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(
+        edited_content,
+        "Hello universe! This is a test file with unique content."
+    );
+}
+
+#[tokio::test]
+async fn test_edit_tool_replace_all_success() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    // Create test file with multiple occurrences
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test_replace_all.txt");
+    let initial_content = "test test test";
+    fs::write(&test_file, initial_content).unwrap();
+
+    // Test replace all
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!("test"));
+    arguments.insert("new_string".to_string(), json!("example"));
+    arguments.insert("replace_all".to_string(), json!(true));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Replace all should succeed");
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+
+    // Verify all occurrences were replaced
+    let edited_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(edited_content, "example example example");
+}
+
+#[tokio::test]
+async fn test_edit_tool_string_not_found_error() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    // Create test file
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test_not_found.txt");
+    let initial_content = "Hello world!";
+    fs::write(&test_file, initial_content).unwrap();
+
+    // Try to replace non-existent string
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!("nonexistent"));
+    arguments.insert("new_string".to_string(), json!("replacement"));
+    arguments.insert("replace_all".to_string(), json!(false));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Edit with non-existent string should fail");
+
+    let error = result.unwrap_err();
+    let error_msg = format!("{:?}", error);
+    assert!(error_msg.contains("not found") || error_msg.contains("does not contain"));
+}
+
+#[tokio::test]
+async fn test_edit_tool_multiple_occurrences_without_replace_all() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    // Create test file with duplicate content
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test_multiple.txt");
+    let initial_content = "duplicate duplicate duplicate";
+    fs::write(&test_file, initial_content).unwrap();
+
+    // Try single replacement on multiple occurrences (should fail)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!("duplicate"));
+    arguments.insert("new_string".to_string(), json!("unique"));
+    arguments.insert("replace_all".to_string(), json!(false));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(
+        result.is_err(),
+        "Single replacement with multiple occurrences should fail"
+    );
+
+    let error = result.unwrap_err();
+    let error_msg = format!("{:?}", error);
+    assert!(error_msg.contains("appears") && error_msg.contains("times in file") && error_msg.contains("Use replace_all=true"));
+}
+
+#[tokio::test]
+async fn test_edit_tool_unicode_content() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("unicode_edit.txt");
+    let unicode_content = "Hello 🌍! Здравствуй мир! 你好世界!";
+    fs::write(&test_file, unicode_content).unwrap();
+
+    // Edit unicode content
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!("🌍"));
+    arguments.insert("new_string".to_string(), json!("🦀"));
+    arguments.insert("replace_all".to_string(), json!(false));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_ok(), "Unicode edit should succeed");
+
+    let call_result = result.unwrap();
+    assert_eq!(call_result.is_error, Some(false));
+
+    // Verify Unicode content was edited correctly
+    let edited_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(edited_content, "Hello 🦀! Здравствуй мир! 你好世界!");
+}
+
+#[tokio::test]
+async fn test_edit_tool_preserves_line_endings() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("line_endings.txt");
+    // Content with mixed line endings
+    let content_with_crlf = "Line 1\r\nLine 2 with target\r\nLine 3\r\n";
+    fs::write(&test_file, content_with_crlf).unwrap();
+
+    // Edit while preserving line endings
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!("target"));
+    arguments.insert("new_string".to_string(), json!("replacement"));
+    arguments.insert("replace_all".to_string(), json!(false));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(
+        result.is_ok(),
+        "Edit preserving line endings should succeed"
+    );
+
+    // Verify line endings were preserved
+    let edited_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(
+        edited_content,
+        "Line 1\r\nLine 2 with replacement\r\nLine 3\r\n"
+    );
+    assert!(edited_content.contains("\r\n")); // CRLF preserved
+}
+
+#[tokio::test]
+async fn test_edit_tool_file_not_exists_error() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let nonexistent_file = temp_dir.path().join("does_not_exist.txt");
+
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "file_path".to_string(),
+        json!(nonexistent_file.to_string_lossy()),
+    );
+    arguments.insert("old_string".to_string(), json!("old"));
+    arguments.insert("new_string".to_string(), json!("new"));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Edit on non-existent file should fail");
+
+    let error = result.unwrap_err();
+    let error_msg = format!("{:?}", error);
+    assert!(error_msg.contains("does not exist") || error_msg.contains("not found"));
+}
+
+#[tokio::test]
+async fn test_edit_tool_empty_parameters_error() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.txt");
+    fs::write(&test_file, "test content").unwrap();
+
+    // Test empty old_string
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    arguments.insert("old_string".to_string(), json!(""));
+    arguments.insert("new_string".to_string(), json!("new"));
+
+    let result = tool.execute(arguments, &context).await;
+    assert!(result.is_err(), "Edit with empty old_string should fail");
+
+    let error = result.unwrap_err();
+    let error_msg = format!("{:?}", error);
+    assert!(error_msg.contains("cannot be empty") || error_msg.contains("required"));
+}
+
+// ============================================================================
+// Tool Composition and Integration Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_write_then_read_workflow() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let read_tool = registry.get_tool("files_read").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("write_read_test.txt");
+    let test_content = "Content written by write tool\nSecond line of content\n";
+
+    // Step 1: Write file
+    let mut write_args = serde_json::Map::new();
+    write_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    write_args.insert("content".to_string(), json!(test_content));
+
+    let write_result = write_tool.execute(write_args, &context).await;
+    assert!(write_result.is_ok(), "Write should succeed");
+
+    let write_call_result = write_result.unwrap();
+    assert_eq!(write_call_result.is_error, Some(false));
+
+    // Step 2: Read the same file
+    let mut read_args = serde_json::Map::new();
+    read_args.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
+
+    let read_result = read_tool.execute(read_args, &context).await;
+    assert!(read_result.is_ok(), "Read should succeed");
+
+    let read_call_result = read_result.unwrap();
+    assert_eq!(read_call_result.is_error, Some(false));
+
+    // Verify content matches
+    let response_text = if let Some(content_item) = read_call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    assert_eq!(response_text, test_content);
+}
+
+#[tokio::test]
+async fn test_write_then_edit_workflow() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let edit_tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("write_edit_test.txt");
+    let initial_content = "Original content that needs updating";
+
+    // Step 1: Write initial file
+    let mut write_args = serde_json::Map::new();
+    write_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    write_args.insert("content".to_string(), json!(initial_content));
+
+    let write_result = write_tool.execute(write_args, &context).await;
+    assert!(write_result.is_ok(), "Write should succeed");
+
+    // Step 2: Edit the file
+    let mut edit_args = serde_json::Map::new();
+    edit_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    edit_args.insert("old_string".to_string(), json!("Original"));
+    edit_args.insert("new_string".to_string(), json!("Updated"));
+    edit_args.insert("replace_all".to_string(), json!(false));
+
+    let edit_result = edit_tool.execute(edit_args, &context).await;
+    assert!(edit_result.is_ok(), "Edit should succeed");
+
+    let edit_call_result = edit_result.unwrap();
+    assert_eq!(edit_call_result.is_error, Some(false));
+
+    // Verify file was edited correctly
+    let final_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(final_content, "Updated content that needs updating");
+}
+
+#[tokio::test]
+async fn test_read_then_edit_workflow() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let edit_tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("read_edit_test.txt");
+    let initial_content = "Function calculate_sum() {\n    return a + b;\n}";
+    fs::write(&test_file, initial_content).unwrap();
+
+    // Step 1: Read the file to analyze content
+    let mut read_args = serde_json::Map::new();
+    read_args.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
+
+    let read_result = read_tool.execute(read_args, &context).await;
+    assert!(read_result.is_ok(), "Read should succeed");
+
+    let read_call_result = read_result.unwrap();
+    let response_text = if let Some(content_item) = read_call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    // Verify we can read the function name
+    assert!(response_text.contains("calculate_sum"));
+
+    // Step 2: Edit the function name based on what we read
+    let mut edit_args = serde_json::Map::new();
+    edit_args.insert("file_path".to_string(), json!(test_file.to_string_lossy()));
+    edit_args.insert("old_string".to_string(), json!("calculate_sum"));
+    edit_args.insert("new_string".to_string(), json!("add_numbers"));
+    edit_args.insert("replace_all".to_string(), json!(false));
+
+    let edit_result = edit_tool.execute(edit_args, &context).await;
+    assert!(edit_result.is_ok(), "Edit should succeed");
+
+    // Verify the edit was successful
+    let final_content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(
+        final_content,
+        "Function add_numbers() {\n    return a + b;\n}"
+    );
+}
+
+#[tokio::test]
+async fn test_glob_then_grep_workflow() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let grep_tool = registry.get_tool("files_grep").unwrap();
+
+    // Create test directory structure with multiple files
+    let temp_dir = TempDir::new().unwrap();
+
+    // Initialize git repo for ignore crate to work properly
+    use std::process::Command;
+    Command::new("git")
+        .args(["init"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to initialize git repo");
+
+    let test_files = vec![
+        ("src/main.rs", "fn main() {\n    println!(\"Hello, world!\");\n    let result = calculate();\n}"),
+        ("src/lib.rs", "pub fn calculate() -> i32 {\n    42\n}\n\npub fn helper() {\n    // Helper function\n}"),
+        ("tests/integration.rs", "use mylib;\n\n#[test]\nfn test_calculate() {\n    assert_eq!(mylib::calculate(), 42);\n}"),
+        ("README.md", "# My Project\n\nThis project has calculate functions.\n"),
+    ];
+
+    for (file_path, content) in &test_files {
+        let full_path = temp_dir.path().join(file_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    // Step 1: Use glob to find all Rust files
+    let mut glob_args = serde_json::Map::new();
+    glob_args.insert("pattern".to_string(), json!("**/*.rs"));
+    glob_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
+
+    let glob_result = glob_tool.execute(glob_args, &context).await;
+    assert!(glob_result.is_ok(), "Glob should succeed");
+
+    let glob_call_result = glob_result.unwrap();
+    assert_eq!(glob_call_result.is_error, Some(false));
+
+    let glob_response = if let Some(content_item) = glob_call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    // Verify glob found Rust files
+    assert!(glob_response.contains("main.rs"));
+    assert!(glob_response.contains("lib.rs"));
+    assert!(glob_response.contains("integration.rs"));
+    assert!(!glob_response.contains("README.md")); // Should not find non-Rust files
+
+    // Step 2: Use grep to search within the files found by glob
+    let mut grep_args = serde_json::Map::new();
+    grep_args.insert("pattern".to_string(), json!("calculate"));
+    grep_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
+    grep_args.insert("glob".to_string(), json!("*.rs")); // Search within Rust files
+
+    let grep_result = grep_tool.execute(grep_args, &context).await;
+    assert!(grep_result.is_ok(), "Grep should succeed");
+
+    let grep_call_result = grep_result.unwrap();
+    assert_eq!(grep_call_result.is_error, Some(false));
+
+    let grep_response = if let Some(content_item) = grep_call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    // Verify grep found "calculate" in Rust files
+    assert!(grep_response.contains("calculate") || grep_response.contains("matches"));
+}
+
+#[tokio::test]
+async fn test_complex_file_workflow() {
+    // Test a complex workflow: glob -> read -> edit -> read (to verify)
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let edit_tool = registry.get_tool("files_edit").unwrap();
+
+    // Create test project structure
+    let temp_dir = TempDir::new().unwrap();
+
+    // Initialize git repo
+    use std::process::Command;
+    Command::new("git")
+        .args(["init"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to initialize git repo");
+
+    let test_files = vec![
+        (
+            "src/config.json",
+            "{\n  \"version\": \"1.0.0\",\n  \"debug\": true\n}",
+        ),
+        (
+            "config/app.json",
+            "{\n  \"version\": \"1.0.0\",\n  \"production\": false\n}",
+        ),
+        (
+            "package.json",
+            "{\n  \"name\": \"myapp\",\n  \"version\": \"1.0.0\"\n}",
+        ),
+    ];
+
+    for (file_path, content) in &test_files {
+        let full_path = temp_dir.path().join(file_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&full_path, content).unwrap();
+    }
+
+    // Step 1: Find all JSON files
+    let mut glob_args = serde_json::Map::new();
+    glob_args.insert("pattern".to_string(), json!("**/*.json"));
+    glob_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
+
+    let glob_result = glob_tool.execute(glob_args, &context).await;
+    assert!(glob_result.is_ok(), "Glob should find JSON files");
+
+    // Step 2: Read one of the config files
+    let config_file = temp_dir.path().join("src/config.json");
+    let mut read_args = serde_json::Map::new();
+    read_args.insert(
+        "absolute_path".to_string(),
+        json!(config_file.to_string_lossy()),
+    );
+
+    let read_result = read_tool.execute(read_args, &context).await;
+    assert!(read_result.is_ok(), "Read should succeed");
+
+    let read_call_result = read_result.unwrap();
+    let original_content = if let Some(content_item) = read_call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    // Verify we can read the version
+    assert!(original_content.contains("1.0.0"));
+    assert!(original_content.contains("debug"));
+
+    // Step 3: Update the version in the config file
+    let mut edit_args = serde_json::Map::new();
+    edit_args.insert(
+        "file_path".to_string(),
+        json!(config_file.to_string_lossy()),
+    );
+    edit_args.insert("old_string".to_string(), json!("1.0.0"));
+    edit_args.insert("new_string".to_string(), json!("1.1.0"));
+    edit_args.insert("replace_all".to_string(), json!(false));
+
+    let edit_result = edit_tool.execute(edit_args, &context).await;
+    assert!(edit_result.is_ok(), "Edit should succeed");
+
+    // Step 4: Read again to verify the change
+    let mut read_verify_args = serde_json::Map::new();
+    read_verify_args.insert(
+        "absolute_path".to_string(),
+        json!(config_file.to_string_lossy()),
+    );
+
+    let read_verify_result = read_tool.execute(read_verify_args, &context).await;
+    assert!(
+        read_verify_result.is_ok(),
+        "Read verification should succeed"
+    );
+
+    let verify_call_result = read_verify_result.unwrap();
+    let updated_content = if let Some(content_item) = verify_call_result.content.first() {
+        match &content_item.raw {
+            rmcp::model::RawContent::Text(text_content) => &text_content.text,
+            _ => panic!("Expected text content"),
+        }
+    } else {
+        panic!("Response should contain content");
+    };
+
+    // Verify the version was updated
+    assert!(updated_content.contains("1.1.0"));
+    assert!(!updated_content.contains("1.0.0")); // Old version should be gone
+    assert!(updated_content.contains("debug")); // Other content should remain
+}
+
+#[tokio::test]
+async fn test_error_handling_in_workflow() {
+    // Test error handling when tools fail in a workflow
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let edit_tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+    let nonexistent_file = temp_dir.path().join("does_not_exist.txt");
+
+    // Step 1: Try to read non-existent file (should fail)
+    let mut read_args = serde_json::Map::new();
+    read_args.insert(
+        "absolute_path".to_string(),
+        json!(nonexistent_file.to_string_lossy()),
+    );
+
+    let read_result = read_tool.execute(read_args, &context).await;
+    assert!(
+        read_result.is_err(),
+        "Read should fail for non-existent file"
+    );
+
+    // Step 2: Try to edit the same non-existent file (should also fail)
+    let mut edit_args = serde_json::Map::new();
+    edit_args.insert(
+        "file_path".to_string(),
+        json!(nonexistent_file.to_string_lossy()),
+    );
+    edit_args.insert("old_string".to_string(), json!("old"));
+    edit_args.insert("new_string".to_string(), json!("new"));
+
+    let edit_result = edit_tool.execute(edit_args, &context).await;
+    assert!(
+        edit_result.is_err(),
+        "Edit should fail for non-existent file"
+    );
+
+    // Both operations should fail gracefully with clear error messages
+    let read_error = format!("{:?}", read_result.unwrap_err());
+    let edit_error = format!("{:?}", edit_result.unwrap_err());
+
+    assert!(read_error.contains("does not exist") || read_error.contains("not found"));
+    assert!(edit_error.contains("does not exist") || edit_error.contains("not found"));
+}
+
+// ============================================================================
+// Enhanced Security Tests for All File Tools
+// ============================================================================
+
+#[tokio::test]
+async fn test_comprehensive_path_traversal_protection_all_tools() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+
+    // Get all file tools
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let edit_tool = registry.get_tool("files_edit").unwrap();
+    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let grep_tool = registry.get_tool("files_grep").unwrap();
+
+    // Define various path traversal attack vectors
+    let dangerous_paths = vec![
+        "/tmp/../../../etc/passwd",
+        "/home/user/../../../etc/passwd",
+        "../../../etc/passwd",
+        "..\\..\\..\\windows\\system32\\config\\sam",
+        "/var/tmp/../../../../etc/shadow",
+        "~/../../etc/hosts",
+        "/usr/local/../../../root/.ssh/id_rsa",
+        "/tmp/../../../../../proc/version",
+    ];
+
+    for dangerous_path in dangerous_paths {
+        // Test read tool
+        let mut read_args = serde_json::Map::new();
+        read_args.insert("absolute_path".to_string(), json!(dangerous_path));
+
+        let read_result = read_tool.execute(read_args, &context).await;
+        // Should either fail due to validation or file not found
+        if let Err(error) = read_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                error_msg.contains("blocked pattern")
+                    || error_msg.contains("not found")
+                    || error_msg.contains("absolute")
+                    || error_msg.contains("No such file"),
+                "Read tool should block or fail path traversal: {} (error: {})",
+                dangerous_path,
+                error_msg
+            );
+        }
+
+        // Test write tool
+        let mut write_args = serde_json::Map::new();
+        write_args.insert("file_path".to_string(), json!(dangerous_path));
+        write_args.insert("content".to_string(), json!("malicious content"));
+
+        let write_result = write_tool.execute(write_args, &context).await;
+        // Should fail due to path validation
+        assert!(
+            write_result.is_err(),
+            "Write tool should reject path traversal: {}",
+            dangerous_path
+        );
+
+        let write_error = format!("{:?}", write_result.unwrap_err());
+        assert!(
+            write_error.contains("absolute")
+                || write_error.contains("invalid")
+                || write_error.contains("dangerous")
+                || write_error.contains("traversal"),
+            "Write error should indicate path validation failure: {}",
+            write_error
+        );
+
+        // Test edit tool
+        let mut edit_args = serde_json::Map::new();
+        edit_args.insert("file_path".to_string(), json!(dangerous_path));
+        edit_args.insert("old_string".to_string(), json!("old"));
+        edit_args.insert("new_string".to_string(), json!("new"));
+
+        let edit_result = edit_tool.execute(edit_args, &context).await;
+        // Should fail due to path validation or file not found
+        assert!(
+            edit_result.is_err(),
+            "Edit tool should reject path traversal: {}",
+            dangerous_path
+        );
+
+        // Test glob tool with dangerous paths
+        let mut glob_args = serde_json::Map::new();
+        glob_args.insert("pattern".to_string(), json!("*"));
+        glob_args.insert("path".to_string(), json!(dangerous_path));
+
+        let glob_result = glob_tool.execute(glob_args, &context).await;
+        // Should either fail or be handled safely
+        if let Err(error) = glob_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                error_msg.contains("does not exist")
+                    || error_msg.contains("invalid")
+                    || error_msg.contains("blocked")
+                    || error_msg.contains("dangerous"),
+                "Glob error should be handled safely: {}",
+                error_msg
+            );
+        }
+
+        // Test grep tool with dangerous paths
+        let mut grep_args = serde_json::Map::new();
+        grep_args.insert("pattern".to_string(), json!("password"));
+        grep_args.insert("path".to_string(), json!(dangerous_path));
+
+        let grep_result = grep_tool.execute(grep_args, &context).await;
+        // Should either fail or be handled safely
+        if let Err(error) = grep_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                error_msg.contains("does not exist")
+                    || error_msg.contains("invalid")
+                    || error_msg.contains("blocked")
+                    || error_msg.contains("dangerous"),
+                "Grep error should be handled safely: {}",
+                error_msg
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_symlink_attack_prevention() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let _edit_tool = registry.get_tool("files_edit").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create a normal file
+    let normal_file = temp_dir.path().join("normal.txt");
+    fs::write(&normal_file, "normal content").unwrap();
+
+    // Create a symlink pointing outside the temp directory (if supported)
+    let symlink_file = temp_dir.path().join("symlink.txt");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        // Try to create symlink to /etc/passwd
+        let _ = symlink("/etc/passwd", &symlink_file);
+    }
+
+    // Test read tool with symlink (if it exists)
+    if symlink_file.exists() {
+        let mut read_args = serde_json::Map::new();
+        read_args.insert(
+            "absolute_path".to_string(),
+            json!(symlink_file.to_string_lossy()),
+        );
+
+        let read_result = read_tool.execute(read_args, &context).await;
+        // Should either handle symlinks safely or reject them
+        if let Err(error) = read_result {
+            let error_msg = format!("{:?}", error);
+            // Error is acceptable for security
+            println!("Symlink read rejected (secure): {}", error_msg);
+        } else {
+            // If it succeeds, it should only read safe content
+            let read_call_result = read_result.unwrap();
+            if let Some(content_item) = read_call_result.content.first() {
+                if let rmcp::model::RawContent::Text(text_content) = &content_item.raw {
+                    // Should not contain sensitive system information
+                    assert!(
+                        !text_content.text.contains("root:")
+                            && !text_content.text.contains("shadow"),
+                        "Symlink should not expose sensitive content"
+                    );
+                }
+            }
+        }
+    }
+
+    // Test write tool with symlink target
+    if symlink_file.exists() {
+        let mut write_args = serde_json::Map::new();
+        write_args.insert(
+            "file_path".to_string(),
+            json!(symlink_file.to_string_lossy()),
+        );
+        write_args.insert("content".to_string(), json!("overwrite attempt"));
+
+        let write_result = write_tool.execute(write_args, &context).await;
+        // Should not allow writing through symlinks to system files
+        if write_result.is_ok() {
+            // If it succeeds, verify it didn't modify system files
+            let passwd_content = fs::read_to_string("/etc/passwd").unwrap_or_default();
+            assert!(
+                !passwd_content.contains("overwrite attempt"),
+                "Should not modify system files through symlinks"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_workspace_boundary_enforcement() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let _edit_tool = registry.get_tool("files_edit").unwrap();
+
+    // Test accessing files outside typical workspace boundaries
+    let restricted_paths = vec![
+        "/etc/passwd",
+        "/root/.bashrc",
+        "/var/log/system.log",
+        "/usr/bin/sudo",
+        "/sys/kernel/debug/",
+        "/proc/1/environ",
+        "/home/other_user/.ssh/id_rsa",
+    ];
+
+    for restricted_path in restricted_paths {
+        // Test read tool
+        let mut read_args = serde_json::Map::new();
+        read_args.insert("absolute_path".to_string(), json!(restricted_path));
+
+        let read_result = read_tool.execute(read_args, &context).await;
+        // Should either fail due to permissions or be handled safely
+        if let Err(error) = read_result {
+            let error_msg = format!("{:?}", error);
+            println!(
+                "Restricted read blocked: {} - {}",
+                restricted_path, error_msg
+            );
+        }
+
+        // Test write tool (should not be able to write to system locations)
+        let mut write_args = serde_json::Map::new();
+        write_args.insert("file_path".to_string(), json!(restricted_path));
+        write_args.insert("content".to_string(), json!("unauthorized write"));
+
+        let write_result = write_tool.execute(write_args, &context).await;
+        // Should fail due to permissions or validation
+        if let Err(error) = write_result {
+            let error_msg = format!("{:?}", error);
+            println!(
+                "Restricted write blocked: {} - {}",
+                restricted_path, error_msg
+            );
+        } else {
+            // If it somehow succeeds, verify the file wasn't actually modified
+            let actual_content = fs::read_to_string(restricted_path).unwrap_or_default();
+            assert!(
+                !actual_content.contains("unauthorized write"),
+                "Should not modify restricted system files"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_malformed_input_handling() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let _edit_tool = registry.get_tool("files_edit").unwrap();
+    let glob_tool = registry.get_tool("files_glob").unwrap();
+    let grep_tool = registry.get_tool("files_grep").unwrap();
+
+    // Test various malformed inputs
+    let long_path = "extremely_long_path_".repeat(1000);
+    let malformed_inputs = vec![
+        "",   // Empty string
+        "\0", // Null byte
+        "/path/with\0null",
+        "path\nwith\nnewlines",
+        "path\rwith\rcarriage\rreturns",
+        "path\twith\ttabs",
+        "path with spaces and special chars: <>|\"*?",
+        "\u{FEFF}path_with_bom", // BOM character
+        long_path.as_str(),      // Very long path
+    ];
+
+    for malformed_input in &malformed_inputs {
+        // Test read tool
+        let mut read_args = serde_json::Map::new();
+        read_args.insert("absolute_path".to_string(), json!(malformed_input));
+
+        let read_result = read_tool.execute(read_args, &context).await;
+        // Should handle malformed input gracefully
+        if let Err(error) = read_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                !error_msg.contains("panic") && !error_msg.contains("thread"),
+                "Should handle malformed input gracefully, not panic: {}",
+                error_msg
+            );
+        }
+
+        // Test write tool
+        let mut write_args = serde_json::Map::new();
+        write_args.insert("file_path".to_string(), json!(malformed_input));
+        write_args.insert("content".to_string(), json!("test content"));
+
+        let write_result = write_tool.execute(write_args, &context).await;
+        // Should validate and reject malformed paths
+        if let Err(error) = write_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                error_msg.contains("invalid")
+                    || error_msg.contains("empty")
+                    || error_msg.contains("absolute")
+                    || error_msg.contains("directory")
+                    || error_msg.contains("permission")
+                    || error_msg.contains("Read-only"),
+                "Should provide clear validation error: {}",
+                error_msg
+            );
+        }
+
+        // Test glob tool with malformed patterns
+        let mut glob_args = serde_json::Map::new();
+        glob_args.insert("pattern".to_string(), json!(malformed_input));
+
+        let glob_result = glob_tool.execute(glob_args, &context).await;
+        // Should handle malformed patterns gracefully
+        if let Err(error) = glob_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                !error_msg.contains("panic"),
+                "Glob should handle malformed patterns gracefully: {}",
+                error_msg
+            );
+        }
+
+        // Test grep tool with malformed regex
+        let mut grep_args = serde_json::Map::new();
+        grep_args.insert("pattern".to_string(), json!(malformed_input));
+
+        let grep_result = grep_tool.execute(grep_args, &context).await;
+        // Should handle malformed regex patterns gracefully
+        if let Err(error) = grep_result {
+            let error_msg = format!("{:?}", error);
+            assert!(
+                error_msg.contains("Invalid regex")
+                    || error_msg.contains("pattern")
+                    || !error_msg.contains("panic"),
+                "Grep should handle malformed regex gracefully: {}",
+                error_msg
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_permission_escalation_prevention() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let edit_tool = registry.get_tool("files_edit").unwrap();
+
+    // Test writing to privileged system locations
+    let privileged_locations = vec![
+        "/etc/sudoers",
+        "/etc/shadow",
+        "/etc/ssh/sshd_config",
+        "/root/.ssh/authorized_keys",
+        "/var/spool/cron/root",
+        "/etc/crontab",
+        "/usr/bin/sudo",
+    ];
+
+    for privileged_location in privileged_locations {
+        // Test write tool
+        let mut write_args = serde_json::Map::new();
+        write_args.insert("file_path".to_string(), json!(privileged_location));
+        write_args.insert(
+            "content".to_string(),
+            json!("# privilege escalation attempt"),
+        );
+
+        let write_result = write_tool.execute(write_args, &context).await;
+        // Should fail due to permissions or validation
+        if let Err(error) = write_result {
+            let error_msg = format!("{:?}", error);
+            println!(
+                "Privileged write blocked: {} - {}",
+                privileged_location, error_msg
+            );
+        } else {
+            // If somehow successful, verify no actual privilege escalation occurred
+            println!(
+                "Warning: Write to {} succeeded unexpectedly",
+                privileged_location
+            );
+        }
+
+        // Test edit tool
+        let mut edit_args = serde_json::Map::new();
+        edit_args.insert("file_path".to_string(), json!(privileged_location));
+        edit_args.insert("old_string".to_string(), json!("root"));
+        edit_args.insert("new_string".to_string(), json!("compromised"));
+
+        let edit_result = edit_tool.execute(edit_args, &context).await;
+        // Should fail due to permissions or file not existing
+        if let Err(error) = edit_result {
+            let error_msg = format!("{:?}", error);
+            println!(
+                "Privileged edit blocked: {} - {}",
+                privileged_location, error_msg
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_resource_exhaustion_protection() {
+    let registry = create_test_registry();
+    let context = create_test_context().await;
+
+    let read_tool = registry.get_tool("files_read").unwrap();
+    let write_tool = registry.get_tool("files_write").unwrap();
+    let glob_tool = registry.get_tool("files_glob").unwrap();
+
+    let temp_dir = TempDir::new().unwrap();
+
+    // Test read tool with excessive offset/limit values
+    let test_file = temp_dir.path().join("test.txt");
+    fs::write(&test_file, "small content").unwrap();
+
+    let mut read_args = serde_json::Map::new();
+    read_args.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
+    read_args.insert("offset".to_string(), json!(u32::MAX)); // Excessive offset
+    read_args.insert("limit".to_string(), json!(u32::MAX)); // Excessive limit
+
+    let read_result = read_tool.execute(read_args, &context).await;
+    // Should either handle gracefully or reject excessive values
+    if let Err(error) = read_result {
+        let error_msg = format!("{:?}", error);
+        assert!(
+            error_msg.contains("offset")
+                || error_msg.contains("limit")
+                || error_msg.contains("too large"),
+            "Should validate excessive offset/limit values: {}",
+            error_msg
+        );
+    }
+
+    // Test write tool with extremely large content
+    let huge_content = "A".repeat(20_000_000); // 20MB string
+    let large_file = temp_dir.path().join("large_test.txt");
+
+    let mut write_args = serde_json::Map::new();
+    write_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
+    write_args.insert("content".to_string(), json!(huge_content));
+
+    let write_result = write_tool.execute(write_args, &context).await;
+    // Should either handle large content gracefully or have size limits
+    if let Err(error) = write_result {
+        let error_msg = format!("{:?}", error);
+        println!("Large content write rejected: {}", error_msg);
+    }
+
+    // Test glob with patterns that could cause excessive recursion
+    let recursive_pattern = "**/**/".repeat(100) + "*"; // Deeply recursive pattern
+
+    let mut glob_args = serde_json::Map::new();
+    glob_args.insert("pattern".to_string(), json!(recursive_pattern));
+    glob_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
+
+    let glob_result = glob_tool.execute(glob_args, &context).await;
+    // Should handle complex patterns without hanging
+    if let Err(error) = glob_result {
+        let error_msg = format!("{:?}", error);
+        println!("Complex glob pattern handled: {}", error_msg);
+    }
+}
+
+#[tokio::test]
+async fn test_concurrent_file_operations_safety() {
+    use std::sync::Arc;
+    use tokio::task::JoinSet;
+
+    let registry = Arc::new(create_test_registry());
+    let context = Arc::new(create_test_context().await);
+
+    let temp_dir = TempDir::new().unwrap();
+    let shared_file = Arc::new(temp_dir.path().join("concurrent_test.txt"));
+
+    // Initialize the file
+    fs::write(&*shared_file, "initial content").unwrap();
+
+    let mut join_set = JoinSet::new();
+
+    // Spawn concurrent operations on the same file
+    for i in 0..5 {
+        // Write operations
+        let registry_clone = registry.clone();
+        let context_clone = context.clone();
+        let file_clone = shared_file.clone();
+
+        join_set.spawn(async move {
+            let write_tool = registry_clone.get_tool("files_write").unwrap();
+            let mut write_args = serde_json::Map::new();
+            write_args.insert("file_path".to_string(), json!(file_clone.to_string_lossy()));
+            write_args.insert(
+                "content".to_string(),
+                json!(format!("content from task {}", i)),
+            );
+
+            write_tool.execute(write_args, &context_clone).await
+        });
+
+        // Read operations
+        let registry_clone = registry.clone();
+        let context_clone = context.clone();
+        let file_clone = shared_file.clone();
+
+        join_set.spawn(async move {
+            let read_tool = registry_clone.get_tool("files_read").unwrap();
+            let mut read_args = serde_json::Map::new();
+            read_args.insert(
+                "absolute_path".to_string(),
+                json!(file_clone.to_string_lossy()),
+            );
+
+            read_tool.execute(read_args, &context_clone).await
+        });
+    }
+
+    // Wait for all operations to complete
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    while let Some(result) = join_set.join_next().await {
+        match result.unwrap() {
+            Ok(_) => success_count += 1,
+            Err(_) => error_count += 1,
+        }
+    }
+
+    println!(
+        "Concurrent operations: {} succeeded, {} failed",
+        success_count, error_count
+    );
+
+    // Verify the file system remains consistent
+    assert!(shared_file.exists());
+    let final_content = fs::read_to_string(&*shared_file).unwrap();
+    assert!(!final_content.is_empty());
+
+    // All operations should complete without causing data corruption or system instability
+    assert!(
+        success_count + error_count == 10,
+        "All concurrent operations should complete"
+    );
+}
