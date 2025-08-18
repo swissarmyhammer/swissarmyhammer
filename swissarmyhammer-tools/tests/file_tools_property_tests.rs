@@ -58,7 +58,7 @@ proptest! {
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
             let read_tool = registry.get_tool("files_read").unwrap();
-            
+
             let temp_dir = TempDir::new().unwrap();
             let test_file = temp_dir.path().join("test.txt");
 
@@ -104,20 +104,20 @@ proptest! {
         let result = tokio_test::block_on(async {
             // Create content that definitely contains the old_string
             let test_content = format!("{} {} {}", content, old_string, content);
-            
+
             let _guard = IsolatedTestHome::new();
             let registry = create_property_test_registry();
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
             let edit_tool = registry.get_tool("files_edit").unwrap();
             let read_tool = registry.get_tool("files_read").unwrap();
-            
+
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Create two identical files
             let file1 = temp_dir.path().join("file1.txt");
             let file2 = temp_dir.path().join("file2.txt");
-            
+
             // Write same content to both files
             for file_path in [&file1, &file2] {
                 let mut write_args = serde_json::Map::new();
@@ -127,7 +127,7 @@ proptest! {
                 let write_result = write_tool.execute(write_args, &context).await;
                 prop_assert!(write_result.is_ok());
             }
-            
+
             // Apply same edit to both files
             for file_path in [&file1, &file2] {
                 let mut edit_args = serde_json::Map::new();
@@ -139,7 +139,7 @@ proptest! {
                 let edit_result = edit_tool.execute(edit_args, &context).await;
                 prop_assert!(edit_result.is_ok());
             }
-            
+
             // Read both files and verify they are identical
             let mut file_contents = Vec::new();
             for file_path in [&file1, &file2] {
@@ -148,7 +148,7 @@ proptest! {
 
                 let read_result = read_tool.execute(read_args, &context).await;
                 prop_assert!(read_result.is_ok());
-                
+
                 let call_result = read_result.unwrap();
                 if let Some(content_item) = call_result.content.first() {
                     if let rmcp::model::RawContent::Text(text_content) = &content_item.raw {
@@ -156,9 +156,9 @@ proptest! {
                     }
                 }
             }
-            
+
             prop_assert_eq!(file_contents.len(), 2);
-            prop_assert_eq!(&file_contents[0], &file_contents[1], 
+            prop_assert_eq!(&file_contents[0], &file_contents[1],
                            "Same edit operation should produce identical results");
 
             Ok(())
@@ -179,9 +179,9 @@ proptest! {
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
             let glob_tool = registry.get_tool("files_glob").unwrap();
-            
+
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Create test files
             let test_files = ["test1.txt", "test2.rs", "test3.md", "test4.py"];
             for file_name in &test_files {
@@ -192,7 +192,7 @@ proptest! {
 
                 let _write_result = write_tool.execute(write_args, &context).await;
             }
-            
+
             // Run glob search multiple times
             let mut results = Vec::new();
             for _ in 0..2 {
@@ -209,10 +209,10 @@ proptest! {
                     }
                 }
             }
-            
+
             // Results should be identical
             if results.len() >= 2 {
-                prop_assert_eq!(&results[0], &results[1], 
+                prop_assert_eq!(&results[0], &results[1],
                                "Glob results should be consistent across multiple runs");
             }
 
@@ -234,7 +234,7 @@ proptest! {
             let context = create_property_test_context().await;
             let write_tool = registry.get_tool("files_write").unwrap();
             let read_tool = registry.get_tool("files_read").unwrap();
-            
+
             let temp_dir = TempDir::new().unwrap();
             let test_file = temp_dir.path().join(filename);
             let test_content = "Valid test content";

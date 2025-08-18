@@ -30,6 +30,12 @@ pub struct PerformanceProfiler {
     initial_memory: Option<usize>,
 }
 
+impl Default for PerformanceProfiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerformanceProfiler {
     pub fn new() -> Self {
         Self {
@@ -143,7 +149,7 @@ impl FileTestEnvironment {
         files_per_level: usize,
     ) -> Result<Vec<PathBuf>, std::io::Error> {
         let mut created_files = Vec::new();
-        
+
         // Create directory structure
         for level in 0..depth {
             let dir_path = format!("level_{}", level);
@@ -172,7 +178,7 @@ impl FileTestEnvironment {
     /// Create files with complex glob patterns
     pub fn create_glob_test_files(&self) -> Result<Vec<PathBuf>, std::io::Error> {
         let mut files = Vec::new();
-        
+
         // Create various file types and structures
         let test_patterns = vec![
             ("src/main.rs", "fn main() {}"),
@@ -194,9 +200,13 @@ impl FileTestEnvironment {
     }
 
     /// Create files for grep performance testing
-    pub fn create_grep_test_files(&self, num_files: usize, lines_per_file: usize) -> Result<Vec<PathBuf>, std::io::Error> {
+    pub fn create_grep_test_files(
+        &self,
+        num_files: usize,
+        lines_per_file: usize,
+    ) -> Result<Vec<PathBuf>, std::io::Error> {
         let mut files = Vec::new();
-        
+
         for file_num in 0..num_files {
             let mut content = String::new();
             for line_num in 0..lines_per_file {
@@ -207,8 +217,9 @@ impl FileTestEnvironment {
                 };
                 content.push_str(&line);
             }
-            
-            let file_path = self.create_test_file(&format!("search_file_{}.txt", file_num), &content)?;
+
+            let file_path =
+                self.create_test_file(&format!("search_file_{}.txt", file_num), &content)?;
             files.push(file_path);
         }
 
@@ -265,7 +276,7 @@ async fn test_read_tool_large_file_performance() {
 
     for size_mb in file_sizes {
         let profiler = PerformanceProfiler::new();
-        
+
         // Create large test file
         let large_file = test_env
             .create_large_file(&format!("large_file_{}_mb.txt", size_mb), size_mb)
@@ -278,13 +289,20 @@ async fn test_read_tool_large_file_performance() {
         );
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_ok(), "Large file read should succeed for {} MB", size_mb);
+        assert!(
+            result.is_ok(),
+            "Large file read should succeed for {} MB",
+            size_mb
+        );
 
-        results.insert(size_mb, profiler.format_results(&format!("Read {} MB file", size_mb)));
+        results.insert(
+            size_mb,
+            profiler.format_results(&format!("Read {} MB file", size_mb)),
+        );
     }
 
     // Report performance results
-    for (_size, result) in &results {
+    for result in results.values() {
         println!("📊 {}", result);
     }
 
@@ -306,17 +324,20 @@ async fn test_read_tool_offset_limit_performance() {
 
     // Test different offset/limit combinations
     let test_cases = vec![
-        (0, Some(1000)),       // Read first 1000 lines
-        (1000, Some(1000)),    // Read middle 1000 lines
-        (10000, Some(1000)),   // Read offset 1000 lines
-        (0, None),             // Read entire file
+        (0, Some(1000)),     // Read first 1000 lines
+        (1000, Some(1000)),  // Read middle 1000 lines
+        (10000, Some(1000)), // Read offset 1000 lines
+        (0, None),           // Read entire file
     ];
 
     for (offset, limit) in test_cases {
         let profiler = PerformanceProfiler::new();
 
         let mut arguments = serde_json::Map::new();
-        arguments.insert("absolute_path".to_string(), json!(large_file.to_string_lossy()));
+        arguments.insert(
+            "absolute_path".to_string(),
+            json!(large_file.to_string_lossy()),
+        );
         arguments.insert("offset".to_string(), json!(offset));
         if let Some(limit_val) = limit {
             arguments.insert("limit".to_string(), json!(limit_val));
@@ -349,16 +370,25 @@ async fn test_write_tool_large_content_performance() {
     let content_sizes = vec![1, 5, 9]; // MB sizes (9MB to stay under 10MB limit)
     for size_mb in content_sizes {
         let profiler = PerformanceProfiler::new();
-        
+
         let large_content = "0123456789\n".repeat(90_000 * size_mb); // ~size_mb MB, under 10MB limit
-        let output_file = test_env.workspace_path().join(format!("write_test_{}_mb.txt", size_mb));
+        let output_file = test_env
+            .workspace_path()
+            .join(format!("write_test_{}_mb.txt", size_mb));
 
         let mut arguments = serde_json::Map::new();
-        arguments.insert("file_path".to_string(), json!(output_file.to_string_lossy()));
+        arguments.insert(
+            "file_path".to_string(),
+            json!(output_file.to_string_lossy()),
+        );
         arguments.insert("content".to_string(), json!(large_content));
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_ok(), "Large content write should succeed for {} MB", size_mb);
+        assert!(
+            result.is_ok(),
+            "Large content write should succeed for {} MB",
+            size_mb
+        );
 
         // Verify file was created with correct size
         assert!(output_file.exists());
@@ -387,11 +417,16 @@ async fn test_write_tool_concurrent_operations() {
     let mut futures = Vec::new();
 
     for i in 0..num_concurrent {
-        let output_file = test_env.workspace_path().join(format!("concurrent_{}.txt", i));
+        let output_file = test_env
+            .workspace_path()
+            .join(format!("concurrent_{}.txt", i));
         let content = format!("Content for concurrent file {} with data\n", i).repeat(1000);
 
         let mut arguments = serde_json::Map::new();
-        arguments.insert("file_path".to_string(), json!(output_file.to_string_lossy()));
+        arguments.insert(
+            "file_path".to_string(),
+            json!(output_file.to_string_lossy()),
+        );
         arguments.insert("content".to_string(), json!(content));
 
         let future = tool.execute(arguments, &context);
@@ -407,7 +442,10 @@ async fn test_write_tool_concurrent_operations() {
         }
     }
 
-    assert_eq!(success_count, num_concurrent, "All concurrent writes should succeed");
+    assert_eq!(
+        success_count, num_concurrent,
+        "All concurrent writes should succeed"
+    );
     println!(
         "📊 {}",
         profiler.format_results(&format!("Concurrent {} write operations", num_concurrent))
@@ -415,7 +453,9 @@ async fn test_write_tool_concurrent_operations() {
 
     // Verify all files were created
     for i in 0..num_concurrent {
-        let file_path = test_env.workspace_path().join(format!("concurrent_{}.txt", i));
+        let file_path = test_env
+            .workspace_path()
+            .join(format!("concurrent_{}.txt", i));
         assert!(file_path.exists(), "Concurrent file {} should exist", i);
     }
 }
@@ -437,7 +477,9 @@ async fn test_edit_tool_large_file_performance() {
     let base_content = "This is a line with OLD_VALUE that should be replaced.\n";
     let large_content = base_content.repeat(100_000); // ~100k lines
 
-    let large_file = test_env.create_test_file("edit_large.txt", &large_content).unwrap();
+    let large_file = test_env
+        .create_test_file("edit_large.txt", &large_content)
+        .unwrap();
 
     // Test single replacement
     let profiler = PerformanceProfiler::new();
@@ -507,7 +549,10 @@ async fn test_glob_tool_large_directory_performance() {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert("pattern".to_string(), json!(pattern));
-        arguments.insert("path".to_string(), json!(test_env.workspace_path().to_string_lossy()));
+        arguments.insert(
+            "path".to_string(),
+            json!(test_env.workspace_path().to_string_lossy()),
+        );
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_ok(), "Glob pattern '{}' should succeed", pattern);
@@ -543,10 +588,17 @@ async fn test_glob_tool_complex_patterns_performance() {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert("pattern".to_string(), json!(pattern));
-        arguments.insert("path".to_string(), json!(test_env.workspace_path().to_string_lossy()));
+        arguments.insert(
+            "path".to_string(),
+            json!(test_env.workspace_path().to_string_lossy()),
+        );
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_ok(), "Complex glob pattern '{}' should succeed", pattern);
+        assert!(
+            result.is_ok(),
+            "Complex glob pattern '{}' should succeed",
+            pattern
+        );
 
         println!(
             "📊 {}",
@@ -579,11 +631,23 @@ async fn test_grep_tool_large_content_performance() {
 
     // Test different search patterns and modes
     let test_cases = vec![
-        ("MATCH_TARGET", "files_with_matches", "Simple pattern, files mode"),
+        (
+            "MATCH_TARGET",
+            "files_with_matches",
+            "Simple pattern, files mode",
+        ),
         ("MATCH_TARGET", "content", "Simple pattern, content mode"),
         ("MATCH_TARGET", "count", "Simple pattern, count mode"),
-        ("line \\d+ in file", "content", "Regex pattern, content mode"),
-        ("(?i)MATCH_TARGET", "files_with_matches", "Case-insensitive regex"),
+        (
+            "line \\d+ in file",
+            "content",
+            "Regex pattern, content mode",
+        ),
+        (
+            "(?i)MATCH_TARGET",
+            "files_with_matches",
+            "Case-insensitive regex",
+        ),
     ];
 
     for (pattern, output_mode, description) in test_cases {
@@ -591,7 +655,10 @@ async fn test_grep_tool_large_content_performance() {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert("pattern".to_string(), json!(pattern));
-        arguments.insert("path".to_string(), json!(test_env.workspace_path().to_string_lossy()));
+        arguments.insert(
+            "path".to_string(),
+            json!(test_env.workspace_path().to_string_lossy()),
+        );
         arguments.insert("output_mode".to_string(), json!(output_mode));
 
         let result = tool.execute(arguments, &context).await;
@@ -637,7 +704,9 @@ async fn test_grep_tool_complex_regex_performance() {
         }
     "#;
 
-    test_env.create_test_file("complex_content.js", complex_content).unwrap();
+    test_env
+        .create_test_file("complex_content.js", complex_content)
+        .unwrap();
 
     let complex_patterns = vec![
         (r"function\s+\w+\s*\([^)]*\)", "Function definitions"),
@@ -652,7 +721,10 @@ async fn test_grep_tool_complex_regex_performance() {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert("pattern".to_string(), json!(pattern));
-        arguments.insert("path".to_string(), json!(test_env.workspace_path().to_string_lossy()));
+        arguments.insert(
+            "path".to_string(),
+            json!(test_env.workspace_path().to_string_lossy()),
+        );
         arguments.insert("output_mode".to_string(), json!("content"));
 
         let result = tool.execute(arguments, &context).await;
@@ -696,7 +768,10 @@ async fn test_cross_tool_workflow_performance() {
 
     // Step 2: Read content
     let mut read_args = serde_json::Map::new();
-    read_args.insert("absolute_path".to_string(), json!(test_file.to_string_lossy()));
+    read_args.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
 
     let read_result = read_tool.execute(read_args, &context).await;
     assert!(read_result.is_ok(), "Read step should succeed");
@@ -713,8 +788,11 @@ async fn test_cross_tool_workflow_performance() {
 
     // Step 4: Verify with final read
     let mut final_read_args = serde_json::Map::new();
-    final_read_args.insert("absolute_path".to_string(), json!(test_file.to_string_lossy()));
-    
+    final_read_args.insert(
+        "absolute_path".to_string(),
+        json!(test_file.to_string_lossy()),
+    );
+
     let final_read_result = read_tool.execute(final_read_args, &context).await;
     assert!(final_read_result.is_ok(), "Final read should succeed");
 
@@ -740,9 +818,9 @@ fn format_duration(duration: Duration) -> String {
 }
 
 fn format_memory_delta(bytes: isize) -> String {
-    let abs_bytes = bytes.abs() as usize;
+    let abs_bytes = bytes.unsigned_abs();
     let sign = if bytes >= 0 { "+" } else { "-" };
-    
+
     if abs_bytes >= 1_000_000_000 {
         format!("{}{:.1} GB", sign, abs_bytes as f64 / 1_000_000_000.0)
     } else if abs_bytes >= 1_000_000 {

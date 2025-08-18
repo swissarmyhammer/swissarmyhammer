@@ -65,7 +65,7 @@ impl MemoryProfiler {
     #[cfg(target_os = "windows")]
     fn get_memory_usage() -> Option<usize> {
         // Use Windows API - simplified version for testing
-        // For now, we'll simulate memory tracking  
+        // For now, we'll simulate memory tracking
         None
     }
 
@@ -3259,10 +3259,15 @@ async fn test_large_file_read_performance() {
     let lines_per_chunk = 1000;
     let num_chunks = 2000;
     let mut lines = Vec::new();
-    
+
     for chunk_i in 0..num_chunks {
         for line_i in 0..lines_per_chunk {
-            lines.push(format!("{} Line {} in chunk {}.", line_content, line_i + 1, chunk_i + 1));
+            lines.push(format!(
+                "{} Line {} in chunk {}.",
+                line_content,
+                line_i + 1,
+                chunk_i + 1
+            ));
         }
     }
     let content = lines.join("\n");
@@ -3275,7 +3280,10 @@ async fn test_large_file_read_performance() {
 
     // Benchmark full file read
     let mut arguments = serde_json::Map::new();
-    arguments.insert("absolute_path".to_string(), json!(large_file.to_string_lossy()));
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(large_file.to_string_lossy()),
+    );
 
     let start_time = std::time::Instant::now();
     let result = read_tool.execute(arguments.clone(), &context).await;
@@ -3283,14 +3291,18 @@ async fn test_large_file_read_performance() {
 
     assert!(result.is_ok());
     println!("Full file read took: {:?}", read_duration);
-    
+
     // Benchmark should complete within reasonable time (30 seconds)
-    assert!(read_duration.as_secs() < 30, "Large file read took too long: {:?}", read_duration);
+    assert!(
+        read_duration.as_secs() < 30,
+        "Large file read took too long: {:?}",
+        read_duration
+    );
 
     // Benchmark offset/limit read performance
     let mut offset_args = arguments.clone();
     offset_args.insert("offset".to_string(), json!(1000000)); // Start from line 1,000,000 (within 2M lines)
-    offset_args.insert("limit".to_string(), json!(1000));     // Read 1000 lines
+    offset_args.insert("limit".to_string(), json!(1000)); // Read 1000 lines
 
     let start_time = std::time::Instant::now();
     let result = read_tool.execute(offset_args, &context).await;
@@ -3301,10 +3313,17 @@ async fn test_large_file_read_performance() {
 
     // Offset reads may not always be faster than full reads depending on implementation
     // This is a performance characteristic that could vary based on the underlying implementation
-    println!("Performance comparison - Full read: {:?}, Offset read: {:?}", read_duration, offset_duration);
-    
+    println!(
+        "Performance comparison - Full read: {:?}, Offset read: {:?}",
+        read_duration, offset_duration
+    );
+
     // Just ensure offset read completes within reasonable time (not necessarily faster than full read)
-    assert!(offset_duration.as_secs() < 10, "Offset read took too long: {:?}", offset_duration);
+    assert!(
+        offset_duration.as_secs() < 10,
+        "Offset read took too long: {:?}",
+        offset_duration
+    );
 }
 
 #[tokio::test]
@@ -3319,11 +3338,15 @@ async fn test_large_file_write_performance() {
     // Generate test content near 10MB limit (write tool has 10MB size limit)
     let chunk = "Performance testing data with varied content patterns. ".repeat(250);
     let mut content = String::new();
-    for i in 0..500 { // Generate ~6-7MB of content
+    for i in 0..500 {
+        // Generate ~6-7MB of content
         content.push_str(&format!("Section {}: {}", i, chunk));
     }
 
-    println!("Testing write performance for {}MB file...", content.len() / 1024 / 1024);
+    println!(
+        "Testing write performance for {}MB file...",
+        content.len() / 1024 / 1024
+    );
 
     let mut arguments = serde_json::Map::new();
     arguments.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
@@ -3340,7 +3363,11 @@ async fn test_large_file_write_performance() {
     println!("Large file write took: {:?}", write_duration);
 
     // Write should complete within reasonable time (30 seconds)
-    assert!(write_duration.as_secs() < 30, "Large file write took too long: {:?}", write_duration);
+    assert!(
+        write_duration.as_secs() < 30,
+        "Large file write took too long: {:?}",
+        write_duration
+    );
 
     // Verify file was written correctly
     assert!(large_file.exists());
@@ -3363,7 +3390,10 @@ async fn test_large_file_edit_performance() {
     let base_pattern = "REPLACE_TARGET: old_value_pattern_here\n".repeat(5000); // 5K lines
     let content = base_pattern.repeat(40); // 200K lines total (~7.2MB, safe under 10MB)
 
-    println!("Creating large file for edit testing ({} lines)...", content.lines().count());
+    println!(
+        "Creating large file for edit testing ({} lines)...",
+        content.lines().count()
+    );
 
     // Write the large file
     let mut write_args = serde_json::Map::new();
@@ -3374,8 +3404,14 @@ async fn test_large_file_edit_performance() {
     // Test single replacement performance
     let mut edit_args = serde_json::Map::new();
     edit_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
-    edit_args.insert("old_string".to_string(), json!("REPLACE_TARGET: old_value_pattern_here"));
-    edit_args.insert("new_string".to_string(), json!("REPLACE_TARGET: new_value_pattern_here"));
+    edit_args.insert(
+        "old_string".to_string(),
+        json!("REPLACE_TARGET: old_value_pattern_here"),
+    );
+    edit_args.insert(
+        "new_string".to_string(),
+        json!("REPLACE_TARGET: new_value_pattern_here"),
+    );
     edit_args.insert("replace_all".to_string(), json!(false));
 
     let start_time = std::time::Instant::now();
@@ -3389,7 +3425,10 @@ async fn test_large_file_edit_performance() {
     let mut edit_all_args = serde_json::Map::new();
     edit_all_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     edit_all_args.insert("old_string".to_string(), json!("old_value_pattern_here"));
-    edit_all_args.insert("new_string".to_string(), json!("completely_new_value_pattern_here"));
+    edit_all_args.insert(
+        "new_string".to_string(),
+        json!("completely_new_value_pattern_here"),
+    );
     edit_all_args.insert("replace_all".to_string(), json!(true));
 
     let start_time = std::time::Instant::now();
@@ -3400,8 +3439,16 @@ async fn test_large_file_edit_performance() {
     println!("Replace all in large file took: {:?}", replace_all_duration);
 
     // Both operations should complete within reasonable time
-    assert!(single_edit_duration.as_secs() < 10, "Single edit took too long: {:?}", single_edit_duration);
-    assert!(replace_all_duration.as_secs() < 60, "Replace all took too long: {:?}", replace_all_duration);
+    assert!(
+        single_edit_duration.as_secs() < 10,
+        "Single edit took too long: {:?}",
+        single_edit_duration
+    );
+    assert!(
+        replace_all_duration.as_secs() < 60,
+        "Replace all took too long: {:?}",
+        replace_all_duration
+    );
 }
 
 #[tokio::test]
@@ -3431,7 +3478,11 @@ async fn test_directory_traversal_performance() {
                 let file_extensions = [".rs", ".txt", ".json", ".md", ".toml"];
                 let ext = file_extensions[file_num % file_extensions.len()];
                 let file_path = sub_path.join(format!("file_{}{}", file_num, ext));
-                fs::write(&file_path, format!("Content for file {} in {}", file_num, sub_path.display())).unwrap();
+                fs::write(
+                    &file_path,
+                    format!("Content for file {} in {}", file_num, sub_path.display()),
+                )
+                .unwrap();
             }
         }
     }
@@ -3450,14 +3501,24 @@ async fn test_directory_traversal_performance() {
 
     assert!(result.is_ok());
     let response = result.unwrap();
-    let files_found = extract_text_content(&response.content[0].raw).lines().count();
+    let files_found = extract_text_content(&response.content[0].raw)
+        .lines()
+        .count();
     println!("Found {} files in {:?}", files_found, all_files_duration);
 
     // Should find many files (at least 10000)
-    assert!(files_found >= 10000, "Should find at least 10,000 files, found {}", files_found);
-    
+    assert!(
+        files_found >= 10000,
+        "Should find at least 10,000 files, found {}",
+        files_found
+    );
+
     // Traversal should complete within reasonable time
-    assert!(all_files_duration.as_secs() < 30, "Directory traversal took too long: {:?}", all_files_duration);
+    assert!(
+        all_files_duration.as_secs() < 30,
+        "Directory traversal took too long: {:?}",
+        all_files_duration
+    );
 
     // Test specific pattern performance
     let mut rust_args = glob_args.clone();
@@ -3469,21 +3530,31 @@ async fn test_directory_traversal_performance() {
 
     assert!(result.is_ok());
     let rust_response = result.unwrap();
-    let rust_files_found = extract_text_content(&rust_response.content[0].raw).lines().count();
-    println!("Found {} Rust files in {:?}", rust_files_found, rust_files_duration);
+    let rust_files_found = extract_text_content(&rust_response.content[0].raw)
+        .lines()
+        .count();
+    println!(
+        "Found {} Rust files in {:?}",
+        rust_files_found, rust_files_duration
+    );
 
     // Pattern-specific search should be reasonably fast (allow some timing variation)
-    assert!(rust_files_duration.as_millis() < all_files_duration.as_millis() + 100, 
-        "Pattern search should not be significantly slower than full traversal: {} vs {}", 
-        rust_files_duration.as_millis(), all_files_duration.as_millis());
+    assert!(
+        rust_files_duration.as_millis() < all_files_duration.as_millis() + 100,
+        "Pattern search should not be significantly slower than full traversal: {} vs {}",
+        rust_files_duration.as_millis(),
+        all_files_duration.as_millis()
+    );
 
     // Should find about 20% of total files (1 out of 5 extensions)
     let expected_rust_files = files_found / 5;
     let tolerance = expected_rust_files / 10; // 10% tolerance
     assert!(
-        rust_files_found >= expected_rust_files - tolerance && 
-        rust_files_found <= expected_rust_files + tolerance,
-        "Expected around {} Rust files, found {}", expected_rust_files, rust_files_found
+        rust_files_found >= expected_rust_files - tolerance
+            && rust_files_found <= expected_rust_files + tolerance,
+        "Expected around {} Rust files, found {}",
+        expected_rust_files,
+        rust_files_found
     );
 }
 
@@ -3517,7 +3588,8 @@ async fn test_grep_performance_large_codebase() {
             let template_idx = (dir_idx + file_idx) % code_templates.len();
             let content = format!(
                 "// File {}/{}\n{}\n// Additional content to make file larger\n{}\n",
-                dir_idx, file_idx,
+                dir_idx,
+                file_idx,
                 code_templates[template_idx],
                 "// padding\n".repeat(50)
             );
@@ -3535,7 +3607,7 @@ async fn test_grep_performance_large_codebase() {
     let test_cases = [
         ("target_pattern", "Common pattern search"),
         ("fn main", "Function definition search"),
-        ("pub struct", "Struct definition search"), 
+        ("pub struct", "Struct definition search"),
         (r"target_pattern\s*:", "Regex pattern search"),
         ("nonexistent_pattern_xyz", "No matches search"),
     ];
@@ -3552,26 +3624,51 @@ async fn test_grep_performance_large_codebase() {
         let result = grep_tool.execute(grep_args, &context).await;
         let grep_duration = start_time.elapsed();
 
-        assert!(result.is_ok(), "Grep should succeed for pattern: {}", pattern);
-        
+        assert!(
+            result.is_ok(),
+            "Grep should succeed for pattern: {}",
+            pattern
+        );
+
         let response = result.unwrap();
         let response_text = extract_text_content(&response.content[0].raw);
-        let matches_found = if response_text.trim().is_empty() || response_text.contains("No files found with matches") {
+        let matches_found = if response_text.trim().is_empty()
+            || response_text.contains("No files found with matches")
+        {
             0
         } else {
             response_text.lines().count()
         };
 
-        println!("  Pattern '{}': {} matches in {:?}", pattern, matches_found, grep_duration);
+        println!(
+            "  Pattern '{}': {} matches in {:?}",
+            pattern, matches_found, grep_duration
+        );
 
         // Grep should complete within reasonable time even for large codebases
-        assert!(grep_duration.as_secs() < 20, "Grep took too long for pattern '{}': {:?}", pattern, grep_duration);
-        
+        assert!(
+            grep_duration.as_secs() < 20,
+            "Grep took too long for pattern '{}': {:?}",
+            pattern,
+            grep_duration
+        );
+
         // Verify expected match counts
-        match pattern {
-            &"target_pattern" => assert!(matches_found >= 1, "Should find some target_pattern matches (found {})", matches_found),
-            &"fn main" => assert!(matches_found >= 1, "Should find some main functions (found {})", matches_found),
-            &"nonexistent_pattern_xyz" => assert_eq!(matches_found, 0, "Should find no matches for nonexistent pattern"),
+        match *pattern {
+            "target_pattern" => assert!(
+                matches_found >= 1,
+                "Should find some target_pattern matches (found {})",
+                matches_found
+            ),
+            "fn main" => assert!(
+                matches_found >= 1,
+                "Should find some main functions (found {})",
+                matches_found
+            ),
+            "nonexistent_pattern_xyz" => assert_eq!(
+                matches_found, 0,
+                "Should find no matches for nonexistent pattern"
+            ),
             _ => {} // Other patterns just need to complete successfully
         }
     }
@@ -3597,7 +3694,10 @@ async fn test_large_file_read_memory_usage() {
         content.push_str(&format!("Block {}: {}", i, chunk));
     }
 
-    println!("Creating {}MB file for memory profiling...", content.len() / 1024 / 1024);
+    println!(
+        "Creating {}MB file for memory profiling...",
+        content.len() / 1024 / 1024
+    );
     let write_result = fs::write(&large_file, &content);
     if let Err(ref e) = write_result {
         println!("fs::write error: {:?}", e);
@@ -3606,68 +3706,82 @@ async fn test_large_file_read_memory_usage() {
 
     // Profile memory usage during full file read
     let profiler = MemoryProfiler::new();
-    
+
     // Check if file exists
     println!("File exists: {}", large_file.exists());
     println!("File path: {}", large_file.to_string_lossy());
-    
+
     let mut arguments = serde_json::Map::new();
-    arguments.insert("absolute_path".to_string(), json!(large_file.to_string_lossy()));
+    arguments.insert(
+        "absolute_path".to_string(),
+        json!(large_file.to_string_lossy()),
+    );
 
     println!("Reading file with memory profiling...");
     let result = read_tool.execute(arguments.clone(), &context).await;
-    
+
     match &result {
-        Ok(r) => println!("Read tool success: response has {} content items", r.content.len()),
+        Ok(r) => println!(
+            "Read tool success: response has {} content items",
+            r.content.len()
+        ),
         Err(e) => panic!("Read tool error: {}", e),
     }
 
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta during read: {} ({})", 
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta during read: {} ({})",
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // Memory usage should be reasonable relative to file size
         let file_size = content.len();
         let max_expected_memory = file_size * 3; // Allow 3x file size for overhead
 
-        assert!(abs_delta < max_expected_memory, 
-               "Memory usage {} exceeds expected maximum {}", 
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "Memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     } else {
         println!("Memory profiling not available on this platform");
     }
 
     // Test offset/limit memory efficiency
     let profiler = MemoryProfiler::new();
-    
+
     let mut offset_args = arguments.clone();
     offset_args.insert("offset".to_string(), json!(500)); // Start from line 500
-    offset_args.insert("limit".to_string(), json!(100));   // Read 100 lines
+    offset_args.insert("limit".to_string(), json!(100)); // Read 100 lines
 
     let result = read_tool.execute(offset_args, &context).await;
     assert!(result.is_ok());
 
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta for offset/limit read: {} ({})", 
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta for offset/limit read: {} ({})",
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // Offset/limit reads should use much less memory
         let limit_size = 100 * 100; // ~100 lines * ~100 chars per line
         let max_expected_memory = limit_size * 10; // Allow 10x for overhead
 
-        assert!(abs_delta < max_expected_memory,
-               "Offset/limit memory usage {} exceeds expected maximum {}",
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "Offset/limit memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     }
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_large_file_write_memory_usage() {
     let registry = create_test_registry();
     let context = create_test_context().await;
@@ -3683,7 +3797,10 @@ async fn test_large_file_write_memory_usage() {
         content.push_str(&format!("Section {}: {}", i, chunk));
     }
 
-    println!("Testing write memory usage for {}MB file...", content.len() / 1024 / 1024);
+    println!(
+        "Testing write memory usage for {}MB file...",
+        content.len() / 1024 / 1024
+    );
 
     let profiler = MemoryProfiler::new();
 
@@ -3695,19 +3812,23 @@ async fn test_large_file_write_memory_usage() {
     assert!(result.is_ok());
 
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta during write: {} ({})", 
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta during write: {} ({})",
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // Memory usage should be reasonable - allow up to 2x content size
         let content_size = content.len();
         let max_expected_memory = content_size * 2;
 
-        assert!(abs_delta < max_expected_memory,
-               "Write memory usage {} exceeds expected maximum {}",
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "Write memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     } else {
         println!("Memory profiling not available on this platform");
     }
@@ -3715,7 +3836,10 @@ async fn test_large_file_write_memory_usage() {
     // Verify file was written correctly
     assert!(large_file.exists());
     let written_size = fs::metadata(&large_file).unwrap().len() as usize;
-    assert!(written_size >= content.len(), "Written file should match content size");
+    assert!(
+        written_size >= content.len(),
+        "Written file should match content size"
+    );
 }
 
 #[tokio::test]
@@ -3732,7 +3856,10 @@ async fn test_large_file_edit_memory_usage() {
     let base_pattern = "MEMORY_TEST_PATTERN: original_content_here\n".repeat(5000);
     let content = base_pattern.repeat(40); // 200K lines, safe under 10MB
 
-    println!("Creating file with {} lines for edit memory testing...", content.lines().count());
+    println!(
+        "Creating file with {} lines for edit memory testing...",
+        content.lines().count()
+    );
 
     // Write the large file
     let mut write_args = serde_json::Map::new();
@@ -3745,27 +3872,37 @@ async fn test_large_file_edit_memory_usage() {
 
     let mut edit_args = serde_json::Map::new();
     edit_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
-    edit_args.insert("old_string".to_string(), json!("MEMORY_TEST_PATTERN: original_content_here"));
-    edit_args.insert("new_string".to_string(), json!("MEMORY_TEST_PATTERN: modified_content_here"));
+    edit_args.insert(
+        "old_string".to_string(),
+        json!("MEMORY_TEST_PATTERN: original_content_here"),
+    );
+    edit_args.insert(
+        "new_string".to_string(),
+        json!("MEMORY_TEST_PATTERN: modified_content_here"),
+    );
     edit_args.insert("replace_all".to_string(), json!(false));
 
     let result = edit_tool.execute(edit_args, &context).await;
     assert!(result.is_ok());
 
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta for single edit: {} ({})", 
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta for single edit: {} ({})",
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // Single edit should use reasonable memory
         let file_size = fs::metadata(&large_file).unwrap().len() as usize;
         let max_expected_memory = file_size * 2; // Allow 2x file size
 
-        assert!(abs_delta < max_expected_memory,
-               "Single edit memory usage {} exceeds expected maximum {}",
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "Single edit memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     }
 
     // Test replace_all memory usage
@@ -3774,26 +3911,33 @@ async fn test_large_file_edit_memory_usage() {
     let mut edit_all_args = serde_json::Map::new();
     edit_all_args.insert("file_path".to_string(), json!(large_file.to_string_lossy()));
     edit_all_args.insert("old_string".to_string(), json!("original_content_here"));
-    edit_all_args.insert("new_string".to_string(), json!("completely_new_content_here"));
+    edit_all_args.insert(
+        "new_string".to_string(),
+        json!("completely_new_content_here"),
+    );
     edit_all_args.insert("replace_all".to_string(), json!(true));
 
     let result = edit_tool.execute(edit_all_args, &context).await;
     assert!(result.is_ok());
 
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta for replace_all: {} ({})", 
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta for replace_all: {} ({})",
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // Replace_all may use more memory but should still be reasonable
         let file_size = fs::metadata(&large_file).unwrap().len() as usize;
         let max_expected_memory = file_size * 3; // Allow 3x file size for replace_all
 
-        assert!(abs_delta < max_expected_memory,
-               "Replace_all memory usage {} exceeds expected maximum {}",
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "Replace_all memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     } else {
         println!("Memory profiling not available on this platform");
     }
@@ -3803,7 +3947,7 @@ async fn test_large_file_edit_memory_usage() {
 async fn test_concurrent_operations_memory_usage() {
     let registry = Arc::new(create_test_registry());
     let context = Arc::new(create_test_context().await);
-    
+
     let temp_dir = TempDir::new().unwrap();
 
     println!("Testing memory usage during concurrent file operations...");
@@ -3820,25 +3964,28 @@ async fn test_concurrent_operations_memory_usage() {
 
         join_set.spawn(async move {
             let file_path = temp_dir_path.join(format!("concurrent_file_{}.txt", i));
-            
+
             // Generate content for each file
             let content = format!("Concurrent test content for file {}\n", i).repeat(1000);
-            
+
             // Write file
             let write_tool = registry_clone.get_tool("files_write").unwrap();
             let mut write_args = serde_json::Map::new();
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
-            
-            let write_result = write_tool.execute(write_args, &*context_clone).await;
-            
+
+            let write_result = write_tool.execute(write_args, &context_clone).await;
+
             // Read file back
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert("absolute_path".to_string(), json!(file_path.to_string_lossy()));
-            
-            let read_result = read_tool.execute(read_args, &*context_clone).await;
-            
+            read_args.insert(
+                "absolute_path".to_string(),
+                json!(file_path.to_string_lossy()),
+            );
+
+            let read_result = read_tool.execute(read_args, &context_clone).await;
+
             (write_result, read_result)
         });
     }
@@ -3846,32 +3993,38 @@ async fn test_concurrent_operations_memory_usage() {
     // Wait for all operations to complete
     let mut success_count = 0;
     while let Some(result) = join_set.join_next().await {
-        match result.unwrap() {
-            (Ok(_), Ok(_)) => success_count += 1,
-            _ => {}
+        if let (Ok(_), Ok(_)) = result.unwrap() {
+            success_count += 1;
         }
     }
 
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta for {} concurrent operations: {} ({})", 
-                success_count,
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta for {} concurrent operations: {} ({})",
+            success_count,
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // Concurrent operations should not cause excessive memory usage
         // Allow reasonable overhead for tokio runtime and file handles
         let max_expected_memory = 50_000_000; // 50MB max for 20 concurrent operations
 
-        assert!(abs_delta < max_expected_memory,
-               "Concurrent operations memory usage {} exceeds expected maximum {}",
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "Concurrent operations memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     } else {
         println!("Memory profiling not available on this platform");
     }
 
-    assert_eq!(success_count, 20, "All concurrent operations should succeed");
+    assert_eq!(
+        success_count, 20,
+        "All concurrent operations should succeed"
+    );
 }
 
 // ============================================================================
@@ -3882,7 +4035,7 @@ async fn test_concurrent_operations_memory_usage() {
 async fn test_high_concurrency_stress_test() {
     let registry = Arc::new(create_test_registry());
     let context = Arc::new(create_test_context().await);
-    
+
     let temp_dir = TempDir::new().unwrap();
 
     println!("Running high concurrency stress test with 100 simultaneous operations...");
@@ -3901,48 +4054,54 @@ async fn test_high_concurrency_stress_test() {
 
         join_set.spawn(async move {
             let file_path = temp_dir_path.join(format!("stress_test_file_{}.txt", i));
-            
+
             // Generate varied content sizes to stress different code paths
             let content_size = 1000 + (i % 10) * 500; // Vary from 1K to 5.5K characters
             let content = format!("Stress test content for file {}\n", i).repeat(content_size);
-            
+
             // Write file
             let write_tool = registry_clone.get_tool("files_write").unwrap();
             let mut write_args = serde_json::Map::new();
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
-            
-            let write_result = write_tool.execute(write_args, &*context_clone).await;
-            
+
+            let write_result = write_tool.execute(write_args, &context_clone).await;
+
             if write_result.is_err() {
                 return Err("Write failed");
             }
-            
+
             // Read file back to verify
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert("absolute_path".to_string(), json!(file_path.to_string_lossy()));
-            
-            let read_result = read_tool.execute(read_args, &*context_clone).await;
-            
+            read_args.insert(
+                "absolute_path".to_string(),
+                json!(file_path.to_string_lossy()),
+            );
+
+            let read_result = read_tool.execute(read_args, &context_clone).await;
+
             if read_result.is_err() {
                 return Err("Read failed");
             }
-            
+
             // Perform edit operation
             let edit_tool = registry_clone.get_tool("files_edit").unwrap();
             let mut edit_args = serde_json::Map::new();
             edit_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             edit_args.insert("old_string".to_string(), json!(format!("file {}", i)));
-            edit_args.insert("new_string".to_string(), json!(format!("FILE {} (edited)", i)));
+            edit_args.insert(
+                "new_string".to_string(),
+                json!(format!("FILE {} (edited)", i)),
+            );
             edit_args.insert("replace_all".to_string(), json!(true));
-            
-            let edit_result = edit_tool.execute(edit_args, &*context_clone).await;
-            
+
+            let edit_result = edit_tool.execute(edit_args, &context_clone).await;
+
             if edit_result.is_err() {
                 return Err("Edit failed");
             }
-            
+
             Ok(())
         });
     }
@@ -3967,34 +4126,49 @@ async fn test_high_concurrency_stress_test() {
 
     // Check memory usage
     if let Some(delta) = profiler.memory_delta() {
-        let abs_delta = delta.abs() as usize;
-        println!("Memory delta for 100 concurrent operations: {} ({})", 
-                if delta >= 0 { "+" } else { "-" }, 
-                MemoryProfiler::format_bytes(abs_delta));
+        let abs_delta = delta.unsigned_abs();
+        println!(
+            "Memory delta for 100 concurrent operations: {} ({})",
+            if delta >= 0 { "+" } else { "-" },
+            MemoryProfiler::format_bytes(abs_delta)
+        );
 
         // High concurrency should still maintain reasonable memory usage
         let max_expected_memory = 200_000_000; // 200MB max for 100 concurrent operations
 
-        assert!(abs_delta < max_expected_memory,
-               "High concurrency memory usage {} exceeds expected maximum {}",
-               MemoryProfiler::format_bytes(abs_delta),
-               MemoryProfiler::format_bytes(max_expected_memory));
+        assert!(
+            abs_delta < max_expected_memory,
+            "High concurrency memory usage {} exceeds expected maximum {}",
+            MemoryProfiler::format_bytes(abs_delta),
+            MemoryProfiler::format_bytes(max_expected_memory)
+        );
     }
 
     // Most operations should succeed (allow for some failures due to resource constraints)
-    assert!(success_count >= 90, "At least 90% of operations should succeed, got {}/100", success_count);
-    assert!(total_duration.as_secs() < 120, "High concurrency test should complete within 2 minutes");
+    assert!(
+        success_count >= 90,
+        "At least 90% of operations should succeed, got {}/100",
+        success_count
+    );
+    assert!(
+        total_duration.as_secs() < 120,
+        "High concurrency test should complete within 2 minutes"
+    );
 
     // Verify files were created correctly
     let files_created = std::fs::read_dir(temp_dir.path()).unwrap().count();
-    assert!(files_created >= 90, "Should create at least 90 files, created {}", files_created);
+    assert!(
+        files_created >= 90,
+        "Should create at least 90 files, created {}",
+        files_created
+    );
 }
 
 #[tokio::test]
 async fn test_mixed_operation_concurrency_stress() {
     let registry = Arc::new(create_test_registry());
     let context = Arc::new(create_test_context().await);
-    
+
     let temp_dir = TempDir::new().unwrap();
 
     println!("Running mixed operation concurrency stress test...");
@@ -4020,13 +4194,13 @@ async fn test_mixed_operation_concurrency_stress() {
         join_set.spawn(async move {
             let file_path = temp_dir_path.join(format!("new_file_{}.txt", i));
             let content = format!("New file content {}\n", i).repeat(50 + i % 50);
-            
+
             let write_tool = registry_clone.get_tool("files_write").unwrap();
             let mut write_args = serde_json::Map::new();
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
-            
-            write_tool.execute(write_args, &*context_clone).await
+
+            write_tool.execute(write_args, &context_clone).await
         });
     }
 
@@ -4039,12 +4213,15 @@ async fn test_mixed_operation_concurrency_stress() {
         join_set.spawn(async move {
             let file_index = i % base_files; // Cycle through base files
             let file_path = temp_dir_path.join(format!("base_file_{}.txt", file_index));
-            
+
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert("absolute_path".to_string(), json!(file_path.to_string_lossy()));
-            
-            read_tool.execute(read_args, &*context_clone).await
+            read_args.insert(
+                "absolute_path".to_string(),
+                json!(file_path.to_string_lossy()),
+            );
+
+            read_tool.execute(read_args, &context_clone).await
         });
     }
 
@@ -4057,15 +4234,21 @@ async fn test_mixed_operation_concurrency_stress() {
         join_set.spawn(async move {
             let file_index = i % base_files; // Cycle through base files
             let file_path = temp_dir_path.join(format!("base_file_{}.txt", file_index));
-            
+
             let edit_tool = registry_clone.get_tool("files_edit").unwrap();
             let mut edit_args = serde_json::Map::new();
             edit_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
-            edit_args.insert("old_string".to_string(), json!(format!("file {}", file_index)));
-            edit_args.insert("new_string".to_string(), json!(format!("file {} (edited by task {})", file_index, i)));
+            edit_args.insert(
+                "old_string".to_string(),
+                json!(format!("file {}", file_index)),
+            );
+            edit_args.insert(
+                "new_string".to_string(),
+                json!(format!("file {} (edited by task {})", file_index, i)),
+            );
             edit_args.insert("replace_all".to_string(), json!(false)); // Single replacement to avoid conflicts
-            
-            edit_tool.execute(edit_args, &*context_clone).await
+
+            edit_tool.execute(edit_args, &context_clone).await
         });
     }
 
@@ -4078,19 +4261,19 @@ async fn test_mixed_operation_concurrency_stress() {
         join_set.spawn(async move {
             let glob_tool = registry_clone.get_tool("files_glob").unwrap();
             let mut glob_args = serde_json::Map::new();
-            
+
             // Vary the patterns to test different scenarios
             let pattern = match i % 4 {
                 0 => "*.txt",
-                1 => "base_*.txt", 
+                1 => "base_*.txt",
                 2 => "new_file_*.txt",
                 _ => "**/*.txt",
             };
-            
+
             glob_args.insert("pattern".to_string(), json!(pattern));
             glob_args.insert("path".to_string(), json!(temp_dir_path.to_string_lossy()));
-            
-            glob_tool.execute(glob_args, &*context_clone).await
+
+            glob_tool.execute(glob_args, &context_clone).await
         });
     }
 
@@ -4112,17 +4295,28 @@ async fn test_mixed_operation_concurrency_stress() {
         success_count, error_count, total_duration
     );
 
-    // Most operations should succeed 
-    assert!(success_count >= 100, "At least 100/110 operations should succeed, got {}", success_count);
-    assert!(error_count <= 10, "Should have at most 10 errors, got {}", error_count);
-    assert!(total_duration.as_secs() < 60, "Mixed operations should complete within 1 minute");
+    // Most operations should succeed
+    assert!(
+        success_count >= 100,
+        "At least 100/110 operations should succeed, got {}",
+        success_count
+    );
+    assert!(
+        error_count <= 10,
+        "Should have at most 10 errors, got {}",
+        error_count
+    );
+    assert!(
+        total_duration.as_secs() < 60,
+        "Mixed operations should complete within 1 minute"
+    );
 }
 
 #[tokio::test]
 async fn test_concurrent_file_access_patterns() {
     let registry = Arc::new(create_test_registry());
     let context = Arc::new(create_test_context().await);
-    
+
     let temp_dir = TempDir::new().unwrap();
     let shared_file = temp_dir.path().join("shared_access_file.txt");
 
@@ -4144,15 +4338,18 @@ async fn test_concurrent_file_access_patterns() {
         join_set.spawn(async move {
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
-            read_args.insert("absolute_path".to_string(), json!(file_path.to_string_lossy()));
-            
+            read_args.insert(
+                "absolute_path".to_string(),
+                json!(file_path.to_string_lossy()),
+            );
+
             // Vary read parameters to test different code paths
             if i % 3 == 0 {
                 read_args.insert("offset".to_string(), json!(i * 100));
                 read_args.insert("limit".to_string(), json!(500));
             }
-            
-            read_tool.execute(read_args, &*context_clone).await
+
+            read_tool.execute(read_args, &context_clone).await
         });
     }
 
@@ -4165,13 +4362,13 @@ async fn test_concurrent_file_access_patterns() {
         join_set.spawn(async move {
             let file_path = temp_dir_path.join(format!("concurrent_write_{}.txt", i));
             let content = format!("Concurrent write operation {}\n", i).repeat(100);
-            
+
             let write_tool = registry_clone.get_tool("files_write").unwrap();
             let mut write_args = serde_json::Map::new();
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
-            
-            write_tool.execute(write_args, &*context_clone).await
+
+            write_tool.execute(write_args, &context_clone).await
         });
     }
 
@@ -4184,18 +4381,18 @@ async fn test_concurrent_file_access_patterns() {
         join_set.spawn(async move {
             let grep_tool = registry_clone.get_tool("files_grep").unwrap();
             let mut grep_args = serde_json::Map::new();
-            
+
             let pattern = if i % 2 == 0 {
                 "SHARED_FILE_CONTENT"
             } else {
                 "initial data"
             };
-            
+
             grep_args.insert("pattern".to_string(), json!(pattern));
             grep_args.insert("path".to_string(), json!(temp_dir_path.to_string_lossy()));
             grep_args.insert("output_mode".to_string(), json!("files_with_matches"));
-            
-            grep_tool.execute(grep_args, &*context_clone).await
+
+            grep_tool.execute(grep_args, &context_clone).await
         });
     }
 
@@ -4218,14 +4415,23 @@ async fn test_concurrent_file_access_patterns() {
     );
 
     // All operations should succeed as they're designed to be compatible
-    assert_eq!(success_count, 100, "All 100 concurrent operations should succeed");
+    assert_eq!(
+        success_count, 100,
+        "All 100 concurrent operations should succeed"
+    );
     assert_eq!(error_count, 0, "Should have no errors");
-    assert!(total_duration.as_secs() < 30, "Concurrent access should complete within 30 seconds");
+    assert!(
+        total_duration.as_secs() < 30,
+        "Concurrent access should complete within 30 seconds"
+    );
 
     // Verify the shared file still exists and is readable
     assert!(shared_file.exists());
     let final_content = std::fs::read_to_string(&shared_file).unwrap();
-    assert!(!final_content.is_empty(), "Shared file should still have content");
+    assert!(
+        !final_content.is_empty(),
+        "Shared file should still have content"
+    );
 }
 
 // ============================================================================
@@ -4247,49 +4453,65 @@ async fn test_write_read_roundtrip_properties() {
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
-    
+
     // Test various file path and content combinations
     let repeated_content = "Pattern ".repeat(100);
     let test_cases = vec![
         ("simple.txt", "Hello, world!"),
         ("nested/path/file.txt", "Content with\nmultiple lines"),
-        ("unicode_file.txt", "Unicode content: 🦀 Rust is awesome! 中文测试"),
+        (
+            "unicode_file.txt",
+            "Unicode content: 🦀 Rust is awesome! 中文测试",
+        ),
         ("empty_file.txt", ""),
-        ("special_chars.txt", "Content with !@#$%^&*() special characters"),
+        (
+            "special_chars.txt",
+            "Content with !@#$%^&*() special characters",
+        ),
         ("repeated.txt", repeated_content.as_str()),
-        ("long_path/deep/nested/structure/file.txt", "Deep nesting test"),
+        (
+            "long_path/deep/nested/structure/file.txt",
+            "Deep nesting test",
+        ),
     ];
 
     for (file_path, content) in test_cases {
         let temp_dir = TempDir::new().unwrap();
         let full_path = temp_dir.path().join(file_path);
-        
+
         // Ensure parent directory exists
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
-        
+
         // Write file
         let mut write_args = serde_json::Map::new();
         write_args.insert("file_path".to_string(), json!(full_path.to_string_lossy()));
         write_args.insert("content".to_string(), json!(content));
-        
+
         let write_result = write_tool.execute(write_args, &context).await;
         if write_result.is_err() {
             continue; // Some file paths may be invalid
         }
-        
+
         // Read file back
         let mut read_args = serde_json::Map::new();
-        read_args.insert("absolute_path".to_string(), json!(full_path.to_string_lossy()));
-        
+        read_args.insert(
+            "absolute_path".to_string(),
+            json!(full_path.to_string_lossy()),
+        );
+
         let read_result = read_tool.execute(read_args, &context).await;
         match read_result {
             Ok(response) => {
                 let read_content = extract_text_content(&response.content[0].raw);
-                assert_eq!(read_content, content, "Content mismatch for file: {}", file_path);
-            },
-            Err(e) => panic!("Read failed for file {}: {:?}", file_path, e)
+                assert_eq!(
+                    read_content, content,
+                    "Content mismatch for file: {}",
+                    file_path
+                );
+            }
+            Err(e) => panic!("Read failed for file {}: {:?}", file_path, e),
         }
     }
 }
@@ -4301,7 +4523,7 @@ async fn test_edit_operation_consistency_properties() {
     let write_tool = registry.get_tool("files_write").unwrap();
     let edit_tool = registry.get_tool("files_edit").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
-    
+
     // Test various edit scenarios
     let test_cases = vec![
         ("Hello world", "world", "universe", false),
@@ -4314,33 +4536,36 @@ async fn test_edit_operation_consistency_properties() {
     for (original_content, old_string, new_string, replace_all) in test_cases {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("edit_test.txt");
-        
+
         // Write original file
         let mut write_args = serde_json::Map::new();
         write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
         write_args.insert("content".to_string(), json!(original_content));
-        
+
         write_tool.execute(write_args, &context).await.unwrap();
-        
+
         // Perform edit
         let mut edit_args = serde_json::Map::new();
         edit_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
         edit_args.insert("old_string".to_string(), json!(old_string));
         edit_args.insert("new_string".to_string(), json!(new_string));
         edit_args.insert("replace_all".to_string(), json!(replace_all));
-        
+
         let edit_result = edit_tool.execute(edit_args, &context).await;
         if edit_result.is_err() {
             continue; // Edit might fail for valid reasons
         }
-        
+
         // Read back and verify
         let mut read_args = serde_json::Map::new();
-        read_args.insert("absolute_path".to_string(), json!(file_path.to_string_lossy()));
-        
+        read_args.insert(
+            "absolute_path".to_string(),
+            json!(file_path.to_string_lossy()),
+        );
+
         let response = read_tool.execute(read_args, &context).await.unwrap();
         let edited_content = extract_text_content(&response.content[0].raw);
-        
+
         if replace_all {
             // All instances should be replaced
             assert!(!edited_content.contains(old_string) || edited_content.contains(new_string));
@@ -4358,7 +4583,7 @@ async fn test_glob_pattern_consistency_properties() {
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let glob_tool = registry.get_tool("files_glob").unwrap();
-    
+
     // Test different file extensions and patterns
     let test_cases = vec![
         (vec!["txt", "txt", "txt"], "*.txt", 3),
@@ -4369,24 +4594,24 @@ async fn test_glob_pattern_consistency_properties() {
 
     for (extensions, pattern, expected_count) in test_cases {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // Create files with specified extensions
         for (i, ext) in extensions.iter().enumerate() {
             let file_path = temp_dir.path().join(format!("test_file_{}.{}", i, ext));
             let content = format!("Content for file {}", i);
-            
+
             let mut write_args = serde_json::Map::new();
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
             write_args.insert("content".to_string(), json!(content));
-            
+
             write_tool.execute(write_args, &context).await.ok();
         }
-        
+
         // Test glob pattern
         let mut glob_args = serde_json::Map::new();
         glob_args.insert("pattern".to_string(), json!(pattern));
         glob_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
-        
+
         let result = glob_tool.execute(glob_args, &context).await;
         if let Ok(response) = result {
             let response_text = extract_text_content(&response.content[0].raw);
@@ -4394,18 +4619,23 @@ async fn test_glob_pattern_consistency_properties() {
                 0
             } else {
                 // Count only lines that look like file paths (start with / or are relative paths)
-                response_text.lines()
+                response_text
+                    .lines()
                     .filter(|line| {
                         let trimmed = line.trim();
-                        !trimmed.is_empty() && 
-                        !trimmed.starts_with("Found") && 
-                        !trimmed.starts_with("No files") &&
-                        (trimmed.starts_with("/") || trimmed.contains("."))
+                        !trimmed.is_empty()
+                            && !trimmed.starts_with("Found")
+                            && !trimmed.starts_with("No files")
+                            && (trimmed.starts_with("/") || trimmed.contains("."))
                     })
                     .count()
             };
-            
-            assert_eq!(files_found, expected_count, "Glob pattern '{}' should find {} files", pattern, expected_count);
+
+            assert_eq!(
+                files_found, expected_count,
+                "Glob pattern '{}' should find {} files",
+                pattern, expected_count
+            );
         }
     }
 }
@@ -4416,57 +4646,78 @@ async fn test_read_offset_limit_consistency_properties() {
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let read_tool = registry.get_tool("files_read").unwrap();
-    
+
     // Create content with multiple lines for line-based testing
-    let lines: Vec<String> = (1..=20).map(|i| format!("Line {}: Content for line {}", i, i)).collect();
+    let lines: Vec<String> = (1..=20)
+        .map(|i| format!("Line {}: Content for line {}", i, i))
+        .collect();
     let content = lines.join("\n");
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("offset_limit_test.txt");
-    
+
     // Write file
     let mut write_args = serde_json::Map::new();
     write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
     write_args.insert("content".to_string(), json!(content));
     write_tool.execute(write_args, &context).await.unwrap();
-    
+
     // Test various line-based offset/limit combinations
     let test_cases = vec![
-        (1, 5),     // Read first 5 lines (1-based indexing)
-        (5, 3),     // Read 3 lines starting from line 5
-        (10, 10),   // Read 10 lines starting from line 10
-        (18, 5),    // Read near end (should be limited by file size)
-        (25, 3),    // Offset beyond file (should fail or return empty)
+        (1, 5),   // Read first 5 lines (1-based indexing)
+        (5, 3),   // Read 3 lines starting from line 5
+        (10, 10), // Read 10 lines starting from line 10
+        (18, 5),  // Read near end (should be limited by file size)
+        (25, 3),  // Offset beyond file (should fail or return empty)
     ];
 
     for (offset, limit) in test_cases {
         let mut read_args = serde_json::Map::new();
-        read_args.insert("absolute_path".to_string(), json!(file_path.to_string_lossy()));
+        read_args.insert(
+            "absolute_path".to_string(),
+            json!(file_path.to_string_lossy()),
+        );
         read_args.insert("offset".to_string(), json!(offset));
         read_args.insert("limit".to_string(), json!(limit));
-        
+
         match read_tool.execute(read_args, &context).await {
             Ok(response) => {
                 let read_content = extract_text_content(&response.content[0].raw);
                 let read_lines: Vec<&str> = read_content.lines().collect();
-                
+
                 // Assert that we don't exceed the requested limit
-                assert!(read_lines.len() <= limit, "Read content should not exceed limit of {} lines, got {}", limit, read_lines.len());
-                
+                assert!(
+                    read_lines.len() <= limit,
+                    "Read content should not exceed limit of {} lines, got {}",
+                    limit,
+                    read_lines.len()
+                );
+
                 // If offset is within the file, check content matches expected lines
                 if offset <= lines.len() {
                     let start_index = offset.saturating_sub(1); // Convert to 0-based indexing
                     let end_index = std::cmp::min(start_index + limit, lines.len());
                     let expected_lines = &lines[start_index..end_index];
-                    
-                    assert_eq!(read_lines.len(), expected_lines.len(), "Should read expected number of lines");
-                    for (i, (actual, expected)) in read_lines.iter().zip(expected_lines.iter()).enumerate() {
+
+                    assert_eq!(
+                        read_lines.len(),
+                        expected_lines.len(),
+                        "Should read expected number of lines"
+                    );
+                    for (i, (actual, expected)) in
+                        read_lines.iter().zip(expected_lines.iter()).enumerate()
+                    {
                         assert_eq!(actual, expected, "Line {} content should match", i + 1);
                     }
                 }
-            },
+            }
             Err(_) => {
                 // Offset beyond file size is acceptable
-                assert!(offset > lines.len(), "Read should only fail if offset is beyond file size (offset: {}, lines: {})", offset, lines.len());
+                assert!(
+                    offset > lines.len(),
+                    "Read should only fail if offset is beyond file size (offset: {}, lines: {})",
+                    offset,
+                    lines.len()
+                );
             }
         }
     }
@@ -4478,9 +4729,9 @@ async fn test_grep_pattern_robustness_properties() {
     let context = create_test_context().await;
     let write_tool = registry.get_tool("files_write").unwrap();
     let grep_tool = registry.get_tool("files_grep").unwrap();
-    
+
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Test various content and pattern combinations
     let test_cases = vec![
         ("Hello world testing", "world", true),
@@ -4495,21 +4746,21 @@ async fn test_grep_pattern_robustness_properties() {
 
     for (i, (content, _pattern, _should_match)) in test_cases.iter().enumerate() {
         let file_path = temp_dir.path().join(format!("grep_test_{}.txt", i));
-        
+
         // Write file
         let mut write_args = serde_json::Map::new();
         write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
         write_args.insert("content".to_string(), json!(content));
         write_tool.execute(write_args, &context).await.unwrap();
     }
-    
+
     // Test each pattern
-    for (_i, (content, pattern, should_match)) in test_cases.iter().enumerate() {
+    for (content, pattern, should_match) in test_cases.iter() {
         let mut grep_args = serde_json::Map::new();
         grep_args.insert("pattern".to_string(), json!(pattern));
         grep_args.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
         grep_args.insert("output_mode".to_string(), json!("files_with_matches"));
-        
+
         match grep_tool.execute(grep_args, &context).await {
             Ok(response) => {
                 let response_text = extract_text_content(&response.content[0].raw);
@@ -4518,18 +4769,28 @@ async fn test_grep_pattern_robustness_properties() {
                 } else {
                     response_text.lines().count()
                 };
-                
+
                 if *should_match {
-                    assert!(matches_found > 0, "Pattern '{}' should find matches in content '{}'", pattern, content);
+                    assert!(
+                        matches_found > 0,
+                        "Pattern '{}' should find matches in content '{}'",
+                        pattern,
+                        content
+                    );
                 } else if content.is_empty() {
                     // Empty files might not be found at all
                     // This is acceptable behavior
                 } else {
                     // For non-empty content that shouldn't match, we might still find the file
                     // but the pattern shouldn't be in the content
-                    assert!(!content.contains(pattern), "Content '{}' should not contain pattern '{}'", content, pattern);
+                    assert!(
+                        !content.contains(pattern),
+                        "Content '{}' should not contain pattern '{}'",
+                        content,
+                        pattern
+                    );
                 }
-            },
+            }
             Err(_) => {
                 // Some patterns might cause regex errors, which is acceptable
                 println!("Grep failed for pattern '{}' (acceptable)", pattern);

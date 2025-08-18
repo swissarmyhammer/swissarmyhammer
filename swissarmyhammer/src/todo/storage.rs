@@ -231,7 +231,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_todo_item() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -256,7 +256,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_next_todo_item() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -289,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn test_mark_complete() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -316,7 +316,7 @@ mod tests {
     #[tokio::test]
     async fn test_mark_complete_partial() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -357,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_specific_item() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -409,7 +409,7 @@ mod tests {
     #[tokio::test]
     async fn test_validation_errors() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -436,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn test_nonexistent_list() {
         let _guard = IsolatedTestHome::new();
-        
+
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");

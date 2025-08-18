@@ -148,7 +148,10 @@ async fn test_max_transition_limit() {
             // Test passed
         }
         other => {
-            panic!("Expected TransitionLimitExceeded with limit {}, but got: {:?}", MAX_TRANSITIONS, other);
+            panic!(
+                "Expected TransitionLimitExceeded with limit {}, but got: {:?}",
+                MAX_TRANSITIONS, other
+            );
         }
     }
 }

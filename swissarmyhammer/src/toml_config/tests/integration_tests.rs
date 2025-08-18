@@ -319,7 +319,7 @@ fn test_template_integration() {
 #[test]
 fn test_file_discovery_from_different_directories() {
     use std::panic;
-    
+
     let temp_dir = TempDir::new().unwrap();
 
     // Create repository structure

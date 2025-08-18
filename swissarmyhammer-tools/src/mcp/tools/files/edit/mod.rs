@@ -116,7 +116,6 @@ impl EditFileTool {
             ));
         }
 
-
         Ok(EditValidation { old_string_count })
     }
 

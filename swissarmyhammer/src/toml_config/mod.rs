@@ -261,7 +261,7 @@ mod module_tests {
     #[test]
     fn test_load_repo_config_wrapper() {
         use std::panic;
-        
+
         // This test creates a temporary directory structure and tests repo config loading
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
@@ -278,10 +278,8 @@ mod module_tests {
         std::env::set_current_dir(&sub_dir).unwrap();
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
-        let result = panic::catch_unwind(|| {
-            load_repo_config_wrapper()
-        });
-        
+        let result = panic::catch_unwind(load_repo_config_wrapper);
+
         // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
 
