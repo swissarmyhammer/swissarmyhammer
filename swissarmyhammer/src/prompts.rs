@@ -8,18 +8,15 @@
 //! Creating and rendering a simple prompt:
 //!
 //! ```
-//! use swissarmyhammer::{Prompt, ArgumentSpec};
+//! use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
 //! use std::collections::HashMap;
 //!
 //! let prompt = Prompt::new("greet", "Hello {{name}}!")
 //!     .with_description("A greeting prompt")
-//!     .add_argument(ArgumentSpec {
-//!         name: "name".to_string(),
-//!         description: Some("Name to greet".to_string()),
-//!         required: true,
-//!         default: None,
-//!         type_hint: Some("string".to_string()),
-//!     });
+//!     .add_parameter(
+//!         Parameter::new("name", "Name to greet", ParameterType::String)
+//!             .required(true)
+//!     );
 //!
 //! let mut args = HashMap::new();
 //! args.insert("name".to_string(), "World".to_string());
@@ -71,27 +68,21 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```
-/// use swissarmyhammer::{Prompt, ArgumentSpec};
+/// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
 /// use std::collections::HashMap;
 ///
 /// // Create a prompt programmatically
 /// let prompt = Prompt::new("debug", "Debug this {{language}} error: {{error}}")
 ///     .with_description("Helps debug programming errors")
 ///     .with_category("debugging")
-///     .add_argument(ArgumentSpec {
-///         name: "error".to_string(),
-///         description: Some("The error message".to_string()),
-///         required: true,
-///         default: None,
-///         type_hint: Some("string".to_string()),
-///     })
-///     .add_argument(ArgumentSpec {
-///         name: "language".to_string(),
-///         description: Some("Programming language".to_string()),
-///         required: false,
-///         default: Some("unknown".to_string()),
-///         type_hint: Some("string".to_string()),
-///     });
+///     .add_parameter(
+///         Parameter::new("error", "The error message", ParameterType::String)
+///             .required(true)
+///     )
+///     .add_parameter(
+///         Parameter::new("language", "Programming language", ParameterType::String)
+///             .with_default(serde_json::Value::String("unknown".to_string()))
+///     );
 ///
 /// // Render with arguments
 /// let mut args = HashMap::new();
@@ -142,19 +133,11 @@ pub struct Prompt {
     /// - Filters: `{{text | upper}}`
     pub template: String,
 
-    /// Specifications for template arguments.
+    /// Parameter specifications for template arguments.
     ///
-    /// Defines what arguments the template expects, whether they're required,
+    /// Defines what parameters the template expects, whether they're required,
     /// default values, and documentation. Used for validation and help generation.
-    #[serde(rename = "parameters")]
-    pub arguments: Vec<ArgumentSpec>,
-
-    /// Cached shared parameters converted from arguments.
-    ///
-    /// This field is lazily populated to provide efficient access to the shared
-    /// parameter system without breaking backward compatibility.
-    #[serde(skip)]
-    cached_parameters: std::sync::OnceLock<Vec<Parameter>>,
+    pub parameters: Vec<Parameter>,
 
     /// Path to the source file (if loaded from file).
     ///
@@ -170,115 +153,10 @@ pub struct Prompt {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
-/// Specification for a template argument.
-///
-/// Defines metadata about an argument that a template expects, including
-/// whether it's required, default values, and documentation. Used for
-/// validation, help generation, and IDE support.
-///
-/// # Examples
-///
-/// ```
-/// use swissarmyhammer::ArgumentSpec;
-///
-/// // Required argument with no default
-/// let required_arg = ArgumentSpec {
-///     name: "filename".to_string(),
-///     description: Some("Path to the file to process".to_string()),
-///     required: true,
-///     default: None,
-///     type_hint: Some("path".to_string()),
-/// };
-///
-/// // Optional argument with default value
-/// let optional_arg = ArgumentSpec {
-///     name: "format".to_string(),
-///     description: Some("Output format".to_string()),
-///     required: false,
-///     default: Some("markdown".to_string()),
-///     type_hint: Some("string".to_string()),
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArgumentSpec {
-    /// The name of the argument as used in templates.
-    ///
-    /// This is how the argument is referenced in the template (e.g., `{{filename}}`).
-    /// Should be a valid identifier using letters, numbers, and underscores.
-    pub name: String,
-
-    /// Human-readable description of the argument's purpose.
-    ///
-    /// Used in help text and documentation generation. Should explain
-    /// what the argument is for and any constraints or expected formats.
-    pub description: Option<String>,
-
-    /// Whether this argument must be provided.
-    ///
-    /// If `true`, template rendering will fail if this argument is not provided
-    /// and no default value is specified.
-    pub required: bool,
-
-    /// Default value to use if the argument is not provided.
-    ///
-    /// Only used when `required` is `false` or when the user doesn't provide
-    /// a value for a required argument. The default is used as-is in the template.
-    pub default: Option<String>,
-
-    /// Type hint for the argument.
-    ///
-    /// Helps tools and users understand what kind of value is expected.
-    /// Common values: "string", "number", "boolean", "path", "url", "json".
-    /// This is primarily for documentation and tooling support.
-    pub type_hint: Option<String>,
-}
-
-impl ArgumentSpec {
-    /// Convert this ArgumentSpec to the shared Parameter type
-    pub fn to_parameter(&self) -> Parameter {
-        let parameter_type = if let Some(type_hint) = &self.type_hint {
-            type_hint.parse().unwrap_or(ParameterType::String)
-        } else {
-            ParameterType::String // Default to string
-        };
-
-        let mut param = Parameter::new(
-            &self.name,
-            self.description.clone().unwrap_or_default(),
-            parameter_type,
-        )
-        .required(self.required);
-
-        if let Some(default) = &self.default {
-            param = param.with_default(serde_json::Value::String(default.clone()));
-        }
-
-        param
-    }
-}
-
-impl From<Parameter> for ArgumentSpec {
-    /// Convert a shared Parameter back to ArgumentSpec for backward compatibility
-    fn from(param: Parameter) -> Self {
-        Self {
-            name: param.name,
-            description: Some(param.description),
-            required: param.required,
-            default: param.default.and_then(|v| v.as_str().map(String::from)),
-            type_hint: Some(param.parameter_type.as_str().to_string()),
-        }
-    }
-}
-
 impl ParameterProvider for Prompt {
-    /// Get the parameters for this prompt by converting from ArgumentSpec
+    /// Get the parameters for this prompt
     fn get_parameters(&self) -> &[Parameter] {
-        self.cached_parameters.get_or_init(|| {
-            self.arguments
-                .iter()
-                .map(|arg_spec| arg_spec.to_parameter())
-                .collect()
-        })
+        &self.parameters
     }
 }
 
@@ -287,7 +165,7 @@ impl Prompt {
     ///
     /// This is the minimal constructor for a prompt. Additional metadata can be added
     /// using the builder methods like [`with_description`](Self::with_description),
-    /// [`with_category`](Self::with_category), and [`add_argument`](Self::add_argument).
+    /// [`with_category`](Self::with_category), and [`add_parameter`](Self::add_parameter).
     ///
     /// # Arguments
     ///
@@ -310,8 +188,7 @@ impl Prompt {
             category: None,
             tags: Vec::new(),
             template: template.into(),
-            arguments: Vec::new(),
-            cached_parameters: std::sync::OnceLock::new(),
+            parameters: Vec::new(),
             source: None,
             metadata: HashMap::new(),
         }
@@ -341,17 +218,14 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{Prompt, ArgumentSpec};
+    /// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
     /// use std::collections::HashMap;
     ///
     /// let prompt = Prompt::new("greet", "Hello {{name}}!")
-    ///     .add_argument(ArgumentSpec {
-    ///         name: "name".to_string(),
-    ///         description: None,
-    ///         required: true,
-    ///         default: None,
-    ///         type_hint: None,
-    ///     });
+    ///     .add_parameter(
+    ///         Parameter::new("name", "", ParameterType::String)
+    ///             .required(true)
+    ///     );
     ///
     /// let mut args = HashMap::new();
     /// args.insert("name".to_string(), "Alice".to_string());
@@ -362,12 +236,12 @@ impl Prompt {
     pub fn render(&self, args: &HashMap<String, String>) -> Result<String> {
         let template = Template::new(&self.template)?;
 
-        // Validate required arguments
-        for arg in &self.arguments {
-            if arg.required && !args.contains_key(&arg.name) {
+        // Validate required parameters
+        for param in &self.parameters {
+            if param.required && !args.contains_key(&param.name) {
                 return Err(SwissArmyHammerError::Template(format!(
-                    "Required argument '{}' not provided",
-                    arg.name
+                    "Required parameter '{}' not provided",
+                    param.name
                 )));
             }
         }
@@ -375,11 +249,18 @@ impl Prompt {
         // Start with all provided arguments
         let mut render_args = args.clone();
 
-        // Add defaults for missing arguments
-        for arg in &self.arguments {
-            if !render_args.contains_key(&arg.name) {
-                if let Some(default) = &arg.default {
-                    render_args.insert(arg.name.clone(), default.clone());
+        // Add defaults for missing parameters
+        for param in &self.parameters {
+            if !render_args.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    // Convert JSON default value to string for template rendering
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    render_args.insert(param.name.clone(), default_str);
                 }
             }
         }
@@ -414,12 +295,12 @@ impl Prompt {
     pub fn render_with_env(&self, args: &HashMap<String, String>) -> Result<String> {
         let template = Template::new(&self.template)?;
 
-        // Validate required arguments
-        for arg in &self.arguments {
-            if arg.required && !args.contains_key(&arg.name) {
+        // Validate required parameters
+        for param in &self.parameters {
+            if param.required && !args.contains_key(&param.name) {
                 return Err(SwissArmyHammerError::Template(format!(
-                    "Required argument '{}' not provided",
-                    arg.name
+                    "Required parameter '{}' not provided",
+                    param.name
                 )));
             }
         }
@@ -427,11 +308,18 @@ impl Prompt {
         // Start with all provided arguments
         let mut render_args = args.clone();
 
-        // Add defaults for missing arguments
-        for arg in &self.arguments {
-            if !render_args.contains_key(&arg.name) {
-                if let Some(default) = &arg.default {
-                    render_args.insert(arg.name.clone(), default.clone());
+        // Add defaults for missing parameters
+        for param in &self.parameters {
+            if !render_args.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    // Convert JSON default value to string for template rendering
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    render_args.insert(param.name.clone(), default_str);
                 }
             }
         }
@@ -480,12 +368,12 @@ impl Prompt {
     ) -> Result<String> {
         let template = crate::Template::with_partials(&self.template, library)?;
 
-        // Validate required arguments
-        for arg in &self.arguments {
-            if arg.required && !args.contains_key(&arg.name) {
+        // Validate required parameters
+        for param in &self.parameters {
+            if param.required && !args.contains_key(&param.name) {
                 return Err(SwissArmyHammerError::Template(format!(
-                    "Required argument '{}' not provided",
-                    arg.name
+                    "Required parameter '{}' not provided",
+                    param.name
                 )));
             }
         }
@@ -493,11 +381,18 @@ impl Prompt {
         // Start with all provided arguments
         let mut render_args = args.clone();
 
-        // Add defaults for missing arguments
-        for arg in &self.arguments {
-            if !render_args.contains_key(&arg.name) {
-                if let Some(default) = &arg.default {
-                    render_args.insert(arg.name.clone(), default.clone());
+        // Add defaults for missing parameters
+        for param in &self.parameters {
+            if !render_args.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    // Convert JSON default value to string for template rendering
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    render_args.insert(param.name.clone(), default_str);
                 }
             }
         }
@@ -549,12 +444,12 @@ impl Prompt {
     ) -> Result<String> {
         let template = crate::Template::with_partials(&self.template, library)?;
 
-        // Validate required arguments
-        for arg in &self.arguments {
-            if arg.required && !args.contains_key(&arg.name) {
+        // Validate required parameters
+        for param in &self.parameters {
+            if param.required && !args.contains_key(&param.name) {
                 return Err(SwissArmyHammerError::Template(format!(
-                    "Required argument '{}' not provided",
-                    arg.name
+                    "Required parameter '{}' not provided",
+                    param.name
                 )));
             }
         }
@@ -562,11 +457,18 @@ impl Prompt {
         // Start with all provided arguments
         let mut render_args = args.clone();
 
-        // Add defaults for missing arguments
-        for arg in &self.arguments {
-            if !render_args.contains_key(&arg.name) {
-                if let Some(default) = &arg.default {
-                    render_args.insert(arg.name.clone(), default.clone());
+        // Add defaults for missing parameters
+        for param in &self.parameters {
+            if !render_args.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    // Convert JSON default value to string for template rendering
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    render_args.insert(param.name.clone(), default_str);
                 }
             }
         }
@@ -574,37 +476,32 @@ impl Prompt {
         template.render_with_config(&render_args)
     }
 
-    /// Adds an argument specification to the prompt.
+    /// Adds a parameter specification to the prompt.
     ///
-    /// Arguments define what inputs the template expects, whether they're required,
+    /// Parameters define what inputs the template expects, whether they're required,
     /// and provide documentation for users of the prompt.
     ///
     /// # Arguments
     ///
-    /// * `arg` - The argument specification to add
+    /// * `param` - The parameter specification to add
     ///
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{Prompt, ArgumentSpec};
+    /// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
     ///
     /// let prompt = Prompt::new("example", "Processing {{file}}")
-    ///     .add_argument(ArgumentSpec {
-    ///         name: "file".to_string(),
-    ///         description: Some("Path to input file".to_string()),
-    ///         required: true,
-    ///         default: None,
-    ///         type_hint: Some("path".to_string()),
-    ///     });
+    ///     .add_parameter(
+    ///         Parameter::new("file", "Path to input file", ParameterType::String)
+    ///             .required(true)
+    ///     );
     ///
-    /// assert_eq!(prompt.arguments.len(), 1);
-    /// assert_eq!(prompt.arguments[0].name, "file");
+    /// assert_eq!(prompt.parameters.len(), 1);
+    /// assert_eq!(prompt.parameters[0].name, "file");
     /// ```
     #[must_use]
-    pub fn add_argument(mut self, arg: ArgumentSpec) -> Self {
-        self.arguments.push(arg);
-        // Clear the cached parameters since arguments have changed
-        self.cached_parameters = std::sync::OnceLock::new();
+    pub fn add_parameter(mut self, param: Parameter) -> Self {
+        self.parameters.push(param);
         self
     }
 
@@ -837,9 +734,12 @@ impl Prompt {
             }
         }
 
-        // Check if all used variables are defined in arguments or sah.toml
-        let defined_args: std::collections::HashSet<String> =
-            self.arguments.iter().map(|arg| arg.name.clone()).collect();
+        // Check if all used variables are defined in parameters or sah.toml
+        let defined_params: std::collections::HashSet<String> = self
+            .parameters
+            .iter()
+            .map(|param| param.name.clone())
+            .collect();
 
         // Also include variables from sah.toml configuration
         let mut defined_config_vars = std::collections::HashSet::new();
@@ -855,8 +755,8 @@ impl Prompt {
                 continue;
             }
 
-            // Check if it's defined in arguments or sah.toml configuration
-            if !defined_args.contains(used_var) && !defined_config_vars.contains(used_var) {
+            // Check if it's defined in parameters or sah.toml configuration
+            if !defined_params.contains(used_var) && !defined_config_vars.contains(used_var) {
                 issues.push(ValidationIssue {
                     level: ValidationLevel::Error,
                     file_path: file_path.to_path_buf(),
@@ -865,40 +765,40 @@ impl Prompt {
                     column: None,
                     message: format!("Undefined template variable: '{used_var}'"),
                     suggestion: Some(format!(
-                        "Add '{used_var}' to the arguments list, define it in sah.toml, or remove the template variable"
+                        "Add '{used_var}' to the parameters list, define it in sah.toml, or remove the template variable"
                     )),
                 });
             }
         }
 
-        // Check for unused arguments (warning)
-        for arg in &self.arguments {
-            if !used_variables.contains(&arg.name) {
+        // Check for unused parameters (warning)
+        for param in &self.parameters {
+            if !used_variables.contains(&param.name) {
                 issues.push(ValidationIssue {
                     level: ValidationLevel::Warning,
                     file_path: file_path.to_path_buf(),
                     content_title: Some(self.name.clone()),
                     line: None,
                     column: None,
-                    message: format!("Unused argument: '{}'", arg.name),
+                    message: format!("Unused parameter: '{}'", param.name),
                     suggestion: Some(format!(
-                        "Remove '{}' from arguments or use it in the template",
-                        arg.name
+                        "Remove '{}' from parameters or use it in the template",
+                        param.name
                     )),
                 });
             }
         }
 
-        // Check if template has variables but no arguments defined
-        if !used_variables.is_empty() && self.arguments.is_empty() {
+        // Check if template has variables but no parameters defined
+        if !used_variables.is_empty() && self.parameters.is_empty() {
             issues.push(ValidationIssue {
                 level: ValidationLevel::Warning,
                 file_path: file_path.to_path_buf(),
                 content_title: Some(self.name.clone()),
                 line: None,
                 column: None,
-                message: "Template uses variables but no arguments are defined".to_string(),
-                suggestion: Some("Define arguments for the template variables".to_string()),
+                message: "Template uses variables but no parameters are defined".to_string(),
+                suggestion: Some("Define parameters for the template variables".to_string()),
             });
         }
 
@@ -1414,27 +1314,47 @@ impl PromptLoader {
                             .unwrap_or_default()
                             .to_string();
 
-                        let arg_spec = ArgumentSpec {
+                        // Parse parameter type from type field
+                        let param_type = arg_obj
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|s| s.parse().unwrap_or(ParameterType::String))
+                            .unwrap_or(ParameterType::String);
+
+                        let mut param = Parameter::new(
                             name,
-                            description: arg_obj
+                            arg_obj
                                 .get("description")
                                 .and_then(serde_json::Value::as_str)
-                                .map(String::from),
-                            required: arg_obj
-                                .get("required")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false),
-                            default: arg_obj
-                                .get("default")
-                                .and_then(serde_json::Value::as_str)
-                                .map(String::from),
-                            type_hint: arg_obj
-                                .get("type")
-                                .and_then(serde_json::Value::as_str)
-                                .map(String::from),
-                        };
+                                .unwrap_or_default(),
+                            param_type,
+                        );
 
-                        prompt.arguments.push(arg_spec);
+                        // Set required flag
+                        param.required = arg_obj
+                            .get("required")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+
+                        // Set default value if provided
+                        if let Some(default_val) = arg_obj.get("default") {
+                            param.default = Some(default_val.clone());
+                        }
+
+                        // Handle choices if provided
+                        if let Some(choices_val) = arg_obj.get("choices") {
+                            if let Some(choices_arr) = choices_val.as_array() {
+                                let choices: Vec<String> = choices_arr
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect();
+                                if !choices.is_empty() {
+                                    param.choices = Some(choices);
+                                }
+                            }
+                        }
+
+                        prompt.parameters.push(param);
                     }
                 }
             }
@@ -1540,31 +1460,53 @@ impl PromptLoader {
             if let Some(args) = args_array {
                 for arg in args {
                     if let Some(arg_obj) = arg.as_object() {
-                        let arg_spec = ArgumentSpec {
-                            name: arg_obj
-                                .get("name")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                            description: arg_obj
+                        let name = arg_obj
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+
+                        // Parse parameter type from type field
+                        let param_type = arg_obj
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|s| s.parse().unwrap_or(ParameterType::String))
+                            .unwrap_or(ParameterType::String);
+
+                        let mut param = Parameter::new(
+                            name,
+                            arg_obj
                                 .get("description")
                                 .and_then(serde_json::Value::as_str)
-                                .map(String::from),
-                            required: arg_obj
-                                .get("required")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false),
-                            default: arg_obj
-                                .get("default")
-                                .and_then(serde_json::Value::as_str)
-                                .map(String::from),
-                            type_hint: arg_obj
-                                .get("type")
-                                .and_then(serde_json::Value::as_str)
-                                .map(String::from),
-                        };
+                                .unwrap_or_default(),
+                            param_type,
+                        );
 
-                        prompt.arguments.push(arg_spec);
+                        // Set required flag
+                        param.required = arg_obj
+                            .get("required")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+
+                        // Set default value if provided
+                        if let Some(default_val) = arg_obj.get("default") {
+                            param.default = Some(default_val.clone());
+                        }
+
+                        // Handle choices if provided
+                        if let Some(choices_val) = arg_obj.get("choices") {
+                            if let Some(choices_arr) = choices_val.as_array() {
+                                let choices: Vec<String> = choices_arr
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect();
+                                if !choices.is_empty() {
+                                    param.choices = Some(choices);
+                                }
+                            }
+                        }
+
+                        prompt.parameters.push(param);
                     }
                 }
             }
@@ -1652,6 +1594,7 @@ impl Default for PromptLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::{Parameter, ParameterType};
 
     #[test]
     fn test_prompt_creation() {
@@ -1662,13 +1605,8 @@ mod tests {
 
     #[test]
     fn test_prompt_render() {
-        let prompt = Prompt::new("test", "Hello {{ name }}!").add_argument(ArgumentSpec {
-            name: "name".to_string(),
-            description: None,
-            required: true,
-            default: None,
-            type_hint: None,
-        });
+        let prompt = Prompt::new("test", "Hello {{ name }}!")
+            .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
         let mut args = HashMap::new();
         args.insert("name".to_string(), "World".to_string());
@@ -1812,13 +1750,9 @@ This is another prompt.
     fn test_shared_parameter_system_integration() {
         use crate::common::ParameterProvider;
 
-        let prompt = Prompt::new("test", "Hello {{name}}!").add_argument(ArgumentSpec {
-            name: "name".to_string(),
-            description: Some("Name to greet".to_string()),
-            required: true,
-            default: None,
-            type_hint: Some("string".to_string()),
-        });
+        let prompt = Prompt::new("test", "Hello {{name}}!").add_parameter(
+            Parameter::new("name", "Name to greet", ParameterType::String).required(true),
+        );
 
         // Test that ParameterProvider trait works
         let parameters = prompt.get_parameters();

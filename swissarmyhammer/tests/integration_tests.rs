@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
+use swissarmyhammer::common::{Parameter, ParameterType};
 use swissarmyhammer::prelude::*;
-use swissarmyhammer::ArgumentSpec;
 use tempfile::TempDir;
 
 use rmcp::ServerHandler;
@@ -30,20 +30,14 @@ fn test_prompt_creation_and_rendering() {
 #[test]
 fn test_prompt_with_arguments() {
     let prompt = Prompt::new("complex", "{{ greeting }}, {{ name }}!")
-        .add_argument(ArgumentSpec {
-            name: "greeting".to_string(),
-            description: Some("The greeting to use".to_string()),
-            required: true,
-            default: None,
-            type_hint: Some("string".to_string()),
-        })
-        .add_argument(ArgumentSpec {
-            name: "name".to_string(),
-            description: Some("The name to greet".to_string()),
-            required: false,
-            default: Some("Friend".to_string()),
-            type_hint: Some("string".to_string()),
-        });
+        .add_parameter(
+            Parameter::new("greeting", "The greeting to use", ParameterType::String).required(true),
+        )
+        .add_parameter(
+            Parameter::new("name", "The name to greet", ParameterType::String)
+                .required(false)
+                .with_default(serde_json::Value::String("Friend".to_string())),
+        );
 
     // Test with all arguments provided
     let mut args = HashMap::new();
@@ -63,13 +57,8 @@ fn test_prompt_with_arguments() {
 
 #[test]
 fn test_missing_required_argument() {
-    let prompt = Prompt::new("test", "Hello {{ name }}!").add_argument(ArgumentSpec {
-        name: "name".to_string(),
-        description: None,
-        required: true,
-        default: None,
-        type_hint: None,
-    });
+    let prompt = Prompt::new("test", "Hello {{ name }}!")
+        .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
     let args = HashMap::new();
     let result = prompt.render(&args);
@@ -285,20 +274,14 @@ fn test_example_usage() {
     let greeting_prompt = Prompt::new("greeting", "Hello {{ name }}! Welcome to {{ place }}.")
         .with_description("A friendly greeting prompt")
         .with_category("examples")
-        .add_argument(ArgumentSpec {
-            name: "name".to_string(),
-            description: Some("The person's name".to_string()),
-            required: true,
-            default: None,
-            type_hint: Some("string".to_string()),
-        })
-        .add_argument(ArgumentSpec {
-            name: "place".to_string(),
-            description: Some("The location".to_string()),
-            required: false,
-            default: Some("our application".to_string()),
-            type_hint: Some("string".to_string()),
-        });
+        .add_parameter(
+            Parameter::new("name", "The person's name", ParameterType::String).required(true),
+        )
+        .add_parameter(
+            Parameter::new("place", "The location", ParameterType::String)
+                .required(false)
+                .with_default(serde_json::Value::String("our application".to_string())),
+        );
 
     // Add to library
     library.add(greeting_prompt).unwrap();

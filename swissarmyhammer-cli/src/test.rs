@@ -119,7 +119,7 @@ impl TestRunner {
         let mut args = HashMap::new();
         let theme = ColorfulTheme::default();
 
-        if prompt.arguments.is_empty() {
+        if prompt.parameters.is_empty() {
             println!("{}", "ℹ No arguments required for this prompt".blue());
             return Ok(args);
         }
@@ -132,26 +132,24 @@ impl TestRunner {
         );
         println!();
 
-        for arg in &prompt.arguments {
+        for arg in &prompt.parameters {
             let prompt_text = if arg.required {
-                format!(
-                    "{} (required): {}",
-                    arg.name.bold(),
-                    arg.description.as_deref().unwrap_or("")
-                )
+                format!("{} (required): {}", arg.name.bold(), &arg.description)
             } else {
-                format!(
-                    "{} (optional): {}",
-                    arg.name.bold(),
-                    arg.description.as_deref().unwrap_or("")
-                )
+                format!("{} (optional): {}", arg.name.bold(), &arg.description)
             };
 
             loop {
                 let mut input = Input::<String>::with_theme(&theme).with_prompt(&prompt_text);
 
                 if let Some(default) = &arg.default {
-                    input = input.default(default.clone()).show_default(true);
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    input = input.default(default_str).show_default(true);
                 }
 
                 match input.interact_text() {
@@ -164,7 +162,13 @@ impl TestRunner {
                         if !value.is_empty() {
                             args.insert(arg.name.clone(), value);
                         } else if let Some(default) = &arg.default {
-                            args.insert(arg.name.clone(), default.clone());
+                            let default_str = match default {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                _ => default.to_string(),
+                            };
+                            args.insert(arg.name.clone(), default_str);
                         }
                         break;
                     }
@@ -185,15 +189,21 @@ impl TestRunner {
     ) -> Result<HashMap<String, String>> {
         let mut args = HashMap::new();
 
-        if prompt.arguments.is_empty() {
+        if prompt.parameters.is_empty() {
             return Ok(args);
         }
 
         // In non-interactive mode, only use default values for optional arguments
         // Required arguments without defaults will cause template to show undefined variable placeholders
-        for arg in &prompt.arguments {
+        for arg in &prompt.parameters {
             if let Some(default) = &arg.default {
-                args.insert(arg.name.clone(), default.clone());
+                let default_str = match default {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    _ => default.to_string(),
+                };
+                args.insert(arg.name.clone(), default_str);
             }
         }
 
@@ -304,7 +314,7 @@ pub fn get_prompt_validation(prompt: &Prompt) -> (Vec<String>, Vec<String>) {
     let mut warnings = Vec::new();
 
     // Check for required arguments
-    for arg in &prompt.arguments {
+    for arg in &prompt.parameters {
         if arg.required && arg.default.is_none() {
             errors.push(format!(
                 "Required argument '{}' has no default value",
@@ -315,7 +325,7 @@ pub fn get_prompt_validation(prompt: &Prompt) -> (Vec<String>, Vec<String>) {
 
     // Check for unused arguments in template
     let template_vars = extract_template_variables(&prompt.template);
-    for arg in &prompt.arguments {
+    for arg in &prompt.parameters {
         if !template_vars.contains(&arg.name) {
             warnings.push(format!(
                 "Argument '{}' is defined but not used in template",
@@ -326,7 +336,7 @@ pub fn get_prompt_validation(prompt: &Prompt) -> (Vec<String>, Vec<String>) {
 
     // Check for undefined variables in template
     for var in &template_vars {
-        if !prompt.arguments.iter().any(|arg| &arg.name == var) {
+        if !prompt.parameters.iter().any(|arg| &arg.name == var) {
             errors.push(format!(
                 "Template variable '{{{{ {var} }}}}' is not defined in arguments"
             ));
@@ -349,7 +359,7 @@ fn extract_template_variables(template: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer::prompts::ArgumentSpec;
+    use swissarmyhammer::common::{Parameter, ParameterType};
 
     #[test]
     fn test_runner_creation() {
@@ -379,20 +389,12 @@ mod tests {
     #[test]
     fn test_get_prompt_validation() {
         let prompt = Prompt::new("test", "Hello {{ name }}!")
-            .add_argument(ArgumentSpec {
-                name: "name".to_string(),
-                description: None,
-                required: true,
-                default: None,
-                type_hint: None,
-            })
-            .add_argument(ArgumentSpec {
-                name: "unused".to_string(),
-                description: None,
-                required: false,
-                default: Some("default".to_string()),
-                type_hint: None,
-            });
+            .add_parameter(Parameter::new("name", "", ParameterType::String).required(true))
+            .add_parameter(
+                Parameter::new("unused", "", ParameterType::String)
+                    .required(false)
+                    .with_default(serde_json::Value::String("default".to_string())),
+            );
 
         let (errors, warnings) = get_prompt_validation(&prompt);
 

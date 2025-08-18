@@ -222,7 +222,7 @@ pub fn generate_excerpt(content: &str, query: &str, highlight: bool) -> Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ArgumentSpec, Prompt};
+    use crate::{common::Parameter, common::ParameterType, Prompt};
 
     fn create_test_prompts() -> Vec<Prompt> {
         vec![
@@ -299,16 +299,12 @@ mod tests {
         let engine = AdvancedSearchEngine::new().unwrap();
         let mut prompts = create_test_prompts();
 
-        // Add a prompt with an argument
-        let mut prompt_with_arg =
-            Prompt::new("arg_test", "Test {{input}}").with_description("Has arguments");
-        prompt_with_arg = prompt_with_arg.add_argument(ArgumentSpec {
-            name: "input".to_string(),
-            description: None,
-            required: true,
-            default: None,
-            type_hint: None,
-        });
+        // Add a prompt with a parameter
+        let prompt_with_arg = Prompt::new("arg_test", "Test {{input}}")
+            .with_description("Has parameters")
+            .add_parameter(
+                Parameter::new("input", "Input value", ParameterType::String).required(true),
+            );
         prompts.push(prompt_with_arg);
 
         // Search for prompts with no arguments
