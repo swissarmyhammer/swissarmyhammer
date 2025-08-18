@@ -691,7 +691,7 @@ Examples:
   swissarmyhammer prompt test -f my-prompt.md                       # Test file
   swissarmyhammer prompt test help --var topic=git                  # Non-interactive
   swissarmyhammer prompt test plan --debug --save output.md         # Debug + save
-  swissarmyhammer prompt test code-review --set author=John --set version=1.0  # With template variables
+  swissarmyhammer prompt test code-review --var author=John --var version=1.0  # With template variables
 ")]
     Test {
         /// Prompt name to test (alternative to --file)
@@ -705,7 +705,7 @@ Examples:
         #[arg(long = "var", alias = "arg", value_name = "KEY=VALUE")]
         vars: Vec<String>,
 
-        /// Set template variables for liquid rendering as key=value pairs
+        /// Set template variables as key=value pairs (alias for --var)
         #[arg(long = "set", value_name = "KEY=VALUE")]
         set: Vec<String>,
 
@@ -813,7 +813,7 @@ pub enum FlowSubcommand {
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
 
-        /// Set template variables for liquid rendering in action strings as key=value pairs
+        /// Set template variables as key=value pairs (alias for --var)
         #[arg(long = "set", value_name = "KEY=VALUE")]
         set: Vec<String>,
 
@@ -955,11 +955,11 @@ Features:
 Usage:
   swissarmyhammer flow test my-workflow
   swissarmyhammer flow test my-workflow --var key=value
-  swissarmyhammer flow test my-workflow --set template_var=value
+  swissarmyhammer flow test my-workflow --var template_var=value
 
 Examples:
   swissarmyhammer flow test hello-world                               # Test basic workflow
-  swissarmyhammer flow test greeting --set name=John --set language=Spanish  # With template variables
+  swissarmyhammer flow test greeting --var name=John --var language=Spanish  # With template variables
   swissarmyhammer flow test code-review --var file=main.rs --timeout 60s     # With vars and timeout
   swissarmyhammer flow test deploy --interactive                      # Step-by-step execution
 
@@ -974,7 +974,7 @@ for better discoverability and clearer intent.
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
 
-        /// Set template variables for liquid rendering in action strings as key=value pairs
+        /// Set template variables as key=value pairs (alias for --var)
         #[arg(long = "set", value_name = "KEY=VALUE")]
         set: Vec<String>,
 
@@ -1735,7 +1735,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_test_subcommand_with_set_variables() {
+    fn test_cli_test_subcommand_with_var_variables() {
         let result = Cli::try_parse_from_args([
             "swissarmyhammer",
             "prompt",
@@ -1743,9 +1743,9 @@ mod tests {
             "help",
             "--var",
             "topic=git",
-            "--set",
+            "--var",
             "author=John",
-            "--set",
+            "--var",
             "version=1.0",
         ]);
         assert!(result.is_ok());
@@ -1765,8 +1765,8 @@ mod tests {
             {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
-                assert_eq!(vars, vec!["topic=git"]);
-                assert_eq!(set, vec!["author=John", "version=1.0"]);
+                assert_eq!(vars, vec!["topic=git", "author=John", "version=1.0"]);
+                assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
                 assert_eq!(save, None);
@@ -2029,9 +2029,9 @@ mod tests {
             "my-workflow",
             "--var",
             "input=test",
-            "--set",
+            "--var",
             "author=Jane",
-            "--set",
+            "--var",
             "version=2.0",
             "--interactive",
             "--timeout",
@@ -2052,8 +2052,8 @@ mod tests {
             } = subcommand
             {
                 assert_eq!(workflow, "my-workflow");
-                assert_eq!(vars, vec!["input=test"]);
-                assert_eq!(set, vec!["author=Jane", "version=2.0"]);
+                assert_eq!(vars, vec!["input=test", "author=Jane", "version=2.0"]);
+                assert!(set.is_empty());
                 assert!(interactive);
                 assert_eq!(timeout, Some("30s".to_string()));
                 assert!(quiet);

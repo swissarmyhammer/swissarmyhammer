@@ -15,7 +15,6 @@ pub struct TestConfig {
     pub prompt_name: Option<String>,
     pub file: Option<String>,
     pub arguments: Vec<String>,
-    pub set: Vec<String>,
     pub raw: bool,
     pub copy: bool,
     pub save: Option<String>,
@@ -41,7 +40,7 @@ impl TestRunner {
         let prompt = self.get_prompt(config.prompt_name.as_deref(), config.file.as_deref())?;
 
         // Collect arguments
-        let mut args = if config.arguments.is_empty() {
+        let args = if config.arguments.is_empty() {
             // Interactive mode - but only if we're in a terminal
             if atty::is(atty::Stream::Stdin) {
                 self.collect_arguments_interactive(&prompt)?
@@ -54,14 +53,7 @@ impl TestRunner {
             self.parse_arguments(&config.arguments)?
         };
 
-        // Parse and add set variables for liquid template rendering
-        let set_variables = self.parse_arguments(&config.set)?;
-        if !set_variables.is_empty() {
-            // Add set variables to the args map for liquid rendering
-            // NOTE: --set variables take precedence over prompt arguments with the same name
-            // This allows users to override default argument values using template variables
-            args.extend(set_variables);
-        }
+        // All template variables are now passed through the regular --var mechanism
 
         // Show debug information if requested
         if config.debug {

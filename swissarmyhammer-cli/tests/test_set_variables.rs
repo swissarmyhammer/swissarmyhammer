@@ -125,7 +125,7 @@ stateDiagram-v2
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid set variable format"))
+        .stderr(predicate::str::contains("Invalid variable format"))
         .stderr(predicate::str::contains("key=value"));
 }
 
@@ -169,9 +169,12 @@ stateDiagram-v2
         .arg("--dry-run")
         .current_dir(&temp_dir);
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "Variables: {\"context_var\": String(\"value1\")",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("context_var"))
+        .stdout(predicate::str::contains("template_var"))
+        .stdout(predicate::str::contains("value1"))
+        .stdout(predicate::str::contains("value2"));
 }
 
 #[test]

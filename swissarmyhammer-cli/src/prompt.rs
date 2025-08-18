@@ -26,12 +26,15 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             save,
             debug,
         } => {
+            // Combine --var and --set parameters, with --set taking precedence
+            let mut all_vars = vars;
+            all_vars.extend(set);
+            
             let mut runner = test::TestRunner::new();
             let config = test::TestConfig {
                 prompt_name,
                 file,
-                arguments: vars,
-                set,
+                arguments: all_vars,
                 raw,
                 copy,
                 save,

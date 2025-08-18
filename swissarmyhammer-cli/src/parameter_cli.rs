@@ -16,7 +16,6 @@ use swissarmyhammer::Result;
 pub fn resolve_workflow_parameters_interactive(
     workflow_name: &str,
     var_args: &[String],
-    _set_args: &[String], // Reserved for future --set liquid template variable integration
     interactive: bool,
 ) -> Result<HashMap<String, Value>> {
     // Phase 1: Discover workflow parameters
@@ -79,8 +78,7 @@ mod tests {
 
     #[test]
     fn test_resolve_workflow_parameters_empty() {
-        let result =
-            resolve_workflow_parameters_interactive("nonexistent-workflow", &[], &[], false);
+        let result = resolve_workflow_parameters_interactive("nonexistent-workflow", &[], false);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
@@ -99,11 +97,9 @@ mod tests {
 
         let workflow_name = "greeting";
         let empty_vars: &[String] = &[];
-        let empty_set: &[String] = &[];
 
         // Test with explicit interactive = false and no vars - should fail for required params
-        let result =
-            resolve_workflow_parameters_interactive(workflow_name, empty_vars, empty_set, false);
+        let result = resolve_workflow_parameters_interactive(workflow_name, empty_vars, false);
 
         // In test environment (no terminal), this should fail for required parameters
         assert!(result.is_err());
@@ -112,19 +108,15 @@ mod tests {
 
         // Test with explicit interactive = true - should succeed (uses interactive resolver)
         let result_interactive =
-            resolve_workflow_parameters_interactive(workflow_name, empty_vars, empty_set, true);
+            resolve_workflow_parameters_interactive(workflow_name, empty_vars, true);
         // Even with interactive=true, it may still fail in test environment due to stdin not being available
         // So we just test that the function can be called without panic
         let _ = result_interactive; // Don't assert success as it depends on test environment
 
         // Test with provided vars - should succeed
         let vars_with_values = vec!["person_name=TestUser".to_string()];
-        let result_with_vars = resolve_workflow_parameters_interactive(
-            workflow_name,
-            &vars_with_values,
-            empty_set,
-            false,
-        );
+        let result_with_vars =
+            resolve_workflow_parameters_interactive(workflow_name, &vars_with_values, false);
         assert!(result_with_vars.is_ok());
     }
 }
