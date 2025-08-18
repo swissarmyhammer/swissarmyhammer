@@ -91,70 +91,26 @@ pub fn generate_grouped_help_text(
     help.push_str(&format!("Execute workflow: {workflow_name}\n\n"));
     help.push_str(&format!("{workflow_description}\n\n"));
 
-    let grouped_params = provider.get_parameters_by_group();
+    let parameters = provider.get_parameters();
 
-    // Sort groups to ensure consistent output: general group last
-    let mut group_names: Vec<_> = grouped_params.keys().collect();
-    group_names.sort_by(|a, b| {
-        if *a == "general" {
-            std::cmp::Ordering::Greater
-        } else if *b == "general" {
-            std::cmp::Ordering::Less
-        } else {
-            a.cmp(b)
+    if !parameters.is_empty() {
+        help.push_str("Parameters:\n");
+
+        // List all parameters in a flat list
+        for param in parameters {
+            let switch_name = parameter_name_to_cli_switch(&param.name);
+            let param_help = generate_parameter_help_text_shared(param);
+            let required_indicator = if param.required { " (required)" } else { "" };
+
+            help.push_str(&format!(
+                "  {switch_name:<20} {param_help}{required_indicator}\n"
+            ));
         }
-    });
 
-    for group_name in group_names {
-        if let Some(group_params) = grouped_params.get(group_name) {
-            if group_params.is_empty() {
-                continue;
-            }
-
-            // Find group metadata for custom description
-            let group_title = if let Some(groups) = provider.get_parameter_groups() {
-                if let Some(group) = groups.iter().find(|g| &g.name == group_name) {
-                    format!("{}:", capitalize_words(&group.name))
-                } else {
-                    format!("{}:", capitalize_words(group_name))
-                }
-            } else {
-                format!("{}:", capitalize_words(group_name))
-            };
-
-            help.push_str(&format!("{group_title}\n"));
-
-            // List parameters in group
-            for param in group_params {
-                let switch_name = parameter_name_to_cli_switch(&param.name);
-                let param_help = generate_parameter_help_text_shared(param);
-                let required_indicator = if param.required { " (required)" } else { "" };
-
-                help.push_str(&format!(
-                    "  {switch_name:<20} {param_help}{required_indicator}\n"
-                ));
-            }
-
-            help.push('\n');
-        }
+        help.push('\n');
     }
 
     help
-}
-
-/// Capitalize words in a string (e.g., "deployment_config" -> "Deployment Config")
-fn capitalize_words(s: &str) -> String {
-    s.replace(['_', '-'], " ")
-        .split_whitespace()
-        .map(|word| {
-            let mut chars: Vec<char> = word.chars().collect();
-            if let Some(first_char) = chars.get_mut(0) {
-                *first_char = first_char.to_ascii_uppercase();
-            }
-            chars.into_iter().collect::<String>()
-        })
-        .collect::<Vec<String>>()
-        .join(" ")
 }
 
 /// Discover workflow parameters for CLI argument generation

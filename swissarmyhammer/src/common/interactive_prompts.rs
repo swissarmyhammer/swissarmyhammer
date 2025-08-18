@@ -4,8 +4,8 @@
 //! It handles different parameter types with appropriate UI controls and validation.
 
 use crate::common::parameters::{
-    ErrorMessageEnhancer, Parameter, ParameterError, ParameterGroup, ParameterResult,
-    ParameterType, ParameterValidator,
+    ErrorMessageEnhancer, Parameter, ParameterError, ParameterResult, ParameterType,
+    ParameterValidator,
 };
 use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input, MultiSelect};
 use std::collections::HashMap;
@@ -60,121 +60,16 @@ impl InteractivePrompts {
         self.prompt_conditional_parameters(parameters, resolved)
     }
 
-    /// Prompt for parameters organized by groups
+    /// Prompt for parameters in a simple flat list
     ///
-    /// This method provides a better user experience by presenting parameters
-    /// organized into logical groups with clear headers and context.
+    /// This method prompts for all parameters without grouping.
     pub fn prompt_parameters_by_groups(
         &self,
         provider: &dyn crate::common::ParameterProvider,
         existing_values: &HashMap<String, serde_json::Value>,
     ) -> ParameterResult<HashMap<String, serde_json::Value>> {
-        let mut resolved = existing_values.clone();
-        let grouped_params = provider.get_parameters_by_group();
-
-        // Process groups in a stable order (general group last)
-        let mut group_names: Vec<_> = grouped_params.keys().collect();
-        group_names.sort_by(|a, b| {
-            if *a == "general" {
-                std::cmp::Ordering::Greater
-            } else if *b == "general" {
-                std::cmp::Ordering::Less
-            } else {
-                a.cmp(b)
-            }
-        });
-
-        for group_name in group_names {
-            if let Some(group_params) = grouped_params.get(group_name) {
-                if group_params.is_empty() {
-                    continue;
-                }
-
-                // Check if any parameters in this group need prompting
-                let needs_prompting = group_params.iter().any(|p| {
-                    !resolved.contains_key(&p.name) && self.should_prompt_parameter(p, &resolved)
-                });
-
-                if !needs_prompting {
-                    continue;
-                }
-
-                // Display group header
-                self.display_group_header(group_name, provider.get_parameter_groups());
-
-                // Process parameters in this group with conditional logic
-                let group_param_slice: Vec<Parameter> =
-                    group_params.iter().map(|&p| p.clone()).collect();
-                let group_resolved =
-                    self.prompt_conditional_parameters(&group_param_slice, resolved)?;
-                resolved = group_resolved;
-
-                if !self.non_interactive {
-                    println!(); // Blank line after group
-                }
-            }
-        }
-
-        Ok(resolved)
-    }
-
-    /// Check if a parameter should be prompted for
-    fn should_prompt_parameter(
-        &self,
-        param: &Parameter,
-        context: &HashMap<String, serde_json::Value>,
-    ) -> bool {
-        // Check if parameter has a condition
-        if let Some(condition) = &param.condition {
-            use crate::common::parameter_conditions::ConditionEvaluator;
-            let evaluator = ConditionEvaluator::new(context.clone());
-            match evaluator.evaluate(&condition.expression) {
-                Ok(condition_met) => condition_met && (param.required || param.default.is_none()),
-                Err(_) => param.required || param.default.is_none(), // Conservative approach if condition can't be evaluated
-            }
-        } else {
-            param.required || param.default.is_none()
-        }
-    }
-
-    /// Display a group header with appropriate formatting
-    fn display_group_header(&self, group_name: &str, groups: Option<&[ParameterGroup]>) {
-        if self.non_interactive {
-            return;
-        }
-
-        if let Some(groups) = groups {
-            if let Some(group) = groups.iter().find(|g| g.name == group_name) {
-                println!("┌─ {} Configuration", self.capitalize_words(&group.name));
-                println!("│  {}", group.description);
-                println!("└─");
-                return;
-            }
-        }
-
-        // Fallback for ungrouped parameters or missing group metadata
-        let display_name = if group_name == "general" {
-            "General Options"
-        } else {
-            &self.capitalize_words(group_name)
-        };
-        println!("┌─ {display_name}");
-        println!("└─");
-    }
-
-    /// Capitalize words in a string for display
-    fn capitalize_words(&self, s: &str) -> String {
-        s.replace(['_', '-'], " ")
-            .split_whitespace()
-            .map(|word| {
-                let mut chars: Vec<char> = word.chars().collect();
-                if let Some(first_char) = chars.get_mut(0) {
-                    *first_char = first_char.to_ascii_uppercase();
-                }
-                chars.into_iter().collect::<String>()
-            })
-            .collect::<Vec<String>>()
-            .join(" ")
+        let parameters = provider.get_parameters();
+        self.prompt_conditional_parameters(parameters, existing_values.clone())
     }
 
     /// Prompt for conditional parameters using iterative resolution
