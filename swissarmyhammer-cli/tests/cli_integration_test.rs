@@ -1401,11 +1401,11 @@ parameters:
     required: false
     description: This variable is defined but not used in template
   - name: used_var
-    required: true
+    required: false
     description: This variable is used in template
 ---
 
-This prompt uses {{ used_var }} but not unused_var, creating a warning."#,
+This prompt uses {{ used_var | default: "default_value" }} but not unused_var, creating a warning."#,
     )?;
 
     // Test in quiet mode - should produce no output for warnings only

@@ -1,7 +1,7 @@
 //! Example showing custom template filters and advanced templating
 
 use std::collections::HashMap;
-use swissarmyhammer::{ArgumentSpec, Prompt, PromptLibrary, TemplateEngine};
+use swissarmyhammer::{Prompt, PromptLibrary, TemplateEngine, common::{Parameter, ParameterType}};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a template engine
@@ -78,41 +78,26 @@ Fixes: {{ issues }}
 "#,
     )
     .with_description("Generate conventional commit messages")
-    .add_argument(ArgumentSpec {
-        name: "type".to_string(),
-        description: Some("Commit type (feat, fix, docs, etc.)".to_string()),
-        required: true,
-        default: None,
-        type_hint: Some("string".to_string()),
-    })
-    .add_argument(ArgumentSpec {
-        name: "description".to_string(),
-        description: Some("Short description".to_string()),
-        required: true,
-        default: None,
-        type_hint: Some("string".to_string()),
-    })
-    .add_argument(ArgumentSpec {
-        name: "body".to_string(),
-        description: Some("Detailed explanation".to_string()),
-        required: false,
-        default: None,
-        type_hint: Some("string".to_string()),
-    })
-    .add_argument(ArgumentSpec {
-        name: "breaking_change".to_string(),
-        description: Some("Breaking change description".to_string()),
-        required: false,
-        default: None,
-        type_hint: Some("string".to_string()),
-    })
-    .add_argument(ArgumentSpec {
-        name: "issues".to_string(),
-        description: Some("Related issue names".to_string()),
-        required: false,
-        default: None,
-        type_hint: Some("string".to_string()),
-    });
+    .add_parameter(
+        Parameter::new("type", "Commit type (feat, fix, docs, etc.)", ParameterType::String)
+            .required(true)
+    )
+    .add_parameter(
+        Parameter::new("description", "Short description", ParameterType::String)
+            .required(true)
+    )
+    .add_parameter(
+        Parameter::new("body", "Detailed explanation", ParameterType::String)
+            .required(false)
+    )
+    .add_parameter(
+        Parameter::new("breaking_change", "Breaking change description", ParameterType::String)
+            .required(false)
+    )
+    .add_parameter(
+        Parameter::new("issues", "Related issue names", ParameterType::String)
+            .required(false)
+    );
 
     library.add(prompt)?;
 
