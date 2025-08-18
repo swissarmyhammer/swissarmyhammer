@@ -139,6 +139,16 @@ impl FileWatcher {
 
             self.watcher_handle = Some(handle);
             self.shutdown_tx = Some(shutdown_tx);
+            return Ok(());
+        }
+
+        #[cfg(not(test))]
+        {
+            // The resolver already returns only existing paths
+            if watch_paths.is_empty() {
+                tracing::warn!("No prompt directories found to watch");
+                return Ok(());
+            }
         }
 
         #[cfg(not(test))]
@@ -234,9 +244,8 @@ impl FileWatcher {
             // Store the handle and shutdown sender
             self.watcher_handle = Some(handle);
             self.shutdown_tx = Some(shutdown_tx);
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// Stop file watching
@@ -494,24 +503,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_watcher_restart() {
-        let _guard = IsolatedTestEnvironment::new().unwrap();
+        let guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
-        use tempfile::TempDir;
 
-        // Save original directory first
-        let original_dir = std::env::current_dir().unwrap();
-
-        // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
-        let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+        // Create .swissarmyhammer/prompts directory in the current (temporary) directory
+        let current_dir = std::env::current_dir().unwrap();
+        let test_prompts_dir = current_dir.join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.yml"), "name: test").unwrap();
-
-        // Set current directory to temp dir
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback1 = TestCallback::new();
@@ -522,24 +521,48 @@ mod tests {
         assert!(result1.is_ok());
         assert!(watcher.watcher_handle.is_some());
 
-        // Add delay to ensure watcher is fully initialized
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Reduce delays to speed up test and reduce flakiness
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Stop first watcher explicitly to ensure proper cleanup
         watcher.stop_watching_async().await;
+        // Verify cleanup completed
+        assert!(watcher.watcher_handle.is_none());
 
-        // Add delay to ensure complete cleanup
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Ensure complete cleanup - increase delay slightly to ensure previous watcher is fully stopped
+        tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+
+        // Verify the directory and file still exist before restarting
+        assert!(
+            test_prompts_dir.exists(),
+            "Test prompts directory should still exist"
+        );
+        assert!(
+            test_prompts_dir.join("test.yml").exists(),
+            "Test file should still exist"
+        );
 
         // Start watching again with second callback
         let result2 = watcher.start_watching(callback2).await;
+        if let Err(ref e) = result2 {
+            eprintln!("Second start_watching failed: {e}");
+        }
         assert!(result2.is_ok());
-        assert!(watcher.watcher_handle.is_some());
 
-        // Add delay before final cleanup
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // The watcher should now have a handle since the directory exists
+        assert!(
+            watcher.watcher_handle.is_some(),
+            "Watcher handle should be set on restart since directory exists"
+        );
+
+        // Reduce final delay
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         watcher.stop_watching_async().await;
+        assert!(watcher.watcher_handle.is_none());
+
+        // Ensure guard is not dropped until end
+        drop(guard);
     }
 
     #[derive(Clone)]
