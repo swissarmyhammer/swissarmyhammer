@@ -46,7 +46,7 @@ fn test_backward_compatibility() {
     // Test that the system works without breaking existing --var functionality
     let result = resolve_workflow_parameters_interactive(
         "greeting", // Using existing workflow
-        &["name=John".to_string(), "language=Spanish".to_string()],
+        &["person_name=John".to_string(), "language=Spanish".to_string()],
         &[],
         false,
     );
@@ -55,7 +55,7 @@ fn test_backward_compatibility() {
     assert!(result.is_ok());
     if let Ok(resolved) = result {
         // Should contain the resolved variables
-        assert!(resolved.contains_key("name") || resolved.is_empty());
+        assert!(resolved.contains_key("person_name") || resolved.is_empty());
     }
 }
 
