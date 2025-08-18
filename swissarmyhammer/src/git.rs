@@ -521,19 +521,29 @@ impl GitOperations {
 
     /// Delete a branch
     pub fn delete_branch(&self, branch_name: &str, force: bool) -> Result<()> {
+        // Check if branch exists first - if not, we've already achieved the desired outcome
+        if !self.branch_exists(branch_name)? {
+            tracing::info!(
+                "Branch '{}' does not exist - deletion already achieved",
+                branch_name
+            );
+            return Ok(());
+        }
+
+        let mut args = vec!["branch", "--delete"];
+        if force {
+            args.push("--force");
+        }
+        args.push(branch_name);
+
         let output = Command::new("git")
             .current_dir(&self.work_dir)
-            .args([
-                "branch",
-                "--delete",
-                if force { "--force" } else { "" },
-                branch_name,
-            ])
+            .args(args)
             .output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Create abort file for automatic merge failure
+            // Create abort file for delete failure
             create_abort_file(
                 &self.work_dir,
                 &format!("Failed to delete branch '{branch_name}': {stderr}"),
@@ -1836,5 +1846,77 @@ mod tests {
         let result = git_ops.create_work_branch("main_issue");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/main_issue");
+    }
+
+    #[test]
+    fn test_delete_branch_nonexistent_succeeds() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Try to delete a branch that doesn't exist - should succeed
+        let result = git_ops.delete_branch("nonexistent-branch", false);
+        assert!(
+            result.is_ok(),
+            "Deleting nonexistent branch should succeed since desired outcome is achieved"
+        );
+
+        // Verify the branch still doesn't exist
+        assert!(!git_ops.branch_exists("nonexistent-branch").unwrap());
+    }
+
+    #[test]
+    fn test_delete_branch_existing_succeeds() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Create a test branch
+        git_ops.create_work_branch("delete-test").unwrap();
+
+        // Switch back to main so we can delete the branch
+        git_ops.checkout_branch("main").unwrap();
+
+        // Verify the branch exists
+        assert!(git_ops.branch_exists("issue/delete-test").unwrap());
+
+        // Delete the branch - should succeed
+        let result = git_ops.delete_branch("issue/delete-test", false);
+        assert!(result.is_ok(), "Deleting existing branch should succeed");
+
+        // Verify the branch no longer exists
+        assert!(!git_ops.branch_exists("issue/delete-test").unwrap());
+    }
+
+    #[test]
+    fn test_delete_branch_nonexistent_then_existing() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Try to delete a branch that doesn't exist - should succeed
+        let result = git_ops.delete_branch("test-branch", false);
+        assert!(
+            result.is_ok(),
+            "First deletion of nonexistent branch should succeed"
+        );
+
+        // Create the branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "test-branch"])
+            .output()
+            .unwrap();
+
+        // Switch back to main
+        git_ops.checkout_branch("main").unwrap();
+
+        // Delete the now-existing branch - should succeed
+        let result = git_ops.delete_branch("test-branch", false);
+        assert!(result.is_ok(), "Deletion of existing branch should succeed");
+
+        // Try to delete it again - should still succeed (idempotent)
+        let result = git_ops.delete_branch("test-branch", false);
+        assert!(
+            result.is_ok(),
+            "Second deletion of now-nonexistent branch should succeed"
+        );
     }
 }
