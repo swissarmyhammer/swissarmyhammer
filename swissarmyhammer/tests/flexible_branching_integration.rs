@@ -459,7 +459,7 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.merge_issue_branch_simple(&issue_name).unwrap();
+        git.merge_issue_branch_auto(&issue_name).unwrap();
     }
 
     // Verify we're back on the correct target branch with changes

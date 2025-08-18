@@ -73,7 +73,7 @@ After comprehensive analysis and testing, I've completed the final integration a
 #### 1. Core Implementation Status ✅
 - **git.rs**: Fully implemented with `create_work_branch_with_source` method supporting flexible base branches
 - **Enhanced validation**: Prevents creating issue branches from other issue branches (prevents circular dependencies)
-- **Backwards compatibility**: Original methods (`create_work_branch_simple`, `merge_issue_branch_simple`) work unchanged
+- **Backwards compatibility**: Original methods (`create_work_branch_simple`, `merge_issue_branch_auto`) work unchanged
 - **Comprehensive error handling**: Including abort file creation for merge conflicts and deleted source branches
 
 #### 2. Testing Status ✅
@@ -91,7 +91,7 @@ After comprehensive analysis and testing, I've completed the final integration a
 - **Abort file integration**: Handles irrecoverable scenarios (deleted source branches, merge conflicts)
 
 #### 4. Backwards Compatibility ✅
-- **Simple methods preserved**: `create_work_branch`, `merge_issue_branch_simple` unchanged
+- **Simple methods preserved**: `create_work_branch`, `merge_issue_branch_auto` unchanged
 - **Main branch workflows**: Traditional main/master workflows continue to work
 - **API compatibility**: No breaking changes to existing code
 

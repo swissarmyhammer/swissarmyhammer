@@ -100,7 +100,7 @@ Successfully implemented source-aware branch creation with the following changes
 
 4. **Backward compatibility methods**:
    - `create_work_branch_simple()`: Returns `String` for existing callers
-   - `merge_issue_branch_simple()`: Uses main branch for existing callers
+   - `merge_issue_branch_auto()`: Uses main branch for existing callers
    - Both preserve original behavior for legacy code
 
 5. **Updated all callers**:

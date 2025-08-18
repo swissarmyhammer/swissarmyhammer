@@ -511,14 +511,6 @@ impl GitOperations {
         Ok(target_branch)
     }
 
-    /// Merge issue branch to source branch (backward compatibility)
-    ///
-    /// This is a convenience method that calls merge_issue_branch_auto
-    /// for backward compatibility with existing code.
-    pub fn merge_issue_branch_simple(&self, issue_name: &str) -> Result<()> {
-        self.merge_issue_branch_auto(issue_name).map(|_| ())
-    }
-
     /// Delete a branch
     pub fn delete_branch(&self, branch_name: &str, force: bool) -> Result<()> {
         // Check if branch exists first - if not, we've already achieved the desired outcome
@@ -928,7 +920,7 @@ mod tests {
             .unwrap();
 
         // Merge the branch
-        git_ops.merge_issue_branch_simple("test_issue").unwrap();
+        git_ops.merge_issue_branch_auto("test_issue").unwrap();
 
         // Verify we're on main branch
         let main_branch = git_ops.main_branch().unwrap();
@@ -946,7 +938,7 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Try to merge non-existent branch
-        let result = git_ops.merge_issue_branch_simple("non_existent_issue");
+        let result = git_ops.merge_issue_branch_auto("non_existent_issue");
         assert!(result.is_err());
     }
 
@@ -1425,7 +1417,7 @@ mod tests {
             .unwrap();
 
         // Test simple merge (should merge to main)
-        let result = git_ops.merge_issue_branch_simple("test-issue");
+        let result = git_ops.merge_issue_branch_auto("test-issue");
         assert!(result.is_ok());
 
         // Should be back on main branch
@@ -1810,8 +1802,8 @@ mod tests {
             .output()
             .unwrap();
 
-        // Test merge_issue_branch_simple
-        git_ops.merge_issue_branch_simple("test_issue").unwrap();
+        // Test merge_issue_branch_auto
+        git_ops.merge_issue_branch_auto("test_issue").unwrap();
 
         // Should be on main branch
         let main_branch = git_ops.main_branch().unwrap();

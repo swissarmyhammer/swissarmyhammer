@@ -63,7 +63,7 @@
 //! let completed = storage.mark_complete(&issue.name).await?;
 //!
 //! // 6. Merge branch
-//! git_ops.merge_issue_branch_simple(&issue.name)?;
+//! git_ops.merge_issue_branch_auto(&issue.name)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -235,6 +235,5 @@ pub use metrics::{MetricsSnapshot, Operation, PerformanceMetrics};
 // Export utilities
 pub use utils::{
     format_issue_status, get_content_from_args, get_current_issue_from_branch, get_project_status,
-    merge_issue_branch, work_on_issue, ContentSource, IssueBranchResult, IssueMergeResult,
-    ProjectStatus,
+    work_on_issue, ContentSource, IssueBranchResult, IssueMergeResult, ProjectStatus,
 };

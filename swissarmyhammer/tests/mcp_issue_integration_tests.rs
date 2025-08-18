@@ -172,7 +172,7 @@ async fn test_complete_issue_workflow() {
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
         // Merge the issue branch
-        git.merge_issue_branch_simple(issue.name.as_str()).unwrap();
+        git.merge_issue_branch_auto(issue.name.as_str()).unwrap();
 
         // Verify we're on main
         let current_branch = git.current_branch().unwrap();

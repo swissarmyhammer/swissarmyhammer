@@ -121,47 +121,6 @@ pub async fn work_on_issue<S: IssueStorage>(
     })
 }
 
-/// Merge a completed issue branch back to its source branch
-///
-/// This function encapsulates the business logic for merging issue branches:
-/// - Validates the issue exists and is completed
-/// - Uses git merge-base to determine the appropriate target branch
-/// - Optionally deletes the branch after merge
-pub async fn merge_issue_branch<S: IssueStorage>(
-    issue_name: &str,
-    storage: &S,
-    git_ops: &GitOperations,
-    delete_branch: bool,
-) -> Result<IssueMergeResult> {
-    // Get the issue to ensure it exists
-    let issue = storage.get_issue(issue_name).await?;
-
-    let branch_name = format!("issue/{}", issue.name);
-
-    // Merge the issue branch back using git merge-base to determine target
-    git_ops.merge_issue_branch_auto(&issue.name)?;
-
-    // Optionally delete the branch
-    let branch_deleted = if delete_branch {
-        match git_ops.delete_branch(&branch_name, false) {
-            Ok(()) => true,
-            Err(e) => {
-                // Log warning but don't fail the operation
-                tracing::warn!("Failed to delete branch {}: {}", branch_name, e);
-                false
-            }
-        }
-    } else {
-        false
-    };
-
-    Ok(IssueMergeResult {
-        issue,
-        branch_name,
-        branch_deleted,
-    })
-}
-
 /// Get the current issue being worked on based on git branch
 ///
 /// This function determines the current issue by parsing the git branch name
