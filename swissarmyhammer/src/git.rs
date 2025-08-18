@@ -1569,7 +1569,7 @@ mod tests {
         // Create issue branch from feature branch
         git_ops.create_work_branch("test_issue").unwrap();
 
-        // Switch back to main and delete feature branch  
+        // Switch back to main and delete feature branch
         let main_branch = git_ops.main_branch().unwrap();
         git_ops.checkout_branch(&main_branch).unwrap();
         git_ops.delete_branch("feature/test").unwrap();

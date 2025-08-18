@@ -121,7 +121,7 @@ impl FileWatcher {
 
             self.watcher_handle = Some(handle);
             self.shutdown_tx = Some(shutdown_tx);
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(test))]
@@ -515,8 +515,14 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
 
         // Verify the directory and file still exist before restarting
-        assert!(test_prompts_dir.exists(), "Test prompts directory should still exist");
-        assert!(test_prompts_dir.join("test.yml").exists(), "Test file should still exist");
+        assert!(
+            test_prompts_dir.exists(),
+            "Test prompts directory should still exist"
+        );
+        assert!(
+            test_prompts_dir.join("test.yml").exists(),
+            "Test file should still exist"
+        );
 
         // Start watching again with second callback
         let result2 = watcher.start_watching(callback2).await;
@@ -524,16 +530,19 @@ mod tests {
             eprintln!("Second start_watching failed: {e}");
         }
         assert!(result2.is_ok());
-        
+
         // The watcher should now have a handle since the directory exists
-        assert!(watcher.watcher_handle.is_some(), "Watcher handle should be set on restart since directory exists");
+        assert!(
+            watcher.watcher_handle.is_some(),
+            "Watcher handle should be set on restart since directory exists"
+        );
 
         // Reduce final delay
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         watcher.stop_watching_async().await;
         assert!(watcher.watcher_handle.is_none());
-        
+
         // Ensure guard is not dropped until end
         drop(guard);
     }
