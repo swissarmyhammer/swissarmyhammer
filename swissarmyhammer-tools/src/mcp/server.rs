@@ -310,17 +310,17 @@ impl McpServer {
     ///
     /// * `Option<Vec<PromptArgument>>` - The converted MCP arguments or None if empty
     fn convert_prompt_arguments(
-        args: &[swissarmyhammer::ArgumentSpec],
+        params: &[swissarmyhammer::common::Parameter],
     ) -> Option<Vec<PromptArgument>> {
-        if args.is_empty() {
+        if params.is_empty() {
             None
         } else {
             Some(
-                args.iter()
-                    .map(|arg| PromptArgument {
-                        name: arg.name.clone(),
-                        description: arg.description.clone(),
-                        required: Some(arg.required),
+                params.iter()
+                    .map(|param| PromptArgument {
+                        name: param.name.clone(),
+                        description: Some(param.description.clone()),
+                        required: Some(param.required),
                     })
                     .collect(),
             )
@@ -625,7 +625,7 @@ impl ServerHandler for McpServer {
                     .iter()
                     .filter(|p| !Self::is_partial_template(p)) // Filter out partial templates
                     .map(|p| {
-                        let arguments = Self::convert_prompt_arguments(&p.arguments);
+                        let arguments = Self::convert_prompt_arguments(&p.parameters);
 
                         Prompt {
                             name: p.name.clone(),

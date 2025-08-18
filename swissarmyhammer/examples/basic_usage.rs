@@ -1,7 +1,7 @@
 //! Basic usage example for SwissArmyHammer library
 
 use std::collections::HashMap;
-use swissarmyhammer::{ArgumentSpec, Prompt, PromptLibrary};
+use swissarmyhammer::{Prompt, PromptLibrary, common::{Parameter, ParameterType}};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new prompt library
@@ -31,20 +31,14 @@ Focus on:
         "review".to_string(),
         "quality".to_string(),
     ])
-    .add_argument(ArgumentSpec {
-        name: "language".to_string(),
-        description: Some("The programming language".to_string()),
-        required: true,
-        default: None,
-        type_hint: Some("string".to_string()),
-    })
-    .add_argument(ArgumentSpec {
-        name: "code".to_string(),
-        description: Some("The code to review".to_string()),
-        required: true,
-        default: None,
-        type_hint: Some("string".to_string()),
-    });
+    .add_parameter(
+        Parameter::new("language", "The programming language", ParameterType::String)
+            .required(true)
+    )
+    .add_parameter(
+        Parameter::new("code", "The code to review", ParameterType::String)
+            .required(true)
+    );
 
     // Add the prompt to the library
     library.add(code_review_prompt)?;

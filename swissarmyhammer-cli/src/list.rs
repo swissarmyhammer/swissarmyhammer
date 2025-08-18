@@ -72,13 +72,13 @@ pub fn run_list_command(
         };
 
         let arguments = prompt
-            .arguments
+            .parameters
             .iter()
-            .map(|arg| PromptArgument {
-                name: arg.name.clone(),
-                description: arg.description.clone(),
-                required: arg.required,
-                default: arg.default.clone(),
+            .map(|param| PromptArgument {
+                name: param.name.clone(),
+                description: Some(param.description.clone()),
+                required: param.required,
+                default: param.default.as_ref().and_then(|v| v.as_str().map(String::from)),
             })
             .collect();
 
