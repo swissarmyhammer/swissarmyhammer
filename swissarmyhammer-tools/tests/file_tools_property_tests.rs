@@ -101,6 +101,8 @@ proptest! {
         old_string in r"[a-zA-Z]{2,5}",
         new_string in r"[a-zA-Z]{2,5}",
     ) {
+        // Skip this test case if old_string equals new_string (not allowed by edit tool)
+        prop_assume!(old_string != new_string);
         let result = tokio_test::block_on(async {
             // Create content that definitely contains the old_string
             let test_content = format!("{} {} {}", content, old_string, content);
