@@ -1,7 +1,7 @@
 //! File reading tool for MCP operations
 //!
 //! This module provides the `ReadFileTool` for secure, validated file reading operations through
-//! the MCP protocol. The tool supports reading various file types including text files, binary 
+//! the MCP protocol. The tool supports reading various file types including text files, binary
 //! content (with base64 encoding), and provides partial reading capabilities for large files.
 //!
 //! ## Features
@@ -102,6 +102,7 @@ impl ReadFileTool {
     ///
     /// ```rust
     /// use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
+    /// use swissarmyhammer_tools::mcp::tool_registry::McpTool;
     ///
     /// let tool = ReadFileTool::new();
     /// assert_eq!(tool.name(), "files_read");
