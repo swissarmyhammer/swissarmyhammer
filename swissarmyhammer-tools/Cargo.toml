@@ -39,6 +39,10 @@ thiserror = "1.0"
 glob = { workspace = true }
 walkdir = { workspace = true }
 
+# File editing enhanced dependencies
+encoding_rs = "0.8"
+filetime = "0.2"
+
 # Web fetch functionality
 markdowndown = { workspace = true }
 url = { workspace = true }
