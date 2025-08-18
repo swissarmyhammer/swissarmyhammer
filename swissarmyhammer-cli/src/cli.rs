@@ -622,10 +622,6 @@ Examples:
         #[arg(long = "var", alias = "arg", value_name = "KEY=VALUE")]
         vars: Vec<String>,
 
-        /// Set template variables as key=value pairs (alias for --var)
-        #[arg(long = "set", value_name = "KEY=VALUE")]
-        set: Vec<String>,
-
         /// Show raw output without formatting
         #[arg(long)]
         raw: bool,
@@ -729,10 +725,6 @@ pub enum FlowSubcommand {
         /// Initial variables as key=value pairs
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
-
-        /// Set template variables as key=value pairs (alias for --var)
-        #[arg(long = "set", value_name = "KEY=VALUE")]
-        set: Vec<String>,
 
         /// Interactive mode - prompt at each state
         #[arg(short, long)]
@@ -890,10 +882,6 @@ for better discoverability and clearer intent.
         /// Initial variables as key=value pairs
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
-
-        /// Set template variables as key=value pairs (alias for --var)
-        #[arg(long = "set", value_name = "KEY=VALUE")]
-        set: Vec<String>,
 
         /// Interactive mode - prompt at each state
         #[arg(short, long)]
@@ -1254,7 +1242,6 @@ mod tests {
                 prompt_name,
                 file,
                 vars,
-                set,
                 raw,
                 copy,
                 save,
@@ -1264,7 +1251,6 @@ mod tests {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
                 assert!(vars.is_empty());
-                assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
                 assert_eq!(save, None);
@@ -1289,7 +1275,6 @@ mod tests {
                 prompt_name,
                 file,
                 vars,
-                set,
                 raw,
                 copy,
                 save,
@@ -1299,7 +1284,6 @@ mod tests {
                 assert_eq!(prompt_name, None);
                 assert_eq!(file, Some("test.md".to_string()));
                 assert!(vars.is_empty());
-                assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
                 assert_eq!(save, None);
@@ -1332,7 +1316,6 @@ mod tests {
                 prompt_name,
                 file,
                 vars,
-                set,
                 raw,
                 copy,
                 save,
@@ -1342,7 +1325,6 @@ mod tests {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
                 assert_eq!(vars, vec!["topic=git", "format=markdown"]);
-                assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
                 assert_eq!(save, None);
@@ -1376,7 +1358,6 @@ mod tests {
                 prompt_name,
                 file,
                 vars,
-                set,
                 raw,
                 copy,
                 save,
@@ -1386,7 +1367,6 @@ mod tests {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
                 assert!(vars.is_empty());
-                assert!(set.is_empty());
                 assert!(raw);
                 assert!(copy);
                 assert_eq!(save, Some("output.md".to_string()));
@@ -1421,7 +1401,6 @@ mod tests {
                 prompt_name,
                 file,
                 vars,
-                set,
                 raw,
                 copy,
                 save,
@@ -1431,7 +1410,6 @@ mod tests {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
                 assert_eq!(vars, vec!["topic=git", "author=John", "version=1.0"]);
-                assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
                 assert_eq!(save, None);
@@ -1665,7 +1643,6 @@ mod tests {
             if let FlowSubcommand::Test {
                 workflow,
                 vars,
-                set,
                 interactive,
                 timeout,
                 quiet,
@@ -1673,7 +1650,6 @@ mod tests {
             {
                 assert_eq!(workflow, "my-workflow");
                 assert!(vars.is_empty());
-                assert!(set.is_empty());
                 assert!(!interactive);
                 assert_eq!(timeout, None);
                 assert!(!quiet);
@@ -1710,7 +1686,6 @@ mod tests {
             if let FlowSubcommand::Test {
                 workflow,
                 vars,
-                set,
                 interactive,
                 timeout,
                 quiet,
@@ -1718,7 +1693,6 @@ mod tests {
             {
                 assert_eq!(workflow, "my-workflow");
                 assert_eq!(vars, vec!["input=test", "author=Jane", "version=2.0"]);
-                assert!(set.is_empty());
                 assert!(interactive);
                 assert_eq!(timeout, Some("30s".to_string()));
                 assert!(quiet);

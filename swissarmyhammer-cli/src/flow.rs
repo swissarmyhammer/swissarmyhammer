@@ -28,16 +28,13 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
         FlowSubcommand::Run {
             workflow,
             vars,
-            set,
             interactive,
             dry_run,
             test,
             timeout: timeout_str,
             quiet,
         } => {
-            // Combine --var and --set parameters, with --set taking precedence
-            let mut all_vars = vars;
-            all_vars.extend(set);
+            let all_vars = vars;
             
             run_workflow_command(WorkflowCommandConfig {
                 workflow_name: workflow,
@@ -89,14 +86,11 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
         FlowSubcommand::Test {
             workflow,
             vars,
-            set,
             interactive,
             timeout: timeout_str,
             quiet,
         } => {
-            // Combine --var and --set parameters, with --set taking precedence
-            let mut all_vars = vars;
-            all_vars.extend(set);
+            let all_vars = vars;
             
             // Run workflow in test mode - same as flow run --test
             run_workflow_command(WorkflowCommandConfig {
@@ -153,7 +147,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         let parts: Vec<&str> = var.splitn(2, '=').collect();
         if parts.len() == 2 {
             let key = parts[0].to_string();
-            // Add variable, allowing later values to override earlier ones (--set takes precedence over --var)
+            // Add variable, allowing later values to override earlier ones
             variables.insert(key, serde_json::Value::String(parts[1].to_string()));
         } else {
             return Err(SwissArmyHammerError::Other(format!(

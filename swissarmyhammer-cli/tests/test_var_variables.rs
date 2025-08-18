@@ -1,4 +1,4 @@
-//! Tests for --set variable functionality in workflows
+//! Tests for --var variable functionality in workflows
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -51,7 +51,7 @@ stateDiagram-v2
 }
 
 #[test]
-fn test_workflow_with_set_variables() {
+fn test_workflow_with_var_variables() {
     let temp_dir = TempDir::new().unwrap();
     // Create .swissarmyhammer/workflows directory in temp dir
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -67,16 +67,16 @@ fn test_workflow_with_set_variables() {
     let prompt_path = prompt_dir.join("test-prompt.md");
     fs::write(&prompt_path, create_test_prompt()).unwrap();
 
-    // Run workflow with --set variables
+    // Run workflow with --var variables
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("test-template")
-        .arg("--set")
+        .arg("--var")
         .arg("greeting=Bonjour")
-        .arg("--set")
+        .arg("--var")
         .arg("message=TestMessage")
-        .arg("--set")
+        .arg("--var")
         .arg("count=5")
         .arg("--dry-run")
         .current_dir(&temp_dir);
@@ -88,7 +88,7 @@ fn test_workflow_with_set_variables() {
 }
 
 #[test]
-fn test_invalid_set_variable_format() {
+fn test_invalid_var_variable_format() {
     let temp_dir = TempDir::new().unwrap();
     // Create .swissarmyhammer/workflows directory in temp dir
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -119,7 +119,7 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("some-workflow")
-        .arg("--set")
+        .arg("--var")
         .arg("invalid_format")
         .current_dir(&temp_dir);
 
@@ -130,7 +130,7 @@ stateDiagram-v2
 }
 
 #[test]
-fn test_set_and_var_together() {
+fn test_var_multiple_usage() {
     let temp_dir = TempDir::new().unwrap();
     // Create .swissarmyhammer/workflows directory in temp dir
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -157,14 +157,14 @@ stateDiagram-v2
     )
     .unwrap();
 
-    // Run workflow with both --var and --set
+    // Run workflow with multiple --var
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("simple")
         .arg("--var")
         .arg("context_var=value1")
-        .arg("--set")
+        .arg("--var")
         .arg("template_var=value2")
         .arg("--dry-run")
         .current_dir(&temp_dir);
@@ -221,11 +221,11 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("template-workflow")
-        .arg("--set")
+        .arg("--var")
         .arg("user_name=John Doe")
-        .arg("--set")
+        .arg("--var")
         .arg("user_id=12345")
-        .arg("--set")
+        .arg("--var")
         .arg("item_count=25")
         .current_dir(&temp_dir);
 
@@ -344,11 +344,11 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("complex-templates")
-        .arg("--set")
+        .arg("--var")
         .arg("user_name=Alice")
-        .arg("--set")
+        .arg("--var")
         .arg("task_type=Code Review")
-        .arg("--set")
+        .arg("--var")
         .arg("project_name=SwissArmyHammer")
         .arg("--dry-run") // Use dry-run since we don't want to actually execute the prompt
         .current_dir(&temp_dir);
@@ -398,9 +398,9 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("malformed-templates")
-        .arg("--set")
+        .arg("--var")
         .arg("name=Test")
-        .arg("--set")
+        .arg("--var")
         .arg("items=[1,2,3]")
         .current_dir(&temp_dir);
 
@@ -450,7 +450,7 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("injection-test")
-        .arg("--set")
+        .arg("--var")
         .arg("user_input={{ '{% raw %}' }}{{ system }}{{ '{% endraw %}' }}")
         .current_dir(&temp_dir);
 
@@ -461,7 +461,7 @@ stateDiagram-v2
 }
 
 #[test]
-fn test_workflow_with_empty_set_value() {
+fn test_workflow_with_empty_var_value() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
@@ -474,7 +474,7 @@ fn test_workflow_with_empty_set_value() {
         &workflow_path,
         r#"---
 title: Empty Value Test
-description: Tests behavior with empty set values
+description: Tests behavior with empty var values
 version: 1.0.0
 ---
 
@@ -491,14 +491,14 @@ stateDiagram-v2
     )
     .unwrap();
 
-    // Run workflow with empty set value
+    // Run workflow with empty var value
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("empty-value-test")
-        .arg("--set")
+        .arg("--var")
         .arg("name=")
-        .arg("--set")
+        .arg("--var")
         .arg("description=")
         .current_dir(&temp_dir);
 
@@ -509,7 +509,7 @@ stateDiagram-v2
 }
 
 #[test]
-fn test_workflow_with_special_chars_in_set_values() {
+fn test_workflow_with_special_chars_in_var_values() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
@@ -522,7 +522,7 @@ fn test_workflow_with_special_chars_in_set_values() {
         &workflow_path,
         r#"---
 title: Special Characters Test
-description: Tests behavior with special characters in set values
+description: Tests behavior with special characters in var values
 version: 1.0.0
 ---
 
@@ -544,7 +544,7 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("special-chars-test")
-        .arg("--set")
+        .arg("--var")
         .arg("message=Hello World! @#$%^&*()")
         .current_dir(&temp_dir);
 
@@ -555,7 +555,7 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("special-chars-test")
-        .arg("--set")
+        .arg("--var")
         .arg("message=Test with 'single' and \"double\" quotes")
         .current_dir(&temp_dir);
 
@@ -563,7 +563,7 @@ stateDiagram-v2
 }
 
 #[test]
-fn test_workflow_with_conflicting_set_and_var_names() {
+fn test_workflow_with_duplicate_var_names() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
@@ -576,7 +576,7 @@ fn test_workflow_with_conflicting_set_and_var_names() {
         &workflow_path,
         r#"---
 title: Variable Conflict Test
-description: Tests precedence when --set and --var have same names
+description: Tests behavior when --var has duplicate names
 version: 1.0.0
 ---
 
@@ -600,18 +600,18 @@ stateDiagram-v2
         .arg("conflict-test")
         .arg("--var")
         .arg("value=from_var")
-        .arg("--set")
+        .arg("--var")
         .arg("value=from_set")
         .current_dir(&temp_dir);
 
-    // --set should take precedence over --var for template rendering
+    // Later --var values should take precedence for template rendering
     cmd.assert()
         .success()
         .stderr(predicate::str::contains("Value from template: from_set"));
 }
 
 #[test]
-fn test_workflow_with_equals_sign_in_set_value() {
+fn test_workflow_with_equals_sign_in_var_value() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
@@ -646,7 +646,7 @@ stateDiagram-v2
     cmd.arg("flow")
         .arg("run")
         .arg("equals-test")
-        .arg("--set")
+        .arg("--var")
         .arg("formula=x=y+z")
         .current_dir(&temp_dir);
 
@@ -656,7 +656,7 @@ stateDiagram-v2
 }
 
 #[test]
-fn test_prompt_test_with_empty_set_value() {
+fn test_prompt_test_with_empty_var_value() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create prompt directory
@@ -669,7 +669,7 @@ fn test_prompt_test_with_empty_set_value() {
         &prompt_path,
         r#"---
 title: Empty Test Prompt
-description: Tests empty set values
+description: Tests empty var values
 parameters:
   - name: content
     required: true
@@ -682,16 +682,16 @@ Version: {{ version | default: "1.0" }}
     )
     .unwrap();
 
-    // Test with empty set value
+    // Test with empty var value
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("prompt")
         .arg("test")
         .arg("empty-test")
         .arg("--var")
         .arg("content=Main content")
-        .arg("--set")
+        .arg("--var")
         .arg("author=")
-        .arg("--set")
+        .arg("--var")
         .arg("version=")
         .current_dir(&temp_dir);
 
@@ -703,7 +703,7 @@ Version: {{ version | default: "1.0" }}
 }
 
 #[test]
-fn test_prompt_test_with_set_overriding_arg() {
+fn test_prompt_test_with_var_overriding_arg() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create prompt directory
@@ -716,7 +716,7 @@ fn test_prompt_test_with_set_overriding_arg() {
         &prompt_path,
         r#"---
 title: Override Test Prompt
-description: Tests set overriding arg
+description: Tests var overriding arg
 parameters:
   - name: message
     required: true
@@ -727,14 +727,14 @@ Message: {{ message }}
     )
     .unwrap();
 
-    // Test with --set overriding --var
+    // Test with later --var overriding earlier --var
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("prompt")
         .arg("test")
         .arg("override-test")
         .arg("--var")
         .arg("message=Original message")
-        .arg("--set")
+        .arg("--var")
         .arg("message=Overridden message")
         .current_dir(&temp_dir);
 

@@ -411,7 +411,6 @@ async fn run_plan(plan_filename: String) -> i32 {
     let subcommand = FlowSubcommand::Run {
         workflow: "plan".to_string(),
         vars: vec![plan_var],
-        set: vec![],
         interactive: false,
         dry_run: false,
         test: false,
@@ -488,7 +487,6 @@ async fn run_implement() -> i32 {
     let subcommand = FlowSubcommand::Run {
         workflow: "implement".to_string(),
         vars: Vec::new(),
-        set: Vec::new(),
         interactive: false,
         dry_run: false,
         test: false,
