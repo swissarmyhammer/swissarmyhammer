@@ -1521,7 +1521,10 @@ mod enhanced_error_handling_tests {
                 assert!(recoverable);
 
                 // Check that examples contain valid email formats
-                assert!(details.examples.iter().any(|e| e.contains("@") && e.contains(".")));
+                assert!(details
+                    .examples
+                    .iter()
+                    .any(|e| e.contains("@") && e.contains(".")));
             }
             _ => panic!("Expected PatternMismatchEnhanced error"),
         }

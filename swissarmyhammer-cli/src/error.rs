@@ -117,9 +117,7 @@ fn format_enhanced_parameter_error(
 
     match error {
         ParameterError::ValidationFailedWithContext {
-            parameter,
-            details,
-            ..
+            parameter, details, ..
         } => {
             let mut output = format!(
                 "❌ Parameter '{}' validation failed: {}",
@@ -145,9 +143,7 @@ fn format_enhanced_parameter_error(
         }
 
         ParameterError::PatternMismatchEnhanced {
-            parameter,
-            details,
-            ..
+            parameter, details, ..
         } => {
             let mut output = format!(
                 "❌ Parameter '{}' format is invalid: '{}'",
@@ -158,7 +154,10 @@ fn format_enhanced_parameter_error(
             if !details.examples.is_empty() && details.examples.len() <= 3 {
                 output.push_str(&format!("\n   Examples: {}", details.examples.join(", ")));
             } else if !details.examples.is_empty() {
-                output.push_str(&format!("\n   Examples: {}", details.examples[..2].join(", ")));
+                output.push_str(&format!(
+                    "\n   Examples: {}",
+                    details.examples[..2].join(", ")
+                ));
             }
 
             output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
@@ -168,9 +167,7 @@ fn format_enhanced_parameter_error(
         }
 
         ParameterError::InvalidChoiceEnhanced {
-            parameter,
-            details,
-            ..
+            parameter, details, ..
         } => {
             let mut output = format!(
                 "❌ Parameter '{}' has invalid value: '{}'",
@@ -180,7 +177,10 @@ fn format_enhanced_parameter_error(
             if let Some(suggestion) = &details.did_you_mean {
                 output.push_str(&format!("\n💡 Did you mean '{suggestion}'?"));
             } else if details.choices.len() <= 5 {
-                output.push_str(&format!("\n💡 Valid options: {}", details.choices.join(", ")));
+                output.push_str(&format!(
+                    "\n💡 Valid options: {}",
+                    details.choices.join(", ")
+                ));
             } else {
                 output.push_str(&format!("\n💡 {} options available", details.choices.len()));
             }
