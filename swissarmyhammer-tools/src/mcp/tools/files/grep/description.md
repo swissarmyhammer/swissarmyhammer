@@ -1,41 +1,76 @@
-Content-based search using ripgrep for fast and flexible text searching.
+Content-based search with ripgrep integration and intelligent fallback for fast and flexible text searching.
+
+## Overview
+
+The grep tool provides high-performance text searching with automatic engine selection:
+- **Primary Engine**: Uses ripgrep when available for optimal performance
+- **Fallback Engine**: Falls back to regex-based search if ripgrep is not installed
+- **Transparent Operation**: Automatically selects the best available engine
+- **Performance Tracking**: Reports which engine was used and execution time
 
 ## Parameters
 
-- `pattern` (required): Regular expression pattern to search
-- `path` (optional): File or directory to search in
-- `glob` (optional): Glob pattern to filter files (e.g., `*.js`)
-- `type` (optional): File type filter (e.g., `js`, `py`, `rust`)
-- `case_insensitive` (optional): Case-insensitive search
-- `context_lines` (optional): Number of context lines around matches
-- `output_mode` (optional): Output format (`content`, `files_with_matches`, `count`)
+- `pattern` (required): Regular expression pattern to search for in file contents
+- `path` (optional): File or directory to search in (defaults to current directory)
+- `glob` (optional): Glob pattern to filter files (e.g., `*.js`, `**/*.ts`)
+- `type` (optional): File type filter (e.g., `js`, `py`, `rust`, `java`, `cpp`)
+- `case_insensitive` (optional): Case-insensitive search (default: false)
+- `context_lines` (optional): Number of context lines around matches (default: 0)
+- `output_mode` (optional): Output format - `content`, `files_with_matches`, or `count` (default: content)
 
-## Functionality
+## Enhanced Functionality
 
-- Leverages ripgrep for high-performance text search
-- Supports full regular expression syntax
-- Provides file type and glob filtering
-- Returns contextual information around matches
-- Handles large codebases efficiently
+### Ripgrep Integration
+- **10-100x faster** search performance on large codebases
+- JSON output parsing for structured results when using ripgrep
+- Advanced file type detection and filtering
+- Parallel processing across multiple CPU cores
+- Built-in .gitignore and ignore pattern support
+
+### Fallback Engine
+- Full regex support with validation and error handling
+- Enhanced binary file detection using content sampling
+- Comprehensive file type matching for all major languages
+- Context line extraction for detailed match information
+
+### Binary File Handling
+- Smart binary file detection by extension and content analysis
+- Automatic exclusion of common binary formats (executables, images, archives)
+- Content-based detection using null byte and UTF-8 validation
+- Prevents search errors and improves performance
 
 ## Use Cases
 
-- Finding function definitions or usages
-- Searching for specific code patterns
-- Locating configuration values
-- Identifying potential issues or code smells
+### Code Analysis
+- Finding function definitions, usages, and call sites
+- Identifying code patterns and architectural relationships
+- Locating specific variable declarations or assignments
+- Searching for API usage across a codebase
+
+### Development Workflow
+- Finding TODO/FIXME comments and technical debt markers
+- Searching for configuration keys and environment variables
+- Locating error messages and logging statements
+- Identifying deprecated code patterns
+
+### Security and Quality
+- Searching for potential security issues or code smells
+- Finding hardcoded credentials or sensitive data patterns
+- Locating import statements and dependency usage
+- Identifying performance anti-patterns
 
 ## Examples
 
-Find function definitions:
+### Find function definitions in Rust:
 ```json
 {
   "pattern": "fn\\s+\\w+\\s*\\(",
-  "type": "rust"
+  "type": "rust",
+  "output_mode": "content"
 }
 ```
 
-Search for TODO comments with context:
+### Search for TODO comments with context:
 ```json
 {
   "pattern": "TODO|FIXME",
@@ -45,7 +80,7 @@ Search for TODO comments with context:
 }
 ```
 
-Find files containing specific imports:
+### Find TypeScript/JavaScript files importing React:
 ```json
 {
   "pattern": "import.*React",
@@ -54,6 +89,69 @@ Find files containing specific imports:
 }
 ```
 
-## Returns
+### Count occurrences of error handling patterns:
+```json
+{
+  "pattern": "catch\\s*\\(|Result<.*,.*>",
+  "case_insensitive": false,
+  "output_mode": "count"
+}
+```
 
-Returns search results in the specified format with file paths, line numbers, matched content, and context as requested.
+### Search specific directory for configuration keys:
+```json
+{
+  "pattern": "config\\.[A-Z_]+",
+  "path": "/path/to/src/config",
+  "type": "js",
+  "output_mode": "content"
+}
+```
+
+## Output Format
+
+### Response Structure
+All responses include engine information and performance metrics:
+- **Engine Used**: Either "ripgrep [version]" or "regex fallback"
+- **Execution Time**: Search duration in milliseconds
+- **Match Statistics**: Number of matches and files searched
+
+### Output Modes
+
+#### `content` (default)
+Returns detailed match information with file paths, line numbers, and matched content:
+```
+Found 3 matches in 2 files | Engine: ripgrep 13.0.0 | Time: 45ms:
+
+/path/to/file1.rs:15: fn calculate_total() -> Result<i32, Error>
+/path/to/file2.rs:8: fn process_data() -> Result<String, ParseError>
+/path/to/file2.rs:23: fn validate_input() -> Result<(), ValidationError>
+```
+
+#### `files_with_matches`
+Returns only file paths containing matches:
+```
+Files with matches (2) | Engine: ripgrep 13.0.0 | Time: 32ms:
+/path/to/file1.rs
+/path/to/file2.rs
+```
+
+#### `count`
+Returns match and file counts:
+```
+3 matches in 2 files | Engine: ripgrep 13.0.0 | Time: 28ms
+```
+
+## Performance Characteristics
+
+### With Ripgrep
+- **Large Codebases**: Handles millions of lines efficiently
+- **Parallel Processing**: Utilizes multiple CPU cores automatically  
+- **Memory Efficient**: Streams results without loading entire files
+- **Smart Filtering**: Respects .gitignore and binary file exclusions
+
+### Fallback Mode
+- **Reliable Operation**: Works on any system with Rust installed
+- **Full Functionality**: Supports all features except advanced ripgrep optimizations
+- **Binary Detection**: Enhanced content-based binary file exclusion
+- **Context Extraction**: Provides context lines around matches
