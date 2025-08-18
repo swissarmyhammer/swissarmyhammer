@@ -468,7 +468,6 @@ impl ErrorMessageEnhancer {
             ParameterError::PatternMismatch { name, value, pattern } => {
                 let description = CommonPatterns::description_for_pattern(pattern);
                 let examples = CommonPatterns::examples_for_pattern(pattern);
-                
                 ParameterError::PatternMismatchEnhanced {
                     parameter: name.clone(),
                     value: value.clone(),
@@ -481,7 +480,6 @@ impl ErrorMessageEnhancer {
 
             ParameterError::InvalidChoice { name, value, choices } => {
                 let did_you_mean = self.suggest_closest_match(value, choices);
-                
                 ParameterError::InvalidChoiceEnhanced {
                     parameter: name.clone(),
                     value: value.clone(),
@@ -494,15 +492,13 @@ impl ErrorMessageEnhancer {
             ParameterError::StringTooShort { name, min_length, actual_length } => {
                 ParameterError::ValidationFailedWithContext {
                     parameter: name.clone(),
-                    value: format!("{} characters", actual_length),
-                    message: format!("Must be at least {} characters long", min_length),
+                    value: format!("{actual_length} characters"),
+                    message: format!("Must be at least {min_length} characters long"),
                     explanation: Some(format!(
-                        "Your input has {} characters, but {} characters are required",
-                        actual_length, min_length
+                        "Your input has {actual_length} characters, but {min_length} characters are required"
                     )),
                     examples: vec![
-                        format!("Example with {} characters: {}", 
-                               min_length, 
+                        format!("Example with {min_length} characters: {}", 
                                "a".repeat(*min_length))
                     ],
                     suggestions: vec![
@@ -516,11 +512,10 @@ impl ErrorMessageEnhancer {
             ParameterError::StringTooLong { name, max_length, actual_length } => {
                 ParameterError::ValidationFailedWithContext {
                     parameter: name.clone(),
-                    value: format!("{} characters", actual_length),
-                    message: format!("Must be at most {} characters long", max_length),
+                    value: format!("{actual_length} characters"),
+                    message: format!("Must be at most {max_length} characters long"),
                     explanation: Some(format!(
-                        "Your input has {} characters, but only {} characters are allowed",
-                        actual_length, max_length
+                        "Your input has {actual_length} characters, but only {max_length} characters are allowed"
                     )),
                     examples: vec![],
                     suggestions: vec![
@@ -533,21 +528,20 @@ impl ErrorMessageEnhancer {
 
             ParameterError::OutOfRange { name, value, min, max } => {
                 let mut suggestions = vec![];
-                let mut explanation = format!("Value {} is outside the allowed range", value);
-                
+                let mut explanation = format!("Value {value} is outside the allowed range");
                 if let (Some(min_val), Some(max_val)) = (min, max) {
-                    explanation = format!("Value {} must be between {} and {}", value, min_val, max_val);
+                    explanation = format!("Value {value} must be between {min_val} and {max_val}");
                     if *value < *min_val {
-                        suggestions.push(format!("Try a value >= {}", min_val));
+                        suggestions.push(format!("Try a value >= {min_val}"));
                     } else {
-                        suggestions.push(format!("Try a value <= {}", max_val));
+                        suggestions.push(format!("Try a value <= {max_val}"));
                     }
                 } else if let Some(min_val) = min {
-                    explanation = format!("Value {} must be at least {}", value, min_val);
-                    suggestions.push(format!("Try a value >= {}", min_val));
+                    explanation = format!("Value {value} must be at least {min_val}");
+                    suggestions.push(format!("Try a value >= {min_val}"));
                 } else if let Some(max_val) = max {
-                    explanation = format!("Value {} must be at most {}", value, max_val);
-                    suggestions.push(format!("Try a value <= {}", max_val));
+                    explanation = format!("Value {value} must be at most {max_val}");
+                    suggestions.push(format!("Try a value <= {max_val}"));
                 }
 
                 ParameterError::ValidationFailedWithContext {
@@ -565,7 +559,7 @@ impl ErrorMessageEnhancer {
                 ParameterError::ValidationFailedWithContext {
                     parameter: parameter.clone(),
                     value: "missing".to_string(),
-                    message: format!("Parameter required for your current configuration"),
+                    message: "Parameter required for your current configuration".to_string(),
                     explanation: Some(self.explain_condition(condition)),
                     examples: vec![],
                     suggestions: vec![
@@ -581,14 +575,14 @@ impl ErrorMessageEnhancer {
                 match error {
                     ParameterError::ValidationFailed { message } => ParameterError::ValidationFailed { message: message.clone() },
                     ParameterError::MissingRequired { name } => ParameterError::MissingRequired { name: name.clone() },
-                    ParameterError::TypeMismatch { name, expected_type, actual_type } => ParameterError::TypeMismatch { 
-                        name: name.clone(), 
-                        expected_type: expected_type.clone(), 
-                        actual_type: actual_type.clone() 
+                    ParameterError::TypeMismatch { name, expected_type, actual_type } => ParameterError::TypeMismatch {
+                        name: name.clone(),
+                        expected_type: expected_type.clone(),
+                        actual_type: actual_type.clone()
                     },
                     // Add other cases as needed for completeness, for now just return a generic error
-                    _ => ParameterError::ValidationFailed { 
-                        message: format!("Parameter validation failed: {}", error) 
+                    _ => ParameterError::ValidationFailed {
+                        message: format!("Parameter validation failed: {error}")
                     }
                 }
             }
@@ -602,7 +596,7 @@ impl ErrorMessageEnhancer {
         }
 
         let input_lower = input.to_lowercase();
-        
+
         // Find the choice with minimum edit distance
         let mut best_match = None;
         let mut best_distance = usize::MAX;
@@ -610,7 +604,7 @@ impl ErrorMessageEnhancer {
         for choice in choices {
             let choice_lower = choice.to_lowercase();
             let distance = self.levenshtein_distance(&input_lower, &choice_lower);
-            
+
             // Be more generous with suggestions for short inputs
             // Allow suggestions if:
             // 1. Distance is reasonable (not more than input length + 4)
@@ -657,14 +651,18 @@ impl ErrorMessageEnhancer {
         // Fill matrix
         for i in 1..=a_len {
             for j in 1..=b_len {
-                let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
-                
+                let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                    0
+                } else {
+                    1
+                };
+
                 matrix[i][j] = std::cmp::min(
                     std::cmp::min(
-                        matrix[i - 1][j] + 1,     // deletion
-                        matrix[i][j - 1] + 1      // insertion
+                        matrix[i - 1][j] + 1, // deletion
+                        matrix[i][j - 1] + 1, // insertion
                     ),
-                    matrix[i - 1][j - 1] + cost   // substitution
+                    matrix[i - 1][j - 1] + cost, // substitution
                 );
             }
         }
@@ -679,10 +677,10 @@ impl ErrorMessageEnhancer {
             if let Some(parts) = condition.split_once("==") {
                 let param = parts.0.trim();
                 let value = parts.1.trim().trim_matches('\'').trim_matches('"');
-                return format!("{} is set to {}", param, value);
+                return format!("{param} is set to {value}");
             }
         }
-        
+
         if condition.contains("in [") {
             if let Some(start) = condition.find("in [") {
                 if let Some(param) = condition.get(..start) {
@@ -691,7 +689,7 @@ impl ErrorMessageEnhancer {
             }
         }
 
-        format!("condition '{}' is met", condition)
+        format!("condition '{condition}' is met")
     }
 }
 
@@ -1467,15 +1465,15 @@ mod enhanced_error_handling_tests {
     #[test]
     fn test_pattern_mismatch_enhancement() {
         let enhancer = ErrorMessageEnhancer::new();
-        
+
         let original_error = ParameterError::PatternMismatch {
             name: "email".to_string(),
             value: "invalid@".to_string(),
             pattern: CommonPatterns::EMAIL.to_string(),
         };
-        
+
         let enhanced = enhancer.enhance_parameter_error(&original_error);
-        
+
         match enhanced {
             ParameterError::PatternMismatchEnhanced {
                 parameter,
@@ -1490,7 +1488,7 @@ mod enhanced_error_handling_tests {
                 assert_eq!(pattern_description, "Valid email address");
                 assert!(!examples.is_empty());
                 assert_eq!(recoverable, true);
-                
+
                 // Check that examples contain valid email formats
                 assert!(examples.iter().any(|e| e.contains("@") && e.contains(".")));
             }
@@ -1501,16 +1499,20 @@ mod enhanced_error_handling_tests {
     #[test]
     fn test_invalid_choice_enhancement_with_fuzzy_matching() {
         let enhancer = ErrorMessageEnhancer::new();
-        
-        let choices = vec!["production".to_string(), "staging".to_string(), "development".to_string()];
+
+        let choices = vec![
+            "production".to_string(),
+            "staging".to_string(),
+            "development".to_string(),
+        ];
         let original_error = ParameterError::InvalidChoice {
             name: "environment".to_string(),
             value: "prod".to_string(),
             choices: choices.clone(),
         };
-        
+
         let enhanced = enhancer.enhance_parameter_error(&original_error);
-        
+
         match enhanced {
             ParameterError::InvalidChoiceEnhanced {
                 parameter,
@@ -1532,15 +1534,15 @@ mod enhanced_error_handling_tests {
     #[test]
     fn test_string_length_error_enhancement() {
         let enhancer = ErrorMessageEnhancer::new();
-        
+
         let original_error = ParameterError::StringTooShort {
             name: "password".to_string(),
             min_length: 8,
             actual_length: 4,
         };
-        
+
         let enhanced = enhancer.enhance_parameter_error(&original_error);
-        
+
         match enhanced {
             ParameterError::ValidationFailedWithContext {
                 parameter,
@@ -1555,7 +1557,7 @@ mod enhanced_error_handling_tests {
                 assert!(explanation.is_some());
                 assert!(!suggestions.is_empty());
                 assert_eq!(recoverable, true);
-                
+
                 // Check that suggestion includes specific guidance
                 let suggestion_text = suggestions.join(" ");
                 assert!(suggestion_text.contains("4 more characters"));
@@ -1567,7 +1569,7 @@ mod enhanced_error_handling_tests {
     #[test]
     fn test_levenshtein_distance_calculation() {
         let enhancer = ErrorMessageEnhancer::new();
-        
+
         // Test various distance calculations - fix expected values based on actual implementation
         assert_eq!(enhancer.levenshtein_distance("prod", "production"), 6); // "prod" -> "production" requires 6 insertions
         assert_eq!(enhancer.levenshtein_distance("dev", "development"), 8); // "dev" -> "development" requires 8 insertions
@@ -1578,7 +1580,7 @@ mod enhanced_error_handling_tests {
     #[test]
     fn test_closest_match_suggestions() {
         let enhancer = ErrorMessageEnhancer::new();
-        
+
         let choices = vec![
             "production".to_string(),
             "staging".to_string(),
@@ -1611,12 +1613,16 @@ mod enhanced_error_handling_tests {
         // Test email pattern examples
         let email_examples = CommonPatterns::examples_for_pattern(CommonPatterns::EMAIL);
         assert!(!email_examples.is_empty());
-        assert!(email_examples.iter().all(|e| e.contains("@") && e.contains(".")));
+        assert!(email_examples
+            .iter()
+            .all(|e| e.contains("@") && e.contains(".")));
 
         // Test URL pattern examples
         let url_examples = CommonPatterns::examples_for_pattern(CommonPatterns::URL);
         assert!(!url_examples.is_empty());
-        assert!(url_examples.iter().all(|u| u.starts_with("http://") || u.starts_with("https://")));
+        assert!(url_examples
+            .iter()
+            .all(|u| u.starts_with("http://") || u.starts_with("https://")));
 
         // Test semantic version examples
         let semver_examples = CommonPatterns::examples_for_pattern(CommonPatterns::SEMVER);

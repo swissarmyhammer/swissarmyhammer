@@ -83,20 +83,24 @@ pub fn handle_cli_result<T>(result: CliResult<T>) -> i32 {
 impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
     fn from(error: swissarmyhammer::common::parameters::ParameterError) -> Self {
         use swissarmyhammer::common::parameters::{ErrorMessageEnhancer, ParameterError};
-        
+
         let enhancer = ErrorMessageEnhancer::new();
         let enhanced_error = enhancer.enhance_parameter_error(&error);
-        
+
         let exit_code = match &enhanced_error {
             ParameterError::MaxAttemptsExceeded { .. } => EXIT_ERROR,
-            ParameterError::ValidationFailedWithContext { recoverable, .. } |
-            ParameterError::PatternMismatchEnhanced { recoverable, .. } |
-            ParameterError::InvalidChoiceEnhanced { recoverable, .. } => {
-                if *recoverable { EXIT_WARNING } else { EXIT_ERROR }
+            ParameterError::ValidationFailedWithContext { recoverable, .. }
+            | ParameterError::PatternMismatchEnhanced { recoverable, .. }
+            | ParameterError::InvalidChoiceEnhanced { recoverable, .. } => {
+                if *recoverable {
+                    EXIT_WARNING
+                } else {
+                    EXIT_ERROR
+                }
             }
             _ => EXIT_ERROR,
         };
-        
+
         Self {
             message: format_enhanced_parameter_error(&enhanced_error),
             exit_code,
@@ -106,9 +110,11 @@ impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
 }
 
 /// Format enhanced parameter errors for CLI display
-fn format_enhanced_parameter_error(error: &swissarmyhammer::common::parameters::ParameterError) -> String {
+fn format_enhanced_parameter_error(
+    error: &swissarmyhammer::common::parameters::ParameterError,
+) -> String {
     use swissarmyhammer::common::parameters::ParameterError;
-    
+
     match error {
         ParameterError::ValidationFailedWithContext {
             parameter,
@@ -118,8 +124,11 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer::common::parameters::
             suggestions,
             ..
         } => {
-            let mut output = format!("❌ Parameter '{}' validation failed: {}", parameter, message);
-            
+            let mut output = format!(
+                "❌ Parameter '{}' validation failed: {}",
+                parameter, message
+            );
+
             if let Some(explanation) = explanation {
                 output.push_str(&format!("\n   {}", explanation));
             }
@@ -145,7 +154,10 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer::common::parameters::
             examples,
             ..
         } => {
-            let mut output = format!("❌ Parameter '{}' format is invalid: '{}'", parameter, value);
+            let mut output = format!(
+                "❌ Parameter '{}' format is invalid: '{}'",
+                parameter, value
+            );
             output.push_str(&format!("\n   {}", pattern_description));
 
             if !examples.is_empty() && examples.len() <= 3 {
@@ -167,8 +179,11 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer::common::parameters::
             did_you_mean,
             ..
         } => {
-            let mut output = format!("❌ Parameter '{}' has invalid value: '{}'", parameter, value);
-            
+            let mut output = format!(
+                "❌ Parameter '{}' has invalid value: '{}'",
+                parameter, value
+            );
+
             if let Some(suggestion) = did_you_mean {
                 output.push_str(&format!("\n💡 Did you mean '{}'?", suggestion));
             } else if choices.len() <= 5 {
@@ -183,7 +198,10 @@ fn format_enhanced_parameter_error(error: &swissarmyhammer::common::parameters::
             output
         }
 
-        ParameterError::MaxAttemptsExceeded { parameter, attempts } => {
+        ParameterError::MaxAttemptsExceeded {
+            parameter,
+            attempts,
+        } => {
             format!("❌ Maximum retry attempts exceeded for parameter '{}' ({} attempts)\n\n📖 Use --help to see parameter requirements\n🔄 Check your input format and try again",
                    parameter, attempts)
         }
