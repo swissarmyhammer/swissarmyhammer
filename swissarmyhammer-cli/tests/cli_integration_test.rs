@@ -253,16 +253,16 @@ fn test_flow_test_with_set_variables() -> Result<()> {
             "flow",
             "test",
             "greeting",
-            "--set",
+            "--var",
             "name=TestUser",
-            "--set",
+            "--var",
             "language=Spanish",
         ])
         .output()?;
 
     assert!(
         output.status.success(),
-        "flow test with --set variables should succeed"
+        "flow test with --var variables should succeed"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -399,17 +399,17 @@ stateDiagram-v2
     Ok(())
 }
 
-/// Test flow test command with invalid set variable format
+/// Test flow test command with invalid var variable format
 #[test]
 fn test_flow_test_invalid_set_format() -> Result<()> {
     let output = Command::cargo_bin("sah")
         .unwrap()
-        .args(["flow", "test", "greeting", "--set", "invalid_format"])
+        .args(["flow", "test", "greeting", "--var", "invalid_format"])
         .output()?;
 
     assert!(
         !output.status.success(),
-        "flow test with invalid --set format should fail"
+        "flow test with invalid --var format should fail"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -433,8 +433,8 @@ fn test_flow_test_help() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("--set"),
-        "help should mention --set parameter"
+        stdout.contains("--var"),
+        "help should mention --var parameter"
     );
     assert!(
         stdout.contains("--timeout"),
@@ -484,9 +484,9 @@ fn test_flow_test_empty_set_value() -> Result<()> {
             "flow",
             "test",
             "greeting",
-            "--set",
+            "--var",
             "name=",
-            "--set",
+            "--var",
             "language=English",
         ])
         .output()?;
@@ -509,9 +509,9 @@ fn test_flow_test_special_chars_in_set() -> Result<()> {
             "flow",
             "test",
             "greeting",
-            "--set",
+            "--var",
             "name=Test User 123",
-            "--set",
+            "--var",
             r#"language="English (US)""#,
         ])
         .output()?;
@@ -540,7 +540,7 @@ async fn test_concurrent_flow_test() -> Result<()> {
                     "flow",
                     "test",
                     "hello-world",
-                    "--set",
+                    "--var",
                     &format!("run_id={i}"),
                 ])
                 .output()

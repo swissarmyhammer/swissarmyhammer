@@ -20,15 +20,12 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             prompt_name,
             file,
             vars,
-            set,
             raw,
             copy,
             save,
             debug,
         } => {
-            // Combine --var and --set parameters, with --set taking precedence
-            let mut all_vars = vars;
-            all_vars.extend(set);
+            let all_vars = vars;
             
             let mut runner = test::TestRunner::new();
             let config = test::TestConfig {
@@ -137,7 +134,6 @@ mod tests {
             prompt_name: Some("non_existent_prompt_12345".to_string()),
             file: None,
             vars: vec![],
-            set: vec![],
             raw: false,
             copy: false,
             save: None,

@@ -44,14 +44,14 @@ fn test_greeting_workflow_backward_compatibility() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
 
-    // Test that old-style --set arguments still work
+    // Test that --var arguments work
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("greeting")
-        .arg("--set")
+        .arg("--var")
         .arg("person_name=John")
-        .arg("--set")
+        .arg("--var")
         .arg("language=English")
         .arg("--dry-run")
         .current_dir(&repo_root);
@@ -148,12 +148,12 @@ fn test_plan_workflow_backward_compatibility() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
 
-    // Test that old-style --set arguments still work
+    // Test that --var arguments work
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("plan")
-        .arg("--set")
+        .arg("--var")
         .arg("plan_filename=./spec/feature.md")
         .arg("--dry-run")
         .current_dir(&repo_root);
@@ -244,15 +244,15 @@ fn test_mixed_parameter_resolution_precedence() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
 
-    // Test precedence when both --var and --set are used
+    // Test precedence when multiple --var are used
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
         .arg("run")
         .arg("greeting")
         .arg("--var")
-        .arg("person_name=Alice") // Current var system
-        .arg("--set")
-        .arg("person_name=Bob") // Legacy set system
+        .arg("person_name=Alice") // First var value
+        .arg("--var")
+        .arg("person_name=Bob") // Second var value (should take precedence)
         .arg("--dry-run")
         .current_dir(&repo_root);
 
