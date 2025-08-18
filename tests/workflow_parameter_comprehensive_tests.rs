@@ -4,30 +4,40 @@
 //! for the workflow parameter system, ensuring all components work correctly
 //! in integration scenarios.
 
-// Import all test modules
-mod workflow_parameters {
-    pub mod unit_tests {
-        pub mod parameter_validation_comprehensive_tests;
-        pub mod conditional_parameter_resolution_tests;
-        pub mod error_condition_tests;
-    }
-    
-    pub mod integration_tests {
-        pub mod cli_parameter_integration_tests;
-    }
-    
-    pub mod performance_tests {
-        pub mod large_parameter_set_benchmarks;
-    }
-    
-    pub mod compatibility_tests {
-        pub mod legacy_var_argument_tests;
-    }
-    
-    pub mod cli_tests {
-        pub mod help_generation_tests;
-    }
-}
+// Import required dependencies that would normally be available in integration tests
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use swissarmyhammer::common::parameters::{
+    CommonPatterns, DefaultParameterResolver, Parameter, ParameterError, ParameterResult, 
+    ParameterResolver, ParameterType, ParameterValidator, ValidationRules,
+};
+
+// Re-export these for the included modules
+pub use serde_json;
+pub use swissarmyhammer;
+
+// Include all test modules using the path attribute to directly include the files
+// This allows the tests to be compiled and run as part of this integration test
+#[path = "workflow_parameters/unit_tests/parameter_validation_comprehensive_tests.rs"]
+mod parameter_validation_comprehensive_tests;
+
+#[path = "workflow_parameters/unit_tests/conditional_parameter_resolution_tests.rs"]
+mod conditional_parameter_resolution_tests;
+
+#[path = "workflow_parameters/unit_tests/error_condition_tests.rs"]
+mod error_condition_tests;
+
+#[path = "workflow_parameters/integration_tests/cli_parameter_integration_tests.rs"]
+mod cli_parameter_integration_tests;
+
+#[path = "workflow_parameters/performance_tests/large_parameter_set_benchmarks.rs"]
+mod large_parameter_set_benchmarks;
+
+#[path = "workflow_parameters/compatibility_tests/legacy_var_argument_tests.rs"]
+mod legacy_var_argument_tests;
+
+#[path = "workflow_parameters/cli_tests/help_generation_tests.rs"]
+mod help_generation_tests;
 
 #[cfg(test)]
 mod comprehensive_integration_tests {
