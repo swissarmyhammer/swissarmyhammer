@@ -23,7 +23,16 @@ pub async fn handle_file_command(
             glob_files(&context, &pattern, path.as_deref(), case_sensitive, !no_git_ignore).await?;
         }
         FileCommands::Grep { pattern, path, glob, file_type, case_insensitive, context_lines, output_mode } => {
-            grep_files(&context, &pattern, path.as_deref(), glob.as_deref(), file_type.as_deref(), case_insensitive, context_lines, output_mode.as_deref()).await?;
+            let params = GrepParams {
+                pattern: &pattern,
+                path: path.as_deref(),
+                glob: glob.as_deref(),
+                file_type: file_type.as_deref(),
+                case_insensitive,
+                context_lines,
+                output_mode: output_mode.as_deref(),
+            };
+            grep_files(&context, params).await?;
         }
     }
 
@@ -123,35 +132,40 @@ async fn glob_files(
     Ok(())
 }
 
+/// Parameters for grep search operations
+struct GrepParams<'a> {
+    pattern: &'a str,
+    path: Option<&'a str>,
+    glob: Option<&'a str>,
+    file_type: Option<&'a str>,
+    case_insensitive: bool,
+    context_lines: Option<usize>,
+    output_mode: Option<&'a str>,
+}
+
 /// Search file contents using ripgrep
 async fn grep_files(
     context: &CliToolContext,
-    pattern: &str,
-    path: Option<&str>,
-    glob: Option<&str>,
-    file_type: Option<&str>,
-    case_insensitive: bool,
-    context_lines: Option<usize>,
-    output_mode: Option<&str>,
+    params: GrepParams<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = vec![("pattern", json!(pattern))];
+    let mut args = vec![("pattern", json!(params.pattern))];
     
-    if let Some(search_path) = path {
+    if let Some(search_path) = params.path {
         args.push(("path", json!(search_path)));
     }
-    if let Some(glob_pattern) = glob {
+    if let Some(glob_pattern) = params.glob {
         args.push(("glob", json!(glob_pattern)));
     }
-    if let Some(file_type_val) = file_type {
+    if let Some(file_type_val) = params.file_type {
         args.push(("type", json!(file_type_val)));
     }
-    if case_insensitive {
+    if params.case_insensitive {
         args.push(("-i", json!(true)));
     }
-    if let Some(context_val) = context_lines {
+    if let Some(context_val) = params.context_lines {
         args.push(("-C", json!(context_val)));
     }
-    if let Some(mode) = output_mode {
+    if let Some(mode) = params.output_mode {
         args.push(("output_mode", json!(mode)));
     }
 
