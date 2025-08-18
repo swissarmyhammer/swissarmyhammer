@@ -1,0 +1,1 @@
+the workflow parser appears to heavily duplicate the prompt parser for frontmatter yaml

@@ -19,7 +19,7 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
         PromptSubcommand::Test {
             prompt_name,
             file,
-            arguments,
+            vars,
             set,
             raw,
             copy,
@@ -30,7 +30,7 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             let config = test::TestConfig {
                 prompt_name,
                 file,
-                arguments,
+                arguments: vars,
                 set,
                 raw,
                 copy,
@@ -133,7 +133,7 @@ mod tests {
         let subcommand = PromptSubcommand::Test {
             prompt_name: Some("non_existent_prompt_12345".to_string()),
             file: None,
-            arguments: vec![],
+            vars: vec![],
             set: vec![],
             raw: false,
             copy: false,

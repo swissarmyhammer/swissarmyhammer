@@ -377,7 +377,7 @@ impl PromptAction {
                     format!("Invalid argument key '{key}': must contain only alphanumeric characters, hyphens, and underscores")
                 ));
             }
-            cmd.arg("--arg");
+            cmd.arg("--var");
             cmd.arg(format!("{key}={value}"));
         }
 
