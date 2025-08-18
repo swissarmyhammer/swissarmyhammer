@@ -28,7 +28,12 @@ pub fn resolve_workflow_parameters_interactive(
         }
     };
 
-    if interactive {
+    // Auto-detect interactive mode: if no var args are provided and we have parameters,
+    // and we're in a terminal, enable interactive prompting (matches prompt test behavior)
+    let should_be_interactive = interactive
+        || (var_args.is_empty() && !workflow_params.is_empty() && atty::is(atty::Stream::Stdin));
+
+    if should_be_interactive {
         // Phase 2: Use interactive parameter resolver
         let resolver = DefaultParameterResolver::new();
 
@@ -48,7 +53,7 @@ pub fn resolve_workflow_parameters_interactive(
             .collect();
 
         resolver
-            .resolve_parameters(&parameters, &cli_args, interactive)
+            .resolve_parameters(&parameters, &cli_args, should_be_interactive)
             .map_err(|e| {
                 swissarmyhammer::SwissArmyHammerError::Other(format!(
                     "Parameter resolution failed: {e}"
@@ -84,5 +89,42 @@ mod tests {
     fn test_get_workflow_parameters_for_help_empty() {
         let result = get_workflow_parameters_for_help("nonexistent-workflow");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_auto_detection_logic() {
+        // Test that the auto-detection logic works as expected
+        // When no var_args are provided and workflow has parameters, it should enable interactive mode
+        // Note: This test runs without a terminal, so interactive detection will be false
+
+        let workflow_name = "greeting";
+        let empty_vars: &[String] = &[];
+        let empty_set: &[String] = &[];
+
+        // Test with explicit interactive = false and no vars - should fail for required params
+        let result =
+            resolve_workflow_parameters_interactive(workflow_name, empty_vars, empty_set, false);
+
+        // In test environment (no terminal), this should fail for required parameters
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        assert!(error_msg.contains("person_name"));
+
+        // Test with explicit interactive = true - should succeed (uses interactive resolver)
+        let result_interactive =
+            resolve_workflow_parameters_interactive(workflow_name, empty_vars, empty_set, true);
+        // Even with interactive=true, it may still fail in test environment due to stdin not being available
+        // So we just test that the function can be called without panic
+        let _ = result_interactive; // Don't assert success as it depends on test environment
+
+        // Test with provided vars - should succeed
+        let vars_with_values = vec!["person_name=TestUser".to_string()];
+        let result_with_vars = resolve_workflow_parameters_interactive(
+            workflow_name,
+            &vars_with_values,
+            empty_set,
+            false,
+        );
+        assert!(result_with_vars.is_ok());
     }
 }
