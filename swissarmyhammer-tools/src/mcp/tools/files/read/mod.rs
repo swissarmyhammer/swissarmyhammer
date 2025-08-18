@@ -1,6 +1,51 @@
 //! File reading tool for MCP operations
 //!
-//! This module provides the ReadFileTool for reading file contents through the MCP protocol.
+//! This module provides the `ReadFileTool` for secure, validated file reading operations through
+//! the MCP protocol. The tool supports reading various file types including text files, binary 
+//! content (with base64 encoding), and provides partial reading capabilities for large files.
+//!
+//! ## Features
+//!
+//! * **Comprehensive Security**: All file paths undergo security validation through the enhanced
+//!   security framework, including workspace boundary enforcement and path traversal protection
+//! * **Partial Reading**: Efficient reading of large files using line-based offset and limit
+//!   parameters without loading the entire file into memory
+//! * **Binary Support**: Automatic detection and base64 encoding of binary file content
+//! * **Performance Optimized**: Configurable limits prevent excessive resource usage
+//! * **Audit Logging**: All file access attempts are logged for security monitoring
+//!
+//! ## Security Considerations
+//!
+//! All file operations are subject to comprehensive security validation:
+//! - Absolute path requirements to prevent relative path confusion
+//! - Workspace boundary enforcement to prevent access outside authorized directories
+//! - Path traversal attack prevention (blocking `../` sequences)
+//! - Permission checking before file access attempts
+//! - Structured audit logging for security monitoring
+//!
+//! ## Examples
+//!
+//! ```rust,no_run
+//! # use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
+//! # use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
+//! # use serde_json::json;
+//! # async fn example(context: &ToolContext) -> Result<(), rmcp::Error> {
+//! let tool = ReadFileTool::new();
+//!
+//! // Read entire file
+//! let mut args = serde_json::Map::new();
+//! args.insert("absolute_path".to_string(), json!("/workspace/src/main.rs"));
+//! let result = tool.execute(args, context).await?;
+//!
+//! // Read with offset and limit
+//! let mut args = serde_json::Map::new();
+//! args.insert("absolute_path".to_string(), json!("/workspace/logs/app.log"));
+//! args.insert("offset".to_string(), json!(100));
+//! args.insert("limit".to_string(), json!(50));
+//! let result = tool.execute(args, context).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -8,12 +53,59 @@ use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use tracing::{debug, info};
 
-/// Tool for reading file contents from the local filesystem
-#[derive(Default)]
+/// Tool for reading file contents from the local filesystem with comprehensive security validation
+///
+/// `ReadFileTool` provides secure, validated file reading operations through the MCP protocol.
+/// It supports reading various file types, partial reading for large files, and implements
+/// comprehensive security measures including workspace boundary enforcement and path validation.
+///
+/// ## Security Features
+///
+/// * **Path Validation**: All file paths must be absolute and undergo comprehensive security validation
+/// * **Workspace Boundaries**: Enforces workspace directory restrictions to prevent unauthorized access
+/// * **Path Traversal Protection**: Blocks dangerous path sequences like `../` to prevent directory traversal attacks
+/// * **Permission Checking**: Validates read permissions before attempting file access
+/// * **Audit Logging**: Logs all file access attempts for security monitoring and compliance
+///
+/// ## Performance Features
+///
+/// * **Configurable Limits**: Prevents excessive resource usage with offset/limit boundaries
+/// * **Memory Efficient**: Supports partial reading of large files without loading entire content
+/// * **Binary Support**: Automatic base64 encoding for binary files
+/// * **Concurrent Safe**: Thread-safe operations for multiple simultaneous file reads
+///
+/// ## Supported Parameters
+///
+/// * `absolute_path`: Required absolute path to the file to read
+/// * `offset`: Optional starting line number (1-based, max 1,000,000)
+/// * `limit`: Optional maximum lines to read (1-100,000 lines)
+///
+/// ## Usage Examples
+///
+/// ```rust,no_run
+/// use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
+/// use swissarmyhammer_tools::mcp::tool_registry::McpTool;
+///
+/// let tool = ReadFileTool::new();
+/// assert_eq!(tool.name(), "files_read");
+/// ```
+#[derive(Default, Debug, Clone)]
 pub struct ReadFileTool;
 
 impl ReadFileTool {
     /// Creates a new instance of the ReadFileTool
+    ///
+    /// Returns a new `ReadFileTool` instance ready for file reading operations.
+    /// The tool is lightweight and can be cloned efficiently for concurrent usage.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
+    ///
+    /// let tool = ReadFileTool::new();
+    /// assert_eq!(tool.name(), "files_read");
+    /// ```
     pub fn new() -> Self {
         Self
     }

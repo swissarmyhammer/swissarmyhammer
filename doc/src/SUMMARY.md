@@ -18,6 +18,9 @@
 
 # Features
 
+- [File Tools](file-tools.md)
+  - [CLI Usage](file-tools-cli.md)
+  - [Troubleshooting](file-tools-troubleshooting.md)
 - [Issue Management](issues.md)
 - [Memoranda System](memoranda.md)
 - [Semantic Search](search.md)
