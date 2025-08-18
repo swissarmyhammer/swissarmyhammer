@@ -369,7 +369,7 @@ This prompt was added while the server was running"#;
         let content = r#"---
 name: edge_case
 description: Prompt with special characters
-arguments:
+parameters:
   - name: input
     description: User input
     required: true

@@ -2,7 +2,7 @@
 name: prompts-create
 title: Create New Prompt
 description: Help create effective prompts for swissarmyhammer
-arguments:
+parameters:
   - name: purpose
     description: What the prompt should accomplish
     required: true
@@ -38,7 +38,7 @@ arguments:
 name: {{category}}-descriptive-name
 title: Clear Title for {{purpose}}
 description: One-line description of what this prompt does
-arguments:
+parameters:
   - name: primary_input
     description: Main input needed
     required: true
@@ -104,7 +104,7 @@ Based on your requirements, here's a template:
 name: {{category}}-descriptive-name
 title: Clear Title for {{purpose}}
 description: A prompt that {{purpose}}
-arguments:
+parameters:
   - name: input
     description: The main input for {{purpose}}
     required: true

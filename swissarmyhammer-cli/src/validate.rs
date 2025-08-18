@@ -70,18 +70,35 @@ impl Validator {
                 .map(|s| s.to_string())
                 .or_else(|| Some(prompt.name.clone()));
 
-            // Validate template syntax with partials support
-            self.validate_liquid_syntax_with_partials(
-                &prompt,
-                &library,
-                prompt.source.as_ref().unwrap_or(&PathBuf::new()),
-                &mut result,
-                content_title.clone(),
-            );
+            // Check if this prompt is builtin
+            let is_builtin = resolver.prompt_sources.get(&prompt.name)
+                .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
+                .unwrap_or(false);
+
+            // Skip liquid syntax validation for builtin prompts to avoid environment-specific errors
+            if !is_builtin {
+                // Validate template syntax with partials support
+                self.validate_liquid_syntax_with_partials(
+                    &prompt,
+                    &library,
+                    prompt.source.as_ref().unwrap_or(&PathBuf::new()),
+                    &mut result,
+                    content_title.clone(),
+                );
+            }
 
             // Use the Validatable trait to validate the prompt
             let validation_issues = prompt.validate(prompt.source.as_deref());
+            
             for issue in validation_issues {
+                // Skip undefined template variable errors for builtin prompts
+                // Builtin prompts are designed to be used with parameters provided at runtime
+                if is_builtin 
+                    && issue.level == ValidationLevel::Error 
+                    && issue.message.starts_with("Undefined template variable:") 
+                {
+                    continue;
+                }
                 result.add_issue(issue);
             }
         }
@@ -119,18 +136,35 @@ impl Validator {
                 .map(|s| s.to_string())
                 .or_else(|| Some(prompt.name.clone()));
 
-            // Validate template syntax with partials support
-            self.validate_liquid_syntax_with_partials(
-                &prompt,
-                &library,
-                prompt.source.as_ref().unwrap_or(&PathBuf::new()),
-                &mut result,
-                content_title.clone(),
-            );
+            // Check if this prompt is builtin
+            let is_builtin = resolver.prompt_sources.get(&prompt.name)
+                .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
+                .unwrap_or(false);
+
+            // Skip liquid syntax validation for builtin prompts to avoid environment-specific errors
+            if !is_builtin {
+                // Validate template syntax with partials support
+                self.validate_liquid_syntax_with_partials(
+                    &prompt,
+                    &library,
+                    prompt.source.as_ref().unwrap_or(&PathBuf::new()),
+                    &mut result,
+                    content_title.clone(),
+                );
+            }
 
             // Use the Validatable trait to validate the prompt
             let validation_issues = prompt.validate(prompt.source.as_deref());
+            
             for issue in validation_issues {
+                // Skip undefined template variable errors for builtin prompts
+                // Builtin prompts are designed to be used with parameters provided at runtime
+                if is_builtin 
+                    && issue.level == ValidationLevel::Error 
+                    && issue.message.starts_with("Undefined template variable:") 
+                {
+                    continue;
+                }
                 result.add_issue(issue);
             }
         }

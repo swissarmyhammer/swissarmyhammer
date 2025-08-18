@@ -1,7 +1,7 @@
 ---
 title: plan
 description: Generate a step by step development plan from specification(s).
-arguments:
+parameters:
   - name: plan_filename
     description: Path to the specific plan markdown file to process (optional)
     required: false

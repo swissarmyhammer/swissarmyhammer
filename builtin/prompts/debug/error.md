@@ -2,7 +2,7 @@
 name: debug-error
 title: Debug Error Messages
 description: Analyze error messages and provide debugging guidance with potential solutions
-arguments:
+parameters:
   - name: error_message
     description: The error message or stack trace to analyze
     required: true
