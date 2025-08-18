@@ -342,10 +342,7 @@ impl InteractivePrompts {
     /// Display an enhanced error message with context and suggestions
     fn display_enhanced_error(&self, error: &ParameterError) {
         match error {
-            ParameterError::ValidationFailedWithContext {
-                details,
-                ..
-            } => {
+            ParameterError::ValidationFailedWithContext { details, .. } => {
                 println!("❌ {}", details.message);
 
                 if let Some(explanation) = &details.explanation {
@@ -362,11 +359,12 @@ impl InteractivePrompts {
             }
 
             ParameterError::PatternMismatchEnhanced {
-                parameter,
-                details,
-                ..
+                parameter, details, ..
             } => {
-                println!("❌ Parameter '{parameter}' format is invalid: '{}'", details.value);
+                println!(
+                    "❌ Parameter '{parameter}' format is invalid: '{}'",
+                    details.value
+                );
                 println!("   {}", details.pattern_description);
 
                 if !details.examples.is_empty() && details.examples.len() <= 3 {
@@ -377,11 +375,12 @@ impl InteractivePrompts {
             }
 
             ParameterError::InvalidChoiceEnhanced {
-                parameter,
-                details,
-                ..
+                parameter, details, ..
             } => {
-                println!("❌ Parameter '{parameter}' has invalid value: '{}'", details.value);
+                println!(
+                    "❌ Parameter '{parameter}' has invalid value: '{}'",
+                    details.value
+                );
 
                 if let Some(suggestion) = &details.did_you_mean {
                     println!("💡 Did you mean '{suggestion}'?");
