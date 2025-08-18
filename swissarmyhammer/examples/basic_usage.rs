@@ -1,7 +1,10 @@
 //! Basic usage example for SwissArmyHammer library
 
 use std::collections::HashMap;
-use swissarmyhammer::{Prompt, PromptLibrary, common::{Parameter, ParameterType}};
+use swissarmyhammer::{
+    common::{Parameter, ParameterType},
+    Prompt, PromptLibrary,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new prompt library
@@ -32,12 +35,15 @@ Focus on:
         "quality".to_string(),
     ])
     .add_parameter(
-        Parameter::new("language", "The programming language", ParameterType::String)
-            .required(true)
+        Parameter::new(
+            "language",
+            "The programming language",
+            ParameterType::String,
+        )
+        .required(true),
     )
     .add_parameter(
-        Parameter::new("code", "The code to review", ParameterType::String)
-            .required(true)
+        Parameter::new("code", "The code to review", ParameterType::String).required(true),
     );
 
     // Add the prompt to the library

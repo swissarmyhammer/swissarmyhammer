@@ -222,7 +222,7 @@ pub fn generate_excerpt(content: &str, query: &str, highlight: bool) -> Option<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Prompt, common::Parameter, common::ParameterType};
+    use crate::{common::Parameter, common::ParameterType, Prompt};
 
     fn create_test_prompts() -> Vec<Prompt> {
         vec![
@@ -300,13 +300,11 @@ mod tests {
         let mut prompts = create_test_prompts();
 
         // Add a prompt with a parameter
-        let prompt_with_arg =
-            Prompt::new("arg_test", "Test {{input}}")
-                .with_description("Has parameters")
-                .add_parameter(
-                    Parameter::new("input", "Input value", ParameterType::String)
-                        .required(true)
-                );
+        let prompt_with_arg = Prompt::new("arg_test", "Test {{input}}")
+            .with_description("Has parameters")
+            .add_parameter(
+                Parameter::new("input", "Input value", ParameterType::String).required(true),
+            );
         prompts.push(prompt_with_arg);
 
         // Search for prompts with no arguments

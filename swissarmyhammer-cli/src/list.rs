@@ -78,7 +78,10 @@ pub fn run_list_command(
                 name: param.name.clone(),
                 description: Some(param.description.clone()),
                 required: param.required,
-                default: param.default.as_ref().and_then(|v| v.as_str().map(String::from)),
+                default: param
+                    .default
+                    .as_ref()
+                    .and_then(|v| v.as_str().map(String::from)),
             })
             .collect();
 

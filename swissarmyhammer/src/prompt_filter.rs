@@ -112,7 +112,11 @@ impl PromptFilter {
 
         // Check has_arg filter
         if let Some(ref arg_name) = self.has_arg {
-            if !prompt.parameters.iter().any(|param| param.name == *arg_name) {
+            if !prompt
+                .parameters
+                .iter()
+                .any(|param| param.name == *arg_name)
+            {
                 return false;
             }
         }
@@ -129,7 +133,7 @@ impl PromptFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Prompt, PromptSource, common::Parameter, common::ParameterType};
+    use crate::{common::Parameter, common::ParameterType, Prompt, PromptSource};
     use std::collections::HashMap;
 
     fn create_test_prompt(name: &str, category: Option<&str>, tags: Vec<&str>) -> Prompt {
@@ -218,11 +222,9 @@ mod tests {
 
     #[test]
     fn test_filter_by_arguments() {
-        let prompt_with_args = create_test_prompt("with_args", Some("dev"), vec![])
-            .add_parameter(
-                Parameter::new("input", "Input data", ParameterType::String)
-                    .required(true)
-            );
+        let prompt_with_args = create_test_prompt("with_args", Some("dev"), vec![]).add_parameter(
+            Parameter::new("input", "Input data", ParameterType::String).required(true),
+        );
 
         let prompt_no_args = create_test_prompt("no_args", Some("dev"), vec![]);
 
