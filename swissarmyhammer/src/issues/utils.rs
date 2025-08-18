@@ -143,7 +143,7 @@ pub async fn merge_issue_branch<S: IssueStorage>(
 
     // Optionally delete the branch
     let branch_deleted = if delete_branch {
-        match git_ops.delete_branch(&branch_name) {
+        match git_ops.delete_branch(&branch_name, false) {
             Ok(()) => true,
             Err(e) => {
                 // Log warning but don't fail the operation

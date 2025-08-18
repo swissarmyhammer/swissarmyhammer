@@ -165,7 +165,7 @@ async fn test_source_branch_deleted_mid_workflow() {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
         git.checkout_branch("main").unwrap();
-        git.delete_branch("feature/temporary").unwrap();
+        git.delete_branch("feature/temporary", true).unwrap();
     }
 
     // Mark issue complete

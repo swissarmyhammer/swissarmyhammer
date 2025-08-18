@@ -174,10 +174,6 @@ async fn test_complete_issue_workflow() {
         // Merge the issue branch
         git.merge_issue_branch_simple(issue.name.as_str()).unwrap();
 
-        // Delete the issue branch
-        let branch_name = format!("issue/{}", issue.name.as_str());
-        git.delete_branch(&branch_name).unwrap();
-
         // Verify we're on main
         let current_branch = git.current_branch().unwrap();
         let main_branch = git.main_branch().unwrap();

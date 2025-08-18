@@ -520,14 +520,24 @@ impl GitOperations {
     }
 
     /// Delete a branch
-    pub fn delete_branch(&self, branch_name: &str) -> Result<()> {
+    pub fn delete_branch(&self, branch_name: &str, force: bool) -> Result<()> {
         let output = Command::new("git")
             .current_dir(&self.work_dir)
-            .args(["branch", "-D", branch_name])
+            .args([
+                "branch",
+                "--delete",
+                if force { "--force" } else { "" },
+                branch_name,
+            ])
             .output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // Create abort file for automatic merge failure
+            create_abort_file(
+                &self.work_dir,
+                &format!("Failed to delete branch '{branch_name}': {stderr}"),
+            )?;
             return Err(SwissArmyHammerError::Other(format!(
                 "Failed to delete branch '{branch_name}': {stderr}"
             )));
@@ -1571,7 +1581,7 @@ mod tests {
 
         // Switch back to main and delete feature branch
         git_ops.checkout_branch("main").unwrap();
-        git_ops.delete_branch("feature/test").unwrap();
+        git_ops.delete_branch("feature/test", true).unwrap();
 
         // Auto merge should fail because the source branch (feature/test) was deleted
         // and reflog-based detection cannot find a valid target branch

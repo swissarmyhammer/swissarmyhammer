@@ -48,7 +48,7 @@ impl McpTool for MergeIssueTool {
                 "delete_branch": {
                     "type": "boolean",
                     "description": "Whether to delete the branch after merging",
-                    "default": false
+                    "default": true
                 }
             },
             "required": ["name"]
@@ -207,7 +207,7 @@ impl McpTool for MergeIssueTool {
                         // If delete_branch is true, delete the branch after successful merge
                         if request.delete_branch {
                             let branch_name = Self::format_issue_branch_name(&issue_name);
-                            match ops.delete_branch(&branch_name) {
+                            match ops.delete_branch(&branch_name, false) {
                                 Ok(_) => {
                                     success_message
                                         .push_str(&format!(" and deleted branch {branch_name}"));
