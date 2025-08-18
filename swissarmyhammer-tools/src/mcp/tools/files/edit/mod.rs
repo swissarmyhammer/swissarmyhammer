@@ -126,9 +126,7 @@ impl EditFileTool {
             ));
         }
 
-        Ok(EditValidation {
-            old_string_count,
-        })
+        Ok(EditValidation { old_string_count })
     }
 
     /// Detects file encoding and reads content as string

@@ -11,7 +11,6 @@ use rmcp::Error as McpError;
 use std::path::Path;
 use std::time::SystemTime;
 
-
 /// Tool for fast file pattern matching with advanced filtering and sorting
 #[derive(Default)]
 pub struct GlobFileTool;
@@ -148,11 +147,11 @@ fn find_files_with_gitignore(
     case_sensitive: bool,
 ) -> Result<Vec<String>, McpError> {
     let mut builder = WalkBuilder::new(search_dir);
-    
+
     // Configure ignore patterns
     builder
         .git_ignore(true)
-        .git_global(true) 
+        .git_global(true)
         .git_exclude(true)
         .ignore(true)
         .parents(true)
@@ -181,30 +180,32 @@ fn find_files_with_gitignore(
     for entry in walker {
         // Performance optimization: stop if we have enough results
         if matched_files.len() >= MAX_RESULTS {
-            tracing::warn!("Result limit reached ({} files), stopping search", MAX_RESULTS);
+            tracing::warn!(
+                "Result limit reached ({} files), stopping search",
+                MAX_RESULTS
+            );
             break;
         }
-        
+
         match entry {
             Ok(dir_entry) => {
                 let path = dir_entry.path();
-                
+
                 // Only process files, not directories
                 if path.is_file() {
                     let mut matched = false;
-                    
+
                     // For patterns like "*.txt", match against filename
                     if !pattern.contains('/') && !pattern.starts_with("**") {
                         if let Some(file_name) = path.file_name() {
-                            if glob_pattern.matches_with(
-                                file_name.to_string_lossy().as_ref(),
-                                match_options,
-                            ) {
+                            if glob_pattern
+                                .matches_with(file_name.to_string_lossy().as_ref(), match_options)
+                            {
                                 matched = true;
                             }
                         }
                     }
-                    
+
                     // For patterns like "**/*.rs" or "src/**/*.py", match against relative path
                     if !matched {
                         if let Ok(relative_path) = path.strip_prefix(search_dir) {
@@ -216,12 +217,12 @@ fn find_files_with_gitignore(
                             }
                         }
                     }
-                    
+
                     // For pattern "**/*" (match all files), always match
                     if !matched && (pattern == "**/*" || pattern == "**") {
                         matched = true;
                     }
-                    
+
                     if matched {
                         matched_files.push(path.to_string_lossy().to_string());
                     }
@@ -251,10 +252,7 @@ fn find_files_with_glob(
     let glob_pattern = if Path::new(pattern).is_absolute() {
         pattern.to_string()
     } else {
-        search_dir
-            .join(pattern)
-            .to_string_lossy()
-            .to_string()
+        search_dir.join(pattern).to_string_lossy().to_string()
     };
 
     // Configure glob options
@@ -264,19 +262,21 @@ fn find_files_with_glob(
     glob_options.require_literal_leading_dot = false;
 
     // Execute glob pattern
-    let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
-        rmcp::Error::invalid_request(format!("Invalid glob pattern: {}", e), None)
-    })?;
+    let entries = glob::glob_with(&glob_pattern, glob_options)
+        .map_err(|e| rmcp::Error::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
 
     let mut matched_files = Vec::new();
 
     for entry in entries {
         // Performance optimization: stop if we have enough results
         if matched_files.len() >= MAX_RESULTS {
-            tracing::warn!("Result limit reached ({} files), stopping search", MAX_RESULTS);
+            tracing::warn!(
+                "Result limit reached ({} files), stopping search",
+                MAX_RESULTS
+            );
             break;
         }
-        
+
         match entry {
             Ok(path) => {
                 // Only include files, not directories
@@ -308,9 +308,9 @@ fn sort_files_by_modification_time(files: &mut [String]) {
                 let b_time = b_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                 b_time.cmp(&a_time) // Most recent first
             }
-            (Some(_), None) => std::cmp::Ordering::Less,   // Files with metadata come first
+            (Some(_), None) => std::cmp::Ordering::Less, // Files with metadata come first
             (None, Some(_)) => std::cmp::Ordering::Greater, // Files with metadata come first
-            (None, None) => a.cmp(b), // Fallback to lexicographic
+            (None, None) => a.cmp(b),                    // Fallback to lexicographic
         }
     });
 }
@@ -324,7 +324,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
             None,
         ));
     }
-    
+
     // Check for extremely long patterns that might cause performance issues
     if pattern.len() > 1000 {
         return Err(rmcp::Error::invalid_request(
@@ -332,7 +332,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
             None,
         ));
     }
-    
+
     // Validate pattern syntax by trying to compile it
     if let Err(e) = glob::Pattern::new(pattern) {
         return Err(rmcp::Error::invalid_request(
@@ -340,7 +340,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
             None,
         ));
     }
-    
+
     // Check for potentially problematic patterns
     if pattern.starts_with('/') && !Path::new(pattern).is_absolute() {
         return Err(rmcp::Error::invalid_request(
@@ -348,6 +348,6 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
             None,
         ));
     }
-    
+
     Ok(())
 }

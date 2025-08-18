@@ -8,10 +8,10 @@ use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
-use std::io::Read;
 
 /// Check if a file type matches the requested type filter
 fn matches_file_type(path: &Path, file_type: &str) -> bool {
@@ -69,7 +69,7 @@ fn is_likely_binary_file(path: &Path) -> bool {
 /// Check if file content contains binary data by examining a sample
 fn is_binary_content(sample: &[u8]) -> bool {
     // Check for null bytes which are common in binary files
-    sample.iter().any(|&byte| byte == 0) || 
+    sample.iter().any(|&byte| byte == 0) ||
     // Check if content is valid UTF-8
     std::str::from_utf8(sample).is_err()
 }
@@ -80,7 +80,7 @@ async fn should_skip_file(path: &Path) -> bool {
     if is_likely_binary_file(path) {
         return true;
     }
-    
+
     // Sample first 512 bytes for binary content detection
     if let Ok(mut file) = std::fs::File::open(path) {
         let mut buffer = [0; 512];
@@ -155,8 +155,7 @@ impl GrepFileTool {
             Ok(output) => {
                 if output.status.success() {
                     let version_output = String::from_utf8_lossy(&output.stdout);
-                    let version = version_output.lines().next()
-                        .map(|line| line.to_string());
+                    let version = version_output.lines().next().map(|line| line.to_string());
                     (true, version)
                 } else {
                     (false, None)
@@ -190,7 +189,7 @@ impl GrepFileTool {
                 "javascript" | "js" => "js",
                 "typescript" | "ts" => "ts",
                 "json" => "json",
-                "yaml" | "yml" => "yaml", 
+                "yaml" | "yml" => "yaml",
                 "toml" => "toml",
                 "markdown" | "md" => "md",
                 "html" => "html",
@@ -224,7 +223,7 @@ impl GrepFileTool {
                 cmd.arg("--count");
             }
             _ => {
-                // default content mode 
+                // default content mode
                 cmd.arg("--with-filename").arg("--line-number");
             }
         }
@@ -234,10 +233,7 @@ impl GrepFileTool {
 
         // Execute ripgrep command
         let output = cmd.output().map_err(|e| {
-            McpError::internal_error(
-                format!("Failed to execute ripgrep: {}", e),
-                None,
-            )
+            McpError::internal_error(format!("Failed to execute ripgrep: {}", e), None)
         })?;
 
         let search_time_ms = start_time.elapsed().as_millis() as u64;
@@ -284,7 +280,7 @@ impl GrepFileTool {
         output_mode: &Option<String>,
     ) -> std::result::Result<GrepResults, McpError> {
         let mode = output_mode.as_deref().unwrap_or("content");
-        
+
         match mode {
             "files_with_matches" => {
                 let files: Vec<String> = output
@@ -292,7 +288,7 @@ impl GrepFileTool {
                     .filter(|line| !line.is_empty())
                     .map(|line| line.to_string())
                     .collect();
-                
+
                 Ok(GrepResults {
                     matches: vec![],
                     files_searched: files.len(),
@@ -319,7 +315,7 @@ impl GrepFileTool {
                         total_matches += count;
                     }
                 }
-                
+
                 Ok(GrepResults {
                     matches: vec![],
                     files_searched,
@@ -398,9 +394,9 @@ impl GrepFileTool {
 
         // Walk directory tree
         let walker = if search_path.is_file() {
-            WalkDir::new(&search_path).max_depth(0)
+            WalkDir::new(search_path).max_depth(0)
         } else {
-            WalkDir::new(&search_path)
+            WalkDir::new(search_path)
         };
 
         for entry in walker.into_iter().filter_map(|e| e.ok()) {
@@ -618,15 +614,16 @@ impl GrepFileTool {
                 results.search_time_ms
             )
         } else {
-            format!(" | Engine: regex fallback | Time: {}ms", results.search_time_ms)
+            format!(
+                " | Engine: regex fallback | Time: {}ms",
+                results.search_time_ms
+            )
         };
 
         let response = match output_mode {
             "count" => format!(
                 "{} matches in {} files{}",
-                results.total_matches,
-                results.files_searched,
-                engine_info
+                results.total_matches, results.files_searched, engine_info
             ),
             "files_with_matches" => {
                 if results.files_searched == 0 {
@@ -634,37 +631,41 @@ impl GrepFileTool {
                 } else {
                     format!(
                         "Files with matches ({}){}",
-                        results.files_searched,
-                        engine_info
+                        results.files_searched, engine_info
                     )
                 }
             }
             "content" => {
                 if results.total_matches == 0 {
                     format!("No matches found{}", engine_info)
+                } else if results.matches.is_empty() {
+                    // Fallback case - we don't have detailed match info
+                    format!(
+                        "Found {} matches in {} files{}",
+                        results.total_matches, results.files_searched, engine_info
+                    )
                 } else {
-                    if results.matches.is_empty() {
-                        // Fallback case - we don't have detailed match info
-                        format!(
-                            "Found {} matches in {} files{}",
-                            results.total_matches,
-                            results.files_searched,
-                            engine_info
-                        )
-                    } else {
-                        // Format detailed matches
-                        let match_details: Vec<String> = results.matches.iter().map(|m| {
-                            format!("{}:{}: {}", m.file_path.display(), m.line_number, m.matched_text)
-                        }).collect();
+                    // Format detailed matches
+                    let match_details: Vec<String> = results
+                        .matches
+                        .iter()
+                        .map(|m| {
+                            format!(
+                                "{}:{}: {}",
+                                m.file_path.display(),
+                                m.line_number,
+                                m.matched_text
+                            )
+                        })
+                        .collect();
 
-                        format!(
-                            "Found {} matches in {} files{}:\n\n{}",
-                            results.total_matches,
-                            results.files_searched,
-                            engine_info,
-                            match_details.join("\n")
-                        )
-                    }
+                    format!(
+                        "Found {} matches in {} files{}:\n\n{}",
+                        results.total_matches,
+                        results.files_searched,
+                        engine_info,
+                        match_details.join("\n")
+                    )
                 }
             }
             _ => {

@@ -754,7 +754,7 @@ async fn test_glob_tool_basic_pattern_matching() {
     let temp_dir = TempDir::new().unwrap();
     let test_files = vec![
         "test1.txt",
-        "test2.js", 
+        "test2.js",
         "subdir/test3.txt",
         "subdir/test4.py",
         "README.md",
@@ -794,7 +794,7 @@ async fn test_glob_tool_basic_pattern_matching() {
     assert!(!response_text.contains("README.md"));
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_glob_tool_advanced_gitignore_integration() {
     // This test will fail initially - it tests the enhanced functionality we need to implement
     let registry = create_test_registry();
@@ -803,28 +803,27 @@ async fn test_glob_tool_advanced_gitignore_integration() {
 
     // Create test directory with .gitignore
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Initialize a git repository (required for ignore crate to work properly)
     use std::process::Command;
-    
+
     Command::new("git")
         .args(["init"])
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to initialize git repo");
-    
+
     // Write .gitignore file
     let gitignore_content = "*.log\n/build/\ntemp_*\n!important.log\n";
     fs::write(temp_dir.path().join(".gitignore"), gitignore_content).unwrap();
-    
 
     let test_files = vec![
         "src/main.rs",
-        "important.log",     // Explicitly not ignored
-        "debug.log",         // Should be ignored
-        "build/output.txt",  // Should be ignored
-        "temp_file.txt",     // Should be ignored  
-        "normal.txt",        // Should be included
+        "important.log",    // Explicitly not ignored
+        "debug.log",        // Should be ignored
+        "build/output.txt", // Should be ignored
+        "temp_file.txt",    // Should be ignored
+        "normal.txt",       // Should be included
     ];
 
     for file_path in &test_files {
@@ -854,15 +853,14 @@ async fn test_glob_tool_advanced_gitignore_integration() {
         panic!("Response should contain content");
     };
 
-
     // Should find files not ignored by .gitignore
     assert!(response_text.contains("main.rs"));
-    assert!(response_text.contains("important.log")); // Explicitly not ignored  
+    assert!(response_text.contains("important.log")); // Explicitly not ignored
     assert!(response_text.contains("normal.txt"));
-    
+
     // Should NOT find ignored files
     assert!(!response_text.contains("debug.log"));
-    assert!(!response_text.contains("build/output.txt"));  
+    assert!(!response_text.contains("build/output.txt"));
     assert!(!response_text.contains("temp_file.txt"));
 }
 
@@ -903,7 +901,7 @@ async fn test_glob_tool_case_sensitivity() {
 
     // Create test files with mixed case
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Initialize git repo for ignore crate to work properly
     use std::process::Command;
     Command::new("git")
@@ -911,7 +909,7 @@ async fn test_glob_tool_case_sensitivity() {
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to initialize git repo");
-    
+
     // Use different filenames to avoid filesystem case issues
     let test_files = vec!["Test.TXT", "other.txt", "README.md", "readme.MD"];
 
@@ -939,7 +937,6 @@ async fn test_glob_tool_case_sensitivity() {
         panic!("Response should contain content");
     };
 
-
     // Should find both .TXT and .txt with case insensitive
     assert!(response_text.contains("Test.TXT"));
     assert!(response_text.contains("other.txt"));
@@ -964,7 +961,7 @@ async fn test_glob_tool_case_sensitivity() {
         panic!("Response should contain content");
     };
 
-    // Should only find .txt files, not .TXT  
+    // Should only find .txt files, not .TXT
     assert!(!response_text.contains("Test.TXT"));
     assert!(response_text.contains("other.txt"));
 }
@@ -977,7 +974,7 @@ async fn test_glob_tool_modification_time_sorting() {
 
     // Create test files with different modification times
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Initialize git repo for ignore crate to work properly
     use std::process::Command;
     Command::new("git")
@@ -985,13 +982,13 @@ async fn test_glob_tool_modification_time_sorting() {
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to initialize git repo");
-    
+
     let file1 = temp_dir.path().join("old_file.txt");
     fs::write(&file1, "Old content").unwrap();
-    
+
     // Sleep to ensure different modification times
     std::thread::sleep(std::time::Duration::from_millis(100));
-    
+
     let file2 = temp_dir.path().join("new_file.txt");
     fs::write(&file2, "New content").unwrap();
 
@@ -1014,7 +1011,8 @@ async fn test_glob_tool_modification_time_sorting() {
     };
 
     // Parse the response to check order - filter out only file paths, not header lines
-    let lines: Vec<&str> = response_text.lines()
+    let lines: Vec<&str> = response_text
+        .lines()
         .filter(|line| line.contains(".txt") && line.starts_with("/"))
         .collect();
 
@@ -1022,10 +1020,13 @@ async fn test_glob_tool_modification_time_sorting() {
     if lines.len() >= 2 {
         let first_file_is_new = lines[0].contains("new_file.txt");
         let second_file_is_old = lines[1].contains("old_file.txt");
-        
+
         // Both conditions should be true for proper sorting
-        assert!(first_file_is_new && second_file_is_old, 
-            "Files should be sorted by modification time (recent first). Found order: {:?}", lines);
+        assert!(
+            first_file_is_new && second_file_is_old,
+            "Files should be sorted by modification time (recent first). Found order: {:?}",
+            lines
+        );
     }
 }
 
@@ -1037,7 +1038,7 @@ async fn test_glob_tool_no_matches() {
 
     // Create test directory with no matching files
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Initialize git repo for ignore crate to work properly
     use std::process::Command;
     Command::new("git")
@@ -1045,7 +1046,7 @@ async fn test_glob_tool_no_matches() {
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to initialize git repo");
-        
+
     fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
 
     // Search for pattern that won't match
@@ -1118,7 +1119,7 @@ async fn test_glob_tool_recursive_patterns() {
     assert!(response_text.contains("lib.rs"));
     assert!(response_text.contains("helper.rs"));
     assert!(response_text.contains("integration.rs"));
-    
+
     // Should not find non-Rust files
     assert!(!response_text.contains("readme.md"));
 }
@@ -1167,7 +1168,7 @@ async fn test_grep_tool_basic_pattern_matching() {
 
     // Create test files with content to search
     let temp_dir = TempDir::new().unwrap();
-    
+
     let test_files = vec![
         ("src/main.rs", "fn main() {\n    println!(\"Hello, world!\");\n    let result = calculate();\n}"),
         ("src/lib.rs", "pub fn calculate() -> i32 {\n    42\n}\n\npub fn helper() {\n    // Helper function\n}"),
@@ -1218,7 +1219,7 @@ async fn test_grep_tool_file_type_filtering() {
 
     // Create test files with different extensions
     let temp_dir = TempDir::new().unwrap();
-    
+
     let test_files = vec![
         ("main.rs", "fn main() {\n    let test = true;\n}"),
         ("script.py", "def test_function():\n    return True"),
@@ -1238,7 +1239,11 @@ async fn test_grep_tool_file_type_filtering() {
     arguments.insert("type".to_string(), json!("rust"));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "File type filtering should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "File type filtering should succeed: {:?}",
+        result
+    );
 
     let call_result = result.unwrap();
     let response_text = if let Some(content_item) = call_result.content.first() {
@@ -1265,7 +1270,7 @@ async fn test_grep_tool_glob_filtering() {
 
     // Create test files in different directories
     let temp_dir = TempDir::new().unwrap();
-    
+
     let test_files = vec![
         ("src/main.rs", "const VERSION: &str = \"1.0.0\";"),
         ("tests/unit.rs", "const TEST_VERSION: &str = \"1.0.0\";"),
@@ -1288,7 +1293,11 @@ async fn test_grep_tool_glob_filtering() {
     arguments.insert("glob".to_string(), json!("*.rs")); // Simplified glob pattern
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "Glob filtering should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Glob filtering should succeed: {:?}",
+        result
+    );
 
     let call_result = result.unwrap();
     let response_text = if let Some(content_item) = call_result.content.first() {
@@ -1304,8 +1313,11 @@ async fn test_grep_tool_glob_filtering() {
     println!("Glob filtering response: {}", response_text);
     // With a *.rs glob, we should find matches in Rust files
     assert!(
-        response_text.contains("4 matches") || response_text.contains("VERSION") || response_text.contains("matches in"),
-        "Should find matches with *.rs glob pattern. Got: {}", response_text
+        response_text.contains("4 matches")
+            || response_text.contains("VERSION")
+            || response_text.contains("matches in"),
+        "Should find matches with *.rs glob pattern. Got: {}",
+        response_text
     );
 }
 
@@ -1410,9 +1422,12 @@ async fn test_grep_tool_output_modes() {
 
     // Create test files
     let temp_dir = TempDir::new().unwrap();
-    
+
     let test_files = vec![
-        ("file1.txt", "This contains the target word multiple times.\nTarget here too."),
+        (
+            "file1.txt",
+            "This contains the target word multiple times.\nTarget here too.",
+        ),
         ("file2.txt", "Another target in this file."),
         ("file3.txt", "No matches in this file."),
     ];
@@ -1444,9 +1459,10 @@ async fn test_grep_tool_output_modes() {
 
     // Should show files with matches (not individual line matches)
     assert!(
-        (response_text.contains("2") && response_text.contains("files")) ||
-        response_text.contains("Files with matches (2)"),
-        "Response should indicate 2 files found. Got: {}", response_text
+        (response_text.contains("2") && response_text.contains("files"))
+            || response_text.contains("Files with matches (2)"),
+        "Response should indicate 2 files found. Got: {}",
+        response_text
     );
 
     // Test count mode
@@ -1474,7 +1490,8 @@ async fn test_grep_tool_output_modes() {
     // Should find 3-4 matches across files (3 target + 1 Target)
     assert!(
         response_text.contains("3") || response_text.contains("4"),
-        "Should find 3-4 matches across files. Got: {}", response_text
+        "Should find 3-4 matches across files. Got: {}",
+        response_text
     );
 }
 
@@ -1497,11 +1514,12 @@ async fn test_grep_tool_error_handling() {
     let error_msg = format!("{:?}", error);
     // The error might come from ripgrep or the regex engine - both are acceptable
     assert!(
-        error_msg.contains("Invalid regex pattern") || 
-        error_msg.contains("regex") || 
-        error_msg.contains("failed") ||
-        error_msg.contains("search failed"),
-        "Error message should indicate regex or search failure: {}", error_msg
+        error_msg.contains("Invalid regex pattern")
+            || error_msg.contains("regex")
+            || error_msg.contains("failed")
+            || error_msg.contains("search failed"),
+        "Error message should indicate regex or search failure: {}",
+        error_msg
     );
 
     // Test non-existent directory
@@ -1537,7 +1555,7 @@ async fn test_grep_tool_binary_file_exclusion() {
 
     // Create test directory with mixed file types
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create text file
     let text_file = temp_dir.path().join("text.txt");
     fs::write(&text_file, "This is searchable text content").unwrap();
@@ -1637,17 +1655,18 @@ async fn test_grep_tool_ripgrep_fallback_behavior() {
 
     // Should indicate which engine was used
     assert!(
-        response_text.contains("Engine: ripgrep") || response_text.contains("Engine: regex fallback"),
+        response_text.contains("Engine: ripgrep")
+            || response_text.contains("Engine: regex fallback"),
         "Response should indicate which engine was used. Got: {}",
         response_text
     );
-    
+
     // Should include timing information
     assert!(response_text.contains("Time:"));
     assert!(response_text.contains("ms"));
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn test_grep_tool_single_file_vs_directory() {
     let registry = create_test_registry();
     let context = create_test_context().await;
@@ -1655,7 +1674,7 @@ async fn test_grep_tool_single_file_vs_directory() {
 
     // Create test directory with multiple files
     let temp_dir = TempDir::new().unwrap();
-    
+
     let test_files = vec![
         ("target.txt", "This file contains the word target"),
         ("other.txt", "This file does not contain the word"),
