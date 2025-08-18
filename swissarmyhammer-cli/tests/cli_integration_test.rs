@@ -870,7 +870,7 @@ fn test_root_validate_invalid_yaml() -> Result<()> {
         r#"---
 title: Test Prompt
 description: This has invalid YAML
-arguments:
+parameters:
   - name: test
     required: yes  # Should be boolean true/false, not yes/no
     description
@@ -908,7 +908,7 @@ fn test_root_validate_missing_fields() -> Result<()> {
         prompts_dir.join("incomplete.md"),
         r#"---
 # Missing title and description
-arguments:
+parameters:
   - name: test
     required: true
 ---
@@ -960,7 +960,7 @@ fn test_root_validate_undefined_variables() -> Result<()> {
         r#"---
 title: Test Undefined Variables
 description: This uses variables not defined in arguments
-arguments:
+parameters:
   - name: defined_var
     required: true
 ---
@@ -1116,7 +1116,7 @@ fn test_root_validate_mixed_valid_invalid_prompts() -> Result<()> {
         r#"---
 title: Valid Prompt
 description: This is a valid prompt
-arguments:
+parameters:
   - name: test
     required: true
     default: "value"
@@ -1396,7 +1396,7 @@ fn test_root_validate_quiet_mode_warnings_behavior() -> Result<()> {
         r#"---
 title: Warning Only Prompt
 description: This prompt has a warning due to unused argument
-arguments:
+parameters:
   - name: unused_var
     required: false
     description: This variable is defined but not used in template
@@ -1477,7 +1477,7 @@ fn test_root_validate_quiet_mode_with_errors_and_warnings() -> Result<()> {
         r#"---
 title: Warning Prompt
 description: This prompt has warnings
-arguments:
+parameters:
   - name: unused_var
     required: false
     description: This variable is not used
@@ -1495,7 +1495,7 @@ This prompt uses {{ used_var }} but not unused_var."#,
         r#"---
 title: Test Undefined Variables
 description: This uses variables not defined in arguments
-arguments:
+parameters:
   - name: defined_var
     required: true
 ---

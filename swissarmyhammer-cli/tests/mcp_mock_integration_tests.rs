@@ -14,7 +14,7 @@ struct MockMcpClient {
 struct MockPrompt {
     name: String,
     description: String,
-    arguments: Vec<MockArgument>,
+    parameters: Vec<MockArgument>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,7 +121,7 @@ async fn setup_test_environment() -> Result<(MockMcpClient, PromptLibrary, TempD
         yaml_content.push_str(&format!("description: Test prompt for {name}\n"));
 
         if !args.is_empty() {
-            yaml_content.push_str("arguments:\n");
+            yaml_content.push_str("parameters:\n");
             for (arg_name, desc, required) in &args {
                 yaml_content.push_str(&format!("  - name: {arg_name}\n"));
                 yaml_content.push_str(&format!("    description: {desc}\n"));
@@ -138,7 +138,7 @@ async fn setup_test_environment() -> Result<(MockMcpClient, PromptLibrary, TempD
         let mock_prompt = MockPrompt {
             name: name.to_string(),
             description: format!("Test prompt for {name}"),
-            arguments: args
+            parameters: args
                 .iter()
                 .map(|(name, desc, required)| MockArgument {
                     name: name.to_string(),
@@ -298,7 +298,7 @@ mod tests {
             .add_prompt(MockPrompt {
                 name: "dynamic".to_string(),
                 description: "Dynamically added prompt".to_string(),
-                arguments: vec![],
+                parameters: vec![],
             })
             .await;
 
@@ -343,7 +343,7 @@ This has invalid syntax {{unclosed"#;
                 .add_prompt(MockPrompt {
                     name: format!("prompt_{i}"),
                     description: format!("Test prompt {i}"),
-                    arguments: vec![
+                    parameters: vec![
                         MockArgument {
                             name: "arg1".to_string(),
                             description: "First argument".to_string(),
@@ -389,7 +389,7 @@ This has invalid syntax {{unclosed"#;
 
         // Verify required arguments
         let required_args: Vec<_> = with_args_prompt
-            .arguments
+            .parameters
             .iter()
             .filter(|a| a.required)
             .map(|a| &a.name)
@@ -414,13 +414,13 @@ This has invalid syntax {{unclosed"#;
 
             // Check argument metadata
             if prompt.name == "optional_args" {
-                assert_eq!(prompt.arguments.len(), 3);
+                assert_eq!(prompt.parameters.len(), 3);
 
-                let name_arg = prompt.arguments.iter().find(|a| a.name == "name").unwrap();
+                let name_arg = prompt.parameters.iter().find(|a| a.name == "name").unwrap();
                 assert!(name_arg.required);
 
                 let greeting_arg = prompt
-                    .arguments
+                    .parameters
                     .iter()
                     .find(|a| a.name == "greeting")
                     .unwrap();
