@@ -758,9 +758,12 @@ port = 5432
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_environment_variable_substitution() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::test_utils::IsolatedTestHome;
         use std::env;
+
+        // Use isolated test home to avoid interfering with other tests
+        let _guard = IsolatedTestHome::new();
 
         // Set up test environment variables
         env::set_var("TEST_DB_HOST", "production.example.com");
@@ -953,9 +956,12 @@ log_level = "debug"
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_shell_env_overrides() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::test_utils::IsolatedTestHome;
         use std::env;
+
+        // Use isolated test home to avoid interfering with other tests
+        let _guard = IsolatedTestHome::new();
 
         // Set test environment variables
         env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", "false");
@@ -1111,9 +1117,12 @@ truncation_strategy = "invalid_strategy"
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_invalid_env_values() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::test_utils::IsolatedTestHome;
         use std::env;
+
+        // Use isolated test home to avoid interfering with other tests
+        let _guard = IsolatedTestHome::new();
 
         // Test invalid boolean value
         env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", "maybe");
