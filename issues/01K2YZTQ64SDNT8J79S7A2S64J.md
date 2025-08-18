@@ -1,1 +1,0 @@
-it does not seem like there should be a WorkflowParameter -- duplicate type - Parameters are supposed to be unified

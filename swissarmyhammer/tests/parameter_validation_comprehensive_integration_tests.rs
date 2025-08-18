@@ -1046,10 +1046,10 @@ mod parameter_validation_integration_tests {
 mod specification_compliance_tests {
     use serde_json::json;
     use std::collections::HashMap;
+    use swissarmyhammer::common::ParameterType;
     use swissarmyhammer::common::{
         discover_workflow_parameters, DefaultParameterResolver, ParameterResolver,
     };
-    use swissarmyhammer::workflow::ParameterType;
 
     /// Test that workflow parameters are defined in frontmatter like prompts
     #[tokio::test]
@@ -1113,10 +1113,7 @@ mod specification_compliance_tests {
         let workflow_params = discover_workflow_parameters("greeting").unwrap();
 
         // Convert to Parameter objects
-        let parameters: Vec<_> = workflow_params
-            .into_iter()
-            .map(|wp| wp.to_parameter())
-            .collect();
+        let parameters: Vec<_> = workflow_params.into_iter().collect();
 
         // Test with missing required parameter (would prompt interactively)
         let cli_args: HashMap<String, String> = [("language".to_string(), "French".to_string())]
@@ -1158,10 +1155,7 @@ mod specification_compliance_tests {
     async fn test_parameter_validation_and_error_handling() {
         let resolver = DefaultParameterResolver::new();
         let workflow_params = discover_workflow_parameters("greeting").unwrap();
-        let parameters: Vec<_> = workflow_params
-            .into_iter()
-            .map(|wp| wp.to_parameter())
-            .collect();
+        let parameters: Vec<_> = workflow_params.into_iter().collect();
 
         // Test missing required parameter
         let cli_args: HashMap<String, String> = [
@@ -1298,10 +1292,7 @@ mod specification_compliance_tests {
         async fn test_parameter_resolution_performance() {
             let resolver = DefaultParameterResolver::new();
             let workflow_params = discover_workflow_parameters("greeting").unwrap();
-            let parameters: Vec<_> = workflow_params
-                .into_iter()
-                .map(|wp| wp.to_parameter())
-                .collect();
+            let parameters: Vec<_> = workflow_params.into_iter().collect();
 
             let cli_args: HashMap<String, String> = [
                 ("person_name".to_string(), "Alice".to_string()),

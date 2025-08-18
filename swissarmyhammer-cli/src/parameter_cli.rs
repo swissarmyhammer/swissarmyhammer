@@ -5,11 +5,11 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
+use swissarmyhammer::common::Parameter;
 use swissarmyhammer::common::{
     discover_workflow_parameters, resolve_parameters_from_vars, DefaultParameterResolver,
     ParameterResolver,
 };
-use swissarmyhammer::workflow::WorkflowParameter;
 use swissarmyhammer::Result;
 
 /// Resolve workflow parameters with optional interactive prompting
@@ -45,11 +45,8 @@ pub fn resolve_workflow_parameters_interactive(
             }
         }
 
-        // Convert WorkflowParameter to Parameter
-        let parameters: Vec<_> = workflow_params
-            .into_iter()
-            .map(|wp| wp.to_parameter())
-            .collect();
+        // Parameters are already the correct type
+        let parameters = workflow_params;
 
         resolver
             .resolve_parameters(&parameters, &cli_args, should_be_interactive)
@@ -68,7 +65,7 @@ pub fn resolve_workflow_parameters_interactive(
 /// Used for future dynamic help text generation implementation
 /// Currently only used in tests, hence the allow attribute
 #[allow(dead_code)]
-pub fn get_workflow_parameters_for_help(workflow_name: &str) -> Vec<WorkflowParameter> {
+pub fn get_workflow_parameters_for_help(workflow_name: &str) -> Vec<Parameter> {
     discover_workflow_parameters(workflow_name).unwrap_or_default()
 }
 
