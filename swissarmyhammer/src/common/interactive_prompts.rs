@@ -4,8 +4,8 @@
 //! It handles different parameter types with appropriate UI controls and validation.
 
 use crate::common::parameters::{
-    CommonPatterns, Parameter, ParameterError, ParameterGroup, ParameterResult, ParameterType,
-    ParameterValidator,
+    ErrorMessageEnhancer, Parameter, ParameterError, ParameterGroup, ParameterResult,
+    ParameterType, ParameterValidator,
 };
 use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input, MultiSelect};
 use std::collections::HashMap;
@@ -17,6 +17,10 @@ pub struct InteractivePrompts {
     non_interactive: bool,
     /// Parameter validator for input validation
     validator: ParameterValidator,
+    /// Error message enhancer for user-friendly error messages
+    error_enhancer: ErrorMessageEnhancer,
+    /// Maximum retry attempts for error recovery
+    max_attempts: u32,
 }
 
 impl InteractivePrompts {
@@ -25,6 +29,18 @@ impl InteractivePrompts {
         Self {
             non_interactive: non_interactive || !io::stdin().is_terminal(),
             validator: ParameterValidator::new(),
+            error_enhancer: ErrorMessageEnhancer::new(),
+            max_attempts: 3,
+        }
+    }
+
+    /// Create a new interactive prompts instance with custom max attempts
+    pub fn with_max_attempts(non_interactive: bool, max_attempts: u32) -> Self {
+        Self {
+            non_interactive: non_interactive || !io::stdin().is_terminal(),
+            validator: ParameterValidator::new(),
+            error_enhancer: ErrorMessageEnhancer::new(),
+            max_attempts,
         }
     }
 
@@ -251,7 +267,7 @@ impl InteractivePrompts {
         }
     }
 
-    /// Prompt for a single parameter based on its type
+    /// Prompt for a single parameter based on its type with error recovery
     fn prompt_for_parameter(&self, param: &Parameter) -> ParameterResult<serde_json::Value> {
         if self.non_interactive {
             return Err(ParameterError::MissingRequired {
@@ -259,38 +275,158 @@ impl InteractivePrompts {
             });
         }
 
-        let result = match param.parameter_type {
-            ParameterType::String => {
-                let value = self.prompt_string(param)?;
-                serde_json::Value::String(value)
-            }
-            ParameterType::Boolean => {
-                let value = self.prompt_boolean(param)?;
-                serde_json::Value::Bool(value)
-            }
-            ParameterType::Number => {
-                let value = self.prompt_number(param)?;
-                serde_json::Value::Number(serde_json::Number::from_f64(value).ok_or_else(|| {
-                    ParameterError::ValidationFailed {
-                        message: format!("Invalid number value: {value}"),
-                    }
-                })?)
-            }
-            ParameterType::Choice => {
-                let value = self.prompt_choice(param)?;
-                serde_json::Value::String(value)
-            }
-            ParameterType::MultiChoice => {
-                let values = self.prompt_multi_choice(param)?;
-                serde_json::Value::Array(
-                    values.into_iter().map(serde_json::Value::String).collect(),
-                )
-            }
-        };
+        self.prompt_with_error_recovery(param)
+    }
 
-        // Validate the input before returning
-        self.validator.validate_parameter(param, &result)?;
-        Ok(result)
+    /// Prompt for a parameter with enhanced error recovery and retry logic
+    pub fn prompt_with_error_recovery(
+        &self,
+        param: &Parameter,
+    ) -> ParameterResult<serde_json::Value> {
+        let mut attempts = 0;
+
+        loop {
+            attempts += 1;
+
+            let result = match param.parameter_type {
+                ParameterType::String => {
+                    let value = self.prompt_string_single_attempt(param)?;
+                    serde_json::Value::String(value)
+                }
+                ParameterType::Boolean => {
+                    let value = self.prompt_boolean(param)?;
+                    serde_json::Value::Bool(value)
+                }
+                ParameterType::Number => {
+                    let value = self.prompt_number_single_attempt(param)?;
+                    serde_json::Value::Number(serde_json::Number::from_f64(value).ok_or_else(
+                        || ParameterError::ValidationFailed {
+                            message: format!("Invalid number value: {value}"),
+                        },
+                    )?)
+                }
+                ParameterType::Choice => {
+                    let value = self.prompt_choice_single_attempt(param)?;
+                    serde_json::Value::String(value)
+                }
+                ParameterType::MultiChoice => {
+                    let values = self.prompt_multi_choice_single_attempt(param)?;
+                    serde_json::Value::Array(
+                        values.into_iter().map(serde_json::Value::String).collect(),
+                    )
+                }
+            };
+
+            // Validate the input
+            match self.validator.validate_parameter(param, &result) {
+                Ok(_) => return Ok(result),
+                Err(error) => {
+                    if attempts >= self.max_attempts {
+                        println!("❌ Maximum attempts reached. Use --help for parameter details.");
+                        return Err(ParameterError::MaxAttemptsExceeded {
+                            parameter: param.name.clone(),
+                            attempts,
+                        });
+                    }
+
+                    // Enhance and display the error
+                    let enhanced_error = self.error_enhancer.enhance_parameter_error(&error);
+                    self.display_enhanced_error(&enhanced_error);
+
+                    println!("Please try again ({}/{}):", attempts, self.max_attempts);
+                }
+            }
+        }
+    }
+
+    /// Display an enhanced error message with context and suggestions
+    fn display_enhanced_error(&self, error: &ParameterError) {
+        match error {
+            ParameterError::ValidationFailedWithContext {
+                message,
+                explanation,
+                examples,
+                suggestions,
+                ..
+            } => {
+                println!("❌ {message}");
+
+                if let Some(explanation) = explanation {
+                    println!("   {explanation}");
+                }
+
+                if !examples.is_empty() {
+                    println!("   Examples: {}", examples.join(", "));
+                }
+
+                for suggestion in suggestions {
+                    println!("💡 {suggestion}");
+                }
+            }
+
+            ParameterError::PatternMismatchEnhanced {
+                parameter,
+                value,
+                pattern_description,
+                examples,
+                ..
+            } => {
+                println!("❌ Parameter '{parameter}' format is invalid: '{value}'");
+                println!("   {pattern_description}");
+
+                if !examples.is_empty() && examples.len() <= 3 {
+                    println!("   Examples: {}", examples.join(", "));
+                } else if !examples.is_empty() {
+                    println!("   Examples: {}", examples[..2].join(", "));
+                }
+            }
+
+            ParameterError::InvalidChoiceEnhanced {
+                parameter,
+                value,
+                choices,
+                did_you_mean,
+                ..
+            } => {
+                println!("❌ Parameter '{parameter}' has invalid value: '{value}'");
+
+                if let Some(suggestion) = did_you_mean {
+                    println!("💡 Did you mean '{suggestion}'?");
+                } else if choices.len() <= 5 {
+                    println!("💡 Valid options: {}", choices.join(", "));
+                } else {
+                    println!("💡 {} options available", choices.len());
+                }
+            }
+
+            _ => {
+                // Fallback to basic error display
+                println!("❌ {error}");
+                self.print_validation_hints_for_error(error);
+            }
+        }
+    }
+
+    /// Print validation hints for errors that don't have enhanced context
+    fn print_validation_hints_for_error(&self, error: &ParameterError) {
+        match error {
+            ParameterError::StringTooShort { min_length, .. } => {
+                println!("💡 Must be at least {min_length} characters long");
+            }
+            ParameterError::StringTooLong { max_length, .. } => {
+                println!("💡 Must be at most {max_length} characters long");
+            }
+            ParameterError::OutOfRange { min, max, .. } => {
+                if let (Some(min_val), Some(max_val)) = (min, max) {
+                    println!("💡 Value must be between {min_val} and {max_val}");
+                } else if let Some(min_val) = min {
+                    println!("💡 Value must be at least {min_val}");
+                } else if let Some(max_val) = max {
+                    println!("💡 Value must be at most {max_val}");
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Prompt for a string parameter with validation
@@ -301,36 +437,30 @@ impl InteractivePrompts {
             });
         }
 
+        self.prompt_string_single_attempt(param)
+    }
+
+    /// Prompt for a string parameter without retry logic (single attempt)
+    fn prompt_string_single_attempt(&self, param: &Parameter) -> ParameterResult<String> {
         let theme = ColorfulTheme::default();
 
-        loop {
-            let mut input_prompt = Input::<String>::with_theme(&theme)
-                .with_prompt(format!("Enter {} ({})", param.name, param.description));
+        let mut input_prompt = Input::<String>::with_theme(&theme)
+            .with_prompt(format!("Enter {} ({})", param.name, param.description));
 
-            // Add default value if available
-            if let Some(default) = &param.default {
-                if let Some(default_str) = default.as_str() {
-                    input_prompt = input_prompt.default(default_str.to_string());
-                }
-            }
-
-            let input = input_prompt
-                .interact()
-                .map_err(|e| ParameterError::ValidationFailed {
-                    message: format!("Failed to read input: {e}"),
-                })?;
-
-            // Validate the input
-            let value = serde_json::Value::String(input.clone());
-            match self.validator.validate_parameter(param, &value) {
-                Ok(_) => return Ok(input),
-                Err(e) => {
-                    println!("❌ {e}");
-                    self.print_validation_hints(param);
-                    println!("Please try again.");
-                }
+        // Add default value if available
+        if let Some(default) = &param.default {
+            if let Some(default_str) = default.as_str() {
+                input_prompt = input_prompt.default(default_str.to_string());
             }
         }
+
+        let input = input_prompt
+            .interact()
+            .map_err(|e| ParameterError::ValidationFailed {
+                message: format!("Failed to read input: {e}"),
+            })?;
+
+        Ok(input)
     }
 
     /// Prompt for a boolean parameter
@@ -367,61 +497,47 @@ impl InteractivePrompts {
             });
         }
 
+        self.prompt_number_single_attempt(param)
+    }
+
+    /// Prompt for a numeric parameter without retry logic (single attempt)
+    fn prompt_number_single_attempt(&self, param: &Parameter) -> ParameterResult<f64> {
         let theme = ColorfulTheme::default();
 
-        loop {
-            let mut prompt_text = format!("Enter {} ({})", param.name, param.description);
-            if let Some(validation) = &param.validation {
-                if let (Some(min), Some(max)) = (validation.min, validation.max) {
-                    prompt_text = format!("{prompt_text} [{min}-{max}]");
-                } else if let Some(min) = validation.min {
-                    prompt_text = format!("{prompt_text} [>= {min}]");
-                } else if let Some(max) = validation.max {
-                    prompt_text = format!("{prompt_text} [<= {max}]");
-                }
-            }
-
-            let mut input_prompt = Input::<String>::with_theme(&theme).with_prompt(prompt_text);
-
-            // Add default value if available
-            if let Some(default) = &param.default {
-                if let Some(default_num) = default.as_f64() {
-                    input_prompt = input_prompt.default(default_num.to_string());
-                }
-            }
-
-            let input = input_prompt
-                .interact()
-                .map_err(|e| ParameterError::ValidationFailed {
-                    message: format!("Failed to read input: {e}"),
-                })?;
-
-            // Parse the number
-            match input.parse::<f64>() {
-                Ok(num) => {
-                    // Validate the input
-                    let value =
-                        serde_json::Value::Number(serde_json::Number::from_f64(num).ok_or_else(
-                            || ParameterError::ValidationFailed {
-                                message: format!("Invalid number value: {num}"),
-                            },
-                        )?);
-
-                    match self.validator.validate_parameter(param, &value) {
-                        Ok(_) => return Ok(num),
-                        Err(e) => {
-                            println!("❌ {e}");
-                            self.print_validation_hints(param);
-                            println!("Please try again.");
-                        }
-                    }
-                }
-                Err(_) => {
-                    println!("❌ Please enter a valid number.");
-                    println!("Please try again.");
-                }
+        let mut prompt_text = format!("Enter {} ({})", param.name, param.description);
+        if let Some(validation) = &param.validation {
+            if let (Some(min), Some(max)) = (validation.min, validation.max) {
+                prompt_text = format!("{prompt_text} [{min}-{max}]");
+            } else if let Some(min) = validation.min {
+                prompt_text = format!("{prompt_text} [>= {min}]");
+            } else if let Some(max) = validation.max {
+                prompt_text = format!("{prompt_text} [<= {max}]");
             }
         }
+
+        let mut input_prompt = Input::<String>::with_theme(&theme).with_prompt(prompt_text);
+
+        // Add default value if available
+        if let Some(default) = &param.default {
+            if let Some(default_num) = default.as_f64() {
+                input_prompt = input_prompt.default(default_num.to_string());
+            }
+        }
+
+        let input = input_prompt
+            .interact()
+            .map_err(|e| ParameterError::ValidationFailed {
+                message: format!("Failed to read input: {e}"),
+            })?;
+
+        // Parse the number
+        input
+            .parse::<f64>()
+            .map_err(|_| ParameterError::TypeMismatch {
+                name: param.name.clone(),
+                expected_type: "number".to_string(),
+                actual_type: "invalid number format".to_string(),
+            })
     }
 
     /// Prompt for a choice parameter using fuzzy selection
@@ -432,6 +548,11 @@ impl InteractivePrompts {
             });
         }
 
+        self.prompt_choice_single_attempt(param)
+    }
+
+    /// Prompt for a choice parameter without retry logic (single attempt)
+    fn prompt_choice_single_attempt(&self, param: &Parameter) -> ParameterResult<String> {
         let choices = param
             .choices
             .as_ref()
@@ -476,6 +597,14 @@ impl InteractivePrompts {
             });
         }
 
+        self.prompt_multi_choice_single_attempt(param)
+    }
+
+    /// Prompt for multiple choice selection without retry logic (single attempt)
+    fn prompt_multi_choice_single_attempt(
+        &self,
+        param: &Parameter,
+    ) -> ParameterResult<Vec<String>> {
         let choices = param
             .choices
             .as_ref()
@@ -527,63 +656,6 @@ impl InteractivePrompts {
         let selected_values: Vec<String> = selections.iter().map(|&i| choices[i].clone()).collect();
 
         Ok(selected_values)
-    }
-
-    /// Print helpful validation hints for a parameter
-    fn print_validation_hints(&self, param: &Parameter) {
-        if let Some(validation) = &param.validation {
-            match param.parameter_type {
-                ParameterType::String => {
-                    if let Some(pattern) = &validation.pattern {
-                        let hint = CommonPatterns::hint_for_pattern(pattern);
-                        let description = CommonPatterns::description_for_pattern(pattern);
-                        println!("💡 Expected format: {hint} ({description})");
-                    }
-
-                    if let (Some(min), Some(max)) = (validation.min_length, validation.max_length) {
-                        println!("💡 Length must be between {min} and {max} characters");
-                    } else if let Some(min) = validation.min_length {
-                        println!("💡 Must be at least {min} characters long");
-                    } else if let Some(max) = validation.max_length {
-                        println!("💡 Must be at most {max} characters long");
-                    }
-                }
-                ParameterType::Number => {
-                    if let (Some(min), Some(max)) = (validation.min, validation.max) {
-                        println!("💡 Value must be between {min} and {max}");
-                    } else if let Some(min) = validation.min {
-                        println!("💡 Value must be at least {min}");
-                    } else if let Some(max) = validation.max {
-                        println!("💡 Value must be at most {max}");
-                    }
-
-                    if let Some(step) = validation.step {
-                        println!("💡 Value must be a multiple of {step}");
-                    }
-                }
-                ParameterType::MultiChoice => {
-                    if let (Some(min), Some(max)) =
-                        (validation.min_selections, validation.max_selections)
-                    {
-                        println!("💡 Must select between {min} and {max} options");
-                    } else if let Some(min) = validation.min_selections {
-                        println!("💡 Must select at least {min} options");
-                    } else if let Some(max) = validation.max_selections {
-                        println!("💡 Must select at most {max} options");
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Show choices hint for choice/multichoice parameters
-        if let Some(choices) = &param.choices {
-            if !choices.is_empty() && choices.len() <= 5 {
-                println!("💡 Available options: {}", choices.join(", "));
-            } else if !choices.is_empty() {
-                println!("💡 {} available options", choices.len());
-            }
-        }
     }
 }
 
