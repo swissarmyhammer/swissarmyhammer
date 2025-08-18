@@ -46,7 +46,10 @@ fn test_backward_compatibility() {
     // Test that the system works without breaking existing --var functionality
     let result = resolve_workflow_parameters_interactive(
         "greeting", // Using existing workflow
-        &["person_name=John".to_string(), "language=Spanish".to_string()],
+        &[
+            "person_name=John".to_string(),
+            "language=Spanish".to_string(),
+        ],
         &[],
         false,
     );
