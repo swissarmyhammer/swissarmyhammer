@@ -589,7 +589,7 @@ Helps debug template errors and refine prompt content before using in Claude Cod
 Usage modes:
   swissarmyhammer prompt test prompt-name                    # Test by name (interactive)
   swissarmyhammer prompt test -f path/to/prompt.md          # Test from file
-  swissarmyhammer prompt test prompt-name --arg key=value   # Non-interactive mode
+  swissarmyhammer prompt test prompt-name --var key=value   # Non-interactive mode
 
 Interactive features:
 - Prompts for each argument with descriptions
@@ -606,7 +606,7 @@ Output options:
 Examples:
   swissarmyhammer prompt test code-review                           # Interactive test
   swissarmyhammer prompt test -f my-prompt.md                       # Test file
-  swissarmyhammer prompt test help --arg topic=git                  # Non-interactive
+  swissarmyhammer prompt test help --var topic=git                  # Non-interactive
   swissarmyhammer prompt test plan --debug --save output.md         # Debug + save
   swissarmyhammer prompt test code-review --set author=John --set version=1.0  # With template variables
 ")]
@@ -618,9 +618,9 @@ Examples:
         #[arg(short, long)]
         file: Option<String>,
 
-        /// Non-interactive mode: specify arguments as key=value pairs
-        #[arg(long = "arg", value_name = "KEY=VALUE")]
-        arguments: Vec<String>,
+        /// Non-interactive mode: specify variables as key=value pairs
+        #[arg(long = "var", alias = "arg", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
 
         /// Set template variables for liquid rendering as key=value pairs
         #[arg(long = "set", value_name = "KEY=VALUE")]
@@ -1253,7 +1253,7 @@ mod tests {
             if let PromptSubcommand::Test {
                 prompt_name,
                 file,
-                arguments,
+                vars,
                 set,
                 raw,
                 copy,
@@ -1263,7 +1263,7 @@ mod tests {
             {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
-                assert!(arguments.is_empty());
+                assert!(vars.is_empty());
                 assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
@@ -1288,7 +1288,7 @@ mod tests {
             if let PromptSubcommand::Test {
                 prompt_name,
                 file,
-                arguments,
+                vars,
                 set,
                 raw,
                 copy,
@@ -1298,7 +1298,7 @@ mod tests {
             {
                 assert_eq!(prompt_name, None);
                 assert_eq!(file, Some("test.md".to_string()));
-                assert!(arguments.is_empty());
+                assert!(vars.is_empty());
                 assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
@@ -1319,9 +1319,9 @@ mod tests {
             "prompt",
             "test",
             "help",
-            "--arg",
+            "--var",
             "topic=git",
-            "--arg",
+            "--var",
             "format=markdown",
         ]);
         assert!(result.is_ok());
@@ -1331,7 +1331,7 @@ mod tests {
             if let PromptSubcommand::Test {
                 prompt_name,
                 file,
-                arguments,
+                vars,
                 set,
                 raw,
                 copy,
@@ -1341,7 +1341,7 @@ mod tests {
             {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
-                assert_eq!(arguments, vec!["topic=git", "format=markdown"]);
+                assert_eq!(vars, vec!["topic=git", "format=markdown"]);
                 assert!(set.is_empty());
                 assert!(!raw);
                 assert!(!copy);
@@ -1375,7 +1375,7 @@ mod tests {
             if let PromptSubcommand::Test {
                 prompt_name,
                 file,
-                arguments,
+                vars,
                 set,
                 raw,
                 copy,
@@ -1385,7 +1385,7 @@ mod tests {
             {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
-                assert!(arguments.is_empty());
+                assert!(vars.is_empty());
                 assert!(set.is_empty());
                 assert!(raw);
                 assert!(copy);
@@ -1406,7 +1406,7 @@ mod tests {
             "prompt",
             "test",
             "help",
-            "--arg",
+            "--var",
             "topic=git",
             "--set",
             "author=John",
@@ -1420,7 +1420,7 @@ mod tests {
             if let PromptSubcommand::Test {
                 prompt_name,
                 file,
-                arguments,
+                vars,
                 set,
                 raw,
                 copy,
@@ -1430,7 +1430,7 @@ mod tests {
             {
                 assert_eq!(prompt_name, Some("help".to_string()));
                 assert_eq!(file, None);
-                assert_eq!(arguments, vec!["topic=git"]);
+                assert_eq!(vars, vec!["topic=git"]);
                 assert_eq!(set, vec!["author=John", "version=1.0"]);
                 assert!(!raw);
                 assert!(!copy);

@@ -2,6 +2,16 @@
 //!
 //! This test suite validates the complete CLI integration with the new file-based abort system,
 //! ensuring proper exit codes, error message formatting, and integration with various CLI commands.
+//!
+//! ## Important Testing Notes
+//!
+//! These tests should be run with single-threaded execution to avoid race conditions:
+//! ```
+//! cargo test --test abort_comprehensive_tests -- --test-threads=1
+//! ```
+//!
+//! The tests use temporary directories but may interfere with each other when run
+//! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
 use assert_cmd::Command;
