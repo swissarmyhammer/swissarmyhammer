@@ -302,6 +302,44 @@ Examples:
         #[command(subcommand)]
         subcommand: MemoCommands,
     },
+    /// File manipulation and search commands
+    #[command(long_about = "
+Comprehensive file manipulation and search tools for code analysis, editing, and discovery.
+Provides direct CLI access to powerful file operations including reading, writing, editing, and searching.
+
+Basic usage:
+  swissarmyhammer file read <PATH>                     # Read file contents
+  swissarmyhammer file write <PATH> <CONTENT>          # Write content to file
+  swissarmyhammer file edit <PATH> <OLD> <NEW>         # Edit file with string replacement
+  swissarmyhammer file glob <PATTERN>                  # Find files by pattern
+  swissarmyhammer file grep <PATTERN>                  # Search file contents
+
+File operations:
+  read                                         # Read file contents with optional offset/limit
+  write                                        # Create new files or overwrite existing ones
+  edit                                         # Precise string replacement with atomic operations
+  glob                                         # Fast file pattern matching with advanced filtering
+  grep                                         # Content-based search using ripgrep
+
+Advanced features:
+  --offset, --limit                           # Partial file reading for large files
+  --replace-all                               # Replace all occurrences in edit operations
+  --case-sensitive, --no-git-ignore           # Advanced pattern matching options
+  -i, -C, --glob, --type                      # Comprehensive search filtering
+
+Examples:
+  swissarmyhammer file read /path/to/config.json --offset 1 --limit 20
+  swissarmyhammer file write ./new-file.txt \"Hello World\"
+  swissarmyhammer file edit ./src/main.rs \"old_function\" \"new_function\"
+  swissarmyhammer file edit ./config.toml \"debug = false\" \"debug = true\" --replace-all
+  swissarmyhammer file glob \"**/*.rs\" --case-sensitive
+  swissarmyhammer file grep \"TODO\" --path ./src --glob \"*.rs\" -C 2
+  swissarmyhammer file grep \"error.*handling\" --type rust --case-insensitive
+")]
+    File {
+        #[command(subcommand)]
+        subcommand: FileCommands,
+    },
     /// Semantic search commands
     #[command(long_about = "
 Manage semantic search functionality for indexing and searching source code files using vector embeddings.
@@ -1065,6 +1103,221 @@ pub enum MemoCommands {
     },
     /// Get all memos as context for AI
     Context,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FileCommands {
+    /// Read file contents with optional offset and limit
+    #[command(long_about = "
+Read and return file contents from the local filesystem with support for various file types.
+
+USAGE:
+  swissarmyhammer file read <PATH>                     # Read entire file
+  swissarmyhammer file read <PATH> --offset 10         # Start from line 10
+  swissarmyhammer file read <PATH> --limit 50          # Read only first 50 lines
+  swissarmyhammer file read <PATH> --offset 10 --limit 50  # Read lines 10-60
+
+PARAMETERS:
+  <PATH>        Absolute path to the file to read
+  --offset      Starting line number for partial reading (1-based)
+  --limit       Maximum number of lines to read
+
+FUNCTIONALITY:
+- Validates file path (must be absolute and within workspace)
+- Supports text files, images, PDFs, and other file types
+- Enables partial file reading via offset/limit for large files
+- Provides error handling for missing or inaccessible files
+- Respects workspace boundaries and ignore patterns
+
+EXAMPLES:
+  swissarmyhammer file read /path/to/file.txt
+  swissarmyhammer file read ./config.json --offset 1 --limit 20
+  swissarmyhammer file read /src/main.rs --limit 100
+")]
+    Read {
+        /// Absolute path to file
+        #[arg(help = "Absolute path to the file to read")]
+        path: String,
+        /// Starting line number
+        #[arg(long, help = "Starting line number for partial reading")]
+        offset: Option<usize>,
+        /// Maximum lines to read
+        #[arg(long, help = "Maximum number of lines to read")]
+        limit: Option<usize>,
+    },
+    /// Write content to file (creates or overwrites)
+    #[command(long_about = "
+Create new files or completely overwrite existing files with specified content.
+
+USAGE:
+  swissarmyhammer file write <PATH> <CONTENT>          # Write content to file
+  swissarmyhammer file write <PATH> -                  # Read content from stdin
+
+PARAMETERS:
+  <PATH>        Absolute path for the new or existing file
+  <CONTENT>     Complete file content to write (use '-' for stdin)
+
+FUNCTIONALITY:
+- Creates new files with specified content
+- Overwrites existing files completely
+- Creates parent directories if they don't exist
+- Sets appropriate file permissions
+- Validates file path and content
+
+EXAMPLES:
+  swissarmyhammer file write /path/to/new-file.txt \"Hello World\"
+  echo \"File content\" | swissarmyhammer file write /path/to/file.txt -
+  swissarmyhammer file write ./config.json '{\"key\": \"value\"}'
+")]
+    Write {
+        /// Absolute path for file
+        #[arg(help = "Absolute path for the new or existing file")]
+        path: String,
+        /// File content (use - for stdin)
+        #[arg(help = "Complete file content to write (use '-' for stdin)")]
+        content: String,
+    },
+    /// Edit file with precise string replacement
+    #[command(long_about = "
+Perform precise string replacements in existing files with atomic operations.
+
+USAGE:
+  swissarmyhammer file edit <PATH> <OLD> <NEW>                 # Single replacement
+  swissarmyhammer file edit <PATH> <OLD> <NEW> --replace-all   # Replace all occurrences
+
+PARAMETERS:
+  <PATH>        Absolute path to the file to modify
+  <OLD>         Exact text to replace
+  <NEW>         Replacement text
+  --replace-all Replace all occurrences (default: false)
+
+FUNCTIONALITY:
+- Performs exact string matching and replacement
+- Maintains file encoding and line endings
+- Validates that old_string exists and is unique (unless replace_all is true)
+- Provides atomic operations (all or nothing replacement)
+- Preserves file permissions and metadata
+
+EXAMPLES:
+  swissarmyhammer file edit /path/to/file.rs \"old_function\" \"new_function\"
+  swissarmyhammer file edit ./config.toml \"debug = false\" \"debug = true\"
+  swissarmyhammer file edit /src/lib.rs \"TODO\" \"DONE\" --replace-all
+")]
+    Edit {
+        /// Absolute path to file
+        #[arg(help = "Absolute path to the file to modify")]
+        path: String,
+        /// Text to replace
+        #[arg(help = "Exact text to replace")]
+        old_string: String,
+        /// Replacement text
+        #[arg(help = "Replacement text")]
+        new_string: String,
+        /// Replace all occurrences
+        #[arg(long, help = "Replace all occurrences (default: single replacement)")]
+        replace_all: bool,
+    },
+    /// Find files using glob patterns
+    #[command(long_about = "
+Fast file pattern matching with advanced filtering and sorting.
+
+USAGE:
+  swissarmyhammer file glob <PATTERN>                          # Basic glob matching
+  swissarmyhammer file glob <PATTERN> --path /search/dir       # Search in specific directory
+  swissarmyhammer file glob <PATTERN> --case-sensitive         # Case-sensitive matching
+  swissarmyhammer file glob <PATTERN> --no-git-ignore          # Ignore .gitignore patterns
+
+PARAMETERS:
+  <PATTERN>           Glob pattern to match files (e.g., **/*.js, src/**/*.ts)
+  --path              Directory to search within (optional)
+  --case-sensitive    Case-sensitive matching (default: false)
+  --respect-git-ignore Honor .gitignore patterns (default: true)
+
+FUNCTIONALITY:
+- Supports standard glob patterns with wildcards
+- Returns file paths sorted by modification time (recent first)
+- Searches across multiple workspace directories
+- Respects git ignore patterns and workspace boundaries
+- Provides fast pattern matching for large codebases
+
+EXAMPLES:
+  swissarmyhammer file glob \"**/*.rs\"
+  swissarmyhammer file glob \"src/**/*.ts\" --path /project
+  swissarmyhammer file glob \"*.json\" --case-sensitive
+  swissarmyhammer file glob \"test_*.py\" --no-git-ignore
+")]
+    Glob {
+        /// Glob pattern
+        #[arg(help = "Glob pattern to match files (e.g., **/*.js, src/**/*.ts)")]
+        pattern: String,
+        /// Search directory
+        #[arg(long, help = "Directory to search within (optional)")]
+        path: Option<String>,
+        /// Case sensitive matching
+        #[arg(long, help = "Case-sensitive matching (default: false)")]
+        case_sensitive: bool,
+        /// Respect .gitignore
+        #[arg(long = "no-git-ignore", help = "Ignore .gitignore patterns")]
+        no_git_ignore: bool,
+    },
+    /// Search file contents using ripgrep
+    #[command(long_about = "
+Content-based search using ripgrep for fast and flexible text searching.
+
+USAGE:
+  swissarmyhammer file grep <PATTERN>                          # Basic text search
+  swissarmyhammer file grep <PATTERN> --path /search/dir       # Search in specific location
+  swissarmyhammer file grep <PATTERN> --glob \"*.rs\"           # Filter by file pattern
+  swissarmyhammer file grep <PATTERN> --type rust              # Filter by file type
+  swissarmyhammer file grep <PATTERN> -i                       # Case-insensitive search
+  swissarmyhammer file grep <PATTERN> -C 3                     # Show 3 context lines
+
+PARAMETERS:
+  <PATTERN>         Regular expression pattern to search
+  --path            File or directory to search in (optional)
+  --glob            Glob pattern to filter files (e.g., *.js)
+  --type            File type filter (e.g., js, py, rust)
+  -i, --case-insensitive  Case-insensitive search
+  -C, --context     Number of context lines around matches
+  --output-mode     Output format (content, files_with_matches, count)
+
+FUNCTIONALITY:
+- Leverages ripgrep for high-performance text search
+- Supports full regular expression syntax
+- Provides file type and glob filtering
+- Returns contextual information around matches
+- Handles large codebases efficiently
+
+EXAMPLES:
+  swissarmyhammer file grep \"function.*async\"
+  swissarmyhammer file grep \"TODO\" --path ./src --glob \"*.rs\"
+  swissarmyhammer file grep \"error\" --type rust -C 2
+  swissarmyhammer file grep \"import.*React\" --case-insensitive
+  swissarmyhammer file grep \"test\" --output-mode files_with_matches
+")]
+    Grep {
+        /// Search pattern
+        #[arg(help = "Regular expression pattern to search for in file contents")]
+        pattern: String,
+        /// File or directory to search
+        #[arg(long, help = "File or directory to search in (optional)")]
+        path: Option<String>,
+        /// File glob filter
+        #[arg(long, help = "Glob pattern to filter files (e.g., *.js)")]
+        glob: Option<String>,
+        /// File type filter
+        #[arg(long = "type", help = "File type filter (e.g., js, py, rust)")]
+        file_type: Option<String>,
+        /// Case insensitive search
+        #[arg(long, short = 'i', help = "Case-insensitive search")]
+        case_insensitive: bool,
+        /// Context lines
+        #[arg(long, short = 'C', help = "Number of context lines around matches")]
+        context_lines: Option<usize>,
+        /// Output mode
+        #[arg(long, help = "Output format (content, files_with_matches, count)")]
+        output_mode: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

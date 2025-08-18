@@ -5,6 +5,7 @@ mod config;
 mod doctor;
 mod error;
 mod exit_codes;
+mod file;
 mod flow;
 mod issue;
 mod list;
@@ -151,6 +152,10 @@ async fn main() {
         Some(Commands::Memo { subcommand }) => {
             tracing::info!("Running memo command");
             run_memo(subcommand).await
+        }
+        Some(Commands::File { subcommand }) => {
+            tracing::info!("Running file command");
+            run_file(subcommand).await
         }
         Some(Commands::Search { subcommand }) => {
             tracing::info!("Running search command");
@@ -319,6 +324,18 @@ async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             tracing::error!("Memo error: {}", e);
+            EXIT_WARNING
+        }
+    }
+}
+
+async fn run_file(subcommand: cli::FileCommands) -> i32 {
+    use file;
+
+    match file::handle_file_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            tracing::error!("File error: {}", e);
             EXIT_WARNING
         }
     }
