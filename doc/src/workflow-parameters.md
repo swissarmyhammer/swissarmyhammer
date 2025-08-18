@@ -11,7 +11,6 @@ The workflow parameter system enables:
 - **Interactive Prompting**: User-friendly prompts when parameters are missing
 - **Validation Rules**: Pattern matching, ranges, string lengths, and custom validation
 - **Conditional Parameters**: Parameters that are required based on other parameter values
-- **Parameter Groups**: Organization of related parameters for better user experience
 - **Error Recovery**: Enhanced error messages with suggestions and retry capabilities
 
 ## Basic Parameter Types
@@ -203,36 +202,6 @@ Supported operators:
 - Logical: `ssl_enabled == true && cert_type == 'custom'`
 - Membership: `environment in ['staging', 'prod']`
 
-### Parameter Groups
-
-Organize related parameters for better UX:
-
-```yaml
-parameter_groups:
-  - name: deployment
-    description: Deployment configuration
-    parameters: [environment, region, replicas]
-    
-  - name: security  
-    description: Security settings
-    parameters: [enable_ssl, cert_path, auth_method]
-
-parameters:
-  # Deployment group
-  - name: environment
-    description: Target environment
-    type: choice
-    choices: [dev, staging, prod]
-    required: true
-    
-  # Security group  
-  - name: enable_ssl
-    description: Enable SSL/TLS encryption
-    type: boolean
-    default: true
-```
-
-Groups appear organized in help text and interactive prompts.
 
 ### Enhanced Error Handling
 
@@ -470,19 +439,6 @@ Here's a comprehensive example showing all parameter features:
 ---
 title: Microservice Deployment
 description: Deploy microservice with advanced configuration
-parameter_groups:
-  - name: application
-    description: Application configuration
-    parameters: [service_name, version, replicas]
-    
-  - name: infrastructure
-    description: Infrastructure settings
-    parameters: [environment, region, instance_type]
-    
-  - name: security
-    description: Security configuration
-    parameters: [enable_ssl, cert_provider, auth_methods]
-
 parameters:
   # Application group
   - name: service_name
