@@ -4,14 +4,14 @@
 //! shelling out to a subprocess.
 
 use anyhow::Result;
-use serial_test::serial;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::workflow::{
     MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowStorage,
 };
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_in_process_execution() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that sub-workflows are executed in-process
     let parent_workflow_content = r#"---
 name: test-parent
@@ -160,8 +160,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_circular_dependency_detection_integration() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that circular dependencies are properly detected
     let workflow_a_content = r#"---
 name: workflow-a
@@ -240,8 +240,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_timeout_behavior() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that sub-workflows respect timeout settings
     let parent_workflow_content = r#"---
 name: test-parent-timeout
@@ -312,8 +312,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_timeout_propagation() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that timeout values are properly propagated to sub-workflows
     let parent_workflow_content = r#"---
 name: test-parent-timeout-propagation
@@ -377,8 +377,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_timeout_cancellation() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that sub-workflows fail quickly when they can't be found
     // The timeout aspect is tested by trying to run a non-existent workflow with a short timeout
     let parent_workflow_content = r#"---
@@ -447,8 +447,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_deeply_nested_sub_workflows() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test sub-workflows nested 3+ levels deep
     let level1_workflow = r#"---
 name: level1-workflow
@@ -556,8 +556,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_deep_nesting_limit() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that extremely deep nesting is handled gracefully
     let recursive_workflow = r#"---
 name: recursive-workflow
@@ -619,8 +619,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_context_isolation() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test that sub-workflows have isolated contexts
     let parent_workflow = r#"---
 name: parent-context-test
@@ -689,8 +689,8 @@ stateDiagram-v2
 }
 
 #[tokio::test]
-#[serial]
 async fn test_sub_workflow_parallel_execution() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new().unwrap();
     // Test multiple sub-workflows executing in parallel
     let parallel_workflow = r#"---
 name: parallel-sub-workflows

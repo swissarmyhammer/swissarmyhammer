@@ -301,7 +301,7 @@ impl Default for FileWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
+    use crate::test_utils::IsolatedTestEnvironment;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -348,8 +348,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_start_stop() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
         use tempfile::TempDir;
 
@@ -413,8 +413,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_custom_config() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
         use tempfile::TempDir;
 
@@ -457,8 +457,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_drop() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
         use tempfile::TempDir;
 
@@ -493,8 +493,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_restart() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
         use tempfile::TempDir;
 
@@ -600,8 +600,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_simple_start() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
         use tempfile::TempDir;
 
@@ -629,8 +629,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_error_callback() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         use std::fs;
         use tempfile::TempDir;
 
