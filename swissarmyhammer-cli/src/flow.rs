@@ -35,7 +35,7 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
             quiet,
         } => {
             let all_vars = vars;
-            
+
             run_workflow_command(WorkflowCommandConfig {
                 workflow_name: workflow,
                 vars: all_vars,
@@ -91,7 +91,7 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
             quiet,
         } => {
             let all_vars = vars;
-            
+
             // Run workflow in test mode - same as flow run --test
             run_workflow_command(WorkflowCommandConfig {
                 workflow_name: workflow,
@@ -200,9 +200,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         }
 
         // Execute in test mode with coverage tracking
-        let coverage =
-            execute_workflow_test_mode(workflow, variables, timeout_duration)
-                .await?;
+        let coverage = execute_workflow_test_mode(workflow, variables, timeout_duration).await?;
 
         // Generate coverage report
         println!("\n📊 Coverage Report:");
@@ -1430,7 +1428,7 @@ mod tests {
         });
 
         let variables = HashMap::new();
-                let coverage = execute_workflow_test_mode(workflow, variables, None)
+        let coverage = execute_workflow_test_mode(workflow, variables, None)
             .await
             .unwrap();
 
@@ -1508,7 +1506,7 @@ mod tests {
         });
 
         let variables = HashMap::new();
-                let coverage = execute_workflow_test_mode(workflow, variables, None)
+        let coverage = execute_workflow_test_mode(workflow, variables, None)
             .await
             .unwrap();
 
@@ -1578,7 +1576,7 @@ mod tests {
         });
 
         let variables = HashMap::new();
-                // Use a very short timeout
+        // Use a very short timeout
         let timeout = Some(Duration::from_millis(100));
         let coverage = execute_workflow_test_mode(workflow, variables, timeout)
             .await
@@ -1610,7 +1608,7 @@ mod tests {
         });
 
         let variables = HashMap::new();
-                let coverage = execute_workflow_test_mode(workflow, variables, None)
+        let coverage = execute_workflow_test_mode(workflow, variables, None)
             .await
             .unwrap();
 
@@ -1664,7 +1662,7 @@ mod tests {
 
         let mut variables = HashMap::new();
         variables.insert("input".to_string(), serde_json::json!("test"));
-        
+
         let coverage = execute_workflow_test_mode(workflow, variables, None)
             .await
             .unwrap();
@@ -1688,7 +1686,7 @@ mod tests {
         );
 
         let variables = HashMap::new();
-                let coverage = execute_workflow_test_mode(workflow, variables, None)
+        let coverage = execute_workflow_test_mode(workflow, variables, None)
             .await
             .unwrap();
 
@@ -1698,7 +1696,6 @@ mod tests {
         assert_eq!(coverage.total_states, 0);
         assert_eq!(coverage.total_transitions, 0);
     }
-
 
     #[tokio::test]
     async fn test_plan_workflow_legacy_compatibility() {
