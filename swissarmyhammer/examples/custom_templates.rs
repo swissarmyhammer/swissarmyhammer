@@ -1,7 +1,10 @@
 //! Example showing custom template filters and advanced templating
 
 use std::collections::HashMap;
-use swissarmyhammer::{Prompt, PromptLibrary, TemplateEngine, common::{Parameter, ParameterType}};
+use swissarmyhammer::{
+    common::{Parameter, ParameterType},
+    Prompt, PromptLibrary, TemplateEngine,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a template engine
@@ -79,24 +82,29 @@ Fixes: {{ issues }}
     )
     .with_description("Generate conventional commit messages")
     .add_parameter(
-        Parameter::new("type", "Commit type (feat, fix, docs, etc.)", ParameterType::String)
-            .required(true)
+        Parameter::new(
+            "type",
+            "Commit type (feat, fix, docs, etc.)",
+            ParameterType::String,
+        )
+        .required(true),
     )
     .add_parameter(
-        Parameter::new("description", "Short description", ParameterType::String)
-            .required(true)
+        Parameter::new("description", "Short description", ParameterType::String).required(true),
     )
     .add_parameter(
-        Parameter::new("body", "Detailed explanation", ParameterType::String)
-            .required(false)
+        Parameter::new("body", "Detailed explanation", ParameterType::String).required(false),
     )
     .add_parameter(
-        Parameter::new("breaking_change", "Breaking change description", ParameterType::String)
-            .required(false)
+        Parameter::new(
+            "breaking_change",
+            "Breaking change description",
+            ParameterType::String,
+        )
+        .required(false),
     )
     .add_parameter(
-        Parameter::new("issues", "Related issue names", ParameterType::String)
-            .required(false)
+        Parameter::new("issues", "Related issue names", ParameterType::String).required(false),
     );
 
     library.add(prompt)?;

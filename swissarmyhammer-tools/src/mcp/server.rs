@@ -316,7 +316,8 @@ impl McpServer {
             None
         } else {
             Some(
-                params.iter()
+                params
+                    .iter()
                     .map(|param| PromptArgument {
                         name: param.name.clone(),
                         description: Some(param.description.clone()),

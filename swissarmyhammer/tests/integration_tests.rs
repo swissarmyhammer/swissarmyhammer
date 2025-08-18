@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
-use swissarmyhammer::prelude::*;
 use swissarmyhammer::common::{Parameter, ParameterType};
+use swissarmyhammer::prelude::*;
 use tempfile::TempDir;
 
 use rmcp::ServerHandler;
@@ -31,13 +31,12 @@ fn test_prompt_creation_and_rendering() {
 fn test_prompt_with_arguments() {
     let prompt = Prompt::new("complex", "{{ greeting }}, {{ name }}!")
         .add_parameter(
-            Parameter::new("greeting", "The greeting to use", ParameterType::String)
-                .required(true)
+            Parameter::new("greeting", "The greeting to use", ParameterType::String).required(true),
         )
         .add_parameter(
             Parameter::new("name", "The name to greet", ParameterType::String)
                 .required(false)
-                .with_default(serde_json::Value::String("Friend".to_string()))
+                .with_default(serde_json::Value::String("Friend".to_string())),
         );
 
     // Test with all arguments provided
@@ -59,10 +58,7 @@ fn test_prompt_with_arguments() {
 #[test]
 fn test_missing_required_argument() {
     let prompt = Prompt::new("test", "Hello {{ name }}!")
-        .add_parameter(
-            Parameter::new("name", "", ParameterType::String)
-                .required(true)
-        );
+        .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
     let args = HashMap::new();
     let result = prompt.render(&args);
@@ -279,13 +275,12 @@ fn test_example_usage() {
         .with_description("A friendly greeting prompt")
         .with_category("examples")
         .add_parameter(
-            Parameter::new("name", "The person's name", ParameterType::String)
-                .required(true)
+            Parameter::new("name", "The person's name", ParameterType::String).required(true),
         )
         .add_parameter(
             Parameter::new("place", "The location", ParameterType::String)
                 .required(false)
-                .with_default(serde_json::Value::String("our application".to_string()))
+                .with_default(serde_json::Value::String("our application".to_string())),
         );
 
     // Add to library

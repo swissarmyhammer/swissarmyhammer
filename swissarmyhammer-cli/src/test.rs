@@ -134,17 +134,9 @@ impl TestRunner {
 
         for arg in &prompt.parameters {
             let prompt_text = if arg.required {
-                format!(
-                    "{} (required): {}",
-                    arg.name.bold(),
-                    &arg.description
-                )
+                format!("{} (required): {}", arg.name.bold(), &arg.description)
             } else {
-                format!(
-                    "{} (optional): {}",
-                    arg.name.bold(),
-                    &arg.description
-                )
+                format!("{} (optional): {}", arg.name.bold(), &arg.description)
             };
 
             loop {
@@ -397,14 +389,11 @@ mod tests {
     #[test]
     fn test_get_prompt_validation() {
         let prompt = Prompt::new("test", "Hello {{ name }}!")
-            .add_parameter(
-                Parameter::new("name", "", ParameterType::String)
-                    .required(true)
-            )
+            .add_parameter(Parameter::new("name", "", ParameterType::String).required(true))
             .add_parameter(
                 Parameter::new("unused", "", ParameterType::String)
                     .required(false)
-                    .with_default(serde_json::Value::String("default".to_string()))
+                    .with_default(serde_json::Value::String("default".to_string())),
             );
 
         let (errors, warnings) = get_prompt_validation(&prompt);

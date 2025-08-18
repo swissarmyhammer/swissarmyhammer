@@ -8,18 +8,15 @@
 //! Creating and rendering a simple prompt:
 //!
 //! ```
-//! use swissarmyhammer::{Prompt, ArgumentSpec};
+//! use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
 //! use std::collections::HashMap;
 //!
 //! let prompt = Prompt::new("greet", "Hello {{name}}!")
 //!     .with_description("A greeting prompt")
-//!     .add_argument(ArgumentSpec {
-//!         name: "name".to_string(),
-//!         description: Some("Name to greet".to_string()),
-//!         required: true,
-//!         default: None,
-//!         type_hint: Some("string".to_string()),
-//!     });
+//!     .add_parameter(
+//!         Parameter::new("name", "Name to greet", ParameterType::String)
+//!             .required(true)
+//!     );
 //!
 //! let mut args = HashMap::new();
 //! args.insert("name".to_string(), "World".to_string());
@@ -71,27 +68,21 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```
-/// use swissarmyhammer::{Prompt, ArgumentSpec};
+/// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
 /// use std::collections::HashMap;
 ///
 /// // Create a prompt programmatically
 /// let prompt = Prompt::new("debug", "Debug this {{language}} error: {{error}}")
 ///     .with_description("Helps debug programming errors")
 ///     .with_category("debugging")
-///     .add_argument(ArgumentSpec {
-///         name: "error".to_string(),
-///         description: Some("The error message".to_string()),
-///         required: true,
-///         default: None,
-///         type_hint: Some("string".to_string()),
-///     })
-///     .add_argument(ArgumentSpec {
-///         name: "language".to_string(),
-///         description: Some("Programming language".to_string()),
-///         required: false,
-///         default: Some("unknown".to_string()),
-///         type_hint: Some("string".to_string()),
-///     });
+///     .add_parameter(
+///         Parameter::new("error", "The error message", ParameterType::String)
+///             .required(true)
+///     )
+///     .add_parameter(
+///         Parameter::new("language", "Programming language", ParameterType::String)
+///             .with_default(serde_json::Value::String("unknown".to_string()))
+///     );
 ///
 /// // Render with arguments
 /// let mut args = HashMap::new();
@@ -162,8 +153,6 @@ pub struct Prompt {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
-
-
 impl ParameterProvider for Prompt {
     /// Get the parameters for this prompt
     fn get_parameters(&self) -> &[Parameter] {
@@ -176,7 +165,7 @@ impl Prompt {
     ///
     /// This is the minimal constructor for a prompt. Additional metadata can be added
     /// using the builder methods like [`with_description`](Self::with_description),
-    /// [`with_category`](Self::with_category), and [`add_argument`](Self::add_argument).
+    /// [`with_category`](Self::with_category), and [`add_parameter`](Self::add_parameter).
     ///
     /// # Arguments
     ///
@@ -229,17 +218,14 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{Prompt, ArgumentSpec};
+    /// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
     /// use std::collections::HashMap;
     ///
     /// let prompt = Prompt::new("greet", "Hello {{name}}!")
-    ///     .add_argument(ArgumentSpec {
-    ///         name: "name".to_string(),
-    ///         description: None,
-    ///         required: true,
-    ///         default: None,
-    ///         type_hint: None,
-    ///     });
+    ///     .add_parameter(
+    ///         Parameter::new("name", "", ParameterType::String)
+    ///             .required(true)
+    ///     );
     ///
     /// let mut args = HashMap::new();
     /// args.insert("name".to_string(), "Alice".to_string());
@@ -502,7 +488,7 @@ impl Prompt {
     /// # Examples
     ///
     /// ```
-    /// use swissarmyhammer::{Prompt, Parameter, ParameterType};
+    /// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
     ///
     /// let prompt = Prompt::new("example", "Processing {{file}}")
     ///     .add_parameter(
@@ -749,8 +735,11 @@ impl Prompt {
         }
 
         // Check if all used variables are defined in parameters or sah.toml
-        let defined_params: std::collections::HashSet<String> =
-            self.parameters.iter().map(|param| param.name.clone()).collect();
+        let defined_params: std::collections::HashSet<String> = self
+            .parameters
+            .iter()
+            .map(|param| param.name.clone())
+            .collect();
 
         // Also include variables from sah.toml configuration
         let mut defined_config_vars = std::collections::HashSet::new();
@@ -1617,10 +1606,7 @@ mod tests {
     #[test]
     fn test_prompt_render() {
         let prompt = Prompt::new("test", "Hello {{ name }}!")
-            .add_parameter(
-                Parameter::new("name", "", ParameterType::String)
-                    .required(true)
-            );
+            .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
         let mut args = HashMap::new();
         args.insert("name".to_string(), "World".to_string());
@@ -1764,11 +1750,9 @@ This is another prompt.
     fn test_shared_parameter_system_integration() {
         use crate::common::ParameterProvider;
 
-        let prompt = Prompt::new("test", "Hello {{name}}!")
-            .add_parameter(
-                Parameter::new("name", "Name to greet", ParameterType::String)
-                    .required(true)
-            );
+        let prompt = Prompt::new("test", "Hello {{name}}!").add_parameter(
+            Parameter::new("name", "Name to greet", ParameterType::String).required(true),
+        );
 
         // Test that ParameterProvider trait works
         let parameters = prompt.get_parameters();
