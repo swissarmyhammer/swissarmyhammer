@@ -107,28 +107,56 @@ This workflow performs a comprehensive code review process.
 | `on_error` | Error handling state | `"error"` |
 | `on_timeout` | Timeout handling state | `"timeout"` |
 
-### Variables
+### Parameters
 
-Define reusable variables:
+Define structured parameters with type safety and validation:
 
 ```yaml
-variables:
+parameters:
   - name: environment
     description: Deployment environment
-    type: string
-    choices: ["dev", "staging", "prod"]
-    default: "dev"
+    type: choice
+    choices: [dev, staging, prod]
+    default: dev
+    required: true
     
   - name: skip_tests
     description: Skip test execution
     type: boolean
     default: false
     
-  - name: components
-    description: Components to deploy
-    type: array
-    default: ["api", "web", "worker"]
+  - name: replicas
+    description: Number of service replicas
+    type: number
+    default: 3
+    validation:
+      min: 1
+      max: 10
 ```
+
+**Parameter Features:**
+- **Type Safety**: String, boolean, number, choice, and multi-choice types
+- **Validation**: Pattern matching, ranges, string lengths, and custom rules
+- **CLI Integration**: Automatic CLI switch generation (`--environment prod`)
+- **Interactive Prompting**: User-friendly prompts for missing parameters
+- **Conditional Parameters**: Parameters required based on other values
+- **Parameter Groups**: Organize related parameters for better UX
+
+For comprehensive parameter documentation, see [Workflow Parameters](workflow-parameters.md).
+
+#### Legacy Variables (Deprecated)
+
+The older `variables` syntax is still supported but deprecated:
+
+```yaml
+variables:
+  - name: environment
+    description: Deployment environment
+    type: string
+    default: "dev"
+```
+
+**Migration:** Convert `variables` to `parameters` for enhanced features. See the [Migration Guide](examples/workflow-parameters/migration-guide.md).
 
 ## State Definitions
 

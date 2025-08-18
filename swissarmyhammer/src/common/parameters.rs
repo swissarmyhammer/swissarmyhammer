@@ -179,52 +179,34 @@ pub enum ParameterError {
     },
 
     /// Enhanced parameter validation error with context and suggestions
-    #[error("Parameter '{parameter}' validation failed: {message}")]
+    #[error("Parameter '{parameter}' validation failed")]
     ValidationFailedWithContext {
         /// Name of the parameter that failed validation
         parameter: String,
-        /// The provided value that failed validation
-        value: String,
-        /// Error message describing the validation failure
-        message: String,
-        /// Human-readable explanation of why validation failed
-        explanation: Option<String>,
-        /// List of example values that would be valid
-        examples: Vec<String>,
-        /// List of suggested fixes or actions
-        suggestions: Vec<String>,
+        /// Detailed error information
+        details: Box<ValidationFailedDetails>,
         /// Whether this error is recoverable through user action
         recoverable: bool,
     },
 
     /// Enhanced pattern mismatch error with helpful context
-    #[error("Parameter '{parameter}' format is invalid: '{value}'")]
+    #[error("Parameter '{parameter}' format is invalid")]
     PatternMismatchEnhanced {
         /// Name of the parameter with invalid format
         parameter: String,
-        /// Value that was provided
-        value: String,
-        /// Required pattern that the value should match
-        pattern: String,
-        /// Human-readable description of the pattern
-        pattern_description: String,
-        /// List of valid example values
-        examples: Vec<String>,
+        /// Detailed error information
+        details: Box<PatternMismatchDetails>,
         /// Whether this error is recoverable
         recoverable: bool,
     },
 
     /// Enhanced invalid choice error with fuzzy matching suggestions
-    #[error("Parameter '{parameter}' has invalid value: '{value}'")]
+    #[error("Parameter '{parameter}' has invalid value")]
     InvalidChoiceEnhanced {
         /// Name of the parameter with invalid choice
         parameter: String,
-        /// Value that was provided
-        value: String,
-        /// List of valid choices
-        choices: Vec<String>,
-        /// Fuzzy-matched suggestion if available
-        did_you_mean: Option<String>,
+        /// Detailed error information
+        details: Box<InvalidChoiceDetails>,
         /// Whether this error is recoverable
         recoverable: bool,
     },
@@ -241,6 +223,45 @@ pub enum ParameterError {
 
 /// Result type for parameter operations
 pub type ParameterResult<T> = Result<T, ParameterError>;
+
+/// Detailed information for validation failures with context
+#[derive(Debug, Clone)]
+pub struct ValidationFailedDetails {
+    /// The provided value that failed validation
+    pub value: String,
+    /// Error message describing the validation failure
+    pub message: String,
+    /// Human-readable explanation of why validation failed
+    pub explanation: Option<String>,
+    /// List of example values that would be valid
+    pub examples: Vec<String>,
+    /// List of suggested fixes or actions
+    pub suggestions: Vec<String>,
+}
+
+/// Detailed information for pattern mismatch errors
+#[derive(Debug, Clone)]
+pub struct PatternMismatchDetails {
+    /// Value that was provided
+    pub value: String,
+    /// Required pattern that the value should match
+    pub pattern: String,
+    /// Human-readable description of the pattern
+    pub pattern_description: String,
+    /// List of valid example values
+    pub examples: Vec<String>,
+}
+
+/// Detailed information for invalid choice errors
+#[derive(Debug, Clone)]
+pub struct InvalidChoiceDetails {
+    /// Value that was provided
+    pub value: String,
+    /// List of valid choices
+    pub choices: Vec<String>,
+    /// Fuzzy-matched suggestion if available
+    pub did_you_mean: Option<String>,
+}
 
 /// Types of parameters supported by the system
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -470,10 +491,12 @@ impl ErrorMessageEnhancer {
                 let examples = CommonPatterns::examples_for_pattern(pattern);
                 ParameterError::PatternMismatchEnhanced {
                     parameter: name.clone(),
-                    value: value.clone(),
-                    pattern: pattern.clone(),
-                    pattern_description: description.to_string(),
-                    examples,
+                    details: Box::new(PatternMismatchDetails {
+                        value: value.clone(),
+                        pattern: pattern.clone(),
+                        pattern_description: description.to_string(),
+                        examples,
+                    }),
                     recoverable: true,
                 }
             }
@@ -482,9 +505,11 @@ impl ErrorMessageEnhancer {
                 let did_you_mean = self.suggest_closest_match(value, choices);
                 ParameterError::InvalidChoiceEnhanced {
                     parameter: name.clone(),
-                    value: value.clone(),
-                    choices: choices.clone(),
-                    did_you_mean,
+                    details: Box::new(InvalidChoiceDetails {
+                        value: value.clone(),
+                        choices: choices.clone(),
+                        did_you_mean,
+                    }),
                     recoverable: true,
                 }
             }
@@ -492,19 +517,21 @@ impl ErrorMessageEnhancer {
             ParameterError::StringTooShort { name, min_length, actual_length } => {
                 ParameterError::ValidationFailedWithContext {
                     parameter: name.clone(),
-                    value: format!("{actual_length} characters"),
-                    message: format!("Must be at least {min_length} characters long"),
-                    explanation: Some(format!(
-                        "Your input has {actual_length} characters, but {min_length} characters are required"
-                    )),
-                    examples: vec![
-                        format!("Example with {min_length} characters: {}", 
-                               "a".repeat(*min_length))
-                    ],
-                    suggestions: vec![
-                        format!("Add {} more characters to meet the minimum requirement", 
-                               min_length - actual_length)
-                    ],
+                    details: Box::new(ValidationFailedDetails {
+                        value: format!("{actual_length} characters"),
+                        message: format!("Must be at least {min_length} characters long"),
+                        explanation: Some(format!(
+                            "Your input has {actual_length} characters, but {min_length} characters are required"
+                        )),
+                        examples: vec![
+                            format!("Example with {min_length} characters: {}", 
+                                   "a".repeat(*min_length))
+                        ],
+                        suggestions: vec![
+                            format!("Add {} more characters to meet the minimum requirement", 
+                                   min_length - actual_length)
+                        ],
+                    }),
                     recoverable: true,
                 }
             }
@@ -512,16 +539,18 @@ impl ErrorMessageEnhancer {
             ParameterError::StringTooLong { name, max_length, actual_length } => {
                 ParameterError::ValidationFailedWithContext {
                     parameter: name.clone(),
-                    value: format!("{actual_length} characters"),
-                    message: format!("Must be at most {max_length} characters long"),
-                    explanation: Some(format!(
-                        "Your input has {actual_length} characters, but only {max_length} characters are allowed"
-                    )),
-                    examples: vec![],
-                    suggestions: vec![
-                        format!("Remove {} characters to meet the maximum limit", 
-                               actual_length - max_length)
-                    ],
+                    details: Box::new(ValidationFailedDetails {
+                        value: format!("{actual_length} characters"),
+                        message: format!("Must be at most {max_length} characters long"),
+                        explanation: Some(format!(
+                            "Your input has {actual_length} characters, but only {max_length} characters are allowed"
+                        )),
+                        examples: vec![],
+                        suggestions: vec![
+                            format!("Remove {} characters to meet the maximum limit", 
+                                   actual_length - max_length)
+                        ],
+                    }),
                     recoverable: true,
                 }
             }
@@ -546,11 +575,13 @@ impl ErrorMessageEnhancer {
 
                 ParameterError::ValidationFailedWithContext {
                     parameter: name.clone(),
-                    value: value.to_string(),
-                    message: explanation.clone(),
-                    explanation: Some(explanation),
-                    examples: vec![],
-                    suggestions,
+                    details: Box::new(ValidationFailedDetails {
+                        value: value.to_string(),
+                        message: explanation.clone(),
+                        explanation: Some(explanation),
+                        examples: vec![],
+                        suggestions,
+                    }),
                     recoverable: true,
                 }
             }
@@ -558,14 +589,16 @@ impl ErrorMessageEnhancer {
             ParameterError::ConditionalParameterMissing { parameter, condition } => {
                 ParameterError::ValidationFailedWithContext {
                     parameter: parameter.clone(),
-                    value: "missing".to_string(),
-                    message: "Parameter required for your current configuration".to_string(),
-                    explanation: Some(self.explain_condition(condition)),
-                    examples: vec![],
-                    suggestions: vec![
-                        format!("Provide --{}", parameter.replace('_', "-")),
-                        "Use --interactive mode for guided input".to_string(),
-                    ],
+                    details: Box::new(ValidationFailedDetails {
+                        value: "missing".to_string(),
+                        message: "Parameter required for your current configuration".to_string(),
+                        explanation: Some(self.explain_condition(condition)),
+                        examples: vec![],
+                        suggestions: vec![
+                            format!("Provide --{}", parameter.replace('_', "-")),
+                            "Use --interactive mode for guided input".to_string(),
+                        ],
+                    }),
                     recoverable: true,
                 }
             }
@@ -641,8 +674,8 @@ impl ErrorMessageEnhancer {
         let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
 
         // Initialize first row and column
-        for i in 0..=a_len {
-            matrix[i][0] = i;
+        for (i, row) in matrix.iter_mut().enumerate().take(a_len + 1) {
+            row[0] = i;
         }
         for j in 0..=b_len {
             matrix[0][j] = j;
@@ -1477,20 +1510,18 @@ mod enhanced_error_handling_tests {
         match enhanced {
             ParameterError::PatternMismatchEnhanced {
                 parameter,
-                value,
-                pattern_description,
-                examples,
+                details,
                 recoverable,
                 ..
             } => {
                 assert_eq!(parameter, "email");
-                assert_eq!(value, "invalid@");
-                assert_eq!(pattern_description, "Valid email address");
-                assert!(!examples.is_empty());
-                assert_eq!(recoverable, true);
+                assert_eq!(details.value, "invalid@");
+                assert_eq!(details.pattern_description, "Valid email address");
+                assert!(!details.examples.is_empty());
+                assert!(recoverable);
 
                 // Check that examples contain valid email formats
-                assert!(examples.iter().any(|e| e.contains("@") && e.contains(".")));
+                assert!(details.examples.iter().any(|e| e.contains("@") && e.contains(".")));
             }
             _ => panic!("Expected PatternMismatchEnhanced error"),
         }
@@ -1516,16 +1547,14 @@ mod enhanced_error_handling_tests {
         match enhanced {
             ParameterError::InvalidChoiceEnhanced {
                 parameter,
-                value,
-                choices: enhanced_choices,
-                did_you_mean,
+                details,
                 recoverable,
             } => {
                 assert_eq!(parameter, "environment");
-                assert_eq!(value, "prod");
-                assert_eq!(enhanced_choices, choices);
-                assert_eq!(did_you_mean, Some("production".to_string()));
-                assert_eq!(recoverable, true);
+                assert_eq!(details.value, "prod");
+                assert_eq!(details.choices, choices);
+                assert_eq!(details.did_you_mean, Some("production".to_string()));
+                assert!(recoverable);
             }
             _ => panic!("Expected InvalidChoiceEnhanced error"),
         }
@@ -1546,20 +1575,18 @@ mod enhanced_error_handling_tests {
         match enhanced {
             ParameterError::ValidationFailedWithContext {
                 parameter,
-                message,
-                explanation,
-                suggestions,
+                details,
                 recoverable,
                 ..
             } => {
                 assert_eq!(parameter, "password");
-                assert_eq!(message, "Must be at least 8 characters long");
-                assert!(explanation.is_some());
-                assert!(!suggestions.is_empty());
-                assert_eq!(recoverable, true);
+                assert_eq!(details.message, "Must be at least 8 characters long");
+                assert!(details.explanation.is_some());
+                assert!(!details.suggestions.is_empty());
+                assert!(recoverable);
 
                 // Check that suggestion includes specific guidance
-                let suggestion_text = suggestions.join(" ");
+                let suggestion_text = details.suggestions.join(" ");
                 assert!(suggestion_text.contains("4 more characters"));
             }
             _ => panic!("Expected ValidationFailedWithContext error"),
@@ -1605,7 +1632,7 @@ mod enhanced_error_handling_tests {
         assert!(distant_suggestion.is_none() || distant_suggestion.is_some());
 
         // Test empty choices
-        assert_eq!(enhancer.suggest_closest_match("anything", &vec![]), None);
+        assert_eq!(enhancer.suggest_closest_match("anything", &[]), None);
     }
 
     #[test]
