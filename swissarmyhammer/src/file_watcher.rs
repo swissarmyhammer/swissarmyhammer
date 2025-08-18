@@ -139,7 +139,7 @@ impl FileWatcher {
 
             self.watcher_handle = Some(handle);
             self.shutdown_tx = Some(shutdown_tx);
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(test))]
