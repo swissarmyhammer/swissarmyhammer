@@ -192,8 +192,7 @@ impl McpTool for WriteFileTool {
 
         let success_message = format!(
             "Successfully wrote {} bytes to {}",
-            bytes_written,
-            request.file_path
+            bytes_written, request.file_path
         );
 
         debug!(
@@ -209,6 +208,7 @@ impl McpTool for WriteFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tool_handlers::ToolHandlers;
     use crate::mcp::tool_registry::ToolContext;
     use std::fs;
     use std::path::PathBuf;
@@ -217,31 +217,45 @@ mod tests {
     use swissarmyhammer::git::GitOperations;
     use swissarmyhammer::issues::FileSystemIssueStorage;
     use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
-    use crate::mcp::tool_handlers::ToolHandlers;
     use tempfile::TempDir;
     use tokio::sync::{Mutex, RwLock};
 
     /// Create a test context for tool execution
     fn create_test_context() -> ToolContext {
-        let issue_storage = Arc::new(RwLock::new(
-            Box::new(FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap())
-                as Box<dyn swissarmyhammer::issues::IssueStorage>,
-        ));
+        let issue_storage = Arc::new(RwLock::new(Box::new(
+            FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+        )
+            as Box<dyn swissarmyhammer::issues::IssueStorage>));
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         let memo_storage = Arc::new(RwLock::new(
-            Box::new(MockMemoStorage::new()) as Box<dyn MemoStorage>,
+            Box::new(MockMemoStorage::new()) as Box<dyn MemoStorage>
         ));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let rate_limiter = Arc::new(MockRateLimiter);
 
-        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage, rate_limiter)
+        ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            rate_limiter,
+        )
     }
 
     /// Create test arguments for the write tool
-    fn create_test_arguments(file_path: &str, content: &str) -> serde_json::Map<String, serde_json::Value> {
+    fn create_test_arguments(
+        file_path: &str,
+        content: &str,
+    ) -> serde_json::Map<String, serde_json::Value> {
         let mut args = serde_json::Map::new();
-        args.insert("file_path".to_string(), serde_json::Value::String(file_path.to_string()));
-        args.insert("content".to_string(), serde_json::Value::String(content.to_string()));
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(file_path.to_string()),
+        );
+        args.insert(
+            "content".to_string(),
+            serde_json::Value::String(content.to_string()),
+        );
         args
     }
 
@@ -260,7 +274,7 @@ mod tests {
         // Verify schema structure
         assert!(schema.is_object());
         let schema_obj = schema.as_object().unwrap();
-        
+
         assert_eq!(schema_obj.get("type").unwrap().as_str().unwrap(), "object");
         assert!(schema_obj.contains_key("properties"));
         assert!(schema_obj.contains_key("required"));
@@ -302,7 +316,7 @@ mod tests {
     async fn test_write_overwrite_existing_file() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test_overwrite.txt");
-        
+
         // Create initial file
         let initial_content = "Initial content";
         fs::write(&test_file, initial_content).unwrap();
@@ -326,7 +340,12 @@ mod tests {
     #[tokio::test]
     async fn test_write_creates_parent_directories() {
         let temp_dir = TempDir::new().unwrap();
-        let nested_file = temp_dir.path().join("deeply").join("nested").join("directory").join("test.txt");
+        let nested_file = temp_dir
+            .path()
+            .join("deeply")
+            .join("nested")
+            .join("directory")
+            .join("test.txt");
         let test_content = "Content in nested directory";
 
         assert!(!nested_file.parent().unwrap().exists());
@@ -341,7 +360,7 @@ mod tests {
         // Verify parent directories were created
         assert!(nested_file.parent().unwrap().exists());
         assert!(nested_file.exists());
-        
+
         let written_content = fs::read_to_string(&nested_file).unwrap();
         assert_eq!(written_content, test_content);
     }
@@ -354,7 +373,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("file_path cannot be empty"));
     }
@@ -367,7 +386,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("file_path cannot be empty"));
     }
@@ -380,7 +399,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("must be absolute"));
     }
@@ -389,7 +408,7 @@ mod tests {
     async fn test_write_content_size_limit() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("large_file.txt");
-        
+
         // Create content larger than 10MB limit
         let large_content = "x".repeat(10_000_001);
 
@@ -399,7 +418,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("exceeds maximum size limit"));
     }
@@ -439,7 +458,7 @@ mod tests {
         assert!(test_file.exists());
         let written_content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(written_content, empty_content);
-        
+
         let metadata = fs::metadata(&test_file).unwrap();
         assert_eq!(metadata.len(), 0);
     }
@@ -469,24 +488,24 @@ mod tests {
     async fn test_atomic_write_cleanup_on_failure() {
         use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("readonly_test.txt");
-        
+
         // Create a read-only file that should cause rename to fail
         fs::write(&test_file, "existing content").unwrap();
-        
+
         #[cfg(unix)]
         {
             let readonly_permissions = Permissions::from_mode(0o444);
             fs::set_permissions(&test_file, readonly_permissions).unwrap();
         }
-        
+
         let test_content = "This should fail to write";
-        
+
         // The atomic write should fail but clean up temporary file
         let _result = WriteFileTool::write_file_atomic(&test_file, test_content);
-        
+
         // Note: This test may pass on some systems where rename succeeds despite readonly target
         // The key is that temporary file should be cleaned up regardless
         let temp_file_name = format!("{}.tmp", test_file.display());
@@ -497,7 +516,8 @@ mod tests {
     async fn test_write_file_with_special_characters() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("special_chars.txt");
-        let special_content = "Line 1\nLine 2\r\nTab\tcharacter\nNull: \0 (null byte)\nBackslash: \\ forward: /";
+        let special_content =
+            "Line 1\nLine 2\r\nTab\tcharacter\nNull: \0 (null byte)\nBackslash: \\ forward: /";
 
         let tool = WriteFileTool::new();
         let context = create_test_context();
@@ -515,15 +535,18 @@ mod tests {
     async fn test_write_json_argument_parsing_error() {
         let tool = WriteFileTool::new();
         let context = create_test_context();
-        
+
         // Create invalid arguments (missing required field)
         let mut args = serde_json::Map::new();
-        args.insert("file_path".to_string(), serde_json::Value::String("/test/path".to_string()));
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String("/test/path".to_string()),
+        );
         // Missing "content" field
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("Invalid arguments"));
     }

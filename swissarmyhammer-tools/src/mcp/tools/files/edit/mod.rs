@@ -33,18 +33,15 @@ pub struct EditResult {
 /// Validation result for edit operations
 #[derive(Debug, Clone)]
 struct EditValidation {
-    pub file_exists: bool,
-    pub old_string_found: bool,
     pub old_string_count: usize,
-    pub is_unique: bool,
 }
 
 /// Line ending types detected in files
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineEnding {
-    Lf,   // Unix: \n
-    CrLf, // Windows: \r\n
-    Cr,   // Classic Mac: \r
+    Lf,    // Unix: \n
+    CrLf,  // Windows: \r\n
+    Cr,    // Classic Mac: \r
     Mixed, // Multiple types found
 }
 
@@ -68,7 +65,7 @@ impl LineEnding {
     fn as_str(&self) -> &'static str {
         match self {
             LineEnding::Lf => "LF",
-            LineEnding::CrLf => "CRLF", 
+            LineEnding::CrLf => "CRLF",
             LineEnding::Cr => "CR",
             LineEnding::Mixed => "Mixed",
         }
@@ -102,9 +99,7 @@ impl EditFileTool {
 
         // Validate file path first
         let path = validate_file_path(file_path)?;
-        let file_exists = path.exists();
-
-        if !file_exists {
+        if !path.exists() {
             return Err(McpError::invalid_request(
                 format!("File does not exist: {}", file_path),
                 None,
@@ -114,19 +109,14 @@ impl EditFileTool {
         // Count occurrences of old_string
         let matches: Vec<_> = content.matches(old_string).collect();
         let old_string_count = matches.len();
-        let old_string_found = old_string_count > 0;
-
-        // Check uniqueness if single replacement requested
-        let is_unique = old_string_count <= 1;
-
-        if !old_string_found {
+        if old_string_count == 0 {
             return Err(McpError::invalid_request(
                 format!("String '{}' not found in file", old_string),
                 None,
             ));
         }
 
-        if !replace_all && !is_unique {
+        if !replace_all && old_string_count > 1 {
             return Err(McpError::invalid_request(
                 format!(
                     "String '{}' appears {} times in file. Use replace_all=true for multiple replacements",
@@ -137,10 +127,7 @@ impl EditFileTool {
         }
 
         Ok(EditValidation {
-            file_exists,
-            old_string_found,
             old_string_count,
-            is_unique,
         })
     }
 
@@ -150,7 +137,10 @@ impl EditFileTool {
     /// - UTF-8 (most common)
     /// - UTF-16 with BOM
     /// - Other encodings with fallback to UTF-8
-    fn read_with_encoding_detection(&self, file_path: &Path) -> Result<(String, &'static Encoding), McpError> {
+    fn read_with_encoding_detection(
+        &self,
+        file_path: &Path,
+    ) -> Result<(String, &'static Encoding), McpError> {
         use crate::mcp::tools::files::shared_utils::handle_file_error;
 
         // Read raw bytes first
@@ -158,8 +148,7 @@ impl EditFileTool {
             .map_err(|e| handle_file_error(e, "read file for encoding detection", file_path))?;
 
         // Detect encoding using BOM, fallback to UTF-8
-        let (encoding, bom_length) = encoding_rs::Encoding::for_bom(&bytes)
-            .unwrap_or((UTF_8, 0));
+        let (encoding, bom_length) = encoding_rs::Encoding::for_bom(&bytes).unwrap_or((UTF_8, 0));
 
         // Use the bytes after BOM for decoding
         let bytes_to_decode = &bytes[bom_length..];
@@ -173,10 +162,13 @@ impl EditFileTool {
 
         // Decode to string
         let (content, _, had_decode_errors) = encoding.decode(bytes_to_decode);
-        
+
         if had_decode_errors {
             return Err(McpError::internal_error(
-                format!("Failed to decode file with detected encoding {}", encoding.name()),
+                format!(
+                    "Failed to decode file with detected encoding {}",
+                    encoding.name()
+                ),
                 None,
             ));
         }
@@ -202,7 +194,7 @@ impl EditFileTool {
         new_string: &str,
         replace_all: bool,
     ) -> Result<EditResult, McpError> {
-        use crate::mcp::tools::files::shared_utils::{validate_file_path, handle_file_error};
+        use crate::mcp::tools::files::shared_utils::{handle_file_error, validate_file_path};
 
         // Step 1: Validate file path and get canonical path
         let path = validate_file_path(file_path)?;
@@ -217,17 +209,18 @@ impl EditFileTool {
 
         // Step 2: Read original file with encoding detection
         let (original_content, detected_encoding) = self.read_with_encoding_detection(&path)?;
-        
+
         // Step 3: Detect line endings
         let line_ending = LineEnding::detect(&original_content);
 
         // Step 4: Validate edit operation
-        let validation = self.validate_edit_operation(file_path, &original_content, old_string, replace_all)?;
+        let validation =
+            self.validate_edit_operation(file_path, &original_content, old_string, replace_all)?;
 
         // Step 5: Get original file metadata for preservation
-        let original_metadata = fs::metadata(&path)
-            .map_err(|e| handle_file_error(e, "read metadata", &path))?;
-        
+        let original_metadata =
+            fs::metadata(&path).map_err(|e| handle_file_error(e, "read metadata", &path))?;
+
         let original_permissions = original_metadata.permissions();
         let original_modified = FileTime::from_last_modification_time(&original_metadata);
         let original_accessed = FileTime::from_last_access_time(&original_metadata);
@@ -244,11 +237,14 @@ impl EditFileTool {
 
         // Step 7: Create temporary file in same directory as original
         let temp_file_name = format!("{}.tmp.{}", path.display(), std::process::id());
-        let temp_path = path.parent()
-            .ok_or_else(|| McpError::internal_error(
-                "Cannot determine parent directory for temporary file".to_string(),
-                None,
-            ))?
+        let temp_path = path
+            .parent()
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    "Cannot determine parent directory for temporary file".to_string(),
+                    None,
+                )
+            })?
             .join(&temp_file_name);
 
         debug!(
@@ -267,16 +263,22 @@ impl EditFileTool {
                 if let Err(e) = fs::set_permissions(&temp_path, original_permissions.clone()) {
                     // Clean up and return error
                     let _ = fs::remove_file(&temp_path);
-                    return Err(handle_file_error(e, "set permissions on temporary file", &temp_path));
+                    return Err(handle_file_error(
+                        e,
+                        "set permissions on temporary file",
+                        &temp_path,
+                    ));
                 }
 
                 // Step 10: Atomically rename temporary file to original
                 let rename_result = fs::rename(&temp_path, &path);
-                
+
                 match rename_result {
                     Ok(()) => {
                         // Step 11: Restore file timestamps
-                        let metadata_preserved = if let Err(e) = set_file_times(&path, original_accessed, original_modified) {
+                        let metadata_preserved = if let Err(e) =
+                            set_file_times(&path, original_accessed, original_modified)
+                        {
                             debug!(
                                 path = %path.display(),
                                 error = %e,
@@ -306,7 +308,11 @@ impl EditFileTool {
                     Err(e) => {
                         // Clean up temporary file and return error
                         let _ = fs::remove_file(&temp_path);
-                        Err(handle_file_error(e, "rename temporary file to target", &path))
+                        Err(handle_file_error(
+                            e,
+                            "rename temporary file to target",
+                            &path,
+                        ))
                     }
                 }
             }
@@ -331,7 +337,7 @@ impl EditFileTool {
 
         // Encode content back to bytes using the detected encoding
         let (bytes, _, had_errors) = encoding.encode(content);
-        
+
         if had_errors {
             return Err(McpError::internal_error(
                 format!("Failed to encode content with encoding {}", encoding.name()),
@@ -344,10 +350,12 @@ impl EditFileTool {
             .map_err(|e| handle_file_error(e, "create temporary file", file_path))?;
 
         let mut writer = BufWriter::new(file);
-        writer.write_all(&bytes)
+        writer
+            .write_all(&bytes)
             .map_err(|e| handle_file_error(e, "write to temporary file", file_path))?;
-        
-        writer.flush()
+
+        writer
+            .flush()
             .map_err(|e| handle_file_error(e, "flush temporary file", file_path))?;
 
         Ok(bytes.len())
@@ -477,6 +485,7 @@ impl McpTool for EditFileTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tool_handlers::ToolHandlers;
     use crate::mcp::tool_registry::ToolContext;
     use std::fs;
     use std::path::PathBuf;
@@ -485,24 +494,29 @@ mod tests {
     use swissarmyhammer::git::GitOperations;
     use swissarmyhammer::issues::FileSystemIssueStorage;
     use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
-    use crate::mcp::tool_handlers::ToolHandlers;
     use tempfile::TempDir;
     use tokio::sync::{Mutex, RwLock};
 
     /// Create a test context for tool execution
     fn create_test_context() -> ToolContext {
-        let issue_storage = Arc::new(RwLock::new(
-            Box::new(FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap())
-                as Box<dyn swissarmyhammer::issues::IssueStorage>,
-        ));
+        let issue_storage = Arc::new(RwLock::new(Box::new(
+            FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+        )
+            as Box<dyn swissarmyhammer::issues::IssueStorage>));
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         let memo_storage = Arc::new(RwLock::new(
-            Box::new(MockMemoStorage::new()) as Box<dyn MemoStorage>,
+            Box::new(MockMemoStorage::new()) as Box<dyn MemoStorage>
         ));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let rate_limiter = Arc::new(MockRateLimiter);
 
-        ToolContext::new(tool_handlers, issue_storage, git_ops, memo_storage, rate_limiter)
+        ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            rate_limiter,
+        )
     }
 
     /// Create test arguments for the edit tool
@@ -513,14 +527,26 @@ mod tests {
         replace_all: Option<bool>,
     ) -> serde_json::Map<String, serde_json::Value> {
         let mut args = serde_json::Map::new();
-        args.insert("file_path".to_string(), serde_json::Value::String(file_path.to_string()));
-        args.insert("old_string".to_string(), serde_json::Value::String(old_string.to_string()));
-        args.insert("new_string".to_string(), serde_json::Value::String(new_string.to_string()));
-        
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(file_path.to_string()),
+        );
+        args.insert(
+            "old_string".to_string(),
+            serde_json::Value::String(old_string.to_string()),
+        );
+        args.insert(
+            "new_string".to_string(),
+            serde_json::Value::String(new_string.to_string()),
+        );
+
         if let Some(replace_all) = replace_all {
-            args.insert("replace_all".to_string(), serde_json::Value::Bool(replace_all));
+            args.insert(
+                "replace_all".to_string(),
+                serde_json::Value::Bool(replace_all),
+            );
         }
-        
+
         args
     }
 
@@ -566,7 +592,7 @@ mod tests {
         // Verify schema structure
         assert!(schema.is_object());
         let schema_obj = schema.as_object().unwrap();
-        
+
         assert_eq!(schema_obj.get("type").unwrap().as_str().unwrap(), "object");
         assert!(schema_obj.contains_key("properties"));
         assert!(schema_obj.contains_key("required"));
@@ -594,12 +620,7 @@ mod tests {
 
         let tool = EditFileTool::new();
         let context = create_test_context();
-        let args = create_edit_arguments(
-            &test_file.to_string_lossy(),
-            "world",
-            "universe",
-            None,
-        );
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "world", "universe", None);
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
@@ -621,12 +642,7 @@ mod tests {
 
         let tool = EditFileTool::new();
         let context = create_test_context();
-        let args = create_edit_arguments(
-            &test_file.to_string_lossy(),
-            "test",
-            "exam",
-            Some(true),
-        );
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "test", "exam", Some(true));
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
@@ -654,7 +670,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("appears 3 times"));
         assert!(format!("{:?}", error).contains("Use replace_all=true"));
@@ -682,7 +698,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("not found in file"));
 
@@ -698,24 +714,19 @@ mod tests {
 
         let tool = EditFileTool::new();
         let context = create_test_context();
-        let args = create_edit_arguments(
-            &nonexistent_file.to_string_lossy(),
-            "old",
-            "new",
-            None,
-        );
+        let args = create_edit_arguments(&nonexistent_file.to_string_lossy(), "old", "new", None);
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         let error_str = format!("{:?}", error);
         // The error message from shared_utils says "File not found"
         assert!(
-            error_str.contains("File does not exist") || 
-            error_str.contains("File not found") ||
-            error_str.contains("does not exist") || 
-            error_str.contains("NotFound")
+            error_str.contains("File does not exist")
+                || error_str.contains("File not found")
+                || error_str.contains("does not exist")
+                || error_str.contains("NotFound")
         );
     }
 
@@ -756,12 +767,7 @@ mod tests {
 
         let tool = EditFileTool::new();
         let context = create_test_context();
-        let args = create_edit_arguments(
-            &test_file.to_string_lossy(),
-            "🌍",
-            "🚀",
-            None,
-        );
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "🌍", "🚀", None);
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
@@ -774,7 +780,7 @@ mod tests {
     #[tokio::test]
     async fn test_edit_preserves_line_endings() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // Test Windows line endings preservation
         let windows_file = temp_dir.path().join("windows_endings.txt");
         let windows_content = "Line 1\r\nold text\r\nLine 3\r\n";
@@ -797,7 +803,7 @@ mod tests {
         assert!(edited_content.contains("\r\n"));
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_edit_atomic_operation_failure_cleanup() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("test_atomic.txt");
@@ -809,34 +815,32 @@ mod tests {
         {
             use std::fs::Permissions;
             use std::os::unix::fs::PermissionsExt;
-            
+
             let readonly_permissions = Permissions::from_mode(0o444);
             fs::set_permissions(&test_file, readonly_permissions).unwrap();
 
             let tool = EditFileTool::new();
-            
+
             // Even if the operation fails, we should verify no temporary files are left behind
             let _temp_pattern = format!("{}.tmp.*", test_file.display());
-            
+
             // The edit should work even with readonly file since we change permissions on temp file
-            let edit_result = tool.edit_file_atomic(
-                &test_file.to_string_lossy(),
-                "original",
-                "modified",
-                false,
-            );
-            
+            let edit_result =
+                tool.edit_file_atomic(&test_file.to_string_lossy(), "original", "modified", false);
+
             // Check that no temporary files remain regardless of result
-            let temp_files: Vec<_> = temp_dir.path()
+            let temp_files: Vec<_> = temp_dir
+                .path()
                 .read_dir()
                 .unwrap()
                 .filter_map(|entry| entry.ok())
-                .filter(|entry| {
-                    entry.file_name().to_string_lossy().contains(".tmp.")
-                })
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
                 .collect();
-            
-            assert!(temp_files.is_empty(), "Temporary files should be cleaned up");
+
+            assert!(
+                temp_files.is_empty(),
+                "Temporary files should be cleaned up"
+            );
 
             // If the edit succeeded, verify the content was actually changed
             if edit_result.is_ok() {
@@ -858,27 +862,26 @@ mod tests {
         {
             use std::fs::Permissions;
             use std::os::unix::fs::PermissionsExt;
-            
+
             let permissions = Permissions::from_mode(0o755);
             fs::set_permissions(&test_file, permissions).unwrap();
-            
+
             let original_metadata = fs::metadata(&test_file).unwrap();
             let original_mode = original_metadata.permissions().mode();
 
             let tool = EditFileTool::new();
-            let edit_result = tool.edit_file_atomic(
-                &test_file.to_string_lossy(),
-                "test",
-                "updated",
-                false,
-            );
+            let edit_result =
+                tool.edit_file_atomic(&test_file.to_string_lossy(), "test", "updated", false);
 
             assert!(edit_result.is_ok());
-            
+
             // Verify permissions were preserved
             let new_metadata = fs::metadata(&test_file).unwrap();
             let new_mode = new_metadata.permissions().mode();
-            assert_eq!(original_mode, new_mode, "File permissions should be preserved");
+            assert_eq!(
+                original_mode, new_mode,
+                "File permissions should be preserved"
+            );
 
             // Verify content was updated
             let final_content = fs::read_to_string(&test_file).unwrap();
@@ -895,12 +898,7 @@ mod tests {
 
         let tool = EditFileTool::new();
         let context = create_test_context();
-        let args = create_edit_arguments(
-            &test_file.to_string_lossy(),
-            "world",
-            "universe",
-            None,
-        );
+        let args = create_edit_arguments(&test_file.to_string_lossy(), "world", "universe", None);
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_ok());
@@ -926,7 +924,7 @@ mod tests {
     #[test]
     fn test_edit_validation_logic() {
         let tool = EditFileTool::new();
-        
+
         // Test with content that has multiple occurrences
         let content = "test content with test and more test";
         let _result = tool.validate_edit_operation(
@@ -943,7 +941,7 @@ mod tests {
         // Count occurrences manually to verify logic
         let matches: Vec<_> = content.matches("test").collect();
         assert_eq!(matches.len(), 3);
-        
+
         // Test unique string
         let matches_unique: Vec<_> = content.matches("content").collect();
         assert_eq!(matches_unique.len(), 1);
@@ -952,7 +950,7 @@ mod tests {
     #[test]
     fn test_encoding_detection_logic() {
         let tool = EditFileTool::new();
-        
+
         // Create a temporary file with UTF-8 content
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("encoding_test.txt");
@@ -961,7 +959,7 @@ mod tests {
 
         let result = tool.read_with_encoding_detection(&test_file);
         assert!(result.is_ok());
-        
+
         let (content, encoding) = result.unwrap();
         assert_eq!(content, utf8_content);
         assert_eq!(encoding.name(), "UTF-8");
@@ -971,16 +969,22 @@ mod tests {
     async fn test_edit_json_argument_parsing_error() {
         let tool = EditFileTool::new();
         let context = create_test_context();
-        
+
         // Create invalid arguments (missing required field)
         let mut args = serde_json::Map::new();
-        args.insert("file_path".to_string(), serde_json::Value::String("/test/path".to_string()));
-        args.insert("old_string".to_string(), serde_json::Value::String("old".to_string()));
+        args.insert(
+            "file_path".to_string(),
+            serde_json::Value::String("/test/path".to_string()),
+        );
+        args.insert(
+            "old_string".to_string(),
+            serde_json::Value::String("old".to_string()),
+        );
         // Missing "new_string" field
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("Invalid arguments"));
     }
@@ -989,13 +993,13 @@ mod tests {
     async fn test_edit_large_file_handling() {
         let temp_dir = TempDir::new().unwrap();
         let test_file = temp_dir.path().join("large_file.txt");
-        
+
         // Create a reasonably large file (1MB) with repetitive content
         let chunk = "This is a line of test content that will be repeated many times.\n";
         let chunk_size = chunk.len();
         let target_size = 1_000_000; // 1MB
         let repetitions = target_size / chunk_size;
-        
+
         let large_content = chunk.repeat(repetitions);
         fs::write(&test_file, &large_content).unwrap();
 
@@ -1034,7 +1038,7 @@ mod tests {
 
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert!(format!("{:?}", error).contains("not found in file"));
     }
