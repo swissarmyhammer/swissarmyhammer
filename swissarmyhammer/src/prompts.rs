@@ -146,6 +146,7 @@ pub struct Prompt {
     ///
     /// Defines what arguments the template expects, whether they're required,
     /// default values, and documentation. Used for validation and help generation.
+    #[serde(rename = "parameters")]
     pub arguments: Vec<ArgumentSpec>,
 
     /// Cached shared parameters converted from arguments.
@@ -1398,7 +1399,13 @@ impl PromptLoader {
                     .map(String::from)
                     .collect();
             }
-            if let Some(args) = metadata_value.get("arguments").and_then(|v| v.as_array()) {
+            // Check both "parameters" (standard) and "arguments" (legacy) field names
+            let args_array = metadata_value
+                .get("parameters")
+                .or_else(|| metadata_value.get("arguments"))
+                .and_then(|v| v.as_array());
+
+            if let Some(args) = args_array {
                 for arg in args {
                     if let Some(arg_obj) = arg.as_object() {
                         let name = arg_obj
@@ -1524,7 +1531,13 @@ impl PromptLoader {
             }
 
             // Parse arguments
-            if let Some(args) = metadata_value.get("arguments").and_then(|v| v.as_array()) {
+            // Check both "parameters" (standard) and "arguments" (legacy) field names
+            let args_array = metadata_value
+                .get("parameters")
+                .or_else(|| metadata_value.get("arguments"))
+                .and_then(|v| v.as_array());
+
+            if let Some(args) = args_array {
                 for arg in args {
                     if let Some(arg_obj) = arg.as_object() {
                         let arg_spec = ArgumentSpec {

@@ -1,1 +1,0 @@
-looking in workflow and prompt yaml -- one is parameters, one is arguments -- this is not consistent. pick one

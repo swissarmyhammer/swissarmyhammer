@@ -11,7 +11,7 @@ fn create_test_prompt() -> String {
 name: Test Prompt
 title: Test Prompt
 description: A test prompt for liquid template testing
-arguments:
+parameters:
   - name: message
     description: The message
     required: true
@@ -301,7 +301,7 @@ fn test_workflow_with_complex_liquid_templates() {
 name: Template Prompt
 title: Template Test Prompt
 description: A prompt that uses template variables
-arguments:
+parameters:
   - name: user
     description: User name
     required: true
@@ -667,7 +667,7 @@ fn test_prompt_test_with_empty_set_value() {
         r#"---
 title: Empty Test Prompt
 description: Tests empty set values
-arguments:
+parameters:
   - name: content
     required: true
 ---
@@ -714,7 +714,7 @@ fn test_prompt_test_with_set_overriding_arg() {
         r#"---
 title: Override Test Prompt
 description: Tests set overriding arg
-arguments:
+parameters:
   - name: message
     required: true
 ---

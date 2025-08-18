@@ -2,7 +2,7 @@
 name: debug-logs
 title: Analyze Log Files
 description: Analyze log files to identify issues and patterns
-arguments:
+parameters:
   - name: log_content
     description: The log content to analyze
     required: true

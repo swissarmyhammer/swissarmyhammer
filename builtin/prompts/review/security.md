@@ -2,7 +2,7 @@
 name: review-security
 title: Security Code Review
 description: Perform a comprehensive security review of code to identify vulnerabilities
-arguments:
+parameters:
   - name: context
     description: Context about the code (e.g., "handles user authentication")
     required: false
