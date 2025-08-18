@@ -297,7 +297,7 @@ fn find_files_with_glob(
 }
 
 /// Sort files by modification time (most recent first)
-fn sort_files_by_modification_time(files: &mut Vec<String>) {
+fn sort_files_by_modification_time(files: &mut [String]) {
     files.sort_by(|a, b| {
         let a_metadata = std::fs::metadata(a).ok();
         let b_metadata = std::fs::metadata(b).ok();
