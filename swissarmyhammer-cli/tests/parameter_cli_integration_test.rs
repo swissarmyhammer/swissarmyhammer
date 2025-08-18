@@ -11,7 +11,6 @@ fn test_parameter_resolution_with_valid_workflow() {
     let result = resolve_workflow_parameters_interactive(
         "nonexistent-workflow",
         &["name=John".to_string()],
-        &[],
         false,
     );
 
@@ -25,7 +24,6 @@ fn test_parameter_resolution_with_invalid_var_format() {
     let result = resolve_workflow_parameters_interactive(
         "test-workflow",
         &["invalid_format".to_string()],
-        &[],
         false,
     );
 
@@ -50,7 +48,6 @@ fn test_backward_compatibility() {
             "person_name=John".to_string(),
             "language=Spanish".to_string(),
         ],
-        &[],
         false,
     );
 
@@ -71,7 +68,6 @@ fn test_multiple_var_parameters() {
             "param2=123".to_string(),
             "param3=true".to_string(),
         ],
-        &[],
         false,
     );
 
@@ -81,7 +77,7 @@ fn test_multiple_var_parameters() {
 
 #[test]
 fn test_empty_parameters() {
-    let result = resolve_workflow_parameters_interactive("test-workflow", &[], &[], false);
+    let result = resolve_workflow_parameters_interactive("test-workflow", &[], false);
 
     // Should handle empty parameters without error
     assert!(result.is_ok());
@@ -95,7 +91,6 @@ fn test_parameter_precedence() {
     let result = resolve_workflow_parameters_interactive(
         "test-workflow",
         &["name=FromVar".to_string()],
-        &[],
         false,
     );
 
@@ -138,8 +133,7 @@ Test workflow content.
         let result = resolve_workflow_parameters_interactive(
             "test",
             &["test_param=value".to_string()],
-            &[],
-            false,
+                false,
         );
 
         // Should handle gracefully regardless of workflow existence

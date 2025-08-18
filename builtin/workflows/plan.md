@@ -31,8 +31,8 @@ sah flow run plan --plan-filename "./specification/my-feature.md"
 # Interactive mode
 sah flow run plan --interactive
 
-# Legacy --set support (during transition)
-sah flow run plan --set plan_filename="./spec/feature.md"
+# Variable parameter support  
+sah flow run plan --var plan_filename="./spec/feature.md"
 
 # Scan ./specification directory (when no parameter provided)
 sah flow run plan

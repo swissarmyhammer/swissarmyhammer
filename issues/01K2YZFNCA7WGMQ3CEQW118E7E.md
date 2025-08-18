@@ -1,1 +1,0 @@
-we do not need --set and --var pick one and have a single consistent switch

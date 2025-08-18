@@ -47,8 +47,8 @@ sah flow run greeting --person-name "Alice" --language "Spanish" --enthusiastic
 # Interactive mode
 sah flow run greeting --interactive
 
-# Legacy --set support (during transition)
-sah flow run greeting --set person_name=John --set language=English
+# Variable parameter support
+sah flow run greeting --var person_name=John --var language=English
 ```
 
 ## States
