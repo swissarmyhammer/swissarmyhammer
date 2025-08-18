@@ -44,7 +44,7 @@ pub use cache::{
     WorkflowCacheManager,
 };
 pub use definition::{
-    ParameterType, Workflow, WorkflowError, WorkflowName, WorkflowParameter, WorkflowResult,
+    Workflow, WorkflowError, WorkflowName, WorkflowResult,
 };
 pub use error_utils::{
     command_succeeded, extract_stderr, extract_stdout, handle_claude_command_error,

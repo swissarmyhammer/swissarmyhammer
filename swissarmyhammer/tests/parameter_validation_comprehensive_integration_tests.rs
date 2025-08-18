@@ -1049,7 +1049,7 @@ mod specification_compliance_tests {
     use swissarmyhammer::common::{
         discover_workflow_parameters, DefaultParameterResolver, ParameterResolver,
     };
-    use swissarmyhammer::workflow::ParameterType;
+    use swissarmyhammer::common::ParameterType;
 
     /// Test that workflow parameters are defined in frontmatter like prompts
     #[tokio::test]
@@ -1115,7 +1115,6 @@ mod specification_compliance_tests {
         // Convert to Parameter objects
         let parameters: Vec<_> = workflow_params
             .into_iter()
-            .map(|wp| wp.to_parameter())
             .collect();
 
         // Test with missing required parameter (would prompt interactively)
@@ -1160,7 +1159,6 @@ mod specification_compliance_tests {
         let workflow_params = discover_workflow_parameters("greeting").unwrap();
         let parameters: Vec<_> = workflow_params
             .into_iter()
-            .map(|wp| wp.to_parameter())
             .collect();
 
         // Test missing required parameter
@@ -1300,8 +1298,7 @@ mod specification_compliance_tests {
             let workflow_params = discover_workflow_parameters("greeting").unwrap();
             let parameters: Vec<_> = workflow_params
                 .into_iter()
-                .map(|wp| wp.to_parameter())
-                .collect();
+                    .collect();
 
             let cli_args: HashMap<String, String> = [
                 ("person_name".to_string(), "Alice".to_string()),
