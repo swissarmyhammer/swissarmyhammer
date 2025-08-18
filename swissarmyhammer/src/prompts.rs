@@ -849,7 +849,6 @@ impl Prompt {
             }
         }
 
-
         for used_var in &used_variables {
             // Skip if this variable is defined within the template
             if assigned_variables.contains(used_var) {
@@ -1401,10 +1400,11 @@ impl PromptLoader {
                     .collect();
             }
             // Check both "parameters" (standard) and "arguments" (legacy) field names
-            let args_array = metadata_value.get("parameters")
+            let args_array = metadata_value
+                .get("parameters")
                 .or_else(|| metadata_value.get("arguments"))
                 .and_then(|v| v.as_array());
-            
+
             if let Some(args) = args_array {
                 for arg in args {
                     if let Some(arg_obj) = arg.as_object() {
@@ -1532,10 +1532,11 @@ impl PromptLoader {
 
             // Parse arguments
             // Check both "parameters" (standard) and "arguments" (legacy) field names
-            let args_array = metadata_value.get("parameters")
+            let args_array = metadata_value
+                .get("parameters")
                 .or_else(|| metadata_value.get("arguments"))
                 .and_then(|v| v.as_array());
-            
+
             if let Some(args) = args_array {
                 for arg in args {
                     if let Some(arg_obj) = arg.as_object() {
