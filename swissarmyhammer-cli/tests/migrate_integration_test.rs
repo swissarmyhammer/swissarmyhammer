@@ -7,7 +7,7 @@ fn test_migrate_status_help() {
 
     // Test that migrate status command is available and shows help
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "sah", "--", "migrate", "status", "--help"])
+        .args(["run", "--bin", "sah", "--", "migrate", "status", "--help"])
         .output()
         .expect("Failed to execute command");
 
