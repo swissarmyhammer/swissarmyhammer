@@ -622,6 +622,41 @@ Examples:
         #[command(subcommand)]
         subcommand: ShellCommands,
     },
+    /// Manage issue directory migration
+    #[command(long_about = "
+Manage issues directory migration from ./issues to .swissarmyhammer/issues.
+Provides manual control over the migration process with safety features and reporting.
+
+Basic usage:
+  swissarmyhammer migrate status             # Show migration status
+  swissarmyhammer migrate check              # Check migration prerequisites
+  swissarmyhammer migrate run                # Perform migration with confirmation
+  swissarmyhammer migrate cleanup            # Clean up migration artifacts
+
+Migration options:
+  --force                                    # Skip confirmation prompt
+  --backup                                   # Create backup before migration
+  --dry-run                                  # Preview migration without changes
+
+Safety features:
+- Confirmation prompts by default
+- Optional backup creation
+- Comprehensive pre-migration checks
+- Detailed error messages and recovery guidance
+- Cleanup command for managing backups
+
+Examples:
+  swissarmyhammer migrate status             # Check current status
+  swissarmyhammer migrate check              # Validate prerequisites
+  swissarmyhammer migrate run --backup       # Migrate with backup
+  swissarmyhammer migrate run --dry-run      # Preview migration
+  swissarmyhammer migrate run --force        # Non-interactive migration
+  swissarmyhammer migrate cleanup            # Remove old backups
+")]
+    Migrate {
+        #[command(subcommand)]
+        subcommand: MigrateCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1444,6 +1479,82 @@ pub enum ShellCommands {
         #[arg(short = 'q', long)]
         quiet: bool,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MigrateCommands {
+    /// Show migration status and preview
+    #[command(long_about = "
+Shows current migration status including:
+- Whether migration is needed
+- Source directory information (file count, size)
+- Destination directory status
+- Migration recommendations
+
+Examples:
+  swissarmyhammer migrate status           # Show current status
+")]
+    Status,
+    
+    /// Perform migration with confirmation
+    #[command(long_about = "
+Performs the issue directory migration from ./issues to .swissarmyhammer/issues.
+Includes comprehensive safety features:
+
+- User confirmation by default (use --force to skip)
+- Optional backup creation with --backup
+- Dry-run capability with --dry-run
+- Detailed progress reporting
+- Automatic rollback on failure
+
+Examples:
+  swissarmyhammer migrate run              # Interactive migration
+  swissarmyhammer migrate run --backup     # Create backup first
+  swissarmyhammer migrate run --dry-run    # Preview without changes
+  swissarmyhammer migrate run --force      # Skip confirmation
+")]
+    Run {
+        /// Skip confirmation prompt
+        #[arg(long, help = "Skip confirmation prompt")]
+        force: bool,
+        
+        /// Create backup before migration
+        #[arg(long, help = "Create backup before migration")]
+        backup: bool,
+        
+        /// Dry run - show what would be migrated
+        #[arg(long, help = "Dry run - show what would be migrated")]
+        dry_run: bool,
+    },
+    
+    /// Check if migration is possible
+    #[command(long_about = "
+Validates migration prerequisites and reports potential issues:
+
+- Source directory existence and permissions
+- Destination directory availability
+- Parent directory write permissions
+- File system space and access
+- Overall migration feasibility
+
+Examples:
+  swissarmyhammer migrate check            # Check prerequisites
+")]
+    Check,
+    
+    /// Clean up migration artifacts
+    #[command(long_about = "
+Manages migration backup artifacts:
+
+- Lists existing backup directories
+- Provides size and age information
+- Interactive cleanup with confirmation
+- Safe removal of old backups
+
+Examples:
+  swissarmyhammer migrate cleanup          # Interactive cleanup
+")]
+    Cleanup,
 }
 
 #[derive(ValueEnum, Clone, Debug)]

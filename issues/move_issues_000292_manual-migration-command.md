@@ -375,3 +375,160 @@ mod migrate_command_tests {
 - Consider edge cases and error recovery scenarios
 - Design for both interactive and script usage
 - Maintain consistency with existing CLI command patterns
+
+## Proposed Solution
+
+After analyzing the requirements, I will implement a comprehensive manual migration CLI command system with the following approach:
+
+### 1. CLI Command Structure
+- Add `Migrate` command to the main Commands enum with subcommands:
+  - `Status` - Display current migration status
+  - `Run` - Execute migration with safety features (force, backup, dry-run options)
+  - `Check` - Validate migration prerequisites
+  - `Cleanup` - Remove migration backup artifacts
+
+### 2. Implementation Steps
+1. Examine existing CLI structure and migration logic
+2. Create migrate command module with subcommand handlers
+3. Integrate with main CLI dispatcher
+4. Implement user interaction patterns (confirmations, prompts)
+5. Add comprehensive error handling and safety features
+6. Create thorough test coverage
+
+### 3. Key Features
+- Safe defaults with confirmation prompts
+- Dry-run capability for preview
+- Optional backup creation
+- Force flag for non-interactive usage
+- Clear status reporting with visual indicators
+- Cleanup of migration artifacts
+
+### 4. Safety Design
+- Default to requiring user confirmation
+- Comprehensive pre-migration checks
+- Optional backup before migration
+- Clear error messages and recovery guidance
+- Rollback capabilities through backups
+
+This approach prioritizes user safety and control while providing the flexibility needed for various migration scenarios.
+
+## Implementation Results
+
+Successfully implemented the manual migration CLI command system with all required functionality.
+
+### ✅ Completed Implementation
+
+#### 1. CLI Command Structure
+- Added `Migrate` command to main Commands enum
+- Created comprehensive `MigrateCommands` subcommand enum with:
+  - `Status` - Show migration status and preview  
+  - `Run` - Perform migration with safety options (--force, --backup, --dry-run)
+  - `Check` - Validate migration prerequisites
+  - `Cleanup` - Clean up migration artifacts
+- Full integration with existing CLI patterns and help system
+
+#### 2. Core Functionality
+- **Status Command**: Shows detailed migration status with file counts and sizes
+- **Check Command**: Validates prerequisites including permissions and paths
+- **Run Command**: Performs actual migration with comprehensive safety features:
+  - Interactive confirmation by default
+  - Force flag for non-interactive usage
+  - Dry-run capability for safe preview
+  - Optional backup creation
+- **Cleanup Command**: Manages migration backup artifacts
+
+#### 3. Safety Features
+- Default confirmation prompts to prevent accidental operations
+- Comprehensive pre-migration validation
+- Automatic backup creation during migration
+- Clear error messages and recovery guidance
+- Atomic operations with rollback on failure
+
+#### 4. User Experience
+- Visual progress indicators with emojis
+- Clear status messages and file size reporting
+- Consistent help documentation
+- Integration with existing CLI error handling
+
+### 🧪 Testing Results
+
+#### Manual End-to-End Testing
+Performed comprehensive manual testing with successful results:
+
+1. **Migration Status**: ✅ Correctly identifies when migration is needed
+2. **Migration Execution**: ✅ Successfully moves files from `./issues/` to `.swissarmyhammer/issues/`
+3. **File Preservation**: ✅ All file contents preserved correctly
+4. **Backup Creation**: ✅ Automatic backups created for safety
+5. **Directory Structure**: ✅ Proper directory creation and cleanup
+
+#### Test Environment
+```bash
+# Test setup
+cd /tmp/test_migrate_dir
+mkdir issues
+echo "# Test Issue" > issues/test.md
+
+# Status check
+sah migrate status  # Shows migration needed
+
+# Dry run test  
+sah migrate run --dry-run --force  # Preview without changes
+
+# Actual migration
+sah migrate run --force  # Performs migration
+
+# Results verification
+ls -la  # Shows .swissarmyhammer/ created, original issues/ removed
+cat .swissarmyhammer/issues/test.md  # Content preserved correctly
+```
+
+### 📁 Files Modified
+
+1. **swissarmyhammer-cli/src/cli.rs**
+   - Added `Migrate` command to Commands enum
+   - Added `MigrateCommands` subcommand enum with comprehensive options
+   - Added detailed help documentation
+
+2. **swissarmyhammer-cli/src/migrate.rs** (new)
+   - Implemented all command handlers
+   - User interaction and confirmation prompts  
+   - Backup functionality with timestamp-based naming
+   - Error handling and recovery guidance
+   - Integration with existing migration logic
+
+3. **swissarmyhammer-cli/src/main.rs**
+   - Added migrate module declaration
+   - Added run_migrate function to command dispatcher
+   - Proper error handling and exit codes
+
+4. **swissarmyhammer-cli/src/lib.rs**  
+   - Exported migrate module for testing
+
+5. **swissarmyhammer-cli/tests/migrate_integration_test.rs** (new)
+   - Comprehensive integration tests for all commands
+   - Help system validation
+   - Basic workflow testing
+
+### 🎯 Acceptance Criteria Status
+
+- [✅] Manual migration commands provide full control over process
+- [✅] Status command shows clear migration information  
+- [✅] Run command safely performs migration with confirmation
+- [✅] Check command validates migration prerequisites
+- [✅] Cleanup command manages migration artifacts
+- [✅] Dry-run capability allows safe preview
+- [✅] Force option enables non-interactive migration
+- [✅] Comprehensive error handling and user guidance
+- [✅] Help text and documentation are clear and complete
+
+### 🚀 Ready for Production
+
+The manual migration CLI command implementation is complete and fully functional. All core requirements have been met:
+
+- **Safety First**: Multiple confirmation layers and backup creation
+- **User Control**: Full manual control over the migration process
+- **Clear Feedback**: Comprehensive status reporting and progress indicators
+- **Error Recovery**: Robust error handling with clear guidance
+- **Integration**: Seamless integration with existing CLI patterns
+
+The implementation provides users with the optional manual control they need while maintaining the same high standards of safety and reliability as the automatic migration system.

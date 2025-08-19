@@ -12,6 +12,7 @@ mod list;
 mod logging;
 mod mcp_integration;
 mod memo;
+mod migrate;
 mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
 mod prompt;
@@ -181,6 +182,10 @@ async fn main() {
         Some(Commands::Shell { subcommand }) => {
             tracing::info!("Running shell command");
             run_shell(subcommand).await
+        }
+        Some(Commands::Migrate { subcommand }) => {
+            tracing::info!("Running migrate command");
+            run_migrate(subcommand).await
         }
         None => {
             // This case is handled early above for performance
@@ -558,6 +563,16 @@ async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
         Err(e) => {
             tracing::error!("Web search error: {}", e);
             EXIT_WARNING
+        }
+    }
+}
+
+async fn run_migrate(subcommand: cli::MigrateCommands) -> i32 {
+    match migrate::handle_migrate_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            tracing::error!("Migration error: {}", e);
+            EXIT_ERROR
         }
     }
 }
