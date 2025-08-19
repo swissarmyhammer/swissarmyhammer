@@ -9,9 +9,14 @@ description = "MCP tools and server implementation for SwissArmyHammer"
 keywords = ["mcp", "tools", "ai", "assistant", "protocol"]
 categories = ["command-line-utilities", "development-tools"]
 
+
+
 [dependencies]
 # Core library dependency
 swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
+
+# Marker macros
+sah-marker-macros = { path = "../sah-marker-macros" }
 
 # Async and JSON processing
 tokio = { workspace = true }
@@ -34,6 +39,8 @@ dirs = { workspace = true }
 regex = { workspace = true }
 schemars = "0.8"
 thiserror = "1.0"
+
+
 
 # File tools dependencies
 glob = { workspace = true }

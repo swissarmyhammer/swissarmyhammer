@@ -273,7 +273,7 @@ mod tests {
         workflow.add_state(create_state("start", "Start state", false));
 
         let abort_path = ".swissarmyhammer/.abort";
-        
+
         // Ensure abort file doesn't exist
         let _ = std::fs::remove_file(abort_path); // Ignore if it doesn't exist
 

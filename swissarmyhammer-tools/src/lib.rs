@@ -52,5 +52,8 @@ pub use mcp::{
 };
 pub use mcp::{ToolContext, ToolRegistry};
 
+// Re-export attribute macros from separate proc-macro crate
+pub use sah_marker_macros::cli_exclude;
+
 /// Version of this crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

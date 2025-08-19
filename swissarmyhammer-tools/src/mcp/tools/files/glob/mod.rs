@@ -100,7 +100,7 @@ impl McpTool for GlobFileTool {
                 validated_path
             }
             None => std::env::current_dir().map_err(|e| {
-                rmcp::Error::internal_error(format!("Failed to get current directory: {}", e), None)
+                rmcp::Error::internal_error(format!("Failed to get current directory: {e}"), None)
             })?,
         };
 
@@ -165,7 +165,7 @@ fn find_files_with_gitignore(
         Ok(p) => p,
         Err(e) => {
             return Err(rmcp::Error::invalid_request(
-                format!("Invalid glob pattern: {}", e),
+                format!("Invalid glob pattern: {e}"),
                 None,
             ));
         }
@@ -263,7 +263,7 @@ fn find_files_with_glob(
 
     // Execute glob pattern
     let entries = glob::glob_with(&glob_pattern, glob_options)
-        .map_err(|e| rmcp::Error::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
+        .map_err(|e| rmcp::Error::invalid_request(format!("Invalid glob pattern: {e}"), None))?;
 
     let mut matched_files = Vec::new();
 
@@ -336,7 +336,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
     // Validate pattern syntax by trying to compile it
     if let Err(e) = glob::Pattern::new(pattern) {
         return Err(rmcp::Error::invalid_request(
-            format!("Invalid glob pattern: {}", e),
+            format!("Invalid glob pattern: {e}"),
             None,
         ));
     }
