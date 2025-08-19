@@ -375,33 +375,33 @@ impl IsolatedTestEnvironment {
         }
         unreachable!()
     }
-    
+
     /// Try to create an isolated test environment (single attempt)
     fn try_create() -> std::io::Result<Self> {
         let original_cwd = std::env::current_dir()?;
         let home_guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new()?;
-        
+
         // Ensure the temporary directory exists and is accessible before changing to it
         let temp_path = temp_dir.path();
         if !temp_path.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Temporary directory does not exist: {:?}", temp_path)
+                format!("Temporary directory does not exist: {:?}", temp_path),
             ));
         }
-        
+
         // Verify we can access the directory
         match std::fs::read_dir(temp_path) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
-                    format!("Cannot access temporary directory {:?}: {}", temp_path, e)
+                    format!("Cannot access temporary directory {:?}: {}", temp_path, e),
                 ));
             }
         }
-        
+
         std::env::set_current_dir(temp_path)?;
 
         Ok(Self {

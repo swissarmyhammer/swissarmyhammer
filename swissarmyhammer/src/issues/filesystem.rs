@@ -218,7 +218,7 @@ impl FileSystemIssueStorage {
     /// otherwise returns `issues` for backward compatibility with existing repositories
     pub fn default_directory() -> Result<PathBuf> {
         let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
-        
+
         let swissarmyhammer_dir = current_dir.join(".swissarmyhammer");
         if swissarmyhammer_dir.exists() {
             Ok(swissarmyhammer_dir.join("issues"))
@@ -239,21 +239,19 @@ impl FileSystemIssueStorage {
         let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
         Self::should_migrate_in_dir(&current_dir)
     }
-    
+
     /// Check if automatic migration should be performed in a specific directory
-    /// 
+    ///
     /// This is the testable version of should_migrate() that accepts a base directory.
     pub(crate) fn should_migrate_in_dir(base_dir: &Path) -> Result<bool> {
         let old_issues = base_dir.join("issues");
         let new_issues_parent = base_dir.join(".swissarmyhammer");
         let new_issues = new_issues_parent.join("issues");
-        
+
         // Migrate if old exists and new location doesn't exist
-        Ok(old_issues.exists() && 
-           old_issues.is_dir() && 
-           !new_issues.exists())
+        Ok(old_issues.exists() && old_issues.is_dir() && !new_issues.exists())
     }
-    
+
     /// Get migration paths for validation
     ///
     /// Returns the source, destination, and backup paths for migration operations.
@@ -262,7 +260,7 @@ impl FileSystemIssueStorage {
         let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
         Ok(Self::migration_paths_in_dir(&current_dir))
     }
-    
+
     /// Get migration paths for validation in a specific directory
     ///
     /// This is the testable version of migration_paths() that accepts a base directory.
@@ -289,28 +287,28 @@ impl FileSystemIssueStorage {
         let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
         Self::migration_info_in_dir(&current_dir)
     }
-    
+
     /// Gather information about potential migration in a specific directory
     ///
     /// This is the testable version of migration_info() that accepts a base directory.
     pub(crate) fn migration_info_in_dir(base_dir: &Path) -> Result<MigrationInfo> {
         let paths = Self::migration_paths_in_dir(base_dir);
         let should_migrate = Self::should_migrate_in_dir(base_dir)?;
-        
+
         let source_exists = paths.source.exists();
         let destination_exists = paths.destination.exists();
-        
+
         let (file_count, total_size) = if source_exists {
             Self::count_directory_contents(&paths.source)?
         } else {
             (0, 0)
         };
-        
+
         debug!(
             "Migration info: should_migrate={}, source_exists={}, destination_exists={}, file_count={}, total_size={}",
             should_migrate, source_exists, destination_exists, file_count, total_size
         );
-        
+
         Ok(MigrationInfo {
             should_migrate,
             source_exists,
@@ -319,7 +317,7 @@ impl FileSystemIssueStorage {
             total_size,
         })
     }
-    
+
     /// Count files and total size in a directory recursively
     ///
     /// This helper function traverses a directory tree and counts:
@@ -338,12 +336,12 @@ impl FileSystemIssueStorage {
     fn count_directory_contents(dir: &Path) -> Result<(usize, u64)> {
         let mut file_count = 0;
         let mut total_size = 0;
-        
+
         fn visit_dir(dir: &Path, file_count: &mut usize, total_size: &mut u64) -> Result<()> {
             for entry in std::fs::read_dir(dir).map_err(SwissArmyHammerError::Io)? {
                 let entry = entry.map_err(SwissArmyHammerError::Io)?;
                 let path = entry.path();
-                
+
                 if path.is_dir() {
                     visit_dir(&path, file_count, total_size)?;
                 } else if path.is_file() {
@@ -354,16 +352,16 @@ impl FileSystemIssueStorage {
             }
             Ok(())
         }
-        
+
         visit_dir(dir, &mut file_count, &mut total_size)?;
-        
+
         debug!(
             "Directory contents: dir={}, file_count={}, total_size={}",
             dir.display(),
             file_count,
             total_size
         );
-        
+
         Ok((file_count, total_size))
     }
 
@@ -1662,31 +1660,34 @@ mod tests {
         // Test the logic by checking that .swissarmyhammer directory existence affects the result
         let temp_dir = TempDir::new().unwrap();
         let swissarmyhammer_path = temp_dir.path().join(".swissarmyhammer");
-        
+
         // Create .swissarmyhammer directory
         std::fs::create_dir_all(&swissarmyhammer_path).unwrap();
-        
+
         // Mock the current_dir to return our temp directory
         let current_dir = temp_dir.path();
-        
+
         // Check that when .swissarmyhammer exists, we get .swissarmyhammer/issues
         let swissarmyhammer_result = if swissarmyhammer_path.exists() {
             current_dir.join(".swissarmyhammer").join("issues")
         } else {
             current_dir.join("issues")
         };
-        
-        assert_eq!(swissarmyhammer_result, current_dir.join(".swissarmyhammer").join("issues"));
-        
+
+        assert_eq!(
+            swissarmyhammer_result,
+            current_dir.join(".swissarmyhammer").join("issues")
+        );
+
         // Remove .swissarmyhammer directory and check legacy fallback
         std::fs::remove_dir_all(&swissarmyhammer_path).unwrap();
-        
+
         let legacy_result = if swissarmyhammer_path.exists() {
             current_dir.join(".swissarmyhammer").join("issues")
         } else {
             current_dir.join("issues")
         };
-        
+
         assert_eq!(legacy_result, current_dir.join("issues"));
     }
 
@@ -1694,17 +1695,20 @@ mod tests {
     fn test_new_default_functional_behavior() {
         // Test that new_default() and default_directory() produce consistent results
         // by testing the actual FileSystemIssueStorage creation
-        
+
         let temp_dir = TempDir::new().unwrap();
         let issues_dir = temp_dir.path().join("test_issues");
-        
+
         // Create storage with explicit path
         let explicit_storage = FileSystemIssueStorage::new(issues_dir.clone()).unwrap();
         assert_eq!(explicit_storage.state.issues_dir, issues_dir);
-        
+
         // Verify storage can be created and basic operations work
         assert!(explicit_storage.state.issues_dir.parent().is_some());
-        assert_eq!(explicit_storage.state.issues_dir.file_name().unwrap(), "test_issues");
+        assert_eq!(
+            explicit_storage.state.issues_dir.file_name().unwrap(),
+            "test_issues"
+        );
     }
 
     #[test]
@@ -3763,28 +3767,34 @@ mod tests {
     fn test_migration_paths() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         let paths = FileSystemIssueStorage::migration_paths_in_dir(base_dir);
-        
+
         // Verify paths are correctly calculated relative to base directory
         assert_eq!(paths.source, base_dir.join("issues"));
-        assert_eq!(paths.destination, base_dir.join(".swissarmyhammer").join("issues"));
-        assert_eq!(paths.backup, base_dir.join(".swissarmyhammer").join("issues_backup"));
+        assert_eq!(
+            paths.destination,
+            base_dir.join(".swissarmyhammer").join("issues")
+        );
+        assert_eq!(
+            paths.backup,
+            base_dir.join(".swissarmyhammer").join("issues_backup")
+        );
     }
 
     #[test]
     fn test_should_migrate_source_exists_destination_does_not() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Create source directory (old issues location)
         let source_dir = base_dir.join("issues");
         std::fs::create_dir_all(&source_dir).unwrap();
-        
+
         // Ensure destination does not exist
         let dest_dir = base_dir.join(".swissarmyhammer").join("issues");
         assert!(!dest_dir.exists());
-        
+
         // Should migrate: source exists, destination doesn't
         let should_migrate = FileSystemIssueStorage::should_migrate_in_dir(base_dir).unwrap();
         assert!(should_migrate);
@@ -3794,11 +3804,11 @@ mod tests {
     fn test_should_not_migrate_source_does_not_exist() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Ensure source directory does not exist
         let source_dir = base_dir.join("issues");
         assert!(!source_dir.exists());
-        
+
         // Should not migrate: source doesn't exist
         let should_migrate = FileSystemIssueStorage::should_migrate_in_dir(base_dir).unwrap();
         assert!(!should_migrate);
@@ -3808,14 +3818,14 @@ mod tests {
     fn test_should_not_migrate_both_exist() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Create both source and destination directories
         let source_dir = base_dir.join("issues");
         std::fs::create_dir_all(&source_dir).unwrap();
-        
+
         let dest_dir = base_dir.join(".swissarmyhammer").join("issues");
         std::fs::create_dir_all(&dest_dir).unwrap();
-        
+
         // Should not migrate: both exist
         let should_migrate = FileSystemIssueStorage::should_migrate_in_dir(base_dir).unwrap();
         assert!(!should_migrate);
@@ -3825,13 +3835,13 @@ mod tests {
     fn test_should_not_migrate_neither_exist() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Ensure neither directory exists in fresh temp directory
         let source_dir = base_dir.join("issues");
         let dest_dir = base_dir.join(".swissarmyhammer").join("issues");
         assert!(!source_dir.exists());
         assert!(!dest_dir.exists());
-        
+
         // Should not migrate: neither exist
         let should_migrate = FileSystemIssueStorage::should_migrate_in_dir(base_dir).unwrap();
         assert!(!should_migrate);
@@ -3841,11 +3851,11 @@ mod tests {
     fn test_should_not_migrate_source_is_file() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Create source as a file instead of directory
         let source_path = base_dir.join("issues");
         std::fs::write(&source_path, "this is a file").unwrap();
-        
+
         // Should not migrate: source exists but is not a directory
         let should_migrate = FileSystemIssueStorage::should_migrate_in_dir(base_dir).unwrap();
         assert!(!should_migrate);
@@ -3856,8 +3866,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_dir = temp_dir.path().join("empty");
         std::fs::create_dir_all(&test_dir).unwrap();
-        
-        let (file_count, total_size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+
+        let (file_count, total_size) =
+            FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
         assert_eq!(file_count, 0);
         assert_eq!(total_size, 0);
     }
@@ -3867,17 +3878,21 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_dir = temp_dir.path().join("with_files");
         std::fs::create_dir_all(&test_dir).unwrap();
-        
+
         // Create test files with known content
         let file1_content = "Hello, world!";
         let file2_content = "This is a test file with more content.";
-        
+
         std::fs::write(test_dir.join("file1.txt"), file1_content).unwrap();
         std::fs::write(test_dir.join("file2.md"), file2_content).unwrap();
-        
-        let (file_count, total_size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+
+        let (file_count, total_size) =
+            FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
         assert_eq!(file_count, 2);
-        assert_eq!(total_size, file1_content.len() as u64 + file2_content.len() as u64);
+        assert_eq!(
+            total_size,
+            file1_content.len() as u64 + file2_content.len() as u64
+        );
     }
 
     #[test]
@@ -3885,20 +3900,24 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_dir = temp_dir.path().join("nested");
         std::fs::create_dir_all(&test_dir).unwrap();
-        
+
         // Create nested structure
         let subdir = test_dir.join("subdir");
         std::fs::create_dir_all(&subdir).unwrap();
-        
+
         let file1_content = "Root file";
         let file2_content = "Nested file";
-        
+
         std::fs::write(test_dir.join("root.txt"), file1_content).unwrap();
         std::fs::write(subdir.join("nested.txt"), file2_content).unwrap();
-        
-        let (file_count, total_size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+
+        let (file_count, total_size) =
+            FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
         assert_eq!(file_count, 2);
-        assert_eq!(total_size, file1_content.len() as u64 + file2_content.len() as u64);
+        assert_eq!(
+            total_size,
+            file1_content.len() as u64 + file2_content.len() as u64
+        );
     }
 
     #[test]
@@ -3906,15 +3925,16 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let test_dir = temp_dir.path().join("with_dirs");
         std::fs::create_dir_all(&test_dir).unwrap();
-        
+
         // Create files and subdirectories
         let file_content = "Test file";
         std::fs::write(test_dir.join("file.txt"), file_content).unwrap();
-        
+
         // Create empty subdirectory (should not be counted)
         std::fs::create_dir_all(test_dir.join("empty_subdir")).unwrap();
-        
-        let (file_count, total_size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+
+        let (file_count, total_size) =
+            FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
         assert_eq!(file_count, 1); // Only the file, not the subdirectory
         assert_eq!(total_size, file_content.len() as u64);
     }
@@ -3924,23 +3944,26 @@ mod tests {
     fn test_migration_info_should_migrate() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Create source directory with test files
         let source_dir = base_dir.join("issues");
         std::fs::create_dir_all(&source_dir).unwrap();
-        
+
         let file1_content = "Test issue 1";
         let file2_content = "Test issue 2 with more content";
         std::fs::write(source_dir.join("issue1.md"), file1_content).unwrap();
         std::fs::write(source_dir.join("issue2.md"), file2_content).unwrap();
-        
+
         let info = FileSystemIssueStorage::migration_info_in_dir(base_dir).unwrap();
-        
+
         assert!(info.should_migrate);
         assert!(info.source_exists);
         assert!(!info.destination_exists);
         assert_eq!(info.file_count, 2);
-        assert_eq!(info.total_size, file1_content.len() as u64 + file2_content.len() as u64);
+        assert_eq!(
+            info.total_size,
+            file1_content.len() as u64 + file2_content.len() as u64
+        );
     }
 
     #[test]
@@ -3948,19 +3971,19 @@ mod tests {
     fn test_migration_info_should_not_migrate() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Create both directories (migration should not occur)
         let source_dir = base_dir.join("issues");
         std::fs::create_dir_all(&source_dir).unwrap();
-        
+
         let dest_dir = base_dir.join(".swissarmyhammer").join("issues");
         std::fs::create_dir_all(&dest_dir).unwrap();
-        
+
         // Add files to source
         std::fs::write(source_dir.join("test.md"), "test content").unwrap();
-        
+
         let info = FileSystemIssueStorage::migration_info_in_dir(base_dir).unwrap();
-        
+
         assert!(!info.should_migrate);
         assert!(info.source_exists);
         assert!(info.destination_exists);
@@ -3972,10 +3995,10 @@ mod tests {
     fn test_migration_info_no_source() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // No source directory exists (fresh temp directory)
         let info = FileSystemIssueStorage::migration_info_in_dir(base_dir).unwrap();
-        
+
         assert!(!info.should_migrate);
         assert!(!info.source_exists);
         assert!(!info.destination_exists);
@@ -3988,20 +4011,20 @@ mod tests {
     fn test_migration_info_large_directory() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
-        
+
         // Create source directory with many files
         let source_dir = base_dir.join("issues");
         std::fs::create_dir_all(&source_dir).unwrap();
-        
+
         let mut expected_size = 0u64;
         for i in 0..10 {
             let content = format!("Issue {} content with variable length", i);
             std::fs::write(source_dir.join(format!("issue{}.md", i)), &content).unwrap();
             expected_size += content.len() as u64;
         }
-        
+
         let info = FileSystemIssueStorage::migration_info_in_dir(base_dir).unwrap();
-        
+
         assert!(info.should_migrate);
         assert!(info.source_exists);
         assert!(!info.destination_exists);
