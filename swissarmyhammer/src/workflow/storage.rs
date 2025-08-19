@@ -940,7 +940,6 @@ mod tests {
     use crate::test_utils::IsolatedTestEnvironment;
     use crate::workflow::{State, StateId, StateType};
 
-
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new(
             WorkflowName::new("test-workflow"),

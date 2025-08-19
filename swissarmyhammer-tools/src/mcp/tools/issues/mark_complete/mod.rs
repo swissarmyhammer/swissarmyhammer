@@ -9,6 +9,7 @@ use crate::mcp::types::MarkCompleteRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
+use swissarmyhammer::config::Config;
 
 /// Tool for marking issues as complete
 #[derive(Default)]
@@ -38,7 +39,7 @@ impl McpTool for MarkCompleteIssueTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Issue name to mark as complete"
+                    "description": "Issue name to mark as complete. Use 'current' to mark the current issue complete."
                 }
             },
             "required": ["name"]
@@ -56,8 +57,40 @@ impl McpTool for MarkCompleteIssueTool {
         McpValidation::validate_not_empty(request.name.as_str(), "issue name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate issue name"))?;
 
+        // Handle special parameters
+        let issue_name = if request.name.0 == "current" {
+            // Get current issue name from git branch
+            let git_ops = context.git_ops.lock().await;
+            match git_ops.as_ref() {
+                Some(ops) => match ops.current_branch() {
+                    Ok(branch) => {
+                        let config = Config::global();
+                        if let Some(issue_name) = branch.strip_prefix(&config.issue_branch_prefix) {
+                            issue_name.to_string()
+                        } else {
+                            return Err(McpError::invalid_params(
+                                format!("Not on an issue branch. Current branch: {branch}"),
+                                None,
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        return Err(McpErrorHandler::handle_error(e, "get current branch"));
+                    }
+                },
+                None => {
+                    return Err(McpError::invalid_params(
+                        "Git operations not available".to_string(),
+                        None,
+                    ));
+                }
+            }
+        } else {
+            request.name.0
+        };
+
         let issue_storage = context.issue_storage.write().await;
-        match issue_storage.mark_complete(request.name.as_str()).await {
+        match issue_storage.mark_complete(&issue_name).await {
             Ok(issue) => {
                 tracing::info!("Successfully marked issue '{}' as complete", issue.name);
                 Ok(create_mark_complete_response(&issue))
