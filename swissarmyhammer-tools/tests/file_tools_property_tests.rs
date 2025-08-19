@@ -105,7 +105,7 @@ proptest! {
         prop_assume!(old_string != new_string);
         let result = tokio_test::block_on(async {
             // Create content that definitely contains the old_string
-            let test_content = format!("{} {} {}", content, old_string, content);
+            let test_content = format!("{content} {old_string} {content}");
 
             let _guard = IsolatedTestHome::new();
             let registry = create_property_test_registry();

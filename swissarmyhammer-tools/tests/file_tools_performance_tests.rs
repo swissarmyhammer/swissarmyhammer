@@ -152,21 +152,21 @@ impl FileTestEnvironment {
 
         // Create directory structure
         for level in 0..depth {
-            let dir_path = format!("level_{}", level);
+            let dir_path = format!("level_{level}");
             let dir = if level == 0 {
                 self.create_test_directory(&dir_path)?
             } else {
                 let parent_path = (0..level)
-                    .map(|i| format!("level_{}", i))
+                    .map(|i| format!("level_{i}"))
                     .collect::<Vec<_>>()
                     .join("/");
-                self.create_test_directory(&format!("{}/{}", parent_path, dir_path))?
+                self.create_test_directory(&format!("{parent_path}/{dir_path}"))?
             };
 
             // Create files in this directory level
             for file_num in 0..files_per_level {
-                let file_content = format!("Content for level {} file {}", level, file_num);
-                let file_path = dir.join(format!("file_{}.txt", file_num));
+                let file_content = format!("Content for level {level} file {file_num}");
+                let file_path = dir.join(format!("file_{file_num}.txt"));
                 fs::write(&file_path, &file_content)?;
                 created_files.push(file_path);
             }
@@ -211,15 +211,15 @@ impl FileTestEnvironment {
             let mut content = String::new();
             for line_num in 0..lines_per_file {
                 let line = if line_num % 10 == 0 {
-                    format!("MATCH_TARGET line {} in file {}\n", line_num, file_num)
+                    format!("MATCH_TARGET line {line_num} in file {file_num}\n")
                 } else {
-                    format!("Regular line {} content data here\n", line_num)
+                    format!("Regular line {line_num} content data here\n")
                 };
                 content.push_str(&line);
             }
 
             let file_path =
-                self.create_test_file(&format!("search_file_{}.txt", file_num), &content)?;
+                self.create_test_file(&format!("search_file_{file_num}.txt"), &content)?;
             files.push(file_path);
         }
 
@@ -279,7 +279,7 @@ async fn test_read_tool_large_file_performance() {
 
         // Create large test file
         let large_file = test_env
-            .create_large_file(&format!("large_file_{}_mb.txt", size_mb), size_mb)
+            .create_large_file(&format!("large_file_{size_mb}_mb.txt"), size_mb)
             .unwrap();
 
         let mut arguments = serde_json::Map::new();
@@ -291,19 +291,18 @@ async fn test_read_tool_large_file_performance() {
         let result = tool.execute(arguments, &context).await;
         assert!(
             result.is_ok(),
-            "Large file read should succeed for {} MB",
-            size_mb
+            "Large file read should succeed for {size_mb} MB"
         );
 
         results.insert(
             size_mb,
-            profiler.format_results(&format!("Read {} MB file", size_mb)),
+            profiler.format_results(&format!("Read {size_mb} MB file")),
         );
     }
 
     // Report performance results
     for result in results.values() {
-        println!("📊 {}", result);
+        println!("📊 {result}");
     }
 
     // Verify performance stays reasonable (< 2 seconds for largest file)
@@ -348,7 +347,7 @@ async fn test_read_tool_offset_limit_performance() {
 
         println!(
             "📊 {}",
-            profiler.format_results(&format!("Read offset {} limit {:?}", offset, limit))
+            profiler.format_results(&format!("Read offset {offset} limit {limit:?}"))
         );
     }
 }
@@ -374,7 +373,7 @@ async fn test_write_tool_large_content_performance() {
         let large_content = "0123456789\n".repeat(90_000 * size_mb); // ~size_mb MB, under 10MB limit
         let output_file = test_env
             .workspace_path()
-            .join(format!("write_test_{}_mb.txt", size_mb));
+            .join(format!("write_test_{size_mb}_mb.txt"));
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
@@ -386,8 +385,7 @@ async fn test_write_tool_large_content_performance() {
         let result = tool.execute(arguments, &context).await;
         assert!(
             result.is_ok(),
-            "Large content write should succeed for {} MB",
-            size_mb
+            "Large content write should succeed for {size_mb} MB"
         );
 
         // Verify file was created with correct size
@@ -397,7 +395,7 @@ async fn test_write_tool_large_content_performance() {
 
         println!(
             "📊 {}",
-            profiler.format_results(&format!("Write {} MB content", size_mb))
+            profiler.format_results(&format!("Write {size_mb} MB content"))
         );
     }
 }
@@ -419,8 +417,8 @@ async fn test_write_tool_concurrent_operations() {
     for i in 0..num_concurrent {
         let output_file = test_env
             .workspace_path()
-            .join(format!("concurrent_{}.txt", i));
-        let content = format!("Content for concurrent file {} with data\n", i).repeat(1000);
+            .join(format!("concurrent_{i}.txt"));
+        let content = format!("Content for concurrent file {i} with data\n").repeat(1000);
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
@@ -448,15 +446,15 @@ async fn test_write_tool_concurrent_operations() {
     );
     println!(
         "📊 {}",
-        profiler.format_results(&format!("Concurrent {} write operations", num_concurrent))
+        profiler.format_results(&format!("Concurrent {num_concurrent} write operations"))
     );
 
     // Verify all files were created
     for i in 0..num_concurrent {
         let file_path = test_env
             .workspace_path()
-            .join(format!("concurrent_{}.txt", i));
-        assert!(file_path.exists(), "Concurrent file {} should exist", i);
+            .join(format!("concurrent_{i}.txt"));
+        assert!(file_path.exists(), "Concurrent file {i} should exist");
     }
 }
 
@@ -555,11 +553,11 @@ async fn test_glob_tool_large_directory_performance() {
         );
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_ok(), "Glob pattern '{}' should succeed", pattern);
+        assert!(result.is_ok(), "Glob pattern '{pattern}' should succeed");
 
         println!(
             "📊 {}",
-            profiler.format_results(&format!("Glob pattern: {} ({})", pattern, description))
+            profiler.format_results(&format!("Glob pattern: {pattern} ({description})"))
         );
     }
 }
@@ -596,13 +594,12 @@ async fn test_glob_tool_complex_patterns_performance() {
         let result = tool.execute(arguments, &context).await;
         assert!(
             result.is_ok(),
-            "Complex glob pattern '{}' should succeed",
-            pattern
+            "Complex glob pattern '{pattern}' should succeed"
         );
 
         println!(
             "📊 {}",
-            profiler.format_results(&format!("Complex pattern: {} ({})", pattern, description))
+            profiler.format_results(&format!("Complex pattern: {pattern} ({description})"))
         );
     }
 }
@@ -662,11 +659,11 @@ async fn test_grep_tool_large_content_performance() {
         arguments.insert("output_mode".to_string(), json!(output_mode));
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_ok(), "Grep pattern '{}' should succeed", pattern);
+        assert!(result.is_ok(), "Grep pattern '{pattern}' should succeed");
 
         println!(
             "📊 {}",
-            profiler.format_results(&format!("Grep: {} ({})", pattern, description))
+            profiler.format_results(&format!("Grep: {pattern} ({description})"))
         );
     }
 }
@@ -728,11 +725,11 @@ async fn test_grep_tool_complex_regex_performance() {
         arguments.insert("output_mode".to_string(), json!("content"));
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_ok(), "Complex regex '{}' should succeed", pattern);
+        assert!(result.is_ok(), "Complex regex '{pattern}' should succeed");
 
         println!(
             "📊 {}",
-            profiler.format_results(&format!("Complex regex: {} ({})", pattern, description))
+            profiler.format_results(&format!("Complex regex: {pattern} ({description})"))
         );
     }
 }
@@ -813,7 +810,7 @@ fn format_duration(duration: Duration) -> String {
     } else if millis >= 1_000 {
         format!("{:.3}s", duration.as_secs_f64())
     } else {
-        format!("{}ms", millis)
+        format!("{millis}ms")
     }
 }
 
@@ -828,6 +825,6 @@ fn format_memory_delta(bytes: isize) -> String {
     } else if abs_bytes >= 1_000 {
         format!("{}{:.1} KB", sign, abs_bytes as f64 / 1_000.0)
     } else {
-        format!("{}{} bytes", sign, abs_bytes)
+        format!("{sign}{abs_bytes} bytes")
     }
 }
