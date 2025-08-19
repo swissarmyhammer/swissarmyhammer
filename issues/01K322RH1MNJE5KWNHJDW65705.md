@@ -91,3 +91,36 @@ The issue has been successfully resolved. Here's what was implemented:
 - Same API surface - no breaking changes to consumers
 
 The PromptAction now calls the prompt rendering code directly instead of shelling out, achieving the goal stated in the issue.
+
+## Code Review Fixes Applied
+
+Following the code review, I've completed all the necessary fixes:
+
+### Compilation Errors Fixed
+
+1. **directory_utils.rs:34** - Fixed type mismatch between Result and Option
+   - Changed the chain to properly handle Option to Result conversion
+   - Used `.ok_or(()).ok()` to convert Option to Result then back to Option
+
+2. **directory_utils.rs:45** - Pattern matching was actually correct after type fix
+   - No changes needed once the type was corrected
+
+### Code Quality Improvements
+
+3. **actions.rs:316** - Enhanced error context for prompt loading failures
+   - Changed generic "Failed to load prompts" to more specific "Failed to load prompts from directories"
+
+4. **actions.rs:322** - Improved error messages when prompt rendering fails
+   - Added available prompts list to error messages when a prompt is not found
+   - Error now shows: "Failed to render prompt 'name': error (available prompts: a, b, c)"
+
+5. **Code formatting** - Applied consistent formatting with `cargo fmt --all`
+
+### Verification
+
+- ✅ All code compiles successfully (`cargo check`)
+- ✅ Code is properly formatted
+- ✅ Enhanced error messages provide better debugging information
+- ✅ All functionality preserved - no breaking changes
+
+The PromptAction now works more reliably with better error reporting while maintaining the direct rendering approach without subprocess calls.

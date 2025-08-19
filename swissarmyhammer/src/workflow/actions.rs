@@ -307,8 +307,6 @@ impl Action for PromptAction {
     impl_as_any!();
 }
 
-
-
 impl PromptAction {
     /// Render the prompt directly using the prompt library instead of shelling out
     async fn render_prompt_directly(
@@ -330,17 +328,33 @@ impl PromptAction {
         // Load prompts and render directly
         let mut library = PromptLibrary::new();
         let mut resolver = PromptResolver::new();
-        
+
         resolver.load_all_prompts(&mut library).map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to load prompts: {e}"))
+            ActionError::ClaudeError(format!("Failed to load prompts from directories: {e}"))
         })?;
 
-        let rendered = library.render_prompt_with_env(&self.prompt_name, &args).map_err(|e| {
-            ActionError::ClaudeError(format!(
-                "Failed to render prompt '{}': {}",
-                self.prompt_name, e
-            ))
-        })?;
+        let rendered = library
+            .render_prompt_with_env(&self.prompt_name, &args)
+            .map_err(|e| {
+                // Try to get available prompts for better error messaging
+                let available_prompts = library
+                    .list()
+                    .ok()
+                    .map(|prompts| {
+                        let names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
+                        if names.is_empty() {
+                            "no prompts available".to_string()
+                        } else {
+                            format!("available prompts: {}", names.join(", "))
+                        }
+                    })
+                    .unwrap_or_else(|| "unable to list available prompts".to_string());
+
+                ActionError::ClaudeError(format!(
+                    "Failed to render prompt '{}': {} ({})",
+                    self.prompt_name, e, available_prompts
+                ))
+            })?;
 
         Ok(rendered)
     }

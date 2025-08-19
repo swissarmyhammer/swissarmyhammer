@@ -1102,7 +1102,8 @@ mod tests {
         use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
 
-        let _env = IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
         let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
