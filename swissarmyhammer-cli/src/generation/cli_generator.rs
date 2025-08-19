@@ -47,7 +47,7 @@ use swissarmyhammer_tools::{cli::ToolCliMetadata, ToolRegistry};
 pub struct CliGenerator {
     /// Reference to the tool registry containing all MCP tools
     registry: Arc<ToolRegistry>,
-    
+
     /// Configuration controlling generation behavior
     config: GenerationConfig,
 }
@@ -79,7 +79,7 @@ impl CliGenerator {
             config: GenerationConfig::default(),
         }
     }
-    
+
     /// Update the generator configuration
     ///
     /// # Arguments
@@ -109,7 +109,7 @@ impl CliGenerator {
         self.config = config;
         self
     }
-    
+
     /// Generate CLI commands for all eligible tools
     ///
     /// This method performs the complete CLI generation pipeline:
@@ -153,25 +153,24 @@ impl CliGenerator {
     pub fn generate_commands(&self) -> Result<Vec<GeneratedCommand>, GenerationError> {
         // Validate configuration first
         self.validate_config()?;
-        
+
         // Get CLI-eligible tools from registry
         let eligible_tools: Vec<_> = if self.config.include_excluded {
             // For debugging, include all tools
-            self.registry.list_tool_names()
+            self.registry
+                .list_tool_names()
                 .into_iter()
-                .filter_map(|name| {
-                    self.registry.get_tool_metadata(&name)
-                        .cloned()
-                })
+                .filter_map(|name| self.registry.get_tool_metadata(&name).cloned())
                 .collect()
         } else {
             // Normal operation: only CLI-eligible tools
-            self.registry.get_cli_eligible_tools()
+            self.registry
+                .get_cli_eligible_tools()
                 .into_iter()
                 .cloned()
                 .collect()
         };
-        
+
         // Check command limit
         if eligible_tools.len() > self.config.max_commands {
             return Err(GenerationError::TooManyCommands(
@@ -179,7 +178,7 @@ impl CliGenerator {
                 eligible_tools.len(),
             ));
         }
-        
+
         // Generate commands for each eligible tool
         let mut commands = Vec::new();
         for tool_metadata in eligible_tools {
@@ -187,16 +186,19 @@ impl CliGenerator {
                 Ok(command) => commands.push(command),
                 Err(e) => {
                     // Log the error but continue with other tools
-                    eprintln!("Warning: Failed to generate command for tool '{}': {}", tool_metadata.name, e);
+                    eprintln!(
+                        "Warning: Failed to generate command for tool '{}': {}",
+                        tool_metadata.name, e
+                    );
                     continue;
                 }
             }
         }
-        
+
         // Apply naming transformations and organization
         self.organize_commands(commands)
     }
-    
+
     /// Generate CLI command for a specific tool
     ///
     /// This method handles the generation of a single command from a tool's metadata:
@@ -218,20 +220,25 @@ impl CliGenerator {
     /// * `GenerationError::ToolNotFound` - Tool not found in registry
     /// * `GenerationError::SchemaParse` - Failed to parse tool schema
     /// * `GenerationError::CommandBuild` - Failed to build command structure
-    fn generate_command_for_tool(&self, metadata: &ToolCliMetadata) -> Result<GeneratedCommand, GenerationError> {
+    fn generate_command_for_tool(
+        &self,
+        metadata: &ToolCliMetadata,
+    ) -> Result<GeneratedCommand, GenerationError> {
         // Get the tool from the registry
-        let tool = self.registry.get_tool(&metadata.name)
+        let tool = self
+            .registry
+            .get_tool(&metadata.name)
             .ok_or_else(|| GenerationError::ToolNotFound(metadata.name.clone()))?;
-        
+
         // Build command using the command builder
         let command = CommandBuilder::new()
             .from_mcp_tool(tool)?
             .with_naming_strategy(&self.config.naming_strategy)
             .build()?;
-        
+
         Ok(command)
     }
-    
+
     /// Organize commands according to configuration settings
     ///
     /// This method applies the final organization structure to the generated commands:
@@ -246,7 +253,10 @@ impl CliGenerator {
     /// # Returns
     ///
     /// * `Result<Vec<GeneratedCommand>, GenerationError>` - Organized commands or error
-    fn organize_commands(&self, mut commands: Vec<GeneratedCommand>) -> Result<Vec<GeneratedCommand>, GenerationError> {
+    fn organize_commands(
+        &self,
+        mut commands: Vec<GeneratedCommand>,
+    ) -> Result<Vec<GeneratedCommand>, GenerationError> {
         // Apply command prefixes if configured
         if let Some(ref prefix) = self.config.command_prefix {
             for command in &mut commands {
@@ -255,12 +265,12 @@ impl CliGenerator {
                 }
             }
         }
-        
+
         // Organize into subcommands if configured
         if self.config.use_subcommands {
             commands = self.create_subcommand_structure(commands)?;
         }
-        
+
         // Sort commands for consistent output
         commands.sort_by(|a, b| {
             // Sort parent commands first, then subcommands
@@ -273,10 +283,10 @@ impl CliGenerator {
                 }
             }
         });
-        
+
         Ok(commands)
     }
-    
+
     /// Create subcommand structure from flat command list
     ///
     /// This method groups commands by their domain prefix (e.g., "memo_create" -> "memo create")
@@ -289,18 +299,21 @@ impl CliGenerator {
     /// # Returns
     ///
     /// * `Result<Vec<GeneratedCommand>, GenerationError>` - Commands organized into subcommand structure
-    fn create_subcommand_structure(&self, commands: Vec<GeneratedCommand>) -> Result<Vec<GeneratedCommand>, GenerationError> {
+    fn create_subcommand_structure(
+        &self,
+        commands: Vec<GeneratedCommand>,
+    ) -> Result<Vec<GeneratedCommand>, GenerationError> {
         use std::collections::HashMap;
-        
+
         let mut parent_commands: HashMap<String, GeneratedCommand> = HashMap::new();
         let mut subcommands: Vec<GeneratedCommand> = Vec::new();
-        
+
         for mut command in commands {
             // Extract domain from tool name (e.g., "memo_create" -> "memo")
             if let Some(underscore_pos) = command.tool_name.find('_') {
                 let domain = command.tool_name[..underscore_pos].to_string();
                 let action = command.tool_name[underscore_pos + 1..].to_string();
-                
+
                 // Create parent command if it doesn't exist
                 if !parent_commands.contains_key(&domain) {
                     let parent = GeneratedCommand::new(
@@ -310,7 +323,7 @@ impl CliGenerator {
                     );
                     parent_commands.insert(domain.clone(), parent);
                 }
-                
+
                 // Convert command to subcommand
                 command.name = action.replace('_', "-");
                 command.subcommand_of = Some(domain);
@@ -320,14 +333,14 @@ impl CliGenerator {
                 subcommands.push(command);
             }
         }
-        
+
         // Combine parent commands and subcommands
         let mut result: Vec<GeneratedCommand> = parent_commands.into_values().collect();
         result.extend(subcommands);
-        
+
         Ok(result)
     }
-    
+
     /// Validate the current configuration
     ///
     /// # Returns
@@ -338,41 +351,41 @@ impl CliGenerator {
         if let Some(ref prefix) = self.config.command_prefix {
             if prefix.is_empty() {
                 return Err(GenerationError::ConfigValidation(
-                    "Command prefix cannot be empty".to_string()
+                    "Command prefix cannot be empty".to_string(),
                 ));
             }
-            
+
             if prefix.contains(char::is_whitespace) {
                 return Err(GenerationError::ConfigValidation(
-                    "Command prefix cannot contain whitespace".to_string()
+                    "Command prefix cannot contain whitespace".to_string(),
                 ));
             }
         }
-        
+
         // Validate maximum commands limit
         if self.config.max_commands == 0 {
             return Err(GenerationError::ConfigValidation(
-                "Maximum commands must be greater than 0".to_string()
+                "Maximum commands must be greater than 0".to_string(),
             ));
         }
-        
+
         // Validate naming strategy
         if let crate::generation::NamingStrategy::Custom(func_name) = &self.config.naming_strategy {
             if func_name.is_empty() {
                 return Err(GenerationError::ConfigValidation(
-                    "Custom naming strategy function name cannot be empty".to_string()
+                    "Custom naming strategy function name cannot be empty".to_string(),
                 ));
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Get configuration information for debugging
     pub fn config(&self) -> &GenerationConfig {
         &self.config
     }
-    
+
     /// Get registry reference for inspection
     pub fn registry(&self) -> &Arc<ToolRegistry> {
         &self.registry
@@ -383,9 +396,9 @@ impl CliGenerator {
 mod tests {
     use super::*;
     use crate::generation::types::NamingStrategy;
-    use swissarmyhammer_tools::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-    use std::sync::Arc;
     use async_trait::async_trait;
+    use std::sync::Arc;
+    use swissarmyhammer_tools::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 
     /// Mock tool for testing
     struct MockTool {
@@ -443,15 +456,15 @@ mod tests {
 
     fn create_test_registry() -> ToolRegistry {
         let mut registry = ToolRegistry::new();
-        
+
         // Add some CLI-eligible tools
         registry.register(MockTool::new("memo_create", "Create a memo"));
         registry.register(MockTool::new("memo_list", "List memos"));
         registry.register(MockTool::new("issue_create", "Create an issue"));
-        
+
         // Add a known excluded tool
         registry.register(MockTool::new("issue_work", "Work on an issue")); // This should be excluded
-        
+
         registry
     }
 
@@ -459,10 +472,13 @@ mod tests {
     fn test_cli_generator_creation() {
         let registry = Arc::new(create_test_registry());
         let generator = CliGenerator::new(registry.clone());
-        
+
         assert_eq!(generator.registry().len(), registry.len());
         assert!(!generator.config().use_subcommands);
-        assert_eq!(generator.config().naming_strategy, NamingStrategy::KeepOriginal);
+        assert_eq!(
+            generator.config().naming_strategy,
+            NamingStrategy::KeepOriginal
+        );
     }
 
     #[test]
@@ -474,11 +490,14 @@ mod tests {
             command_prefix: Some("sah-".to_string()),
             ..Default::default()
         };
-        
+
         let generator = CliGenerator::new(registry).with_config(config);
-        
+
         assert!(generator.config().use_subcommands);
-        assert_eq!(generator.config().naming_strategy, NamingStrategy::GroupByDomain);
+        assert_eq!(
+            generator.config().naming_strategy,
+            NamingStrategy::GroupByDomain
+        );
         assert_eq!(generator.config().command_prefix, Some("sah-".to_string()));
     }
 
@@ -489,12 +508,15 @@ mod tests {
             command_prefix: Some("".to_string()),
             ..Default::default()
         };
-        
+
         let generator = CliGenerator::new(registry).with_config(config);
         let result = generator.generate_commands();
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), GenerationError::ConfigValidation(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            GenerationError::ConfigValidation(_)
+        ));
     }
 
     #[test]
@@ -504,12 +526,15 @@ mod tests {
             command_prefix: Some("sah ".to_string()),
             ..Default::default()
         };
-        
+
         let generator = CliGenerator::new(registry).with_config(config);
         let result = generator.generate_commands();
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), GenerationError::ConfigValidation(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            GenerationError::ConfigValidation(_)
+        ));
     }
 
     #[test]
@@ -519,12 +544,15 @@ mod tests {
             max_commands: 0,
             ..Default::default()
         };
-        
+
         let generator = CliGenerator::new(registry).with_config(config);
         let result = generator.generate_commands();
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), GenerationError::ConfigValidation(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            GenerationError::ConfigValidation(_)
+        ));
     }
 
     #[test]
@@ -534,10 +562,10 @@ mod tests {
             max_commands: 1, // Very low limit
             ..Default::default()
         };
-        
+
         let generator = CliGenerator::new(registry).with_config(config);
         let result = generator.generate_commands();
-        
+
         // This test might pass or fail depending on how many CLI-eligible tools we have
         // The exact behavior depends on the registry contents and exclusion logic
         if let Err(GenerationError::TooManyCommands(limit, attempted)) = result {
@@ -551,10 +579,10 @@ mod tests {
     fn test_empty_registry_generation() {
         let registry = Arc::new(ToolRegistry::new());
         let generator = CliGenerator::new(registry);
-        
+
         let result = generator.generate_commands();
         assert!(result.is_ok());
-        
+
         let commands = result.unwrap();
         assert!(commands.is_empty());
     }
@@ -566,16 +594,15 @@ mod tests {
             include_excluded: true,
             ..Default::default()
         };
-        
+
         let generator = CliGenerator::new(registry.clone()).with_config(config);
         let result = generator.generate_commands();
-        
+
         assert!(result.is_ok());
         let commands = result.unwrap();
-        
+
         // With include_excluded=true, we should get more commands (including excluded ones)
 
-        
         // Note: The exact count might be different due to generation failures,
         // but we should at least have some commands generated
         assert!(!commands.is_empty());

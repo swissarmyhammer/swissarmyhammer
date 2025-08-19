@@ -314,7 +314,7 @@ impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
         let _lock = HOME_MUTEX.lock().expect("Failed to acquire HOME mutex");
-        
+
         let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home();
 
@@ -341,7 +341,7 @@ impl IsolatedTestHome {
 impl Drop for IsolatedTestHome {
     fn drop(&mut self) {
         let _lock = HOME_MUTEX.lock().expect("Failed to acquire HOME mutex");
-        
+
         // Restore original HOME environment variable
         match &self.original_home {
             Some(home) => std::env::set_var("HOME", home),
@@ -601,19 +601,25 @@ mod tests {
 
     #[test]
     fn test_guard_restores_home() {
-        let original_home = std::env::var("HOME").ok();
-
+        // Test that nested IsolatedTestHome correctly restores the HOME set by the outer guard
+        let outer_guard = IsolatedTestHome::new();
+        let outer_home = std::env::var("HOME").expect("HOME not set");
+        
         {
-            let _guard = IsolatedTestHome::new();
-            let test_home = std::env::var("HOME").expect("HOME not set");
-            // Should be pointing to temporary directory, not original home
-            assert_ne!(test_home, original_home.clone().unwrap_or_default());
-            assert!(PathBuf::from(&test_home).exists());
+            let _inner_guard = IsolatedTestHome::new();
+            let inner_home = std::env::var("HOME").expect("HOME not set");
+            // Inner guard should set a different temporary directory
+            assert_ne!(inner_home, outer_home);
+            assert!(PathBuf::from(&inner_home).exists());
         }
 
-        // Check that HOME is restored after guard is dropped
-        let restored_home = std::env::var("HOME").ok();
-        assert_eq!(original_home, restored_home);
+        // Check that HOME is restored to the outer guard's value after inner guard is dropped
+        let restored_home = std::env::var("HOME").expect("HOME not set");
+        assert_eq!(outer_home, restored_home);
+        assert!(PathBuf::from(&restored_home).exists());
+        
+        // Don't drop outer_guard until the end so we maintain isolation
+        drop(outer_guard);
     }
 
     #[test]

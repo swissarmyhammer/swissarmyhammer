@@ -60,5 +60,6 @@ pub mod types;
 pub use cli_generator::CliGenerator;
 pub use command_builder::CommandBuilder;
 pub use types::{
-    GeneratedCommand, CliArgument, CliOption, GenerationConfig, GenerationError, NamingStrategy, ParseError
+    CliArgument, CliOption, GeneratedCommand, GenerationConfig, GenerationError, NamingStrategy,
+    ParseError,
 };
