@@ -4048,17 +4048,27 @@ mod tests {
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
             let storage = FileSystemIssueStorage::new_default().unwrap();
-            
+
             // Verify the storage uses .swissarmyhammer path by checking the path contains it
-            assert!(storage.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(storage
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
             assert!(storage.state.issues_dir.ends_with("issues"));
-            
+
             // The completed_dir should be issues_dir/complete - test this relationship
             assert!(storage.state.completed_dir.ends_with("complete"));
             let completed_parent = storage.state.completed_dir.parent().unwrap();
             assert_eq!(
-                completed_parent.canonicalize().unwrap_or_else(|_| completed_parent.to_path_buf()),
-                storage.state.issues_dir.canonicalize().unwrap_or_else(|_| storage.state.issues_dir.clone())
+                completed_parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| completed_parent.to_path_buf()),
+                storage
+                    .state
+                    .issues_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| storage.state.issues_dir.clone())
             );
 
             // Restore original directory
@@ -4074,17 +4084,27 @@ mod tests {
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
             let storage = FileSystemIssueStorage::new_default().unwrap();
-            
+
             // Verify the storage uses legacy path (not containing .swissarmyhammer)
-            assert!(!storage.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(!storage
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
             assert!(storage.state.issues_dir.ends_with("issues"));
-            
+
             // The completed_dir should be issues_dir/complete - test this relationship
             assert!(storage.state.completed_dir.ends_with("complete"));
             let completed_parent = storage.state.completed_dir.parent().unwrap();
             assert_eq!(
-                completed_parent.canonicalize().unwrap_or_else(|_| completed_parent.to_path_buf()),
-                storage.state.issues_dir.canonicalize().unwrap_or_else(|_| storage.state.issues_dir.clone())
+                completed_parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| completed_parent.to_path_buf()),
+                storage
+                    .state
+                    .issues_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| storage.state.issues_dir.clone())
             );
 
             // Restore original directory
@@ -4132,9 +4152,16 @@ mod tests {
             assert!(storage.state.completed_dir.exists());
 
             // Verify the paths are correct
-            assert!(storage.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(storage
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
             assert!(storage.state.issues_dir.ends_with("issues"));
-            assert_eq!(storage.state.completed_dir, storage.state.issues_dir.join("complete"));
+            assert_eq!(
+                storage.state.completed_dir,
+                storage.state.issues_dir.join("complete")
+            );
 
             // Restore original directory
             std::env::set_current_dir(original_dir).unwrap();
@@ -4282,10 +4309,10 @@ mod tests {
             // Create nested structure with files at different levels
             let issues_dir = temp_dir.path().join("issues");
             std::fs::create_dir_all(&issues_dir).unwrap();
-            
+
             let complete_dir = issues_dir.join("complete");
             std::fs::create_dir_all(&complete_dir).unwrap();
-            
+
             let sub_dir = complete_dir.join("archived");
             std::fs::create_dir_all(&sub_dir).unwrap();
 
@@ -4316,7 +4343,8 @@ mod tests {
             let empty_dir = temp_dir.path().join("empty");
             std::fs::create_dir_all(&empty_dir).unwrap();
 
-            let (count, size) = FileSystemIssueStorage::count_directory_contents(&empty_dir).unwrap();
+            let (count, size) =
+                FileSystemIssueStorage::count_directory_contents(&empty_dir).unwrap();
             assert_eq!(count, 0);
             assert_eq!(size, 0);
         }
@@ -4331,7 +4359,8 @@ mod tests {
             std::fs::write(test_dir.join("file1.txt"), "hello").unwrap();
             std::fs::write(test_dir.join("file2.txt"), "world").unwrap();
 
-            let (count, size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+            let (count, size) =
+                FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
             assert_eq!(count, 2);
             assert_eq!(size, 10); // "hello" + "world"
         }
@@ -4345,7 +4374,8 @@ mod tests {
             std::fs::write(test_dir.join("root.txt"), "root").unwrap();
             std::fs::write(test_dir.join("subdir/sub.txt"), "sub").unwrap();
 
-            let (count, size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+            let (count, size) =
+                FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
             assert_eq!(count, 2);
             assert_eq!(size, 7); // "root" + "sub"
         }
@@ -4361,7 +4391,8 @@ mod tests {
             std::fs::create_dir_all(test_dir.join("empty_dir")).unwrap();
             std::fs::create_dir_all(test_dir.join("another_dir")).unwrap();
 
-            let (count, size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+            let (count, size) =
+                FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
             assert_eq!(count, 1); // Only the file, not the directories
             assert_eq!(size, 7); // "content"
         }
@@ -4377,7 +4408,8 @@ mod tests {
             std::fs::write(test_dir.join("medium.txt"), "x".repeat(100)).unwrap(); // 100 bytes
             std::fs::write(test_dir.join("large.txt"), "x".repeat(1000)).unwrap(); // 1000 bytes
 
-            let (count, size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+            let (count, size) =
+                FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
             assert_eq!(count, 3);
             assert_eq!(size, 1101); // 1 + 100 + 1000
         }
@@ -4392,10 +4424,15 @@ mod tests {
             for i in 0..5 {
                 current_dir = current_dir.join(format!("level{}", i));
                 std::fs::create_dir_all(&current_dir).unwrap();
-                std::fs::write(current_dir.join(format!("file{}.txt", i)), format!("level{}", i)).unwrap();
+                std::fs::write(
+                    current_dir.join(format!("file{}.txt", i)),
+                    format!("level{}", i),
+                )
+                .unwrap();
             }
 
-            let (count, size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+            let (count, size) =
+                FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
             assert_eq!(count, 5);
             assert_eq!(size, 30); // "level0" + "level1" + "level2" + "level3" + "level4" = 6*5 = 30
         }
@@ -4420,13 +4457,13 @@ mod tests {
             // This test is platform-specific and may not work in all environments
             // We'll test the error handling path by temporarily changing to a directory
             // that doesn't exist
-            
+
             let original_dir = std::env::current_dir().unwrap();
-            
+
             // Try to set current dir to something that might not work
             let temp_dir = TempDir::new().unwrap();
             let test_path = temp_dir.path().join("nonexistent");
-            
+
             // Attempting to set current directory to non-existent path should fail
             // But std::env::set_current_dir will create the error we want to test
             let result = std::env::set_current_dir(&test_path);
@@ -4437,7 +4474,7 @@ mod tests {
                 // Since we couldn't change to the invalid directory, this should still work
                 assert!(result.is_ok());
             }
-            
+
             // Always restore original directory
             std::env::set_current_dir(original_dir).unwrap();
         }
@@ -4445,7 +4482,7 @@ mod tests {
         #[test]
         fn test_migration_info_with_permission_errors() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4458,23 +4495,23 @@ mod tests {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                
+
                 // Remove read permissions to cause an error
                 let mut perms = std::fs::metadata(&issues_dir).unwrap().permissions();
                 let original_mode = perms.mode();
                 perms.set_mode(0o000); // No permissions
-                
+
                 if std::fs::set_permissions(&issues_dir, perms).is_ok() {
                     // Test that error is handled gracefully
                     let result = FileSystemIssueStorage::migration_info();
                     assert!(result.is_err());
-                    
+
                     // Restore permissions for cleanup
                     let perms = std::fs::Permissions::from_mode(original_mode);
                     std::fs::set_permissions(&issues_dir, perms).unwrap();
                 }
             }
-            
+
             #[cfg(not(unix))]
             {
                 // On non-Unix systems, just verify that the function works normally
@@ -4489,7 +4526,7 @@ mod tests {
         #[test]
         fn test_should_migrate_with_file_instead_of_directory() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4517,7 +4554,7 @@ mod tests {
         #[test]
         fn test_migration_paths_consistency() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4545,7 +4582,7 @@ mod tests {
         #[test]
         fn test_storage_creation_end_to_end() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4553,13 +4590,21 @@ mod tests {
             // Test creation without .swissarmyhammer
             let storage1 = FileSystemIssueStorage::new_default().unwrap();
             assert!(storage1.state.issues_dir.ends_with("issues"));
-            assert!(!storage1.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(!storage1
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
 
             // Create .swissarmyhammer and test again
             std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer")).unwrap();
             let storage2 = FileSystemIssueStorage::new_default().unwrap();
             assert!(storage2.state.issues_dir.ends_with("issues"));
-            assert!(storage2.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(storage2
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
 
             // Restore original directory
             std::env::set_current_dir(original_dir).unwrap();
@@ -4568,7 +4613,7 @@ mod tests {
         #[test]
         fn test_migration_detection_end_to_end() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4595,7 +4640,7 @@ mod tests {
         #[test]
         fn test_migration_info_workflow() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4636,7 +4681,7 @@ mod tests {
         #[test]
         fn test_directory_detection_with_complex_structure() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4644,10 +4689,10 @@ mod tests {
             // Create complex directory structure
             let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
             std::fs::create_dir_all(&swissarmyhammer_dir).unwrap();
-            
+
             // Add some files to .swissarmyhammer to make it "real"
             std::fs::write(swissarmyhammer_dir.join("config.toml"), "[settings]").unwrap();
-            
+
             // Create other directories that shouldn't affect detection
             std::fs::create_dir_all(temp_dir.path().join("src")).unwrap();
             std::fs::create_dir_all(temp_dir.path().join(".git")).unwrap();
@@ -4655,14 +4700,22 @@ mod tests {
 
             // Storage should detect .swissarmyhammer and use it
             let storage = FileSystemIssueStorage::new_default().unwrap();
-            assert!(storage.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(storage
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
 
             // Remove .swissarmyhammer directory
             std::fs::remove_dir_all(&swissarmyhammer_dir).unwrap();
 
             // Storage should fall back to legacy issues directory
             let storage2 = FileSystemIssueStorage::new_default().unwrap();
-            assert!(!storage2.state.issues_dir.to_string_lossy().contains(".swissarmyhammer"));
+            assert!(!storage2
+                .state
+                .issues_dir
+                .to_string_lossy()
+                .contains(".swissarmyhammer"));
             assert!(storage2.state.issues_dir.ends_with("issues"));
 
             // Restore original directory
@@ -4678,7 +4731,7 @@ mod tests {
         #[test]
         fn test_migration_detection_performance() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4712,14 +4765,19 @@ mod tests {
             for i in 0..100 {
                 let subdir = test_dir.join(format!("subdir{}", i));
                 std::fs::create_dir_all(&subdir).unwrap();
-                
+
                 for j in 0..10 {
-                    std::fs::write(subdir.join(format!("file{}.txt", j)), format!("content{}", j)).unwrap();
+                    std::fs::write(
+                        subdir.join(format!("file{}.txt", j)),
+                        format!("content{}", j),
+                    )
+                    .unwrap();
                 }
             }
 
             let start = std::time::Instant::now();
-            let (count, _size) = FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
+            let (count, _size) =
+                FileSystemIssueStorage::count_directory_contents(&test_dir).unwrap();
             let duration = start.elapsed();
 
             assert_eq!(count, 1000); // 100 subdirs * 10 files each
@@ -4729,7 +4787,7 @@ mod tests {
         #[test]
         fn test_migration_info_performance_with_large_files() {
             let temp_dir = TempDir::new().unwrap();
-            
+
             // Save and restore original current directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -4752,7 +4810,12 @@ mod tests {
 
             assert!(info.should_migrate);
             assert_eq!(info.file_count, 3);
-            assert_eq!(info.total_size, small_content.len() as u64 + medium_content.len() as u64 + large_content.len() as u64);
+            assert_eq!(
+                info.total_size,
+                small_content.len() as u64
+                    + medium_content.len() as u64
+                    + large_content.len() as u64
+            );
             assert!(duration < std::time::Duration::from_millis(50)); // Should be very fast
 
             // Restore original directory
