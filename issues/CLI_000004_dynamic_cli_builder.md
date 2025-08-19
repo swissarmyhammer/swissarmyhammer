@@ -322,3 +322,110 @@ pub use cli_builder::CliBuilder;
 - Uses schema conversion from previous step
 - Creates foundation for unified command execution
 - Maintains backward compatibility with existing CLI usage
+## Proposed Solution
+
+After examining the codebase, I will implement the dynamic CLI builder following the existing patterns and architecture:
+
+### Implementation Approach
+
+1. **CliBuilder Structure**: Create `swissarmyhammer-cli/src/cli_builder.rs` with:
+   - Uses existing `ToolRegistry` from `swissarmyhammer-tools`
+   - Leverages existing `SchemaConverter` for JSON Schema to Clap conversion  
+   - Preserves all static CLI commands exactly as they are
+   - Dynamically generates commands from MCP tool categories and individual tools
+
+2. **Key Design Decisions**:
+   - Reuse existing schema conversion logic from `schema_conversion.rs`
+   - Utilize the MCP tool registry's CLI integration methods (`cli_category()`, `cli_name()`, etc.)
+   - Maintain backward compatibility with all existing CLI commands
+   - Create structured command info extraction for execution routing
+
+3. **Architecture Integration**:
+   - The CliBuilder will integrate with the existing MCP tool context system
+   - Uses the same argument parsing and validation patterns
+   - Maintains the established error handling patterns
+   - Follows the testing patterns established in the codebase
+
+4. **Testing Strategy**:
+   - Unit tests for command generation logic
+   - Integration tests with real MCP tools
+   - Verification that static commands remain unchanged
+   - Schema-to-clap conversion validation
+
+### Implementation Steps
+
+1. Create the CliBuilder struct with dynamic command generation
+2. Implement command extraction logic for routing dynamic commands
+3. Add comprehensive unit and integration tests
+4. Integrate with main CLI module
+5. Verify all existing functionality preserved
+
+This approach leverages the excellent foundation already established in the codebase, particularly the tool registry pattern and schema conversion utilities.
+## Implementation Complete
+
+✅ **Status: COMPLETED**
+
+### What was implemented:
+
+1. **CliBuilder Structure** (`swissarmyhammer-cli/src/cli_builder.rs`):
+   - Created complete `CliBuilder` struct with dynamic command generation
+   - Integrates with existing `ToolRegistry` and `SchemaConverter`
+   - Preserves all static CLI commands exactly as they were
+   - Dynamically generates commands from MCP tool categories and individual tools
+   - Uses `Box::leak` pattern for 'static string requirements in clap
+
+2. **Command Execution Context**:
+   - Implemented `DynamicCommandInfo` struct to capture command routing information
+   - Added `extract_command_info()` method to parse CLI matches and identify MCP tools
+   - Added `get_tool_matches()` method to extract tool-specific arguments
+   - Supports both categorized tools (e.g., `sah issue create`) and root-level tools (e.g., `sah search`)
+
+3. **Schema Integration**:
+   - Leverages existing `SchemaConverter` to convert JSON schemas to clap arguments
+   - Maintains all existing argument validation and help text generation
+   - Uses tool descriptions for CLI help text with fallbacks
+
+4. **Testing Infrastructure**:
+   - Created comprehensive test suite with 14 passing tests
+   - Tests cover command generation, argument parsing, help text, and edge cases
+   - Mock tools created to test various CLI integration scenarios
+   - Tests verify static command preservation and dynamic command generation
+
+5. **Module Integration**:
+   - Added `cli_builder` module to `swissarmyhammer-cli/src/lib.rs`
+   - Added `async-trait` dependency for test compilation
+   - Exported `CliBuilder` for easy access
+   - Verified compilation in release mode
+
+### Key Features:
+
+- **Backward Compatibility**: All existing static CLI commands preserved exactly
+- **Dynamic Generation**: MCP tools automatically become CLI commands
+- **Category Organization**: Tools grouped by category become subcommands (e.g., `issue`, `memo`)
+- **Schema-Driven**: JSON schemas automatically generate CLI arguments
+- **Help Generation**: Tool descriptions become CLI help text
+- **Type Safety**: Full type safety with comprehensive error handling
+- **Testing**: Extensive test coverage with mock tools and integration tests
+
+### Technical Architecture:
+
+```
+CLI Structure Generated:
+sah
+├── serve                    # Static command (preserved)
+├── doctor                   # Static command (preserved)  
+├── prompt                   # Static command (preserved)
+├── flow                     # Static command (preserved)
+├── issue                    # Dynamic category from MCP tools
+│   ├── create              # Generated from issue_create MCP tool
+│   ├── list                # Generated from issue_list MCP tool
+│   └── ...
+├── memo                     # Dynamic category from MCP tools
+│   ├── create              # Generated from memo_create MCP tool
+│   └── ...
+└── search                   # Dynamic root-level tool (no category)
+```
+
+The implementation successfully eliminates the CLI redundancy problem described in `/ideas/cli.md` by making the CLI structure fully dynamic while preserving all existing functionality.
+
+All tests pass, code compiles successfully, and the implementation follows the established patterns in the codebase.

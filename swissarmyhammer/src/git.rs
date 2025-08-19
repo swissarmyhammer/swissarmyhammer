@@ -749,6 +749,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_git_operations_new_in_git_repo() {
         let temp_dir = create_test_git_repo().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -784,6 +785,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_git_operations_new_not_in_git_repo() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -1742,6 +1744,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_contains_detailed_context() {
         let temp_dir = create_test_git_repo().unwrap();
 

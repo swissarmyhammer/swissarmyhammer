@@ -82,6 +82,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    #[serial_test::serial]
     fn test_prompt_resolver_loads_user_prompts() {
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
@@ -195,6 +196,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_user_prompt_overrides_builtin_source_tracking() {
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");

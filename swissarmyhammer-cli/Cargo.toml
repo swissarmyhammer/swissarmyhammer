@@ -54,6 +54,9 @@ tracing-subscriber = { workspace = true }
 # MCP support
 rmcp = { workspace = true }
 
+# Async trait
+async-trait = "0.1"
+
 # File operations
 walkdir = { workspace = true }
 notify = { workspace = true }
