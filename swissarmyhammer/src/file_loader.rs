@@ -377,7 +377,6 @@ impl VirtualFileSystem {
         Ok(directories)
     }
 
-
     /// Validate that a path is safe and within the expected directory
     fn is_path_safe(path: &Path, base_dir: &Path) -> bool {
         // Try to canonicalize both paths

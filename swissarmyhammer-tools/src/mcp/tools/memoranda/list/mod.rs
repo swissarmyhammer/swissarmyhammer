@@ -41,6 +41,18 @@ impl McpTool for ListMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "list"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("List all available memos with metadata")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

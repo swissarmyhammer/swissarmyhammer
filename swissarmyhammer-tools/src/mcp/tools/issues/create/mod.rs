@@ -50,6 +50,18 @@ impl McpTool for CreateIssueTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("issue")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "create"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Create a new issue with automatic numbering")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
