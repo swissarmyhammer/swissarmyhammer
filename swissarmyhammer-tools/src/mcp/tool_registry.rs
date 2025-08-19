@@ -465,6 +465,310 @@ impl ToolRegistry {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
+
+    /// Get all CLI categories from registered tools
+    ///
+    /// Returns a sorted list of all unique categories from tools that are visible in the CLI.
+    /// Hidden tools are excluded from the results.
+    ///
+    /// # Returns
+    ///
+    /// A vector of category names sorted alphabetically
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let categories = registry.get_cli_categories();
+    /// // Returns: ["issue", "memo", "search"]
+    /// ```
+    pub fn get_cli_categories(&self) -> Vec<String> {
+        let mut categories = std::collections::HashSet::new();
+
+        for tool in self.tools.values() {
+            if let Some(category) = tool.cli_category() {
+                if !tool.hidden_from_cli() {
+                    categories.insert(category.to_string());
+                }
+            }
+        }
+
+        let mut result: Vec<String> = categories.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    /// Get all tools for a specific CLI category
+    ///
+    /// Returns all tools that belong to the specified category and are visible in the CLI.
+    /// Hidden tools are excluded from the results.
+    ///
+    /// # Arguments
+    ///
+    /// * `category` - The category name to filter by
+    ///
+    /// # Returns
+    ///
+    /// A vector of tool references for the specified category
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let issue_tools = registry.get_tools_for_category("issue");
+    /// // Returns all issue-related tools like issue_create, issue_list, etc.
+    /// ```
+    pub fn get_tools_for_category(&self, category: &str) -> Vec<&dyn McpTool> {
+        self.tools
+            .values()
+            .filter(|tool| tool.cli_category() == Some(category) && !tool.hidden_from_cli())
+            .map(|tool| tool.as_ref())
+            .collect()
+    }
+
+    /// Get all CLI-visible tools without a category (root level tools)
+    ///
+    /// Returns all tools that don't belong to a specific category and are visible in the CLI.
+    /// These tools appear at the root command level rather than under a category subcommand.
+    ///
+    /// # Returns
+    ///
+    /// A vector of tool references for root-level tools
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let root_tools = registry.get_root_cli_tools();
+    /// // Returns tools that are called like: sah tool_name
+    /// ```
+    pub fn get_root_cli_tools(&self) -> Vec<&dyn McpTool> {
+        self.tools
+            .values()
+            .filter(|tool| tool.cli_category().is_none() && !tool.hidden_from_cli())
+            .map(|tool| tool.as_ref())
+            .collect()
+    }
+
+    /// Get a tool by CLI path (category/name or just name for root tools)
+    ///
+    /// Resolves a CLI path to a tool reference. Supports both categorized tools
+    /// (category/name format) and root-level tools (name only).
+    ///
+    /// # Arguments
+    ///
+    /// * `cli_path` - The CLI path to resolve (e.g., "issue/create" or "my_tool")
+    ///
+    /// # Returns
+    ///
+    /// * `Some(tool)` - The tool if found and visible in CLI
+    /// * `None` - Tool not found or hidden from CLI
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let tool = registry.get_tool_by_cli_path("issue/create");  // Categorized tool
+    /// let tool = registry.get_tool_by_cli_path("my_tool");       // Root tool
+    /// ```
+    pub fn get_tool_by_cli_path(&self, cli_path: &str) -> Option<&dyn McpTool> {
+        // Handle category/name format
+        if let Some((category, name)) = cli_path.split_once('/') {
+            return self
+                .get_tools_for_category(category)
+                .into_iter()
+                .find(|tool| tool.cli_name() == name);
+        }
+
+        // Handle root-level tools
+        self.get_root_cli_tools()
+            .into_iter()
+            .find(|tool| tool.cli_name() == cli_path)
+    }
+
+    /// Collect CLI metadata for all visible tools
+    ///
+    /// Returns a vector of CliToolMetadata structs containing all the information
+    /// needed to integrate tools with CLI systems. Hidden tools are excluded.
+    ///
+    /// # Returns
+    ///
+    /// A vector of metadata structs for CLI-visible tools
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let metadata = registry.get_cli_metadata();
+    /// for meta in metadata {
+    ///     println!("Tool: {}, Category: {:?}", meta.name, meta.category);
+    /// }
+    /// ```
+    pub fn get_cli_metadata(&self) -> Vec<CliToolMetadata> {
+        self.tools
+            .values()
+            .filter(|tool| !tool.hidden_from_cli())
+            .map(|tool| CliToolMetadata {
+                name: tool.cli_name().to_string(),
+                category: tool.cli_category().map(|s| s.to_string()),
+                about: tool
+                    .cli_about()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| tool.description().to_string()),
+                schema: tool.schema(),
+                mcp_name: tool.name().to_string(),
+            })
+            .collect()
+    }
+}
+
+/// Metadata for CLI tool integration
+///
+/// Contains all the information needed to integrate an MCP tool with the CLI system.
+/// This struct captures both MCP-specific and CLI-specific metadata in a unified format.
+///
+/// # Fields
+///
+/// * `name` - CLI command name (from cli_name())
+/// * `category` - Optional CLI category for grouping (from cli_category())  
+/// * `about` - CLI-specific help text (from cli_about() or description())
+/// * `schema` - JSON schema for argument validation (from schema())
+/// * `mcp_name` - Original MCP tool name for internal lookups (from name())
+///
+/// # Usage
+///
+/// This metadata is primarily used by CLI command generators to create dynamic
+/// command structures based on registered MCP tools.
+#[derive(Debug, Clone)]
+pub struct CliToolMetadata {
+    /// CLI command name (may differ from MCP name)
+    pub name: String,
+
+    /// Optional category for CLI subcommand grouping
+    pub category: Option<String>,
+
+    /// CLI help text (uses cli_about() if available, falls back to description())
+    pub about: String,
+
+    /// JSON schema for argument validation
+    pub schema: serde_json::Value,
+
+    /// Original MCP tool name for registry lookups
+    pub mcp_name: String,
+}
+
+/// Builder pattern for easier CLI integration with ToolRegistry
+///
+/// The `CliRegistryBuilder` provides a convenient interface for CLI systems to
+/// interact with the tool registry. It wraps a ToolRegistry and provides
+/// methods specifically designed for CLI use cases.
+///
+/// # Design Goals
+///
+/// - **Convenience**: Simplified interface for common CLI operations
+/// - **Encapsulation**: Hides ToolRegistry complexity from CLI systems
+/// - **Consistency**: Provides uniform access patterns for CLI builders
+/// - **Performance**: Delegates to ToolRegistry methods without additional overhead
+///
+/// # Usage Patterns
+///
+/// ```rust,ignore
+/// let builder = CliRegistryBuilder::new(registry);
+///
+/// // Get all categories for subcommand generation
+/// let categories = builder.categories();
+///
+/// // Generate commands for a specific category
+/// for category in &categories {
+///     let tools = builder.tools_in_category(category);
+///     // Generate CLI commands for tools...
+/// }
+///
+/// // Handle root-level commands
+/// let root_tools = builder.root_tools();
+/// ```
+pub struct CliRegistryBuilder<'a> {
+    /// Reference to the underlying tool registry
+    registry: &'a ToolRegistry,
+}
+
+impl<'a> CliRegistryBuilder<'a> {
+    /// Create a new CLI registry builder
+    ///
+    /// # Arguments
+    ///
+    /// * `registry` - Reference to the tool registry to wrap
+    ///
+    /// # Returns
+    ///
+    /// A new builder instance for CLI integration
+    pub fn new(registry: &'a ToolRegistry) -> Self {
+        Self { registry }
+    }
+
+    /// Get all CLI categories
+    ///
+    /// Convenience method that delegates to the registry's get_cli_categories().
+    /// Returns a sorted list of all unique categories from CLI-visible tools.
+    ///
+    /// # Returns
+    ///
+    /// A vector of category names sorted alphabetically
+    pub fn categories(&self) -> Vec<String> {
+        self.registry.get_cli_categories()
+    }
+
+    /// Get tools for a specific category
+    ///
+    /// Convenience method that delegates to the registry's get_tools_for_category().
+    /// Returns all CLI-visible tools that belong to the specified category.
+    ///
+    /// # Arguments
+    ///
+    /// * `category` - The category name to filter by
+    ///
+    /// # Returns
+    ///
+    /// A vector of tool references for the specified category
+    pub fn tools_in_category(&self, category: &str) -> Vec<&dyn McpTool> {
+        self.registry.get_tools_for_category(category)
+    }
+
+    /// Get root-level tools (no category)
+    ///
+    /// Convenience method that delegates to the registry's get_root_cli_tools().
+    /// Returns all CLI-visible tools that don't belong to a specific category.
+    ///
+    /// # Returns
+    ///
+    /// A vector of tool references for root-level tools
+    pub fn root_tools(&self) -> Vec<&dyn McpTool> {
+        self.registry.get_root_cli_tools()
+    }
+
+    /// Get all CLI metadata
+    ///
+    /// Convenience method that delegates to the registry's get_cli_metadata().
+    /// Returns metadata for all CLI-visible tools.
+    ///
+    /// # Returns
+    ///
+    /// A vector of CLI tool metadata structs
+    pub fn metadata(&self) -> Vec<CliToolMetadata> {
+        self.registry.get_cli_metadata()
+    }
+
+    /// Find a tool by CLI path
+    ///
+    /// Convenience method that delegates to the registry's get_tool_by_cli_path().
+    /// Resolves a CLI path to a tool reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `cli_path` - The CLI path to resolve (e.g., "issue/create" or "my_tool")
+    ///
+    /// # Returns
+    ///
+    /// * `Some(tool)` - The tool if found and visible in CLI
+    /// * `None` - Tool not found or hidden from CLI
+    pub fn find_tool(&self, cli_path: &str) -> Option<&dyn McpTool> {
+        self.registry.get_tool_by_cli_path(cli_path)
+    }
 }
 
 /// Base implementation providing common utility methods for MCP tools
@@ -608,6 +912,7 @@ pub fn register_web_search_tools(registry: &mut ToolRegistry) {
 mod tests {
     use super::*;
     use rmcp::model::{Annotated, RawContent, RawTextContent};
+    use std::iter::Iterator;
 
     /// Mock tool for testing
     struct MockTool {
@@ -935,7 +1240,7 @@ mod tests {
         assert_eq!(tool.cli_category(), None);
         assert_eq!(tool.cli_name(), "hidden");
         assert_eq!(tool.cli_about(), None);
-        assert_eq!(tool.hidden_from_cli(), true);
+        assert!(tool.hidden_from_cli());
     }
 
     #[test]
@@ -1029,5 +1334,370 @@ mod tests {
         let _hidden: bool = tool.hidden_from_cli();
 
         // Test passes if compilation succeeds - validates trait signature compatibility
+    }
+
+    // Tests for CLI integration methods
+
+    fn create_test_registry_with_cli_tools() -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+
+        // Add categorized tools
+        registry.register(TestCliTool {
+            name: "issue_create",
+            category: Some("issue"),
+            cli_name: "create",
+            cli_about: Some("Create a new issue"),
+            hidden: false,
+        });
+
+        registry.register(TestCliTool {
+            name: "issue_list",
+            category: Some("issue"),
+            cli_name: "list",
+            cli_about: None, // Will use description
+            hidden: false,
+        });
+
+        registry.register(TestCliTool {
+            name: "memo_create",
+            category: Some("memo"),
+            cli_name: "create",
+            cli_about: Some("Create a new memo"),
+            hidden: false,
+        });
+
+        // Add root-level tool
+        registry.register(TestCliTool {
+            name: "search_files",
+            category: None,
+            cli_name: "search",
+            cli_about: Some("Search through files"),
+            hidden: false,
+        });
+
+        // Add hidden tool (should be excluded)
+        registry.register(TestCliTool {
+            name: "internal_tool",
+            category: Some("internal"),
+            cli_name: "internal",
+            cli_about: Some("Internal tool"),
+            hidden: true,
+        });
+
+        registry
+    }
+
+    #[test]
+    fn test_get_cli_categories() {
+        let registry = create_test_registry_with_cli_tools();
+        let categories = registry.get_cli_categories();
+
+        // Should contain visible categories only
+        assert_eq!(categories, vec!["issue", "memo"]);
+
+        // Should be sorted
+        let mut expected_sorted = categories.clone();
+        expected_sorted.sort();
+        assert_eq!(categories, expected_sorted);
+
+        // Should not contain categories from hidden tools
+        assert!(!categories.contains(&"internal".to_string()));
+    }
+
+    #[test]
+    fn test_get_cli_categories_empty_registry() {
+        let registry = ToolRegistry::new();
+        let categories = registry.get_cli_categories();
+        assert!(categories.is_empty());
+    }
+
+    #[test]
+    fn test_get_cli_categories_only_hidden_tools() {
+        let mut registry = ToolRegistry::new();
+        registry.register(TestCliTool {
+            name: "hidden1",
+            category: Some("category1"),
+            cli_name: "hidden1",
+            cli_about: None,
+            hidden: true,
+        });
+
+        let categories = registry.get_cli_categories();
+        assert!(categories.is_empty());
+    }
+
+    #[test]
+    fn test_get_tools_for_category() {
+        let registry = create_test_registry_with_cli_tools();
+        let issue_tools = registry.get_tools_for_category("issue");
+
+        assert_eq!(issue_tools.len(), 2);
+
+        let tool_names: Vec<&str> = issue_tools.iter().map(|tool| tool.cli_name()).collect();
+        assert!(tool_names.contains(&"create"));
+        assert!(tool_names.contains(&"list"));
+
+        // Verify all tools are in the correct category
+        for tool in &issue_tools {
+            assert_eq!(tool.cli_category(), Some("issue"));
+            assert!(!tool.hidden_from_cli());
+        }
+    }
+
+    #[test]
+    fn test_get_tools_for_category_nonexistent() {
+        let registry = create_test_registry_with_cli_tools();
+        let tools = registry.get_tools_for_category("nonexistent");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_tools_for_category_excludes_hidden() {
+        let registry = create_test_registry_with_cli_tools();
+        let internal_tools = registry.get_tools_for_category("internal");
+
+        // Should be empty because internal_tool is hidden
+        assert!(internal_tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_root_cli_tools() {
+        let registry = create_test_registry_with_cli_tools();
+        let root_tools = registry.get_root_cli_tools();
+
+        assert_eq!(root_tools.len(), 1);
+        assert_eq!(root_tools[0].cli_name(), "search");
+        assert_eq!(root_tools[0].cli_category(), None);
+        assert!(!root_tools[0].hidden_from_cli());
+    }
+
+    #[test]
+    fn test_get_root_cli_tools_empty() {
+        let mut registry = ToolRegistry::new();
+
+        // Add only categorized tools
+        registry.register(TestCliTool {
+            name: "categorized",
+            category: Some("category"),
+            cli_name: "categorized",
+            cli_about: None,
+            hidden: false,
+        });
+
+        let root_tools = registry.get_root_cli_tools();
+        assert!(root_tools.is_empty());
+    }
+
+    #[test]
+    fn test_get_tool_by_cli_path_categorized() {
+        let registry = create_test_registry_with_cli_tools();
+
+        // Test category/name format
+        let tool = registry.get_tool_by_cli_path("issue/create");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().cli_name(), "create");
+        assert_eq!(tool.unwrap().cli_category(), Some("issue"));
+
+        let tool = registry.get_tool_by_cli_path("memo/create");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().cli_name(), "create");
+        assert_eq!(tool.unwrap().cli_category(), Some("memo"));
+    }
+
+    #[test]
+    fn test_get_tool_by_cli_path_root() {
+        let registry = create_test_registry_with_cli_tools();
+
+        // Test root tool lookup
+        let tool = registry.get_tool_by_cli_path("search");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().cli_name(), "search");
+        assert_eq!(tool.unwrap().cli_category(), None);
+    }
+
+    #[test]
+    fn test_get_tool_by_cli_path_not_found() {
+        let registry = create_test_registry_with_cli_tools();
+
+        // Test nonexistent paths
+        assert!(registry.get_tool_by_cli_path("nonexistent/tool").is_none());
+        assert!(registry.get_tool_by_cli_path("issue/nonexistent").is_none());
+        assert!(registry.get_tool_by_cli_path("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_get_tool_by_cli_path_hidden_tool() {
+        let registry = create_test_registry_with_cli_tools();
+
+        // Hidden tools should not be found
+        assert!(registry.get_tool_by_cli_path("internal/internal").is_none());
+    }
+
+    #[test]
+    fn test_get_cli_metadata() {
+        let registry = create_test_registry_with_cli_tools();
+        let metadata = registry.get_cli_metadata();
+
+        // Should have 4 visible tools (excluding hidden)
+        assert_eq!(metadata.len(), 4);
+
+        // Find specific tools and verify metadata
+        let issue_create = metadata
+            .iter()
+            .find(|m| m.mcp_name == "issue_create")
+            .expect("issue_create should be present");
+
+        assert_eq!(issue_create.name, "create");
+        assert_eq!(issue_create.category, Some("issue".to_string()));
+        assert_eq!(issue_create.about, "Create a new issue");
+        assert_eq!(issue_create.mcp_name, "issue_create");
+
+        // Test tool with no cli_about (should use description)
+        let issue_list = metadata
+            .iter()
+            .find(|m| m.mcp_name == "issue_list")
+            .expect("issue_list should be present");
+
+        assert_eq!(issue_list.about, "Test tool description"); // Falls back to description()
+
+        // Test root tool
+        let search = metadata
+            .iter()
+            .find(|m| m.mcp_name == "search_files")
+            .expect("search_files should be present");
+
+        assert_eq!(search.category, None);
+        assert_eq!(search.name, "search");
+
+        // Verify hidden tools are excluded
+        assert!(metadata.iter().all(|m| m.mcp_name != "internal_tool"));
+    }
+
+    #[test]
+    fn test_get_cli_metadata_empty_registry() {
+        let registry = ToolRegistry::new();
+        let metadata = registry.get_cli_metadata();
+        assert!(metadata.is_empty());
+    }
+
+    // Tests for CliRegistryBuilder
+
+    #[test]
+    fn test_cli_registry_builder_categories() {
+        let registry = create_test_registry_with_cli_tools();
+        let builder = CliRegistryBuilder::new(&registry);
+
+        let categories = builder.categories();
+        assert_eq!(categories, vec!["issue", "memo"]);
+    }
+
+    #[test]
+    fn test_cli_registry_builder_tools_in_category() {
+        let registry = create_test_registry_with_cli_tools();
+        let builder = CliRegistryBuilder::new(&registry);
+
+        let issue_tools = builder.tools_in_category("issue");
+        assert_eq!(issue_tools.len(), 2);
+
+        let tool_names: Vec<&str> = issue_tools.iter().map(|tool| tool.cli_name()).collect();
+        assert!(tool_names.contains(&"create"));
+        assert!(tool_names.contains(&"list"));
+    }
+
+    #[test]
+    fn test_cli_registry_builder_root_tools() {
+        let registry = create_test_registry_with_cli_tools();
+        let builder = CliRegistryBuilder::new(&registry);
+
+        let root_tools = builder.root_tools();
+        assert_eq!(root_tools.len(), 1);
+        assert_eq!(root_tools[0].cli_name(), "search");
+    }
+
+    #[test]
+    fn test_cli_registry_builder_metadata() {
+        let registry = create_test_registry_with_cli_tools();
+        let builder = CliRegistryBuilder::new(&registry);
+
+        let metadata = builder.metadata();
+        assert_eq!(metadata.len(), 4); // 4 visible tools
+    }
+
+    #[test]
+    fn test_cli_registry_builder_find_tool() {
+        let registry = create_test_registry_with_cli_tools();
+        let builder = CliRegistryBuilder::new(&registry);
+
+        // Test categorized tool lookup
+        let tool = builder.find_tool("issue/create");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().cli_name(), "create");
+
+        // Test root tool lookup
+        let tool = builder.find_tool("search");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().cli_name(), "search");
+
+        // Test not found
+        assert!(builder.find_tool("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_cli_tool_metadata_structure() {
+        let metadata = CliToolMetadata {
+            name: "test-name".to_string(),
+            category: Some("test-category".to_string()),
+            about: "Test about text".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+            mcp_name: "test_mcp_name".to_string(),
+        };
+
+        // Verify all fields are accessible
+        assert_eq!(metadata.name, "test-name");
+        assert_eq!(metadata.category, Some("test-category".to_string()));
+        assert_eq!(metadata.about, "Test about text");
+        assert_eq!(metadata.mcp_name, "test_mcp_name");
+
+        // Verify schema is preserved
+        if let serde_json::Value::Object(obj) = &metadata.schema {
+            assert!(obj.contains_key("type"));
+        } else {
+            panic!("Schema should be an object");
+        }
+    }
+
+    #[test]
+    fn test_integration_with_existing_registration() {
+        let mut registry = ToolRegistry::new();
+
+        // Register tools using existing pattern
+        registry.register(MockTool {
+            name: "existing_tool",
+            description: "Existing tool",
+        });
+
+        // Add CLI-aware tools
+        registry.register(TestCliTool {
+            name: "cli_tool",
+            category: Some("test"),
+            cli_name: "cli",
+            cli_about: Some("CLI tool"),
+            hidden: false,
+        });
+
+        // Verify both types work together
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get_tool("existing_tool").is_some());
+        assert!(registry.get_tool("cli_tool").is_some());
+
+        // CLI methods should work with both
+        let categories = registry.get_cli_categories();
+        assert_eq!(categories, vec!["test"]); // Only cli_tool has category
+
+        let root_tools = registry.get_root_cli_tools();
+        assert_eq!(root_tools.len(), 1); // existing_tool (no category, not hidden)
+
+        let metadata = registry.get_cli_metadata();
+        assert_eq!(metadata.len(), 2); // Both tools visible
     }
 }
