@@ -939,7 +939,7 @@ mod tests {
     use super::*;
     use crate::test_utils::IsolatedTestEnvironment;
     use crate::workflow::{State, StateId, StateType};
-    use serial_test::serial;
+
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new(

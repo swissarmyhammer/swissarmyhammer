@@ -10,7 +10,7 @@ use crate::workflow::storage::{
 };
 use crate::workflow::{MermaidParser, WorkflowExecutor, WorkflowStorage};
 use serde_json::Value;
-use serial_test::serial;
+
 use std::sync::Arc;
 
 /// Helper function to set up test storage with workflows

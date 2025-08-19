@@ -272,8 +272,9 @@ mod tests {
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        // Ensure abort file doesn't exist
         let abort_path = ".swissarmyhammer/.abort";
+        
+        // Ensure abort file doesn't exist
         let _ = std::fs::remove_file(abort_path); // Ignore if it doesn't exist
 
         // Create a new workflow run - should not fail even if file doesn't exist
@@ -321,8 +322,6 @@ mod tests {
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
-
-        let abort_path = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory if it doesn't exist
         std::fs::create_dir_all(".swissarmyhammer").unwrap();

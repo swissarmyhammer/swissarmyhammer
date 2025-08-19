@@ -1584,7 +1584,7 @@ mod tests {
         // Switch back to main and delete feature branch
         let main_branch = git_ops.main_branch().unwrap();
         git_ops.checkout_branch(&main_branch).unwrap();
-        git_ops.delete_branch("feature/test").unwrap();
+        git_ops.delete_branch("feature/test", false).unwrap();
 
         // Auto merge should fail because the source branch (feature/test) was deleted
         // and reflog-based detection cannot find a valid target branch

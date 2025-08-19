@@ -377,18 +377,6 @@ impl VirtualFileSystem {
         Ok(directories)
     }
 
-    /// Get the home directory, respecting the HOME environment variable for testing
-    fn get_home_dir() -> Option<PathBuf> {
-        // First check the HOME environment variable (for test compatibility)
-        if let Ok(home) = std::env::var("HOME") {
-            let path = PathBuf::from(home);
-            if path.exists() && path.is_dir() {
-                return Some(path);
-            }
-        }
-        // Fallback to dirs crate for platform-specific behavior
-        dirs::home_dir()
-    }
 
     /// Validate that a path is safe and within the expected directory
     fn is_path_safe(path: &Path, base_dir: &Path) -> bool {
