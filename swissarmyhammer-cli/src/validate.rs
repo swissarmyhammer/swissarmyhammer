@@ -782,11 +782,292 @@ impl Validator {
     }
 }
 
+/// Run CLI exclusion validation
+fn run_exclusion_validation(quiet: bool, format: ValidateFormat) -> Result<i32> {
+    use swissarmyhammer_tools::cli::{ExclusionValidator, ValidationConfig};
+    use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
+
+    // Create tool registry
+    let registry = ToolRegistry::new();
+    
+    // Get exclusion detector from registry
+    let detector = registry.create_cli_exclusion_detector();
+    
+    // Create validator
+    let config = ValidationConfig::default();
+    let validator = ExclusionValidator::new(config);
+    
+    // Run validation
+    let report = validator.validate_all(&detector);
+    
+    // Print results
+    print_exclusion_results(&report, format, quiet)?;
+    
+    // Return appropriate exit code
+    if report.has_issues() {
+        Ok(EXIT_ERROR)
+    } else if report.has_warnings() {
+        Ok(EXIT_WARNING)
+    } else {
+        Ok(EXIT_SUCCESS)
+    }
+}
+
+/// Print CLI exclusion validation results
+fn print_exclusion_results(
+    report: &swissarmyhammer_tools::cli::ValidationReport,
+    format: ValidateFormat,
+    quiet: bool,
+) -> Result<()> {
+    match format {
+        ValidateFormat::Text => print_exclusion_text_results(report, quiet),
+        ValidateFormat::Json => print_exclusion_json_results(report),
+    }
+}
+
+/// Print exclusion validation results in text format
+fn print_exclusion_text_results(
+    report: &swissarmyhammer_tools::cli::ValidationReport,
+    quiet: bool,
+) -> Result<()> {
+    use swissarmyhammer_tools::cli::{ValidationIssue, ValidationWarning};
+    
+    if report.issues.is_empty() && report.warnings.is_empty() {
+        if !quiet {
+            println!(
+                "{} CLI exclusion system validation passed!",
+                "✓".green()
+            );
+            println!("  Total tools: {}", report.summary.total_tools);
+            println!("  CLI eligible: {}", report.summary.eligible_tools);
+            println!("  CLI excluded: {}", report.summary.excluded_tools);
+        }
+        return Ok(());
+    }
+
+    // Print issues
+    for issue in &report.issues {
+        match issue {
+            ValidationIssue::SuggestExclusion { tool_name, reason, confidence } => {
+                println!(
+                    "{} [SUGGEST] Tool '{}' should probably be excluded from CLI",
+                    "!".red(),
+                    tool_name.bold()
+                );
+                println!("    Reason: {reason}");
+                println!("    Confidence: {:.1}%", confidence * 100.0);
+            }
+            ValidationIssue::MissingExclusionReason { tool_name } => {
+                println!(
+                    "{} [MISSING] Tool '{}' is excluded but has no documented reason",
+                    "!".red(),
+                    tool_name.bold()
+                );
+            }
+            ValidationIssue::MissingCliAlternatives { tool_name } => {
+                println!(
+                    "{} [MISSING] Tool '{}' is excluded but has no CLI alternatives documented",
+                    "!".red(),
+                    tool_name.bold()
+                );
+            }
+            ValidationIssue::InconsistentNaming { tool_name, suggested_name } => {
+                println!(
+                    "{} [NAMING] Tool '{}' has inconsistent naming, suggest '{}'",
+                    "!".red(),
+                    tool_name.bold(),
+                    suggested_name
+                );
+            }
+        }
+    }
+
+    // Print warnings in non-quiet mode
+    if !quiet {
+        for warning in &report.warnings {
+            match warning {
+                ValidationWarning::MayBenefitFromExclusion { tool_name, reason, confidence } => {
+                    println!(
+                        "{} [MAYBE] Tool '{}' might benefit from exclusion",
+                        "?".yellow(),
+                        tool_name.bold()
+                    );
+                    println!("    Reason: {reason}");
+                    println!("    Confidence: {:.1}%", confidence * 100.0);
+                }
+                ValidationWarning::VagueExclusionReason { tool_name, current_reason } => {
+                    println!(
+                        "{} [VAGUE] Tool '{}' has vague exclusion reason",
+                        "?".yellow(),
+                        tool_name.bold()
+                    );
+                    println!("    Current reason: \"{}\"", current_reason.dimmed());
+                    println!("    💡 Consider providing a more detailed explanation");
+                }
+            }
+        }
+    }
+
+    // Print summary
+    if !quiet {
+        println!("\n{}", "Summary:".bold());
+        println!("  Total tools: {}", report.summary.total_tools);
+        println!("  CLI eligible: {}", report.summary.eligible_tools);
+        println!("  CLI excluded: {}", report.summary.excluded_tools);
+    }
+    
+    if report.has_issues() {
+        println!("  Issues: {}", report.summary.issues_found.to_string().red());
+    }
+    if report.has_warnings() && !quiet {
+        println!("  Warnings: {}", report.summary.warnings_found.to_string().yellow());
+    }
+
+    if report.has_issues() {
+        println!("\n{} CLI exclusion validation failed with issues.", "✗".red());
+    } else if report.has_warnings() {
+        println!("\n{} CLI exclusion validation completed with warnings.", "⚠".yellow());
+    } else {
+        println!("\n{} CLI exclusion validation passed!", "✓".green());
+    }
+
+    Ok(())
+}
+
+/// Print exclusion validation results in JSON format
+fn print_exclusion_json_results(
+    report: &swissarmyhammer_tools::cli::ValidationReport,
+) -> Result<()> {
+    use serde::Serialize;
+    use swissarmyhammer_tools::cli::{ValidationIssue, ValidationWarning};
+    
+    #[derive(Serialize)]
+    struct JsonExclusionResult {
+        summary: JsonExclusionSummary,
+        issues: Vec<JsonExclusionIssue>,
+        warnings: Vec<JsonExclusionWarning>,
+    }
+
+    #[derive(Serialize)]
+    struct JsonExclusionSummary {
+        total_tools: usize,
+        eligible_tools: usize,
+        excluded_tools: usize,
+        issues_found: usize,
+        warnings_found: usize,
+    }
+
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    enum JsonExclusionIssue {
+        SuggestExclusion {
+            tool_name: String,
+            reason: String,
+            confidence: f64,
+        },
+        MissingExclusionReason {
+            tool_name: String,
+        },
+        MissingCliAlternatives {
+            tool_name: String,
+        },
+        InconsistentNaming {
+            tool_name: String,
+            suggested_name: String,
+        },
+    }
+
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    enum JsonExclusionWarning {
+        MayBenefitFromExclusion {
+            tool_name: String,
+            reason: String,
+            confidence: f64,
+        },
+        VagueExclusionReason {
+            tool_name: String,
+            current_reason: String,
+        },
+    }
+
+    let json_issues: Vec<JsonExclusionIssue> = report
+        .issues
+        .iter()
+        .map(|issue| match issue {
+            ValidationIssue::SuggestExclusion { tool_name, reason, confidence } => {
+                JsonExclusionIssue::SuggestExclusion {
+                    tool_name: tool_name.clone(),
+                    reason: reason.clone(),
+                    confidence: *confidence,
+                }
+            }
+            ValidationIssue::MissingExclusionReason { tool_name } => {
+                JsonExclusionIssue::MissingExclusionReason {
+                    tool_name: tool_name.clone(),
+                }
+            }
+            ValidationIssue::MissingCliAlternatives { tool_name } => {
+                JsonExclusionIssue::MissingCliAlternatives {
+                    tool_name: tool_name.clone(),
+                }
+            }
+            ValidationIssue::InconsistentNaming { tool_name, suggested_name } => {
+                JsonExclusionIssue::InconsistentNaming {
+                    tool_name: tool_name.clone(),
+                    suggested_name: suggested_name.clone(),
+                }
+            }
+        })
+        .collect();
+
+    let json_warnings: Vec<JsonExclusionWarning> = report
+        .warnings
+        .iter()
+        .map(|warning| match warning {
+            ValidationWarning::MayBenefitFromExclusion { tool_name, reason, confidence } => {
+                JsonExclusionWarning::MayBenefitFromExclusion {
+                    tool_name: tool_name.clone(),
+                    reason: reason.clone(),
+                    confidence: *confidence,
+                }
+            }
+            ValidationWarning::VagueExclusionReason { tool_name, current_reason } => {
+                JsonExclusionWarning::VagueExclusionReason {
+                    tool_name: tool_name.clone(),
+                    current_reason: current_reason.clone(),
+                }
+            }
+        })
+        .collect();
+
+    let json_result = JsonExclusionResult {
+        summary: JsonExclusionSummary {
+            total_tools: report.summary.total_tools,
+            eligible_tools: report.summary.eligible_tools,
+            excluded_tools: report.summary.excluded_tools,
+            issues_found: report.summary.issues_found,
+            warnings_found: report.summary.warnings_found,
+        },
+        issues: json_issues,
+        warnings: json_warnings,
+    };
+
+    println!("{}", serde_json::to_string_pretty(&json_result)?);
+    Ok(())
+}
+
 pub fn run_validate_command_with_dirs(
     quiet: bool,
     format: ValidateFormat,
+    exclusions: bool,
     workflow_dirs: Vec<String>,
 ) -> Result<i32> {
+    // Handle CLI exclusion validation if requested
+    if exclusions {
+        return run_exclusion_validation(quiet, format);
+    }
+
     let mut validator = Validator::new(quiet);
 
     // Validate with custom workflow directories if provided

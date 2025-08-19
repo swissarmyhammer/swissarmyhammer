@@ -235,6 +235,10 @@ Examples:
         #[arg(long, value_enum, default_value = "text")]
         format: ValidateFormat,
 
+        /// Validate CLI exclusion system consistency
+        #[arg(long)]
+        exclusions: bool,
+
         /// \[DEPRECATED\] This parameter is ignored. Workflows are now only loaded from standard locations.
         #[arg(long = "workflow-dir", value_name = "DIR", hide = true)]
         workflow_dirs: Vec<String>,
@@ -1930,6 +1934,7 @@ mod tests {
             quiet,
             format,
             workflow_dirs,
+            exclusions: _,
         }) = cli.command
         {
             assert!(!quiet);
@@ -1958,6 +1963,7 @@ mod tests {
             quiet,
             format,
             workflow_dirs,
+            exclusions: _,
         }) = cli.command
         {
             assert!(quiet);
