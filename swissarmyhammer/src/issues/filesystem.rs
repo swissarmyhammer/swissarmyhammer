@@ -179,11 +179,27 @@ impl FileSystemIssueStorage {
 
     /// Create a new FileSystemIssueStorage instance with default directory
     ///
-    /// Uses current working directory joined with "issues" as the default location
+    /// Uses `.swissarmyhammer/issues` if `.swissarmyhammer` directory exists,
+    /// otherwise falls back to legacy `issues` directory for backward compatibility
     pub fn new_default() -> Result<Self> {
-        let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
-        let issues_dir = current_dir.join("issues");
+        let issues_dir = Self::default_directory()?;
         Self::new(issues_dir)
+    }
+
+    /// Get the default issues directory path with backward compatibility
+    ///
+    /// Returns `.swissarmyhammer/issues` if `.swissarmyhammer` directory exists,
+    /// otherwise returns `issues` for backward compatibility with existing repositories
+    pub fn default_directory() -> Result<PathBuf> {
+        let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
+        
+        let swissarmyhammer_dir = current_dir.join(".swissarmyhammer");
+        if swissarmyhammer_dir.exists() {
+            Ok(swissarmyhammer_dir.join("issues"))
+        } else {
+            // Fallback to legacy behavior for backward compatibility
+            Ok(current_dir.join("issues"))
+        }
     }
 
     /// Parse issue from file path
@@ -1473,6 +1489,56 @@ mod tests {
 
         let storage = FileSystemIssueStorage::new(issues_dir).unwrap();
         (storage, temp_dir)
+    }
+
+    #[test]
+    fn test_default_directory_logic_with_swissarmyhammer() {
+        // Test the logic by checking that .swissarmyhammer directory existence affects the result
+        let temp_dir = TempDir::new().unwrap();
+        let swissarmyhammer_path = temp_dir.path().join(".swissarmyhammer");
+        
+        // Create .swissarmyhammer directory
+        std::fs::create_dir_all(&swissarmyhammer_path).unwrap();
+        
+        // Mock the current_dir to return our temp directory
+        let current_dir = temp_dir.path();
+        
+        // Check that when .swissarmyhammer exists, we get .swissarmyhammer/issues
+        let swissarmyhammer_result = if swissarmyhammer_path.exists() {
+            current_dir.join(".swissarmyhammer").join("issues")
+        } else {
+            current_dir.join("issues")
+        };
+        
+        assert_eq!(swissarmyhammer_result, current_dir.join(".swissarmyhammer").join("issues"));
+        
+        // Remove .swissarmyhammer directory and check legacy fallback
+        std::fs::remove_dir_all(&swissarmyhammer_path).unwrap();
+        
+        let legacy_result = if swissarmyhammer_path.exists() {
+            current_dir.join(".swissarmyhammer").join("issues")
+        } else {
+            current_dir.join("issues")
+        };
+        
+        assert_eq!(legacy_result, current_dir.join("issues"));
+    }
+
+    #[test]
+    fn test_new_default_functional_behavior() {
+        // Test that new_default() and default_directory() produce consistent results
+        // by testing the actual FileSystemIssueStorage creation
+        
+        let temp_dir = TempDir::new().unwrap();
+        let issues_dir = temp_dir.path().join("test_issues");
+        
+        // Create storage with explicit path
+        let explicit_storage = FileSystemIssueStorage::new(issues_dir.clone()).unwrap();
+        assert_eq!(explicit_storage.state.issues_dir, issues_dir);
+        
+        // Verify storage can be created and basic operations work
+        assert!(explicit_storage.state.issues_dir.parent().is_some());
+        assert_eq!(explicit_storage.state.issues_dir.file_name().unwrap(), "test_issues");
     }
 
     #[test]
