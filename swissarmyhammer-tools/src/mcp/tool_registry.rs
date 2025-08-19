@@ -1311,17 +1311,17 @@ mod tests {
         let excluded = registry.get_excluded_tools();
         assert_eq!(excluded.len(), 2);
         let excluded_names: std::collections::HashSet<_> = 
-            excluded.iter().map(|meta| &meta.name).collect();
-        assert!(excluded_names.contains(&"excluded1".to_string()));
-        assert!(excluded_names.contains(&"excluded2".to_string()));
+            excluded.iter().map(|meta| meta.name.as_str()).collect();
+        assert!(excluded_names.contains("excluded1"));
+        assert!(excluded_names.contains("excluded2"));
         
         // Test eligible tools
         let eligible = registry.get_cli_eligible_tools();
         assert_eq!(eligible.len(), 2);
         let eligible_names: std::collections::HashSet<_> = 
-            eligible.iter().map(|meta| &meta.name).collect();
-        assert!(eligible_names.contains(&"included1".to_string()));
-        assert!(eligible_names.contains(&"included2".to_string()));
+            eligible.iter().map(|meta| meta.name.as_str()).collect();
+        assert!(eligible_names.contains("included1"));
+        assert!(eligible_names.contains("included2"));
         
         // Test convenience methods
         let excluded_names = registry.get_excluded_tool_names();
