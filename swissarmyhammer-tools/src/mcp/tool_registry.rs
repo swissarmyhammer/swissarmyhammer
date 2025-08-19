@@ -1240,7 +1240,7 @@ mod tests {
         assert_eq!(tool.cli_category(), None);
         assert_eq!(tool.cli_name(), "hidden");
         assert_eq!(tool.cli_about(), None);
-        assert_eq!(tool.hidden_from_cli(), true);
+        assert!(tool.hidden_from_cli());
     }
 
     #[test]
