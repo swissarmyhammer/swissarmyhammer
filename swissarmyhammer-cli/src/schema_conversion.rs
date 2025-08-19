@@ -73,9 +73,8 @@ impl ArgBuilder {
         }
         
         if let Some(parser) = self.value_parser {
-            match parser.as_str() {
-                "i64" => arg = arg.value_parser(clap::value_parser!(i64)),
-                _ => {} // default string parser
+            if parser.as_str() == "i64" {
+                arg = arg.value_parser(clap::value_parser!(i64));
             }
         }
         
@@ -139,18 +138,15 @@ impl SchemaConverter {
                 builder = builder.value_parser("i64".to_string());
                 if let Some(min) = schema.get("minimum").and_then(|m| m.as_i64()) {
                     // Add validation range hint
-                    help_text = format!("{} (min: {})", help_text, min);
+                    help_text = format!("{help_text} (min: {min})");
                 }
             },
             Some("array") => {
                 builder = builder.action(ArgAction::Append);
                 // Handle array item types if specified
                 if let Some(items) = schema.get("items") {
-                    if let Some(item_type) = items.get("type").and_then(|t| t.as_str()) {
-                        match item_type {
-                            "integer" => builder = builder.value_parser("i64".to_string()),
-                            _ => {} // string is default
-                        }
+                    if let Some("integer") = items.get("type").and_then(|t| t.as_str()) {
+                        builder = builder.value_parser("i64".to_string());
                     }
                 }
             },
@@ -180,7 +176,7 @@ impl SchemaConverter {
                 // Handle pattern validation hint
                 if let Some(pattern) = schema.get("pattern").and_then(|p| p.as_str()) {
                     // For now, just add to help text
-                    help_text = format!("{} (pattern: {})", help_text, pattern);
+                    help_text = format!("{help_text} (pattern: {pattern})");
                 }
             },
             Some(unknown_type) => {
@@ -240,7 +236,7 @@ impl SchemaConverter {
             Some("array") => {
                 let values: Vec<String> = matches.get_many::<String>(prop_name)
                     .unwrap_or_default()
-                    .map(|s| s.clone())
+                    .cloned()
                     .collect();
                 Value::Array(values.into_iter().map(Value::String).collect())
             },
