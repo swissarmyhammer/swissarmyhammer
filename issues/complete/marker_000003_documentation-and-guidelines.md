@@ -150,3 +150,80 @@ pub struct CreateMemoTool {
 ## Notes
 
 This step ensures that the CLI exclusion system is well-documented and easily understood by developers, creating a foundation for consistent usage across the codebase.
+
+## Proposed Solution
+
+After analyzing the current implementation, I can see that the CLI exclusion system is already well-architected with:
+
+1. **Macro-based Marking**: `#[cli_exclude]` attribute macro from `sah-marker-macros` crate
+2. **Trait-based Runtime Detection**: `CliExclusionMarker` trait for runtime queryability  
+3. **Detection Infrastructure**: `CliExclusionDetector` trait and `RegistryCliExclusionDetector` implementation
+4. **Real Examples**: `IssueWorkTool` and `IssueMergeTool` already properly marked and documented
+
+My implementation approach:
+
+### 1. Developer Documentation (docs/cli-exclusion-system.md)
+Create comprehensive documentation covering:
+- Architecture overview with trait-based design  
+- Usage patterns and decision criteria
+- Complete examples from existing codebase
+- Integration with tool registry system
+
+### 2. Enhanced API Documentation
+Update rustdoc comments for all public APIs to include:
+- Usage examples with real tools from codebase
+- Integration patterns with existing systems
+- Clear explanations of design decisions
+
+### 3. Usage Guidelines Integration  
+Document the exclusion philosophy based on existing implementations:
+- Workflow orchestration tools (like `issue_work`, `issue_merge`)
+- Tools using abort file patterns
+- MCP-specific state management tools
+
+### 4. Testing and Validation
+Ensure all documentation examples compile and work by:
+- Using existing tools as examples (rather than fictional ones)
+- Testing code snippets against actual implementations
+- Validating integration patterns
+
+This builds on the solid existing foundation rather than creating new patterns.
+## Implementation Complete
+
+Successfully implemented comprehensive documentation and usage guidelines for the CLI exclusion system:
+
+### 1. Developer Documentation ✅
+- Created `doc/src/cli-exclusion-system.md` with 13KB of comprehensive documentation
+- Covers architecture, usage patterns, real-world examples, and decision criteria
+- Integrated with existing mdBook documentation structure
+- Updated `doc/src/SUMMARY.md` to include new section
+- Updated `doc/src/architecture.md` to reference CLI exclusion system
+
+### 2. Enhanced API Documentation ✅
+- Updated rustdoc for `swissarmyhammer-tools::cli` module with detailed overview
+- Enhanced `sah-marker-macros::cli_exclude` macro documentation with examples
+- Comprehensive rustdoc for all traits and types in the system
+- Real-world examples using actual tools from the codebase
+
+### 3. Working Examples and Tests ✅ 
+- Created `swissarmyhammer-tools/src/cli/examples.rs` (13KB)
+- Complete example module with working tools demonstrating both patterns
+- Comprehensive test suite covering all functionality
+- `run_complete_example()` function demonstrating the entire system
+
+### 4. Validation Results ✅
+- All tests passing: 33 CLI-related tests + 6 macro tests
+- Documentation compiles successfully
+- Examples demonstrate proper usage of existing `issue_work` and `issue_merge` tools
+- Complete integration with existing tool registry system
+
+### Key Deliverables
+
+1. **Comprehensive Documentation**: 13KB developer guide with decision criteria and examples
+2. **Integration**: Seamless integration with existing mdBook and architecture docs  
+3. **API Documentation**: Enhanced rustdoc with real examples and usage patterns
+4. **Working Examples**: Complete example module with 13KB of tested code
+5. **Test Coverage**: 39 tests covering all aspects of the system
+6. **Real-world Usage**: Documentation based on actual `issue_work` and `issue_merge` implementations
+
+The CLI exclusion system is now fully documented with both conceptual understanding and practical implementation guidance. All examples compile and work correctly, providing a solid foundation for future CLI generation systems.

@@ -44,6 +44,7 @@
 # Advanced Usage
 
 - [CLI Reference](cli-reference.md)
+- [CLI Exclusion System](cli-exclusion-system.md)
 - [Rust API](rust-api.md)
 - [Plugin Development](plugins.md)
 - [Custom Workflows](custom-workflows.md)
