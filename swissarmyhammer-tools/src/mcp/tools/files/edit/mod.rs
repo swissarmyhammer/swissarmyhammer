@@ -684,7 +684,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("not found in file"));
+        assert!(format!("{error:?}").contains("not found in file"));
 
         // Verify file was not modified
         let unchanged_content = fs::read_to_string(&test_file).unwrap();
@@ -704,7 +704,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        let error_str = format!("{:?}", error);
+        let error_str = format!("{error:?}");
         // The error message from shared_utils says "File not found"
         assert!(
             error_str.contains("File does not exist")
@@ -727,19 +727,19 @@ mod tests {
         let args = create_edit_arguments("", "old", "new", None);
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("file_path cannot be empty"));
+        assert!(format!("{result:?}").contains("file_path cannot be empty"));
 
         // Test empty old_string
         let args = create_edit_arguments(&test_file.to_string_lossy(), "", "new", None);
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("old_string cannot be empty"));
+        assert!(format!("{result:?}").contains("old_string cannot be empty"));
 
         // Test identical old_string and new_string
         let args = create_edit_arguments(&test_file.to_string_lossy(), "same", "same", None);
         let result = tool.execute(args, &context).await;
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("must be different"));
+        assert!(format!("{result:?}").contains("must be different"));
     }
 
     #[tokio::test]
@@ -970,7 +970,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("Invalid arguments"));
+        assert!(format!("{error:?}").contains("Invalid arguments"));
     }
 
     #[tokio::test]
@@ -1024,6 +1024,6 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("not found in file"));
+        assert!(format!("{error:?}").contains("not found in file"));
     }
 }

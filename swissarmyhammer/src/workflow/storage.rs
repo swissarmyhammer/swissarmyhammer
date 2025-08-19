@@ -1132,7 +1132,7 @@ mod tests {
 
         // Create a test workflow file in user workflows directory with a unique name
         let unique_name = format!("user_workflow_test_{}", std::process::id());
-        let workflow_file = user_workflows_dir.join(&format!("{}.md", unique_name));
+        let workflow_file = user_workflows_dir.join(format!("{unique_name}.md"));
         let workflow_content = r"---
 name: User Test Workflow
 description: A user workflow for testing
@@ -1158,10 +1158,10 @@ stateDiagram-v2
         let workflow = workflows
             .iter()
             .find(|w| w.name.as_str() == unique_name)
-            .expect(&format!("Could not find {} in loaded workflows", unique_name));
+            .unwrap_or_else(|| panic!("Could not find {unique_name} in loaded workflows"));
 
         assert_eq!(workflow.name.as_str(), unique_name);
-        
+
         // Verify it's tracked as a User workflow
         assert_eq!(
             resolver.workflow_sources.get(&workflow.name),

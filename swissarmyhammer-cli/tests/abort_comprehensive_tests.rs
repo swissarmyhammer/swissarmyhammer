@@ -246,8 +246,8 @@ fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
         // Read content directly to debug the issue
         let actual_content = std::fs::read_to_string(abort_path)?;
         if actual_content != reason {
-            println!("DEBUG: Expected content: '{}'", reason);
-            println!("DEBUG: Actual content: '{}'", actual_content);
+            println!("DEBUG: Expected content: '{reason}'");
+            println!("DEBUG: Actual content: '{actual_content}'");
             println!("DEBUG: Content length: {}", actual_content.len());
             // Force cleanup and retry once
             cleanup_abort_file();
@@ -256,7 +256,7 @@ fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
             if retry_content == reason {
                 println!("DEBUG: Retry succeeded with correct content");
             } else {
-                println!("DEBUG: Retry failed, content: '{}'", retry_content);
+                println!("DEBUG: Retry failed, content: '{retry_content}'");
             }
         }
         // Use direct assertion with clearer error message
