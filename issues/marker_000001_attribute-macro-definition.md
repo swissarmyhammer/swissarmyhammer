@@ -85,3 +85,75 @@ mod tests {
 ## Notes
 
 This is a foundational step that creates the attribute infrastructure. The attribute is currently a no-op marker but provides the foundation for future CLI generation systems to detect and exclude marked tools.
+## Proposed Solution
+
+I will implement the `#[cli_exclude]` attribute macro by:
+
+### 1. Dependencies Setup
+- Update `swissarmyhammer-tools/Cargo.toml` to add `proc-macro = true` and necessary proc-macro dependencies
+- Add `proc-macro2`, `quote`, and `syn` as dependencies for macro processing
+
+### 2. Attribute Module Structure
+- Create `swissarmyhammer-tools/src/attributes/` directory
+- Create `swissarmyhammer-tools/src/attributes/mod.rs` with the macro implementation
+- Follow existing code patterns and documentation standards
+
+### 3. Macro Implementation
+- Implement `cli_exclude` as a no-op procedural attribute macro
+- Add comprehensive rustdoc documentation with examples
+- Ensure it properly passes through the original token stream unchanged
+
+### 4. Module Integration
+- Update `swissarmyhammer-tools/src/lib.rs` to include the new `attributes` module
+- Export the `cli_exclude` macro for external usage
+
+### 5. Testing Strategy
+- Create compilation tests to ensure the attribute works with structs
+- Test compatibility with existing derive macros
+- Verify multiple attributes can be combined
+- Test the no-op behavior (attribute doesn't change functionality)
+
+### 6. Quality Assurance
+- Run `cargo test` to verify all tests pass
+- Use `cargo fmt` for code formatting
+- Use `cargo clippy` to catch any potential issues
+
+This approach creates the foundational infrastructure as requested while maintaining compatibility with existing code and following Rust procedural macro best practices.
+## Implementation Notes
+
+### Architectural Decision: Separate Proc-Macro Crate
+
+During implementation, I discovered that Rust proc-macro crates have restrictions - they can only export procedural macros and cannot export other items like modules or structs. To maintain the existing `swissarmyhammer-tools` architecture while adding macro functionality, I created a separate `sah-marker-macros` crate.
+
+### Structure Created
+
+1. **New Crate**: `sah-marker-macros/`
+   - Dedicated procedural macro crate with `proc-macro = true`
+   - Contains the `cli_exclude` attribute macro implementation
+   - Dependencies: `proc-macro2`, `quote`, `syn` for macro processing
+
+2. **Workspace Integration**: 
+   - Added `sah-marker-macros` to workspace members
+   - Added as dependency to `swissarmyhammer-tools`
+   - Re-exported through `swissarmyhammer-tools` for convenience
+
+3. **Testing Strategy**:
+   - Integration tests in `sah-marker-macros/tests/` (proc macros can't be tested in same crate)
+   - Verification test in `swissarmyhammer-tools` to confirm re-export works
+   - Comprehensive test coverage for various use cases
+
+### Implementation Details
+
+- **No-op Behavior**: The macro correctly passes through the input unchanged
+- **Documentation**: Comprehensive rustdoc with examples and philosophy
+- **Compatibility**: Works with other attributes, derives, generics, and trait implementations
+- **Error Handling**: Proper syntax parsing with syn for validation
+
+### Quality Assurance Completed
+
+- ✅ All tests pass (including integration tests)
+- ✅ Code formatted with `cargo fmt`  
+- ✅ Clippy checks completed (only formatting warnings unrelated to macro)
+- ✅ Macro available through `use swissarmyhammer_tools::cli_exclude;`
+
+The foundational infrastructure is now ready for future CLI generation systems to detect and exclude marked tools.

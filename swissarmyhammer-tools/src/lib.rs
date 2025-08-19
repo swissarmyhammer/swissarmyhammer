@@ -43,6 +43,8 @@ pub mod mcp;
 #[cfg(test)]
 pub mod test_utils;
 
+
+
 // Re-export key types for convenience
 pub use mcp::McpServer;
 pub use mcp::{
@@ -51,6 +53,9 @@ pub use mcp::{
     register_web_search_tools,
 };
 pub use mcp::{ToolContext, ToolRegistry};
+
+// Re-export attribute macros from separate proc-macro crate
+pub use sah_marker_macros::cli_exclude;
 
 /// Version of this crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
