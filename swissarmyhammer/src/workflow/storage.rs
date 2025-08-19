@@ -1211,6 +1211,7 @@ stateDiagram-v2
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_workflow_resolver_precedence() {
         use std::fs;
 

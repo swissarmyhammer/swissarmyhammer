@@ -109,6 +109,7 @@ async fn test_transition_to_invalid_state() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_max_transition_limit() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1559,6 +1560,7 @@ async fn test_say_hello_workflow() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1611,6 +1613,7 @@ async fn test_abort_file_detection() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection_with_read_error() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1652,6 +1655,7 @@ async fn test_abort_file_detection_with_read_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection_during_multiple_state_transitions() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1698,6 +1702,7 @@ async fn test_abort_file_detection_during_multiple_state_transitions() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection_with_unicode_reason() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1738,6 +1743,7 @@ async fn test_abort_file_detection_with_unicode_reason() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection_with_large_reason() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1778,6 +1784,7 @@ async fn test_abort_file_detection_with_large_reason() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection_with_newlines() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
@@ -1877,6 +1884,7 @@ async fn test_abort_file_performance_impact() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_abort_file_detection_zero_transitions_limit() {
     let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();

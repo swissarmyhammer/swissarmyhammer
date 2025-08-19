@@ -523,6 +523,9 @@ mod tests {
         // Create the .swissarmyhammer directory
         std::fs::create_dir_all(".swissarmyhammer").unwrap();
 
+        // Create the .swissarmyhammer directory if it doesn't exist
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+
         // Create abort file
         std::fs::write(abort_path_str, "test reason").unwrap();
         assert!(Path::new(abort_path_str).exists());
