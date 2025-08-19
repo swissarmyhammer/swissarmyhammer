@@ -75,6 +75,7 @@ Command-line interface providing:
 Model Context Protocol server providing:
 
 - **Tool Registry**: Dynamic tool registration and discovery
+- **CLI Exclusion System**: Trait-based marking for workflow-only tools
 - **Request Handling**: Structured request/response processing
 - **Error Management**: Comprehensive error reporting
 - **Type Safety**: Full JSON schema validation
@@ -211,10 +212,13 @@ SwissArmyHammer integrates with Claude Code through the Model Context Protocol:
 
 **Available Tools:**
 - `issue_*` - Issue management tools (issue_create, issue_list, issue_work, etc.)
+  - Note: Some tools like `issue_work` and `issue_merge` are marked with `#[cli_exclude]` for MCP-only usage
 - `memo_*` - Memoranda tools (memo_create, memo_list, memo_get, etc.)
 - `search_*` - Semantic search tools (search_index, search_query)
 - `outline_*` - Code outline tools (outline_generate)
 - `abort_*` - Workflow control tools (abort_create)
+
+The system includes a [CLI Exclusion System](cli-exclusion-system.md) that distinguishes between user-facing tools and workflow orchestration tools designed specifically for MCP protocol interactions.
 
 ### Git Integration
 
