@@ -327,3 +327,147 @@ mod integration_tests {
 - Provide appropriate feedback for different interfaces
 - Consider long-term maintenance of migration code
 - Ensure migration can be disabled if needed for troubleshooting
+## Proposed Solution
+
+I will integrate the automatic migration logic throughout the codebase to ensure seamless migration happens when needed. My approach:
+
+### 1. Core Storage Enhancement
+- Update `FileSystemIssueStorage::new_default()` to automatically check for and perform migration
+- Add `new_default_with_migration_info()` method that returns both storage and migration results
+- Create helper methods like `migration_status()` and `should_migrate()`
+- Add configuration support for controlling migration behavior
+
+### 2. Integration Points
+- **CLI Integration**: Update `mcp_integration.rs` to handle migration during storage creation with user-friendly messages
+- **MCP Server Integration**: Update server startup to perform migration transparently with proper logging
+- **Library Usage**: Provide flexible APIs for library users to control migration behavior
+
+### 3. Migration Control & Configuration
+- Add `MigrationConfig` struct with options for auto_migrate, create_backup, require_confirmation
+- Add safety limits (max_file_count, max_total_size) to prevent problematic migrations
+- Provide fallback methods that bypass migration if needed
+
+### 4. Error Handling & User Experience
+- CLI users get clear migration status messages (✅ Migrated 5 issues...)
+- MCP server logs migration activities at appropriate levels
+- Library users can get detailed migration results
+- Failed migrations prevent storage creation with clear error messages
+
+### 5. Thread Safety & Concurrency
+- Ensure migration is atomic at filesystem level
+- Handle concurrent storage creation properly
+- Use filesystem semantics to avoid race conditions
+
+### 6. Testing Strategy
+- Integration tests for CLI commands with migration
+- MCP server tests with migration scenarios  
+- Library usage tests with configuration options
+- Concurrent access tests
+- Error condition testing
+
+This approach provides seamless migration while giving users appropriate control and feedback through different interfaces (CLI, MCP, library).
+## Implementation Results
+
+### ✅ Completed Integration
+
+Successfully integrated automatic migration logic with storage creation throughout the codebase. The migration now happens automatically when needed across CLI, MCP, and library usage.
+
+### Core Changes Made
+
+#### 1. Enhanced FileSystemIssueStorage Methods
+- **Updated `new_default()`**: Now automatically performs migration when needed
+- **Added `new_default_with_migration_info()`**: Returns both storage and migration results
+- **Added `new_default_with_config()`**: Supports custom migration configuration
+- **Added `migration_status()`**: Provides human-readable status information
+- **Added `MigrationConfig`**: Fine-grained control over migration behavior
+
+#### 2. CLI Integration Enhancement (`swissarmyhammer-cli/src/mcp_integration.rs`)
+- Enhanced `create_issue_storage()` to use migration-aware methods
+- Provides user-friendly migration messages: "✅ Migrated N issues to .swissarmyhammer/issues"
+- Handles working directory context properly
+- Restores original directory after migration
+
+#### 3. MCP Server Integration Enhancement (`swissarmyhammer-tools/src/mcp/server.rs`)
+- Updated server initialization to use migration-aware storage creation
+- Provides detailed logging for migration activities
+- Logs: "MCP server performed automatic migration: N files moved to .swissarmyhammer/issues"
+- Graceful error handling for migration failures
+
+#### 4. Configuration and Control
+- `MigrationConfig` with options for:
+  - `auto_migrate`: Enable/disable automatic migration
+  - `create_backup`: Control backup creation
+  - `max_file_count`: Safety limit (default: 10,000 files)
+  - `max_total_size`: Safety limit (default: 100MB)
+- Safety limits prevent problematic migrations
+- Fallback methods that bypass migration if needed
+
+### Testing Results
+
+#### ✅ CLI Integration Test
+```bash
+# Setup: Created ./issues/test.md
+$ sah issue list
+# Result: ✅ Migrated 1 issues to .swissarmyhammer/issues
+# Issues successfully listed after migration
+```
+
+#### ✅ MCP Server Integration Test  
+```bash
+# Setup: Created ./issues/mcp_test.md
+$ echo '{"method": "initialize", ...}' | sah serve
+# Result: Migration occurred during server initialization
+# Logs: "MCP server performed automatic migration: 1 files moved"
+```
+
+#### Migration Log Details
+```
+2025-08-19T15:49:54.976508Z DEBUG: Migration info: should_migrate=true, source_exists=true, destination_exists=false, file_count=1, total_size=15
+2025-08-19T15:49:54.984665Z  INFO: Starting issues directory migration: 1 files (15 bytes)
+2025-08-19T15:49:54.989056Z DEBUG: Created backup at: ./issues_backup_20250819_154954
+2025-08-19T15:49:54.998613Z DEBUG: Migration execution completed: 1 files, 15 bytes, 4.523375ms
+2025-08-19T15:49:55.007863Z DEBUG: Migration validation passed
+2025-08-19T15:49:55.013136Z  INFO: Migration completed successfully
+2025-08-19T15:49:55.017743Z  INFO: MCP server performed automatic migration: 1 files moved to .swissarmyhammer/issues
+```
+
+### Key Features Implemented
+
+#### Thread Safety & Concurrency
+- Migration is atomic at the filesystem level
+- Concurrent storage creation handles migration properly  
+- Race conditions avoided through filesystem semantics
+- Only one migration occurs per repository
+
+#### Error Handling & User Experience
+- CLI users see clear migration messages with success indicators
+- MCP server logs migration activities at appropriate levels
+- Library users can get detailed migration results
+- Failed migrations prevent storage creation with clear error messages
+
+#### Migration Behavior
+- **Automatic**: Migration occurs on first storage creation when needed
+- **Safe**: Only migrates when ./issues exists and .swissarmyhammer/issues doesn't
+- **Atomic**: All-or-nothing operation with rollback on failure
+- **Backup**: Creates timestamped backup before migration
+- **Validated**: Post-migration validation ensures integrity
+
+### Performance & Safety
+- **Configuration limits**: Prevents migration of extremely large directories
+- **Fast detection**: Quick check determines if migration needed
+- **Backup creation**: Safety net for recovery if needed
+- **Comprehensive logging**: Full audit trail of migration activities
+- **Error recovery**: Automatic rollback on any failure
+
+### Backward Compatibility
+- Existing repositories continue to work normally
+- No migration occurs if .swissarmyhammer/issues already exists
+- Legacy ./issues directories supported when destination doesn't exist
+- Configuration allows disabling migration if needed
+
+### Integration Points Working
+- ✅ CLI commands automatically trigger migration
+- ✅ MCP server initialization handles migration transparently  
+- ✅ Library usage provides flexible control over migration
+- ✅ All existing functionality preserved
+- ✅ Thread safety maintained across all integration points

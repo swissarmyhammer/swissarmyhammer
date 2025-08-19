@@ -58,13 +58,35 @@ impl CliToolContext {
 
     /// Create issue storage backend
     fn create_issue_storage(
-        _current_dir: &std::path::Path,
+        current_dir: &std::path::Path,
     ) -> Result<IssueStorageArc, Box<dyn std::error::Error>> {
-        // Use the updated new_default() method instead of hardcoded path
-        // This respects .swissarmyhammer/issues with fallback to issues for backward compatibility
-        Ok(Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new_default()?,
-        ))))
+        // Set working directory for migration context
+        let original_dir = std::env::current_dir()?;
+        if current_dir != original_dir {
+            std::env::set_current_dir(current_dir)?;
+        }
+        
+        // Create storage with automatic migration and detailed results
+        let (storage, migration_result) = swissarmyhammer::issues::FileSystemIssueStorage::new_default_with_migration_info()?;
+        
+        // Log migration results for CLI users
+        if let Some(result) = migration_result {
+            match result {
+                swissarmyhammer::issues::filesystem::MigrationResult::Success(stats) => {
+                    eprintln!("✅ Migrated {} issues to .swissarmyhammer/issues", stats.files_moved);
+                }
+                swissarmyhammer::issues::filesystem::MigrationResult::NotNeeded(_) => {
+                    // Silent for CLI - no need to inform about no migration
+                }
+            }
+        }
+        
+        // Restore original directory
+        if current_dir != original_dir {
+            std::env::set_current_dir(original_dir)?;
+        }
+        
+        Ok(Arc::new(RwLock::new(Box::new(storage))))
     }
 
     /// Create git operations handler

@@ -2,6 +2,7 @@
 target
 **/*.rs.bk
 *.rcgu.o
+rust_out
 
 # Editor
 *.swp

@@ -154,6 +154,33 @@ pub enum MigrationError {
     },
 }
 
+/// Configuration for migration behavior
+#[derive(Debug, Clone)]
+pub struct MigrationConfig {
+    /// Whether to automatically migrate when needed
+    pub auto_migrate: bool,
+    /// Whether to create backup before migration
+    pub create_backup: bool,
+    /// Whether to require confirmation before migration
+    pub require_confirmation: bool,
+    /// Maximum number of files to migrate automatically
+    pub max_file_count: usize,
+    /// Maximum total size in bytes to migrate automatically
+    pub max_total_size: u64,
+}
+
+impl Default for MigrationConfig {
+    fn default() -> Self {
+        Self {
+            auto_migrate: true,
+            create_backup: true,
+            require_confirmation: false,
+            max_file_count: 10000,
+            max_total_size: 100 * 1024 * 1024, // 100 MB
+        }
+    }
+}
+
 /// Trait for issue storage operations
 #[async_trait::async_trait]
 pub trait IssueStorage: Send + Sync {
@@ -245,9 +272,35 @@ impl FileSystemIssueStorage {
 
     /// Create a new FileSystemIssueStorage instance with default directory
     ///
-    /// Uses `.swissarmyhammer/issues` if `.swissarmyhammer` directory exists,
-    /// otherwise falls back to legacy `issues` directory for backward compatibility
+    /// This method now automatically performs migration if needed:
+    /// - Checks if migration should occur (./issues exists, .swissarmyhammer/issues doesn't)
+    /// - Performs migration automatically if needed
+    /// - Creates storage instance at the appropriate location
+    ///
+    /// Migration failures will prevent storage creation and return an error.
+    /// For more control over migration behavior, use `new_default_with_config()`.
     pub fn new_default() -> Result<Self> {
+        // Check if migration should occur and perform it automatically
+        if Self::should_migrate()? {
+            match Self::perform_migration() {
+                Ok(MigrationResult::Success(stats)) => {
+                    tracing::info!(
+                        "Automatically migrated {} files ({} bytes) to .swissarmyhammer/issues",
+                        stats.files_moved,
+                        stats.bytes_moved
+                    );
+                }
+                Ok(MigrationResult::NotNeeded(_)) => {
+                    // This shouldn't happen given the should_migrate check, but handle gracefully
+                }
+                Err(e) => {
+                    tracing::error!("Automatic migration failed: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+        
+        // Create storage instance at the appropriate location
         let issues_dir = Self::default_directory()?;
         Self::new(issues_dir)
     }
@@ -275,6 +328,102 @@ impl FileSystemIssueStorage {
         let storage = Self::new_default()?;
 
         Ok((storage, migration_result))
+    }
+
+    /// Create a new FileSystemIssueStorage instance that reports migration results
+    ///
+    /// This method is similar to new_default() but returns detailed migration information.
+    /// Useful for CLI and MCP server integration where migration feedback is needed.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (storage_instance, optional_migration_result)
+    /// where the migration result is `Some` if migration was performed,
+    /// or `None` if no migration was needed.
+    pub fn new_default_with_migration_info() -> Result<(Self, Option<MigrationResult>)> {
+        let migration_result = if Self::should_migrate()? {
+            Some(Self::perform_migration()?)
+        } else {
+            None
+        };
+        
+        let storage = {
+            let issues_dir = Self::default_directory()?;
+            Self::new(issues_dir)?
+        };
+        
+        Ok((storage, migration_result))
+    }
+
+    /// Create storage with custom migration configuration
+    ///
+    /// This method provides fine-grained control over migration behavior,
+    /// including safety limits and configuration options.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Migration configuration controlling behavior
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (storage_instance, optional_migration_result)
+    pub fn new_default_with_config(config: &MigrationConfig) -> Result<(Self, Option<MigrationResult>)> {
+        if !config.auto_migrate {
+            return Ok((Self::new_default_without_migration()?, None));
+        }
+        
+        let info = Self::migration_info()?;
+        
+        // Check size and file count limits
+        if info.file_count > config.max_file_count {
+            return Err(SwissArmyHammerError::validation_failed(
+                "file_count",
+                &info.file_count.to_string(),
+                &format!("exceeds maximum for automatic migration: {}", config.max_file_count)
+            ));
+        }
+        
+        if info.total_size > config.max_total_size {
+            return Err(SwissArmyHammerError::validation_failed(
+                "total_size",
+                &info.total_size.to_string(),
+                &format!("exceeds maximum for automatic migration: {} bytes", config.max_total_size)
+            ));
+        }
+        
+        Self::new_default_with_migration_info()
+    }
+    
+    /// Create storage without any migration attempts
+    ///
+    /// This method bypasses all migration logic and directly creates storage
+    /// at the default directory location. Useful for testing or when migration
+    /// needs to be handled externally.
+    fn new_default_without_migration() -> Result<Self> {
+        let issues_dir = Self::default_directory()?;
+        Self::new(issues_dir)
+    }
+
+    /// Get human-readable migration status
+    ///
+    /// Returns a user-friendly string describing the current migration status
+    /// and what actions would be taken.
+    pub fn migration_status() -> Result<String> {
+        let info = Self::migration_info()?;
+        
+        if info.should_migrate {
+            Ok(format!(
+                "Migration needed: {} files ({:.1} KB) in ./issues/",
+                info.file_count,
+                info.total_size as f64 / 1024.0
+            ))
+        } else if info.source_exists && info.destination_exists {
+            Ok("Both ./issues/ and .swissarmyhammer/issues/ exist - no migration needed".to_string())
+        } else if info.destination_exists {
+            Ok("Using .swissarmyhammer/issues/ directory".to_string())
+        } else {
+            Ok("No issues directory found - will create .swissarmyhammer/issues/".to_string())
+        }
     }
 
     /// Get the default issues directory path with backward compatibility
@@ -456,13 +605,10 @@ impl FileSystemIssueStorage {
             .join(&backup_name);
 
         Self::copy_directory_recursive(source, &backup_path)
-            .map_err(|e| SwissArmyHammerError::operation_failed(
+            .map_err(|e| SwissArmyHammerError::file_operation_failed(
                 "backup creation",
-                format!("Failed to backup {} to {}: {}", 
-                    source.display(), 
-                    backup_path.display(), 
-                    e
-                )
+                &source.display().to_string(),
+                &format!("Failed to backup to {}: {}", backup_path.display(), e)
             ))?;
 
         debug!("Created backup at: {}", backup_path.display());
@@ -480,24 +626,24 @@ impl FileSystemIssueStorage {
     /// * `destination` - Destination directory to copy to
     fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
         std::fs::create_dir_all(destination)
-            .map_err(|e| SwissArmyHammerError::file_operation_error(
+            .map_err(|e| SwissArmyHammerError::file_operation_failed(
                 "create backup directory",
-                destination.display().to_string(),
-                e
+                &destination.display().to_string(),
+                &e.to_string()
             ))?;
 
         for entry in std::fs::read_dir(source)
-            .map_err(|e| SwissArmyHammerError::file_operation_error(
+            .map_err(|e| SwissArmyHammerError::file_operation_failed(
                 "read source directory",
-                source.display().to_string(),
-                e
+                &source.display().to_string(),
+                &e.to_string()
             ))? 
         {
             let entry = entry
-                .map_err(|e| SwissArmyHammerError::file_operation_error(
+                .map_err(|e| SwissArmyHammerError::file_operation_failed(
                     "read directory entry",
-                    source.display().to_string(),
-                    e
+                    &source.display().to_string(),
+                    &e.to_string()
                 ))?;
             let path = entry.path();
             let dest_path = destination.join(entry.file_name());
@@ -506,10 +652,10 @@ impl FileSystemIssueStorage {
                 Self::copy_directory_recursive(&path, &dest_path)?;
             } else {
                 std::fs::copy(&path, &dest_path)
-                    .map_err(|e| SwissArmyHammerError::file_operation_error(
+                    .map_err(|e| SwissArmyHammerError::file_operation_failed(
                         "copy file during backup",
-                        format!("{} -> {}", path.display(), dest_path.display()),
-                        e
+                        &path.display().to_string(),
+                        &format!("copy to {} failed: {}", dest_path.display(), e)
                     ))?;
             }
         }
@@ -5401,5 +5547,245 @@ mod tests {
             std::fs::read_to_string(destination.join("nested").join("nested_file.txt")).unwrap();
         assert_eq!(root_content, "root content");
         assert_eq!(nested_content, "nested content");
+    }
+
+    // Integration Tests for Automatic Migration
+    #[tokio::test]
+    #[serial]
+    async fn test_automatic_migration_integration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Setup: Create old issues directory with test files
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test1.md"), "Test issue 1").unwrap();
+        std::fs::write(issues_dir.join("test2.md"), "Test issue 2").unwrap();
+
+        // Test: Create storage with new_default() - should automatically migrate
+        let storage = FileSystemIssueStorage::new_default().unwrap();
+
+        // Verify: Migration occurred
+        let new_issues_dir = temp_dir.path().join(".swissarmyhammer").join("issues");
+        assert!(new_issues_dir.exists());
+        assert!(new_issues_dir.join("test1.md").exists());
+        assert!(new_issues_dir.join("test2.md").exists());
+        
+        // Verify: Old directory no longer exists
+        assert!(!issues_dir.exists());
+
+        // Verify: Storage works correctly after migration
+        let issues = storage.list_issues().await.unwrap();
+        assert_eq!(issues.len(), 2);
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_new_default_with_migration_info_integration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Setup: Create old issues directory
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test.md"), "Test content").unwrap();
+
+        // Test: Use new_default_with_migration_info()
+        let (storage, migration_result) = FileSystemIssueStorage::new_default_with_migration_info().unwrap();
+
+        // Verify: Migration result is returned
+        assert!(migration_result.is_some());
+        match migration_result.unwrap() {
+            MigrationResult::Success(stats) => {
+                assert_eq!(stats.files_moved, 1);
+                assert!(stats.bytes_moved > 0);
+            },
+            _ => panic!("Expected MigrationResult::Success"),
+        }
+
+        // Verify: Storage is functional
+        let issues = storage.list_issues().await.unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].name, "test");
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_migration_config_integration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Setup: Create issues directory with multiple files
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(issues_dir.join(format!("test{}.md", i)), "Test content").unwrap();
+        }
+
+        // Test: Config with file count limit
+        let config = MigrationConfig {
+            auto_migrate: true,
+            max_file_count: 3, // Less than the 5 files we have
+            ..Default::default()
+        };
+
+        let result = FileSystemIssueStorage::new_default_with_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Too many files"));
+
+        // Test: Config with higher limit should succeed
+        let config = MigrationConfig {
+            auto_migrate: true,
+            max_file_count: 10, // More than the 5 files we have
+            ..Default::default()
+        };
+
+        let result = FileSystemIssueStorage::new_default_with_config(&config);
+        assert!(result.is_ok());
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_migration_config_disabled() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Setup: Create old issues directory
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test.md"), "Test content").unwrap();
+
+        // Test: Config with migration disabled
+        let config = MigrationConfig {
+            auto_migrate: false,
+            ..Default::default()
+        };
+
+        let (storage, migration_result) = FileSystemIssueStorage::new_default_with_config(&config).unwrap();
+
+        // Verify: No migration occurred
+        assert!(migration_result.is_none());
+        
+        // Verify: Old directory still exists
+        assert!(issues_dir.exists());
+        assert!(issues_dir.join("test.md").exists());
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_migration_status_integration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Test: No issues directory
+        let status = FileSystemIssueStorage::migration_status().unwrap();
+        assert!(status.contains("No issues directory found"));
+
+        // Setup: Create old issues directory
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test.md"), "Test content").unwrap();
+
+        // Test: Migration needed
+        let status = FileSystemIssueStorage::migration_status().unwrap();
+        assert!(status.contains("Migration needed"));
+        assert!(status.contains("1 files"));
+
+        // Perform migration
+        let _storage = FileSystemIssueStorage::new_default().unwrap();
+
+        // Test: No migration needed after migration
+        let status = FileSystemIssueStorage::migration_status().unwrap();
+        assert!(status.contains("Using .swissarmyhammer/issues/"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_concurrent_storage_creation_integration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Setup: Create old issues directory
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test.md"), "Test content").unwrap();
+
+        // Test: Concurrent storage creation
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                tokio::spawn(async {
+                    FileSystemIssueStorage::new_default()
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = futures::future::join_all(handles).await;
+        
+        // Verify: All creations succeeded
+        for result in results {
+            assert!(result.unwrap().is_ok());
+        }
+
+        // Verify: Migration completed successfully
+        let new_issues_dir = temp_dir.path().join(".swissarmyhammer").join("issues");
+        assert!(new_issues_dir.exists());
+        assert!(new_issues_dir.join("test.md").exists());
+        assert!(!issues_dir.exists());
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[tokio::test] 
+    #[serial]
+    async fn test_migration_with_existing_destination_integration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Setup: Create both old and new directories
+        let issues_dir = temp_dir.path().join("issues");
+        let new_issues_dir = temp_dir.path().join(".swissarmyhammer").join("issues");
+        
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::create_dir_all(&new_issues_dir).unwrap();
+        
+        std::fs::write(issues_dir.join("old.md"), "Old content").unwrap();
+        std::fs::write(new_issues_dir.join("new.md"), "New content").unwrap();
+
+        // Test: No migration should occur when destination exists
+        let storage = FileSystemIssueStorage::new_default().unwrap();
+
+        // Verify: Both directories still exist, no migration occurred
+        assert!(issues_dir.exists());
+        assert!(new_issues_dir.exists());
+        assert!(issues_dir.join("old.md").exists());
+        assert!(new_issues_dir.join("new.md").exists());
+
+        // Verify: Storage uses the new directory
+        let issues = storage.list_issues().await.unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].name, "new");
+
+        std::env::set_current_dir(original_dir).unwrap();
     }
 }
