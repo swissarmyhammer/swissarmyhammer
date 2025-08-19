@@ -43,8 +43,6 @@ pub mod mcp;
 #[cfg(test)]
 pub mod test_utils;
 
-
-
 // Re-export key types for convenience
 pub use mcp::McpServer;
 pub use mcp::{

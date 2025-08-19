@@ -69,7 +69,7 @@ fn is_likely_binary_file(path: &Path) -> bool {
 /// Check if file content contains binary data by examining a sample
 fn is_binary_content(sample: &[u8]) -> bool {
     // Check for null bytes which are common in binary files
-    sample.iter().any(|&byte| byte == 0) ||
+    sample.contains(&0) ||
     // Check if content is valid UTF-8
     std::str::from_utf8(sample).is_err()
 }
@@ -233,7 +233,7 @@ impl GrepFileTool {
 
         // Execute ripgrep command
         let output = cmd.output().map_err(|e| {
-            McpError::internal_error(format!("Failed to execute ripgrep: {}", e), None)
+            McpError::internal_error(format!("Failed to execute ripgrep: {e}"), None)
         })?;
 
         let search_time_ms = start_time.elapsed().as_millis() as u64;
@@ -253,7 +253,7 @@ impl GrepFileTool {
                 });
             } else {
                 return Err(McpError::invalid_request(
-                    format!("Ripgrep search failed: {}", stderr),
+                    format!("Ripgrep search failed: {stderr}"),
                     None,
                 ));
             }
@@ -381,9 +381,7 @@ impl GrepFileTool {
         let regex = RegexBuilder::new(&request.pattern)
             .case_insensitive(request.case_insensitive.unwrap_or(false))
             .build()
-            .map_err(|e| {
-                McpError::invalid_request(format!("Invalid regex pattern: {}", e), None)
-            })?;
+            .map_err(|e| McpError::invalid_request(format!("Invalid regex pattern: {e}"), None))?;
 
         let output_mode = request.output_mode.as_deref().unwrap_or("content");
         let context_lines = request.context_lines.unwrap_or(0);
@@ -417,7 +415,7 @@ impl GrepFileTool {
             if let Some(ref glob_pattern) = request.glob {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                     let pattern = glob::Pattern::new(glob_pattern).map_err(|e| {
-                        McpError::invalid_request(format!("Invalid glob pattern: {}", e), None)
+                        McpError::invalid_request(format!("Invalid glob pattern: {e}"), None)
                     })?;
                     if !pattern.matches(filename) {
                         continue;
@@ -581,7 +579,7 @@ impl McpTool for GrepFileTool {
                 validated_path
             }
             None => std::env::current_dir().map_err(|e| {
-                McpError::internal_error(format!("Failed to get current directory: {}", e), None)
+                McpError::internal_error(format!("Failed to get current directory: {e}"), None)
             })?,
         };
 
@@ -627,7 +625,7 @@ impl GrepFileTool {
             ),
             "files_with_matches" => {
                 if results.files_searched == 0 {
-                    format!("No files found with matches{}", engine_info)
+                    format!("No files found with matches{engine_info}")
                 } else {
                     format!(
                         "Files with matches ({}){}",
@@ -637,7 +635,7 @@ impl GrepFileTool {
             }
             "content" => {
                 if results.total_matches == 0 {
-                    format!("No matches found{}", engine_info)
+                    format!("No matches found{engine_info}")
                 } else if results.matches.is_empty() {
                     // Fallback case - we don't have detailed match info
                     format!(

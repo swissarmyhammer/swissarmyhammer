@@ -130,7 +130,7 @@ pub fn file_exists(path: &Path) -> Result<bool, McpError> {
     match path.try_exists() {
         Ok(exists) => Ok(exists),
         Err(e) => Err(McpError::internal_error(
-            format!("Failed to check file existence: {}", e),
+            format!("Failed to check file existence: {e}"),
             None,
         )),
     }
@@ -150,7 +150,7 @@ pub fn file_exists(path: &Path) -> Result<bool, McpError> {
 /// * `Result<std::fs::Metadata, McpError>` - File metadata or error
 pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
     std::fs::metadata(path)
-        .map_err(|e| McpError::invalid_request(format!("Failed to get file metadata: {}", e), None))
+        .map_err(|e| McpError::invalid_request(format!("Failed to get file metadata: {e}"), None))
 }
 
 /// Ensure a directory exists, creating it if necessary
@@ -168,7 +168,7 @@ pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
 pub fn ensure_directory_exists(dir_path: &Path) -> Result<(), McpError> {
     if !dir_path.exists() {
         std::fs::create_dir_all(dir_path).map_err(|e| {
-            McpError::internal_error(format!("Failed to create directory: {}", e), None)
+            McpError::internal_error(format!("Failed to create directory: {e}"), None)
         })?;
     }
     Ok(())
@@ -424,14 +424,14 @@ impl FilePathValidator {
         workspace_root: &Path,
     ) -> Result<(), McpError> {
         // Canonicalize both paths for accurate comparison
-        let canonical_workspace = workspace_root.canonicalize().map_err(|e| {
-            McpError::invalid_request(format!("Invalid workspace root: {}", e), None)
-        })?;
+        let canonical_workspace = workspace_root
+            .canonicalize()
+            .map_err(|e| McpError::invalid_request(format!("Invalid workspace root: {e}"), None))?;
 
         // For non-existent paths, check the deepest existing parent
         let path_to_check = if path.exists() {
             path.canonicalize().map_err(|e| {
-                McpError::invalid_request(format!("Failed to canonicalize path: {}", e), None)
+                McpError::invalid_request(format!("Failed to canonicalize path: {e}"), None)
             })?
         } else {
             // Find the deepest existing parent directory
@@ -442,7 +442,7 @@ impl FilePathValidator {
                 if parent.exists() {
                     let canonical_parent = parent.canonicalize().map_err(|e| {
                         McpError::invalid_request(
-                            format!("Failed to canonicalize parent directory: {}", e),
+                            format!("Failed to canonicalize parent directory: {e}"),
                             None,
                         )
                     })?;
@@ -493,7 +493,7 @@ impl FilePathValidator {
         for pattern in &self.blocked_patterns {
             if path.contains(pattern) {
                 return Err(McpError::invalid_request(
-                    format!("Path contains blocked pattern '{}': {}", pattern, path),
+                    format!("Path contains blocked pattern '{pattern}': {path}"),
                     None,
                 ));
             }
@@ -524,7 +524,7 @@ impl FilePathValidator {
     /// Securely resolves symlinks while maintaining workspace boundaries
     fn resolve_symlink_securely(&self, path: &Path) -> Result<PathBuf, McpError> {
         let resolved = path.canonicalize().map_err(|e| {
-            McpError::invalid_request(format!("Failed to resolve symlink: {}", e), None)
+            McpError::invalid_request(format!("Failed to resolve symlink: {e}"), None)
         })?;
 
         // Re-check workspace boundaries after symlink resolution
@@ -790,7 +790,7 @@ impl SecureFileAccess {
             let matches: Vec<_> = content.matches(old_string).collect();
             if matches.is_empty() {
                 return Err(McpError::invalid_request(
-                    format!("String '{}' not found in file", old_string),
+                    format!("String '{old_string}' not found in file"),
                     None,
                 ));
             }
