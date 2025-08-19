@@ -2,6 +2,7 @@
 //!
 //! This module provides the WorkIssueTool for switching to work on a specific issue.
 
+use crate::cli::CliExclusionMarker;
 use crate::mcp::responses::create_success_response;
 use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
@@ -12,8 +13,23 @@ use rmcp::Error as McpError;
 use swissarmyhammer::common::create_abort_file_current_dir;
 
 /// Tool for switching to work on an issue
+///
+/// This tool is designed for MCP workflow state transitions and should not
+/// be exposed as a CLI command since it requires specific MCP context and
+/// uses MCP-specific error handling patterns like abort files.
+#[sah_marker_macros::cli_exclude]
 #[derive(Default)]
 pub struct WorkIssueTool;
+
+impl CliExclusionMarker for WorkIssueTool {
+    fn is_cli_excluded(&self) -> bool {
+        true
+    }
+
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        Some("MCP workflow state transition tool - requires MCP context and uses abort file patterns")
+    }
+}
 
 impl WorkIssueTool {
     /// Creates a new instance of the WorkIssueTool
@@ -114,6 +130,10 @@ impl McpTool for WorkIssueTool {
                 None,
             ))
         }
+    }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
     }
 }
 

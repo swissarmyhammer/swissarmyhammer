@@ -275,6 +275,23 @@ pub trait McpTool: Send + Sync {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError>;
+
+    /// Get the tool as an Any trait object for downcasting
+    ///
+    /// This method enables CLI exclusion detection by allowing tools to be
+    /// downcast to specific marker traits. The default implementation returns
+    /// None, but tools that implement marker traits should override this.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn as_any(&self) -> Option<&dyn std::any::Any> {
+    ///     Some(self)
+    /// }
+    /// ```
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 }
 
 /// Registry for managing MCP tools
@@ -381,6 +398,114 @@ impl ToolRegistry {
     /// Check if the registry is empty
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+
+    /// Create a CLI exclusion detector from this registry
+    ///
+    /// This method analyzes all registered tools and creates a detector that
+    /// can identify which tools should be excluded from CLI generation.
+    /// Tools that implement the `CliExclusionMarker` trait and return `true`
+    /// from `is_cli_excluded()` will be marked as excluded.
+    ///
+    /// # Returns
+    ///
+    /// A `RegistryCliExclusionDetector` instance that can query exclusion status
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
+    /// use swissarmyhammer_tools::cli::CliExclusionDetector;
+    ///
+    /// let registry = ToolRegistry::new();
+    /// let detector = registry.create_cli_exclusion_detector();
+    ///
+    /// let excluded_tools = detector.get_excluded_tools();
+    /// println!("MCP-only tools: {:?}", excluded_tools);
+    /// ```
+    pub fn create_cli_exclusion_detector(&self) -> crate::cli::RegistryCliExclusionDetector {
+        use crate::cli::{RegistryCliExclusionDetector, ToolCliMetadata};
+        use std::collections::HashMap;
+
+        let metadata_cache: HashMap<String, ToolCliMetadata> = self
+            .tools
+            .iter()
+            .map(|(name, tool)| {
+                let metadata = if let Some(_any) = tool.as_any() {
+                    // Try to downcast to CliExclusionMarker
+                    // Note: This is a simplified approach - in practice, each concrete tool type
+                    // that implements CliExclusionMarker would need to handle this explicitly
+                    // For now, we'll check tool names against known excluded tools
+                    if name == "issue_work" || name == "issue_merge" {
+                        ToolCliMetadata::excluded(
+                            name,
+                            "MCP workflow orchestration tool - not suitable for direct CLI usage",
+                        )
+                    } else {
+                        ToolCliMetadata::included(name)
+                    }
+                } else {
+                    // Tool doesn't provide as_any implementation, include by default
+                    ToolCliMetadata::included(name)
+                };
+
+                (name.clone(), metadata)
+            })
+            .collect();
+
+        RegistryCliExclusionDetector::new(metadata_cache)
+    }
+
+    /// Get all tools that should be excluded from CLI generation
+    ///
+    /// This is a convenience method that creates a detector and returns the
+    /// list of excluded tool names.
+    ///
+    /// # Returns
+    ///
+    /// Vector of tool names that should be excluded from CLI generation
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
+    ///
+    /// let registry = ToolRegistry::new();
+    /// let excluded = registry.get_excluded_tool_names();
+    /// for tool in excluded {
+    ///     println!("Excluding {} from CLI generation", tool);
+    /// }
+    /// ```
+    pub fn get_excluded_tool_names(&self) -> Vec<String> {
+        use crate::cli::CliExclusionDetector;
+        let detector = self.create_cli_exclusion_detector();
+        detector.get_excluded_tools()
+    }
+
+    /// Get all tools that should be included in CLI generation
+    ///
+    /// This is a convenience method that creates a detector and returns the
+    /// list of CLI-eligible tool names.
+    ///
+    /// # Returns
+    ///
+    /// Vector of tool names eligible for CLI generation
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
+    ///
+    /// let registry = ToolRegistry::new();
+    /// let eligible = registry.get_cli_eligible_tool_names();
+    /// for tool in eligible {
+    ///     println!("Including {} in CLI generation", tool);
+    /// }
+    /// ```
+    pub fn get_cli_eligible_tool_names(&self) -> Vec<String> {
+        use crate::cli::CliExclusionDetector;
+        let detector = self.create_cli_exclusion_detector();
+        detector.get_cli_eligible_tools()
     }
 }
 

@@ -36,6 +36,9 @@
 
 #![warn(missing_docs)]
 
+/// CLI-related utilities
+pub mod cli;
+
 /// Model Context Protocol (MCP) server and tools
 pub mod mcp;
 

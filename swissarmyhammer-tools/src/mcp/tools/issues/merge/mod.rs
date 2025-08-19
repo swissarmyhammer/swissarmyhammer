@@ -2,6 +2,7 @@
 //!
 //! This module provides the MergeIssueTool for merging issue work branches.
 
+use crate::cli::CliExclusionMarker;
 use crate::mcp::responses::create_success_response;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::types::MergeIssueRequest;
@@ -11,8 +12,23 @@ use rmcp::Error as McpError;
 use swissarmyhammer::common::create_abort_file_current_dir;
 
 /// Tool for merging an issue work branch
+///
+/// This tool is designed for MCP workflow orchestration and should not be
+/// exposed as a CLI command since it requires coordinated state between
+/// git operations and issue storage, and uses MCP-specific abort patterns.
+#[sah_marker_macros::cli_exclude]
 #[derive(Default)]
 pub struct MergeIssueTool;
+
+impl CliExclusionMarker for MergeIssueTool {
+    fn is_cli_excluded(&self) -> bool {
+        true
+    }
+
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        Some("MCP workflow orchestration tool - requires coordinated state management and uses abort file patterns")
+    }
+}
 
 impl MergeIssueTool {
     /// Creates a new instance of the MergeIssueTool
@@ -243,5 +259,9 @@ impl McpTool for MergeIssueTool {
                 Err(McpError::invalid_params(error_msg, None))
             }
         }
+    }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
     }
 }
