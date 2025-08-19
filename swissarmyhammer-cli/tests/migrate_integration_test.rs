@@ -24,7 +24,7 @@ fn test_migrate_check_help() {
 
     // Test that migrate check command is available
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "sah", "--", "migrate", "check", "--help"])
+        .args(["run", "--bin", "sah", "--", "migrate", "check", "--help"])
         .output()
         .expect("Failed to execute command");
 
@@ -41,7 +41,7 @@ fn test_migrate_run_help() {
 
     // Test that migrate run command has the expected options
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "sah", "--", "migrate", "run", "--help"])
+        .args(["run", "--bin", "sah", "--", "migrate", "run", "--help"])
         .output()
         .expect("Failed to execute command");
 
@@ -60,7 +60,7 @@ fn test_migrate_cleanup_help() {
 
     // Test that migrate cleanup command is available
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "sah", "--", "migrate", "cleanup", "--help"])
+        .args(["run", "--bin", "sah", "--", "migrate", "cleanup", "--help"])
         .output()
         .expect("Failed to execute command");
 
@@ -77,7 +77,7 @@ fn test_migrate_main_help() {
 
     // Test that migrate main command shows subcommands
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "sah", "--", "migrate", "--help"])
+        .args(["run", "--bin", "sah", "--", "migrate", "--help"])
         .output()
         .expect("Failed to execute command");
 
