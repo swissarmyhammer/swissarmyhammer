@@ -716,7 +716,8 @@ impl IssueStorage for FileSystemIssueStorage {
         let completed_issue = self.move_issue_with_issue(issue, true).await?;
 
         // Verify we actually moved it successfully
-        self.validate_completion_successful(&completed_issue.name)?;
+        self.validate_completion_successful(&completed_issue.name)
+            .await?;
 
         Ok(completed_issue)
     }
@@ -827,10 +828,14 @@ impl IssueStorage for FileSystemIssueStorage {
 
 impl FileSystemIssueStorage {
     /// Verify that the issue was actually moved to the completed directory
-    fn validate_completion_successful(&self, issue_name: &str) -> Result<()> {
-        let completed_file = self.state.completed_dir.join(format!("{issue_name}.md"));
+    async fn validate_completion_successful(&self, issue_name: &str) -> Result<()> {
+        // Use list_issues_info to find the issue and check if it's in the completed directory
+        let all_issue_infos = self.list_issues_info().await?;
+        let completed_issue_info = all_issue_infos
+            .into_iter()
+            .find(|issue_info| issue_info.issue.name == issue_name && issue_info.completed);
 
-        if !completed_file.exists() {
+        if completed_issue_info.is_none() {
             let work_dir = std::env::current_dir().map_err(crate::SwissArmyHammerError::Io)?;
             crate::common::create_abort_file(
                 &work_dir,
@@ -838,7 +843,7 @@ impl FileSystemIssueStorage {
             )?;
 
             return Err(crate::SwissArmyHammerError::Storage(format!(
-                "Issue '{issue_name}' completion failed - file not found in completed directory"
+                "Issue '{issue_name}' completion failed - not found in completed directory"
             )));
         }
 
