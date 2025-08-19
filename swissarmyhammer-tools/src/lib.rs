@@ -36,6 +36,9 @@
 
 #![warn(missing_docs)]
 
+/// CLI-related utilities
+pub mod cli;
+
 /// Model Context Protocol (MCP) server and tools
 pub mod mcp;
 
@@ -57,3 +60,5 @@ pub use sah_marker_macros::cli_exclude;
 
 /// Version of this crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+
