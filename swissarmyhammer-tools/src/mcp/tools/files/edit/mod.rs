@@ -101,7 +101,7 @@ impl EditFileTool {
         let path = validate_file_path(file_path)?;
         if !path.exists() {
             return Err(McpError::invalid_request(
-                format!("File does not exist: {}", file_path),
+                format!("File does not exist: {file_path}"),
                 None,
             ));
         }
@@ -111,7 +111,7 @@ impl EditFileTool {
         let old_string_count = matches.len();
         if old_string_count == 0 {
             return Err(McpError::invalid_request(
-                format!("String '{}' not found in file", old_string),
+                format!("String '{old_string}' not found in file"),
                 None,
             ));
         }

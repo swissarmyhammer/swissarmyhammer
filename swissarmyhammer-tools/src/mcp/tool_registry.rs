@@ -256,76 +256,84 @@ pub trait McpTool: Send + Sync {
     ///
     /// Returns the category name used to organize tools into CLI subcommands.
     /// For example, "issue" groups issue-related tools, "memo" groups memo-related tools.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Some(category)` - Tool belongs to the specified category subcommand
     /// * `None` - Tool appears at the root level (default)
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust,ignore
     /// fn cli_category(&self) -> Option<&'static str> { Some("issue") }  // sah issue create
     /// fn cli_category(&self) -> Option<&'static str> { Some("memo") }   // sah memo list  
     /// fn cli_category(&self) -> Option<&'static str> { None }           // sah my_tool
     /// ```
-    fn cli_category(&self) -> Option<&'static str> { None }
+    fn cli_category(&self) -> Option<&'static str> {
+        None
+    }
 
     /// Get the CLI command name
     ///
     /// Returns the command name to use in the CLI interface. By default, this
     /// returns the MCP tool name, but can be overridden to provide CLI-specific
     /// naming that follows kebab-case conventions.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// The command name as a static string reference
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust,ignore
     /// fn cli_name(&self) -> &'static str { "create" }      // Use custom CLI name
     /// fn cli_name(&self) -> &'static str { self.name() }   // Use MCP tool name (default)
     /// ```
-    fn cli_name(&self) -> &'static str { self.name() }
+    fn cli_name(&self) -> &'static str {
+        self.name()
+    }
 
     /// Get CLI-specific help text
     ///
     /// Returns help text specifically tailored for CLI usage. If not provided,
     /// the CLI will fall back to using the tool's description().
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `Some(help_text)` - Custom CLI help text
     /// * `None` - Use description() for CLI help (default)
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust,ignore
     /// fn cli_about(&self) -> Option<&'static str> {
     ///     Some("Create a new issue with automatic numbering")
     /// }
     /// ```
-    fn cli_about(&self) -> Option<&'static str> { None }
+    fn cli_about(&self) -> Option<&'static str> {
+        None
+    }
 
     /// Control visibility in CLI
     ///
     /// Returns whether this tool should be hidden from CLI command generation.
     /// Useful for MCP-only tools, internal tools, or tools that shouldn't be
     /// exposed directly to CLI users.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// * `true` - Hide from CLI (tool is MCP-only)
     /// * `false` - Show in CLI (default)
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```rust,ignore
     /// fn hidden_from_cli(&self) -> bool { true }   // MCP-only tool
     /// fn hidden_from_cli(&self) -> bool { false }  // Available in CLI (default)
     /// ```
-    fn hidden_from_cli(&self) -> bool { false }
+    fn hidden_from_cli(&self) -> bool {
+        false
+    }
 
     /// Execute the tool with the given arguments and context
     ///
@@ -893,7 +901,7 @@ mod tests {
         assert_eq!(tool.cli_category(), None);
         assert_eq!(tool.cli_name(), "test_defaults"); // Should match name()
         assert_eq!(tool.cli_about(), None);
-        assert_eq!(tool.hidden_from_cli(), false);
+        assert!(!tool.hidden_from_cli());
     }
 
     #[test]
@@ -910,7 +918,7 @@ mod tests {
         assert_eq!(tool.cli_category(), Some("test"));
         assert_eq!(tool.cli_name(), "custom-name");
         assert_eq!(tool.cli_about(), Some("Custom CLI help text"));
-        assert_eq!(tool.hidden_from_cli(), false);
+        assert!(!tool.hidden_from_cli());
     }
 
     #[test]
@@ -944,7 +952,7 @@ mod tests {
         assert_eq!(tool.cli_category(), Some("category"));
         assert_eq!(tool.cli_name(), "categorized");
         assert_eq!(tool.cli_about(), Some("Categorized tool help"));
-        assert_eq!(tool.hidden_from_cli(), false);
+        assert!(!tool.hidden_from_cli());
     }
 
     #[test]
