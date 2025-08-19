@@ -316,7 +316,7 @@ pub trait McpTool: Send + Sync {
 /// let mut registry = ToolRegistry::new();
 /// registry.register(MyTool::new());      // Automatically detects CLI eligibility
 /// registry.register(WorkflowTool::new()); // Automatically detects exclusion
-/// 
+///
 /// // Query CLI exclusion status
 /// assert!(!registry.is_cli_excluded("my_tool"));
 /// assert!(registry.is_cli_excluded("workflow_tool"));
@@ -337,7 +337,7 @@ pub trait McpTool: Send + Sync {
 /// for tool_meta in eligible_tools {
 ///     generate_cli_command(tool_meta);
 /// }
-/// 
+///
 /// // Get tools excluded from CLI (MCP-only)
 /// let excluded_tools = registry.get_excluded_tools();
 /// for tool_meta in excluded_tools {
@@ -349,7 +349,7 @@ pub trait McpTool: Send + Sync {
 /// ```rust,ignore
 /// // List all tools for MCP list_tools response
 /// let tools = registry.list_tools();
-/// 
+///
 /// // Create CLI exclusion detector for external systems
 /// let detector = registry.create_cli_exclusion_detector();
 /// ```
@@ -397,7 +397,7 @@ impl ToolRegistry {
     /// let mut registry = ToolRegistry::new();
     /// registry.register(MemoCreateTool::new()); // Will be CLI-eligible
     /// registry.register(IssueWorkTool::new());  // Will be CLI-excluded if marked
-    /// 
+    ///
     /// assert!(!registry.is_cli_excluded("memo_create"));
     /// assert!(registry.is_cli_excluded("issue_work")); // If marked with CliExclusionMarker
     /// ```
@@ -416,13 +416,13 @@ impl ToolRegistry {
     /// by trying multiple detection strategies in order of preference.
     fn detect_cli_exclusion_status<T: McpTool>(tool: &T) -> crate::cli::ToolCliMetadata {
         let name = tool.name();
-        
+
         // Strategy 1: Try to detect via CliExclusionMarker trait if tool provides as_any()
         if let Some(_any_tool) = tool.as_any() {
             // For concrete types that implement CliExclusionMarker, we need type-specific logic
             // Since we can't downcast to trait objects, we use type name matching
             let type_name = std::any::type_name::<T>();
-            
+
             // Handle known test types
             if type_name.contains("CliExcludedMockTool") {
                 return crate::cli::ToolCliMetadata::excluded(
@@ -430,15 +430,15 @@ impl ToolRegistry {
                     "Test exclusion for unit testing",
                 );
             }
-            
+
             if type_name.contains("CliIncludedMockTool") {
                 return crate::cli::ToolCliMetadata::included(name);
             }
-            
+
             // For production tools, we'd need to check if they're concrete types that
             // implement CliExclusionMarker. For now, fall back to known tool list.
         }
-        
+
         // Strategy 2: Use known excluded tools list
         if Self::is_known_excluded_tool(name) {
             crate::cli::ToolCliMetadata::excluded(
@@ -474,11 +474,11 @@ impl ToolRegistry {
     /// use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
     ///
     /// let mut registry = ToolRegistry::new();
-    /// 
+    ///
     /// // Register a CLI-eligible tool
     /// registry.register(MemoCreateTool::new());
     /// assert!(!registry.is_cli_excluded("memo_create"));
-    /// 
+    ///
     /// // Register a workflow tool (automatically detected as excluded)
     /// registry.register(IssueWorkTool::new());
     /// assert!(registry.is_cli_excluded("issue_work"));
@@ -491,10 +491,10 @@ impl ToolRegistry {
     /// of CLI exclusion metadata tracking.
     pub fn register<T: McpTool + 'static>(&mut self, tool: T) {
         let name = tool.name().to_string();
-        
+
         // Detect CLI exclusion status using our enhanced detection logic
         let metadata = Self::detect_cli_exclusion_status(&tool);
-        
+
         self.exclusion_metadata.insert(name.clone(), metadata);
         self.tools.insert(name, Box::new(tool));
     }
@@ -574,7 +574,7 @@ impl ToolRegistry {
 
     /// Get all tools marked for CLI exclusion
     ///
-    /// Returns a vector of CLI metadata for all tools that are marked for 
+    /// Returns a vector of CLI metadata for all tools that are marked for
     /// exclusion from CLI generation. Useful for generating MCP-only tool
     /// documentation or exclusion reports.
     ///
@@ -590,8 +590,8 @@ impl ToolRegistry {
     /// let registry = ToolRegistry::new();
     /// let excluded = registry.get_excluded_tools();
     /// for tool_meta in excluded {
-    ///     println!("Excluded: {} - {}", 
-    ///         tool_meta.name, 
+    ///     println!("Excluded: {} - {}",
+    ///         tool_meta.name,
     ///         tool_meta.exclusion_reason.unwrap_or_else(|| "No reason given".to_string())
     ///     );
     /// }
@@ -680,14 +680,19 @@ impl ToolRegistry {
     ///
     /// let registry = ToolRegistry::new();
     /// let (excluded, eligible) = registry.list_tools_by_category();
-    /// 
+    ///
     /// println!("Excluded tools: {}", excluded.len());
     /// println!("CLI-eligible tools: {}", eligible.len());
     /// ```
-    pub fn list_tools_by_category(&self) -> (Vec<&crate::cli::ToolCliMetadata>, Vec<&crate::cli::ToolCliMetadata>) {
+    pub fn list_tools_by_category(
+        &self,
+    ) -> (
+        Vec<&crate::cli::ToolCliMetadata>,
+        Vec<&crate::cli::ToolCliMetadata>,
+    ) {
         let mut excluded = Vec::new();
         let mut eligible = Vec::new();
-        
+
         for metadata in self.exclusion_metadata.values() {
             if metadata.is_cli_excluded {
                 excluded.push(metadata);
@@ -695,7 +700,7 @@ impl ToolRegistry {
                 eligible.push(metadata);
             }
         }
-        
+
         (excluded, eligible)
     }
 
@@ -723,7 +728,7 @@ impl ToolRegistry {
     /// ```
     pub fn create_cli_exclusion_detector(&self) -> crate::cli::RegistryCliExclusionDetector {
         use crate::cli::RegistryCliExclusionDetector;
-        
+
         // Use the metadata that was already computed during tool registration
         // This is much more efficient than re-computing exclusion status
         RegistryCliExclusionDetector::new(self.exclusion_metadata.clone())
@@ -1263,34 +1268,34 @@ mod tests {
     #[test]
     fn test_registry_cli_exclusion_metadata_tracking() {
         let mut registry = ToolRegistry::new();
-        
+
         // Register an excluded tool (simulate known excluded tool for now)
         let excluded_tool = MockTool {
             name: "issue_work", // Use a known excluded tool name to test the fallback
             description: "Test excluded tool",
         };
         registry.register(excluded_tool);
-        
+
         // Register an included tool
         let included_tool = MockTool {
             name: "test_included",
             description: "Test included tool",
         };
         registry.register(included_tool);
-        
+
         // Verify that both tools were registered
-        
+
         // Test basic exclusion queries
         assert!(registry.is_cli_excluded("issue_work"));
         assert!(!registry.is_cli_excluded("test_included"));
         assert!(!registry.is_cli_excluded("nonexistent_tool"));
-        
+
         // Test metadata retrieval
         let excluded_meta = registry.get_tool_metadata("issue_work").unwrap();
         assert_eq!(excluded_meta.name, "issue_work");
         assert!(excluded_meta.is_cli_excluded);
         assert!(excluded_meta.exclusion_reason.is_some());
-        
+
         let included_meta = registry.get_tool_metadata("test_included").unwrap();
         assert_eq!(included_meta.name, "test_included");
         assert!(!included_meta.is_cli_excluded);
@@ -1300,35 +1305,35 @@ mod tests {
     #[test]
     fn test_registry_exclusion_lists() {
         let mut registry = ToolRegistry::new();
-        
+
         // Register mixed tools
         registry.register(CliExcludedMockTool::new("excluded1"));
         registry.register(CliIncludedMockTool::new("included1"));
         registry.register(CliExcludedMockTool::new("excluded2"));
         registry.register(CliIncludedMockTool::new("included2"));
-        
+
         // Test excluded tools
         let excluded = registry.get_excluded_tools();
         assert_eq!(excluded.len(), 2);
-        let excluded_names: std::collections::HashSet<_> = 
+        let excluded_names: std::collections::HashSet<_> =
             excluded.iter().map(|meta| meta.name.as_str()).collect();
         assert!(excluded_names.contains("excluded1"));
         assert!(excluded_names.contains("excluded2"));
-        
+
         // Test eligible tools
         let eligible = registry.get_cli_eligible_tools();
         assert_eq!(eligible.len(), 2);
-        let eligible_names: std::collections::HashSet<_> = 
+        let eligible_names: std::collections::HashSet<_> =
             eligible.iter().map(|meta| meta.name.as_str()).collect();
         assert!(eligible_names.contains("included1"));
         assert!(eligible_names.contains("included2"));
-        
+
         // Test convenience methods
         let excluded_names = registry.get_excluded_tool_names();
         assert_eq!(excluded_names.len(), 2);
         assert!(excluded_names.contains(&"excluded1".to_string()));
         assert!(excluded_names.contains(&"excluded2".to_string()));
-        
+
         let eligible_names = registry.get_cli_eligible_tool_names();
         assert_eq!(eligible_names.len(), 2);
         assert!(eligible_names.contains(&"included1".to_string()));
@@ -1338,12 +1343,12 @@ mod tests {
     #[test]
     fn test_registry_category_listing() {
         let mut registry = ToolRegistry::new();
-        
+
         registry.register(CliExcludedMockTool::new("excluded_tool"));
         registry.register(CliIncludedMockTool::new("included_tool"));
-        
+
         let (excluded, eligible) = registry.list_tools_by_category();
-        
+
         assert_eq!(excluded.len(), 1);
         assert_eq!(eligible.len(), 1);
         assert_eq!(excluded[0].name, "excluded_tool");
@@ -1355,17 +1360,17 @@ mod tests {
     #[test]
     fn test_known_excluded_tools_detection() {
         let mut registry = ToolRegistry::new();
-        
+
         // Register a tool with a name that's in the known excluded list
         let mock_tool = MockTool {
             name: "issue_work", // This should be detected as excluded
             description: "Mock issue work tool",
         };
         registry.register(mock_tool);
-        
+
         // Should be detected as excluded even without CliExclusionMarker trait
         assert!(registry.is_cli_excluded("issue_work"));
-        
+
         let metadata = registry.get_tool_metadata("issue_work").unwrap();
         assert!(metadata.is_cli_excluded);
         assert!(metadata.exclusion_reason.is_some());
@@ -1374,20 +1379,20 @@ mod tests {
     #[test]
     fn test_registry_detector_creation() {
         let mut registry = ToolRegistry::new();
-        
+
         registry.register(CliExcludedMockTool::new("excluded_tool"));
         registry.register(CliIncludedMockTool::new("included_tool"));
-        
+
         // Create detector using the new optimized method
         let detector = registry.create_cli_exclusion_detector();
-        
+
         // Test detector functionality
         assert!(detector.is_cli_excluded("excluded_tool"));
         assert!(!detector.is_cli_excluded("included_tool"));
-        
+
         let excluded_tools = detector.get_excluded_tools();
         let eligible_tools = detector.get_cli_eligible_tools();
-        
+
         assert_eq!(excluded_tools.len(), 1);
         assert_eq!(eligible_tools.len(), 1);
         assert!(excluded_tools.contains(&"excluded_tool".to_string()));
@@ -1397,26 +1402,26 @@ mod tests {
     #[test]
     fn test_registry_backward_compatibility() {
         let mut registry = ToolRegistry::new();
-        
+
         // Register a regular tool (existing functionality should work)
         let tool = MockTool {
             name: "regular_tool",
             description: "Regular tool without CLI exclusion",
         };
         registry.register(tool);
-        
+
         // All existing functionality should work unchanged
         assert!(registry.get_tool("regular_tool").is_some());
         assert_eq!(registry.len(), 1);
         assert!(!registry.is_empty());
-        
+
         let tool_names = registry.list_tool_names();
         assert!(tool_names.contains(&"regular_tool".to_string()));
-        
+
         let tools = registry.list_tools();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "regular_tool");
-        
+
         // New functionality should also work
         assert!(!registry.is_cli_excluded("regular_tool")); // Should be CLI-eligible by default
         assert_eq!(registry.get_excluded_tools().len(), 0);
@@ -1426,7 +1431,7 @@ mod tests {
     #[test]
     fn test_empty_registry_exclusion_behavior() {
         let registry = ToolRegistry::new();
-        
+
         // Empty registry should handle exclusion queries gracefully
         assert!(!registry.is_cli_excluded("any_tool"));
         assert!(registry.get_excluded_tools().is_empty());
@@ -1434,11 +1439,11 @@ mod tests {
         assert!(registry.get_excluded_tool_names().is_empty());
         assert!(registry.get_cli_eligible_tool_names().is_empty());
         assert!(registry.get_tool_metadata("any_tool").is_none());
-        
+
         let (excluded, eligible) = registry.list_tools_by_category();
         assert!(excluded.is_empty());
         assert!(eligible.is_empty());
-        
+
         // Detector should also work with empty registry
         let detector = registry.create_cli_exclusion_detector();
         assert!(!detector.is_cli_excluded("any_tool"));
@@ -1449,25 +1454,25 @@ mod tests {
     #[test]
     fn test_registry_exclusion_consistency() {
         let mut registry = ToolRegistry::new();
-        
+
         registry.register(CliExcludedMockTool::new("excluded_tool"));
         registry.register(CliIncludedMockTool::new("included_tool"));
-        
+
         // Test that all query methods return consistent results
         let direct_excluded = registry.is_cli_excluded("excluded_tool");
         let direct_included = registry.is_cli_excluded("included_tool");
-        
+
         let detector = registry.create_cli_exclusion_detector();
         let detector_excluded = detector.is_cli_excluded("excluded_tool");
         let detector_included = detector.is_cli_excluded("included_tool");
-        
+
         assert_eq!(direct_excluded, detector_excluded);
         assert_eq!(direct_included, detector_included);
-        
+
         // Test list consistency
         let registry_excluded = registry.get_excluded_tool_names();
         let detector_excluded_list = detector.get_excluded_tools();
-        
+
         assert_eq!(registry_excluded.len(), detector_excluded_list.len());
         for tool_name in &registry_excluded {
             assert!(detector_excluded_list.contains(tool_name));

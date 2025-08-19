@@ -712,10 +712,7 @@ async fn test_read_tool_large_file_handling() {
     let result = tool.execute(arguments, &context).await;
     let duration = start_time.elapsed();
 
-    assert!(
-        result.is_ok(),
-        "Large file read should succeed: {result:?}"
-    );
+    assert!(result.is_ok(), "Large file read should succeed: {result:?}");
     assert!(
         duration.as_secs() < 5,
         "Large file read should complete quickly"
@@ -1366,10 +1363,7 @@ async fn test_grep_tool_glob_filtering() {
     arguments.insert("glob".to_string(), json!("*.rs")); // Simplified glob pattern
 
     let result = tool.execute(arguments, &context).await;
-    assert!(
-        result.is_ok(),
-        "Glob filtering should succeed: {result:?}"
-    );
+    assert!(result.is_ok(), "Glob filtering should succeed: {result:?}");
 
     let call_result = result.unwrap();
     let response_text = if let Some(content_item) = call_result.content.first() {
@@ -2887,9 +2881,7 @@ async fn test_workspace_boundary_enforcement() {
         // Should either fail due to permissions or be handled safely
         if let Err(error) = read_result {
             let error_msg = format!("{error:?}");
-            println!(
-                "Restricted read blocked: {restricted_path} - {error_msg}"
-            );
+            println!("Restricted read blocked: {restricted_path} - {error_msg}");
         }
 
         // Test write tool (should not be able to write to system locations)
@@ -2901,9 +2893,7 @@ async fn test_workspace_boundary_enforcement() {
         // Should fail due to permissions or validation
         if let Err(error) = write_result {
             let error_msg = format!("{error:?}");
-            println!(
-                "Restricted write blocked: {restricted_path} - {error_msg}"
-            );
+            println!("Restricted write blocked: {restricted_path} - {error_msg}");
         } else {
             // If it somehow succeeds, verify the file wasn't actually modified
             let actual_content = fs::read_to_string(restricted_path).unwrap_or_default();
@@ -3039,14 +3029,10 @@ async fn test_permission_escalation_prevention() {
         // Should fail due to permissions or validation
         if let Err(error) = write_result {
             let error_msg = format!("{error:?}");
-            println!(
-                "Privileged write blocked: {privileged_location} - {error_msg}"
-            );
+            println!("Privileged write blocked: {privileged_location} - {error_msg}");
         } else {
             // If somehow successful, verify no actual privilege escalation occurred
-            println!(
-                "Warning: Write to {privileged_location} succeeded unexpectedly"
-            );
+            println!("Warning: Write to {privileged_location} succeeded unexpectedly");
         }
 
         // Test edit tool
@@ -3059,9 +3045,7 @@ async fn test_permission_escalation_prevention() {
         // Should fail due to permissions or file not existing
         if let Err(error) = edit_result {
             let error_msg = format!("{error:?}");
-            println!(
-                "Privileged edit blocked: {privileged_location} - {error_msg}"
-            );
+            println!("Privileged edit blocked: {privileged_location} - {error_msg}");
         }
     }
 }
@@ -3194,9 +3178,7 @@ async fn test_concurrent_file_operations_safety() {
         }
     }
 
-    println!(
-        "Concurrent operations: {success_count} succeeded, {error_count} failed"
-    );
+    println!("Concurrent operations: {success_count} succeeded, {error_count} failed");
 
     // Verify the file system remains consistent
     assert!(shared_file.exists());
@@ -3494,9 +3476,7 @@ async fn test_directory_traversal_performance() {
     let rust_files_found = extract_text_content(&rust_response.content[0].raw)
         .lines()
         .count();
-    println!(
-        "Found {rust_files_found} Rust files in {rust_files_duration:?}"
-    );
+    println!("Found {rust_files_found} Rust files in {rust_files_duration:?}");
 
     // Pattern-specific search should be reasonably fast (allow some timing variation)
     assert!(
@@ -3582,10 +3562,7 @@ async fn test_grep_performance_large_codebase() {
         let result = grep_tool.execute(grep_args, &context).await;
         let grep_duration = start_time.elapsed();
 
-        assert!(
-            result.is_ok(),
-            "Grep should succeed for pattern: {pattern}"
-        );
+        assert!(result.is_ok(), "Grep should succeed for pattern: {pattern}");
 
         let response = result.unwrap();
         let response_text = extract_text_content(&response.content[0].raw);
@@ -3597,9 +3574,7 @@ async fn test_grep_performance_large_codebase() {
             response_text.lines().count()
         };
 
-        println!(
-            "  Pattern '{pattern}': {matches_found} matches in {grep_duration:?}"
-        );
+        println!("  Pattern '{pattern}': {matches_found} matches in {grep_duration:?}");
 
         // Grep should complete within reasonable time even for large codebases
         assert!(

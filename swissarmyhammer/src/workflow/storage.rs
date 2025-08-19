@@ -1099,16 +1099,17 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_workflow_resolver_user_workflows() {
-        use crate::test_utils::create_isolated_test_home;
+        use crate::test_utils::IsolatedTestHome;
         use std::fs;
 
-        let _env = create_isolated_test_home();
-        let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
+        let _env = IsolatedTestHome::new();
+        let home_dir = std::env::var("HOME").unwrap();
+        let swissarmyhammer_dir = home_dir + "/.swissarmyhammer";
         let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
-        // Create a test workflow file in user workflows directory
-        let workflow_file = user_workflows_dir.join("user_workflow.md");
+        // Create a test workflow file in user workflows directory with unique name
+        let workflow_file = user_workflows_dir.join("test_user_workflow_unique_12345.md");
         let workflow_content = r"---
 name: User Test Workflow
 description: A user workflow for testing
@@ -1133,10 +1134,10 @@ stateDiagram-v2
         let workflows = storage.list_workflows().unwrap();
         let workflow = workflows
             .iter()
-            .find(|w| w.name.as_str() == "user_workflow")
-            .expect("Could not find user_workflow in loaded workflows");
+            .find(|w| w.name.as_str() == "test_user_workflow_unique_12345")
+            .expect("Could not find test_user_workflow_unique_12345 in loaded workflows");
 
-        assert_eq!(workflow.name.as_str(), "user_workflow");
+        assert_eq!(workflow.name.as_str(), "test_user_workflow_unique_12345");
         assert_eq!(
             resolver.workflow_sources.get(&workflow.name),
             Some(&FileSource::User)
