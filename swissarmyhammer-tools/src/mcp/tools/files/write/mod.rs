@@ -375,7 +375,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("file_path cannot be empty"));
+        assert!(format!("{error:?}").contains("file_path cannot be empty"));
     }
 
     #[tokio::test]
@@ -388,7 +388,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("file_path cannot be empty"));
+        assert!(format!("{error:?}").contains("file_path cannot be empty"));
     }
 
     #[tokio::test]
@@ -401,7 +401,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("must be absolute"));
+        assert!(format!("{error:?}").contains("must be absolute"));
     }
 
     #[tokio::test]
@@ -420,7 +420,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("exceeds maximum size limit"));
+        assert!(format!("{error:?}").contains("exceeds maximum size limit"));
     }
 
     #[tokio::test]
@@ -548,7 +548,7 @@ mod tests {
         assert!(result.is_err());
 
         let error = result.unwrap_err();
-        assert!(format!("{:?}", error).contains("Invalid arguments"));
+        assert!(format!("{error:?}").contains("Invalid arguments"));
     }
 
     #[tokio::test]

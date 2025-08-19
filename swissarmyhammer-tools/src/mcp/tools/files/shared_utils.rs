@@ -913,11 +913,11 @@ mod tests {
 
         let not_found_error = Error::new(ErrorKind::NotFound, "test error");
         let mcp_error = handle_file_error(not_found_error, "read", path);
-        assert!(format!("{:?}", mcp_error).contains("File not found"));
+        assert!(format!("{mcp_error:?}").contains("File not found"));
 
         let permission_error = Error::new(ErrorKind::PermissionDenied, "test error");
         let mcp_error = handle_file_error(permission_error, "write", path);
-        assert!(format!("{:?}", mcp_error).contains("Permission denied"));
+        assert!(format!("{mcp_error:?}").contains("Permission denied"));
     }
 
     // Enhanced Security Framework Tests
@@ -941,8 +941,7 @@ mod tests {
             let result = validator.validate_absolute_path(&dangerous_path);
             assert!(
                 result.is_err(),
-                "Should block dangerous path: {}",
-                dangerous_path
+                "Should block dangerous path: {dangerous_path}"
             );
         }
     }
@@ -990,7 +989,7 @@ mod tests {
         // File with blocked pattern should fail
         let result = validator.validate_absolute_path(&dangerous_file.to_string_lossy());
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("blocked pattern"));
+        assert!(format!("{result:?}").contains("blocked pattern"));
     }
 
     #[test]
@@ -1167,12 +1166,12 @@ mod tests {
         // Attempt to read a file outside workspace should fail
         let result = secure_access.read("/etc/passwd", None, None);
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("outside workspace boundaries"));
+        assert!(format!("{result:?}").contains("outside workspace boundaries"));
 
         // Attempt to write outside workspace should fail
         let result = secure_access.write("/tmp/malicious.txt", "malicious content");
         assert!(result.is_err());
-        assert!(format!("{:?}", result).contains("outside workspace boundaries"));
+        assert!(format!("{result:?}").contains("outside workspace boundaries"));
     }
 
     #[test]
@@ -1194,8 +1193,7 @@ mod tests {
             let result = validator.validate_absolute_path(&full_path);
             assert!(
                 result.is_err(),
-                "Should block path traversal attack: {}",
-                pattern
+                "Should block path traversal attack: {pattern}"
             );
         }
     }
@@ -1210,7 +1208,7 @@ mod tests {
         let result = secure_access.read("/etc/passwd", None, None);
         assert!(result.is_err());
 
-        let error_msg = format!("{:?}", result);
+        let error_msg = format!("{result:?}");
         assert!(
             error_msg.contains("workspace boundaries") || error_msg.contains("blocked pattern")
         );

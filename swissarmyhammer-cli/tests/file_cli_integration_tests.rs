@@ -63,7 +63,7 @@ fn test_file_read_basic_functionality() -> Result<()> {
 fn test_file_read_with_offset_and_limit() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("test.txt");
-    let lines: Vec<String> = (1..=20).map(|i| format!("Line {}", i)).collect();
+    let lines: Vec<String> = (1..=20).map(|i| format!("Line {i}")).collect();
     let test_content = lines.join("\n");
 
     create_test_file(&test_file, &test_content)?;
@@ -425,8 +425,7 @@ fn test_file_grep_basic_search() -> Result<()> {
     assert_eq!(exit_code, Some(0), "Command should succeed");
     assert!(
         stdout.contains("search1.txt") || stdout.contains("3") || stdout.contains("found"),
-        "Should find matches in files: {}",
-        stdout
+        "Should find matches in files: {stdout}"
     );
 
     Ok(())
@@ -497,8 +496,7 @@ fn test_file_grep_file_type_filtering() -> Result<()> {
     assert_eq!(exit_code, Some(0), "Command should succeed");
     assert!(
         stdout.contains("file.rs") || stdout.contains("1") || stdout.contains("found"),
-        "Should find matches only in Rust files: {}",
-        stdout
+        "Should find matches only in Rust files: {stdout}"
     );
 
     Ok(())
