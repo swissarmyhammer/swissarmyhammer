@@ -22,6 +22,8 @@ use thiserror::Error;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::{PromptLibrary, PromptResolver};
+
 /// Global test storage registry for tests
 static TEST_STORAGE_REGISTRY: RwLock<Option<Arc<WorkflowStorage>>> = RwLock::new(None);
 
@@ -305,104 +307,42 @@ impl Action for PromptAction {
     impl_as_any!();
 }
 
-/// Resolve the path to the swissarmyhammer binary
-///
-/// This function handles the complexity of finding the correct binary path,
-/// especially in test environments where current_exe might point to the test binary.
-///
-/// # Returns
-/// The path to the swissarmyhammer binary
-fn resolve_swissarmyhammer_binary() -> std::path::PathBuf {
-    // Use the current executable path to ensure we call the right binary
-    let current_exe =
-        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("swissarmyhammer"));
 
-    // In test environment, current_exe might point to test binary, so try to find the actual swissarmyhammer binary
-    if current_exe.to_string_lossy().contains("test")
-        || current_exe.to_string_lossy().contains("deps")
-    {
-        // We're in a test, try to find the actual binary
-        if let Ok(cargo_target) = std::env::var("CARGO_TARGET_DIR") {
-            let debug_binary = std::path::PathBuf::from(cargo_target)
-                .join("debug")
-                .join("swissarmyhammer");
-            if debug_binary.exists() {
-                return debug_binary;
-            }
-        }
-
-        // Fallback to target/debug/swissarmyhammer relative to workspace
-        if let Ok(workspace_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            let workspace_root = std::path::Path::new(&workspace_dir)
-                .parent()
-                .unwrap_or(std::path::Path::new("."));
-            let debug_binary = workspace_root
-                .join("target")
-                .join("debug")
-                .join("swissarmyhammer");
-            if debug_binary.exists() {
-                return debug_binary;
-            }
-        }
-
-        // Final fallback
-        std::path::PathBuf::from("swissarmyhammer")
-    } else {
-        current_exe
-    }
-}
 
 impl PromptAction {
-    /// Render the prompt using swissarmyhammer prompt test
-    async fn render_prompt_with_swissarmyhammer(
+    /// Render the prompt directly using the prompt library instead of shelling out
+    async fn render_prompt_directly(
         &self,
         context: &HashMap<String, Value>,
     ) -> ActionResult<String> {
         // Substitute variables in arguments
         let args = self.substitute_variables(context);
 
-        // Build the command to render the prompt
-        let cmd_binary = resolve_swissarmyhammer_binary();
-
-        let mut cmd = Command::new(&cmd_binary);
-        cmd.arg("prompt")
-            .arg("test")
-            .arg(&self.prompt_name)
-            .arg("--raw"); // Get raw output without formatting
-
-        // Add arguments
-        for (key, value) in &args {
+        // Validate argument keys
+        for key in args.keys() {
             if !is_valid_argument_key(key) {
                 return Err(ActionError::ParseError(
                     format!("Invalid argument key '{key}': must contain only alphanumeric characters, hyphens, and underscores")
                 ));
             }
-            cmd.arg("--var");
-            cmd.arg(format!("{key}={value}"));
         }
 
-        // Set up process pipes
-        cmd.stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null());
-
-        // Execute the command
-        let output = cmd.output().await.map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to render prompt with swissarmyhammer: {e}"))
+        // Load prompts and render directly
+        let mut library = PromptLibrary::new();
+        let mut resolver = PromptResolver::new();
+        
+        resolver.load_all_prompts(&mut library).map_err(|e| {
+            ActionError::ClaudeError(format!("Failed to load prompts: {e}"))
         })?;
 
-        // Check for errors
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ActionError::ClaudeError(format!(
+        let rendered = library.render_prompt_with_env(&self.prompt_name, &args).map_err(|e| {
+            ActionError::ClaudeError(format!(
                 "Failed to render prompt '{}': {}",
-                self.prompt_name, stderr
-            )));
-        }
+                self.prompt_name, e
+            ))
+        })?;
 
-        // Get the rendered prompt
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.to_string())
+        Ok(rendered)
     }
 
     /// Execute the command once without retry logic
@@ -427,7 +367,7 @@ impl PromptAction {
         );
 
         // First, render the prompt using swissarmyhammer
-        let rendered_prompt = self.render_prompt_with_swissarmyhammer(context).await?;
+        let rendered_prompt = self.render_prompt_directly(context).await?;
 
         // Log the actual prompt being sent to Claude
         tracing::debug!("Piping prompt to Claude:\n{}", rendered_prompt);
