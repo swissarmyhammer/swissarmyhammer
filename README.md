@@ -30,7 +30,7 @@ Working with AI assistants involves repetitive prompt crafting, context loss, in
 SwissArmyHammer provides a unified, file-based approach with three integrated components:
 
 - **Command Line Application** - A powerful CLI that uses Claude Code as a sub-agent for executing prompts and workflows
-- **MCP Server** - Seamless integration with Claude Code via the Model Context Protocol, providing a comprehensive tool suite  
+- **MCP Server** - Seamless integration with Claude Code via the Model Context Protocol, providing a comprehensive tool suite with intelligent CLI exclusion
 - **Rust Library** - A flexible library for building prompt-based applications with comprehensive APIs
 
 ## TLDR
@@ -55,6 +55,7 @@ claude mcp add --scope user sah sah serve
 - **📝 Issue Management** - Git-integrated issue tracking with automatic branch management
 - **💾 Memoranda System** - Note-taking and knowledge management with full-text search
 - **🔍 Semantic Search** - Vector-based search with TreeSitter parsing and embedding models
+- **🎯 Smart CLI Exclusion** - Intelligent separation of user-facing tools from workflow orchestration
 
 ### Common Commands
 
@@ -194,15 +195,49 @@ This simple workflow demonstrates:
 
 You can also run it through Claude Code using the MCP integration to see how workflows integrate with AI interactions.
 
+## CLI vs MCP Tool Usage
+
+SwissArmyHammer provides both CLI and MCP interfaces with intelligent tool separation:
+
+### CLI-Eligible Tools
+User-facing operations available in both CLI and MCP:
+```bash
+# Content management
+sah memo create "Meeting Notes" --content "# Team Meeting\\n\\nDiscussed..."
+sah issue create "feature-xyz" --content "# Feature XYZ\\n\\nImplement..."
+
+# Information display  
+sah issue list
+sah memo search "meeting notes"
+sah search query "error handling"
+```
+
+### MCP-Only Tools
+Workflow orchestration tools excluded from CLI (marked with `#[cli_exclude]`):
+- `issue_work` - Git branch state transitions (use `git checkout -b issue/name`)
+- `issue_merge` - Coordinated merge operations (use `git merge`)
+- `abort_create` - Workflow termination signals (internal error handling)
+
+**Why Excluded?** These tools require MCP workflow context, use abort file patterns, and coordinate complex state between multiple systems. CLI users should use standard Git commands for direct operations.
+
 ## 🔧 MCP Tools
 
 SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
 
-- **Abort Tool** - Controlled workflow termination with file-based abort detection
-- **Issue Management** - Complete issue tracking with Git branch integration  
-- **Memoranda System** - Note-taking and knowledge management with search
-- **Semantic Search** - Vector-based code and content search with TreeSitter parsing
+**Complete Tool Suite:**
+- `issue_*` - Issue management (create, list, show, update, work†, merge†, mark_complete)
+- `memo_*` - Memoranda system (create, list, get, update, delete, search)  
+- `search_*` - Semantic search (index, query)
+- `outline_*` - Code analysis (generate outlines with TreeSitter)
+- `abort_*` - Workflow control (create† abort signals)
+- `files_*` - File operations (read, write, edit, glob, grep)
+- `web_*` - Web content (fetch, search)
+- `notify_*` - User notifications (create status messages)
+- `todo_*` - Task tracking (create, show, mark_complete)
+- `shell_*` - Command execution (execute with timeout controls)
 
-All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The abort tool provides robust workflow control, replacing legacy string-based detection with a reliable file-based approach.
+† _MCP-only tools marked with `#[cli_exclude]` for workflow orchestration_
+
+All tools integrate seamlessly with Claude Code's MCP protocol with structured, typed responses and intelligent CLI exclusion system.
 
 

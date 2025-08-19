@@ -371,7 +371,12 @@ async fn run_search(subcommand: cli::SearchCommands) -> i32 {
 /// - 0: Success (no errors or warnings)
 /// - 1: Warnings found
 /// - 2: Errors found
-fn run_validate(quiet: bool, format: cli::ValidateFormat, exclusions: bool, workflow_dirs: Vec<String>) -> i32 {
+fn run_validate(
+    quiet: bool,
+    format: cli::ValidateFormat,
+    exclusions: bool,
+    workflow_dirs: Vec<String>,
+) -> i32 {
     use validate;
 
     match validate::run_validate_command_with_dirs(quiet, format, exclusions, workflow_dirs) {

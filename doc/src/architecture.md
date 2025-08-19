@@ -75,10 +75,36 @@ Command-line interface providing:
 Model Context Protocol server providing:
 
 - **Tool Registry**: Dynamic tool registration and discovery
-- **CLI Exclusion System**: Trait-based marking for workflow-only tools
+- **CLI Exclusion System**: Trait-based marking for workflow-only tools with `#[cli_exclude]` attributes
 - **Request Handling**: Structured request/response processing
 - **Error Management**: Comprehensive error reporting
 - **Type Safety**: Full JSON schema validation
+
+#### CLI Exclusion System
+
+The CLI exclusion system provides infrastructure for distinguishing between user-facing tools and workflow orchestration tools:
+
+**Components:**
+- `#[cli_exclude]` attribute macro for compile-time marking
+- `CliExclusionMarker` trait for runtime querying
+- `CliExclusionDetector` interface for CLI generation systems
+- Integration with MCP tool registry for metadata tracking
+
+**Architecture:**
+```rust
+// Workflow orchestration tools (MCP-only)
+#[cli_exclude] 
+pub struct IssueWorkTool;  // Git branch state management
+
+// User-facing tools (CLI + MCP)
+pub struct CreateMemoTool; // Direct content creation
+```
+
+**Decision Criteria:**
+- MCP context dependency → Exclude from CLI
+- Workflow state coordination → Exclude from CLI  
+- Abort file error patterns → Exclude from CLI
+- Direct user value → Include in CLI
 
 ## Data Flow
 
@@ -131,6 +157,33 @@ graph TD
     I[Issue Complete] --> J[Merge Branch]
     J --> K[Move to Complete]
     K --> L[Cleanup Branch]
+```
+
+### CLI Exclusion System Flow
+
+```mermaid
+graph TD
+    A[MCP Tool Definition] --> B{Has #[cli_exclude]?}
+    B -->|Yes| C[Workflow-Only Tool]
+    B -->|No| D[CLI-Eligible Tool]
+    
+    C --> E[Implement CliExclusionMarker]
+    D --> F[Default CLI-Eligible]
+    
+    E --> G[MCP Registry Only]
+    F --> H[MCP Registry + CLI Generation]
+    
+    G --> I[MCP Server Tools]
+    H --> I
+    H --> J[CLI Command Generation]
+    
+    I --> K[Claude Code Integration]
+    J --> L[Terminal CLI Usage]
+    
+    style C fill:#ffcc99
+    style G fill:#ffcc99
+    style D fill:#ccffcc  
+    style H fill:#ccffcc
 ```
 
 ## File System Organization
@@ -210,13 +263,20 @@ SwissArmyHammer integrates with Claude Code through the Model Context Protocol:
 }
 ```
 
-**Available Tools:**
-- `issue_*` - Issue management tools (issue_create, issue_list, issue_work, etc.)
-  - Note: Some tools like `issue_work` and `issue_merge` are marked with `#[cli_exclude]` for MCP-only usage
-- `memo_*` - Memoranda tools (memo_create, memo_list, memo_get, etc.)
-- `search_*` - Semantic search tools (search_index, search_query)
-- `outline_*` - Code outline tools (outline_generate)
-- `abort_*` - Workflow control tools (abort_create)
+**Tool Classification:**
+
+*CLI-Eligible Tools (user-facing):*
+- `memo_*` - Content creation and management
+- `issue_create`, `issue_list`, `issue_show` - Information operations
+- `search_*` - Query and indexing operations  
+- `outline_*` - Code analysis tools
+
+*MCP-Only Tools (workflow orchestration):*
+- `issue_work` - Git branch state transitions
+- `issue_merge` - Coordinated merge operations
+- `abort_create` - Workflow termination signals
+
+The CLI exclusion system ensures workflow tools remain in MCP context while user operations are available through both interfaces.
 
 The system includes a [CLI Exclusion System](cli-exclusion-system.md) that distinguishes between user-facing tools and workflow orchestration tools designed specifically for MCP protocol interactions.
 
