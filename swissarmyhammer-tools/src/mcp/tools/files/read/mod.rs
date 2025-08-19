@@ -143,6 +143,18 @@ impl McpTool for ReadFileTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("file")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "read"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Read file contents with optional offset and limit")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

@@ -252,6 +252,81 @@ pub trait McpTool: Send + Sync {
     /// ```
     fn schema(&self) -> serde_json::Value;
 
+    /// Get the CLI category for grouping tools
+    ///
+    /// Returns the category name used to organize tools into CLI subcommands.
+    /// For example, "issue" groups issue-related tools, "memo" groups memo-related tools.
+    /// 
+    /// # Returns
+    /// 
+    /// * `Some(category)` - Tool belongs to the specified category subcommand
+    /// * `None` - Tool appears at the root level (default)
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,ignore
+    /// fn cli_category(&self) -> Option<&'static str> { Some("issue") }  // sah issue create
+    /// fn cli_category(&self) -> Option<&'static str> { Some("memo") }   // sah memo list  
+    /// fn cli_category(&self) -> Option<&'static str> { None }           // sah my_tool
+    /// ```
+    fn cli_category(&self) -> Option<&'static str> { None }
+
+    /// Get the CLI command name
+    ///
+    /// Returns the command name to use in the CLI interface. By default, this
+    /// returns the MCP tool name, but can be overridden to provide CLI-specific
+    /// naming that follows kebab-case conventions.
+    /// 
+    /// # Returns
+    /// 
+    /// The command name as a static string reference
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,ignore
+    /// fn cli_name(&self) -> &'static str { "create" }      // Use custom CLI name
+    /// fn cli_name(&self) -> &'static str { self.name() }   // Use MCP tool name (default)
+    /// ```
+    fn cli_name(&self) -> &'static str { self.name() }
+
+    /// Get CLI-specific help text
+    ///
+    /// Returns help text specifically tailored for CLI usage. If not provided,
+    /// the CLI will fall back to using the tool's description().
+    /// 
+    /// # Returns
+    /// 
+    /// * `Some(help_text)` - Custom CLI help text
+    /// * `None` - Use description() for CLI help (default)
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,ignore
+    /// fn cli_about(&self) -> Option<&'static str> {
+    ///     Some("Create a new issue with automatic numbering")
+    /// }
+    /// ```
+    fn cli_about(&self) -> Option<&'static str> { None }
+
+    /// Control visibility in CLI
+    ///
+    /// Returns whether this tool should be hidden from CLI command generation.
+    /// Useful for MCP-only tools, internal tools, or tools that shouldn't be
+    /// exposed directly to CLI users.
+    /// 
+    /// # Returns
+    /// 
+    /// * `true` - Hide from CLI (tool is MCP-only)
+    /// * `false` - Show in CLI (default)
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust,ignore
+    /// fn hidden_from_cli(&self) -> bool { true }   // MCP-only tool
+    /// fn hidden_from_cli(&self) -> bool { false }  // Available in CLI (default)
+    /// ```
+    fn hidden_from_cli(&self) -> bool { false }
+
     /// Execute the tool with the given arguments and context
     ///
     /// This is the main entry point for tool execution. The method receives:
@@ -753,5 +828,198 @@ mod tests {
         } else {
             panic!("Expected text content");
         }
+    }
+
+    /// Test tool that implements all CLI methods for testing
+    struct TestCliTool {
+        name: &'static str,
+        category: Option<&'static str>,
+        cli_name: &'static str,
+        cli_about: Option<&'static str>,
+        hidden: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for TestCliTool {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn description(&self) -> &'static str {
+            "Test tool description"
+        }
+
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })
+        }
+
+        fn cli_category(&self) -> Option<&'static str> {
+            self.category
+        }
+
+        fn cli_name(&self) -> &'static str {
+            self.cli_name
+        }
+
+        fn cli_about(&self) -> Option<&'static str> {
+            self.cli_about
+        }
+
+        fn hidden_from_cli(&self) -> bool {
+            self.hidden
+        }
+
+        async fn execute(
+            &self,
+            _arguments: serde_json::Map<String, serde_json::Value>,
+            _context: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test executed"))
+        }
+    }
+
+    #[test]
+    fn test_default_cli_methods() {
+        let tool = MockTool {
+            name: "test_defaults",
+            description: "Test tool",
+        };
+
+        // Test default implementations
+        assert_eq!(tool.cli_category(), None);
+        assert_eq!(tool.cli_name(), "test_defaults"); // Should match name()
+        assert_eq!(tool.cli_about(), None);
+        assert_eq!(tool.hidden_from_cli(), false);
+    }
+
+    #[test]
+    fn test_custom_cli_methods() {
+        let tool = TestCliTool {
+            name: "test_tool",
+            category: Some("test"),
+            cli_name: "custom-name",
+            cli_about: Some("Custom CLI help text"),
+            hidden: false,
+        };
+
+        // Test custom implementations
+        assert_eq!(tool.cli_category(), Some("test"));
+        assert_eq!(tool.cli_name(), "custom-name");
+        assert_eq!(tool.cli_about(), Some("Custom CLI help text"));
+        assert_eq!(tool.hidden_from_cli(), false);
+    }
+
+    #[test]
+    fn test_hidden_cli_tool() {
+        let tool = TestCliTool {
+            name: "hidden_tool",
+            category: None,
+            cli_name: "hidden",
+            cli_about: None,
+            hidden: true,
+        };
+
+        // Test hidden tool
+        assert_eq!(tool.cli_category(), None);
+        assert_eq!(tool.cli_name(), "hidden");
+        assert_eq!(tool.cli_about(), None);
+        assert_eq!(tool.hidden_from_cli(), true);
+    }
+
+    #[test]
+    fn test_cli_categorized_tool() {
+        let tool = TestCliTool {
+            name: "categorized_tool",
+            category: Some("category"),
+            cli_name: "categorized",
+            cli_about: Some("Categorized tool help"),
+            hidden: false,
+        };
+
+        // Test categorized tool
+        assert_eq!(tool.cli_category(), Some("category"));
+        assert_eq!(tool.cli_name(), "categorized");
+        assert_eq!(tool.cli_about(), Some("Categorized tool help"));
+        assert_eq!(tool.hidden_from_cli(), false);
+    }
+
+    #[test]
+    fn test_cli_name_defaults_to_tool_name() {
+        let tool = MockTool {
+            name: "mcp_tool_name",
+            description: "Test tool",
+        };
+
+        // CLI name should default to MCP tool name
+        assert_eq!(tool.cli_name(), tool.name());
+        assert_eq!(tool.cli_name(), "mcp_tool_name");
+    }
+
+    #[tokio::test]
+    async fn test_cli_tool_execution() {
+        use std::path::PathBuf;
+        use swissarmyhammer::git::GitOperations;
+        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
+        use tokio::sync::{Mutex, RwLock};
+
+        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
+            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+                .unwrap(),
+        )));
+        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
+        let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
+            Arc::new(RwLock::new(Box::new(MockMemoStorage::new())));
+
+        let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
+        let context = ToolContext::new(
+            tool_handlers,
+            issue_storage,
+            git_ops,
+            memo_storage,
+            Arc::new(swissarmyhammer::common::rate_limiter::MockRateLimiter),
+        );
+
+        let tool = TestCliTool {
+            name: "exec_test",
+            category: Some("test"),
+            cli_name: "execute",
+            cli_about: Some("Test execution"),
+            hidden: false,
+        };
+
+        // Test that CLI tools can execute normally
+        let result = tool.execute(serde_json::Map::new(), &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+
+        if let RawContent::Text(text_content) = &call_result.content[0].raw {
+            assert_eq!(text_content.text, "Test executed");
+        }
+    }
+
+    #[test]
+    fn test_cli_method_return_types() {
+        let tool = TestCliTool {
+            name: "type_test",
+            category: Some("types"),
+            cli_name: "types",
+            cli_about: Some("Type testing"),
+            hidden: false,
+        };
+
+        // Verify return types match trait signature
+        let _category: Option<&'static str> = tool.cli_category();
+        let _name: &'static str = tool.cli_name();
+        let _about: Option<&'static str> = tool.cli_about();
+        let _hidden: bool = tool.hidden_from_cli();
+
+        // Test passes if compilation succeeds - validates trait signature compatibility
     }
 }
