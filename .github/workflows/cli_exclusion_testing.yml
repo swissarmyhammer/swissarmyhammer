@@ -1,0 +1,127 @@
+name: CLI Exclusion System Testing
+
+on:
+  push:
+    branches: [main, 'marker*', 'issue/*cli*exclusion*']
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tests/cli_exclusion/**'
+      - 'sah-marker-macros/**'
+      - 'swissarmyhammer-tools/src/cli/**'
+      - 'swissarmyhammer-cli/src/generation/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  cli_exclusion_unit_tests:
+    name: CLI Exclusion Unit Tests
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-exclusion-unit
+      - name: Run CLI exclusion unit tests
+        run: |
+          cargo test --test cli_exclusion_comprehensive_tests -- unit --no-capture
+
+  cli_exclusion_integration_tests:
+    name: CLI Exclusion Integration Tests
+    runs-on: self-hosted
+    needs: [cli_exclusion_unit_tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-exclusion-integration
+      - name: Run CLI exclusion integration tests
+        run: |
+          cargo test --test cli_exclusion_comprehensive_tests -- integration --no-capture
+
+  cli_exclusion_property_tests:
+    name: CLI Exclusion Property Tests
+    runs-on: self-hosted
+    needs: [cli_exclusion_unit_tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-exclusion-property
+      - name: Run CLI exclusion property tests
+        run: |
+          cargo test --test cli_exclusion_comprehensive_tests -- property --no-capture
+        env:
+          PROPTEST_CASES: 1000  # Increase property test cases for CI
+
+  cli_exclusion_e2e_tests:
+    name: CLI Exclusion End-to-End Tests
+    runs-on: self-hosted
+    needs: [cli_exclusion_integration_tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-exclusion-e2e
+      - name: Run CLI exclusion end-to-end tests
+        run: |
+          cargo test --test cli_exclusion_comprehensive_tests -- e2e --no-capture
+
+  cli_exclusion_performance_tests:
+    name: CLI Exclusion Performance Tests
+    runs-on: self-hosted
+    needs: [cli_exclusion_integration_tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-exclusion-performance
+      - name: Run CLI exclusion performance tests
+        run: |
+          cargo test --test cli_exclusion_comprehensive_tests -- performance --no-capture --ignored
+
+  cli_exclusion_comprehensive_coverage:
+    name: CLI Exclusion Coverage Analysis
+    runs-on: self-hosted
+    needs: [cli_exclusion_e2e_tests, cli_exclusion_performance_tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-exclusion-coverage
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --force
+      - name: Run CLI exclusion specific coverage
+        run: |
+          cargo tarpaulin --config cli_exclusion_coverage --skip-clean
+      - name: Upload CLI exclusion coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-exclusion-coverage
+          path: |
+            target/tarpaulin/cli_exclusion/tarpaulin-report.html
+            target/tarpaulin/cli_exclusion/tarpaulin-report.xml
+            target/tarpaulin/cli_exclusion/tarpaulin-report.json
+          retention-days: 30
+
+  cli_exclusion_validation:
+    name: CLI Exclusion System Validation
+    runs-on: self-hosted
+    needs: [cli_exclusion_comprehensive_coverage]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run comprehensive CLI exclusion validation
+        run: |
+          echo "🧪 Running complete CLI exclusion system validation..."
+          cargo test --test cli_exclusion_comprehensive_tests --no-capture
+          echo "✅ CLI exclusion system validation completed successfully"

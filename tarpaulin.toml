@@ -1,0 +1,45 @@
+[tool.tarpaulin.cli_exclusion_coverage]
+# Comprehensive test coverage configuration for CLI exclusion system
+exclude-files = [
+    "target/*",
+    "build.rs",
+    "tests/cli_exclusion/common/mock_*.rs",  # Exclude mock implementations from coverage
+]
+include-tests = true
+follow-exec = true
+post-args = ["--", "--test-threads", "1"]  # Run tests sequentially for reliable coverage
+timeout = "300s"
+fail-under = 95
+output = ["Html", "Xml", "Json"]
+output-dir = "target/tarpaulin/cli_exclusion/"
+
+[tool.tarpaulin.comprehensive]
+# Main coverage configuration for comprehensive testing
+exclude-files = [
+    "target/*", 
+    "build.rs",
+    "**/mock_*.rs",
+    "**/test_*.rs",
+]
+include-tests = false  # Don't include test code in main coverage
+follow-exec = true
+post-args = ["--", "--test-threads", "1"]
+timeout = "600s" 
+fail-under = 85
+output = ["Html", "Xml", "Json"]
+output-dir = "target/tarpaulin/comprehensive/"
+
+[tool.tarpaulin.integration]
+# Integration test specific coverage
+run-types = ["Tests", "Doctests"]
+include-tests = true
+exclude-files = [
+    "target/*",
+    "build.rs", 
+    "**/bench_*.rs",
+]
+follow-exec = true
+timeout = "300s"
+fail-under = 90
+output = ["Html"]
+output-dir = "target/tarpaulin/integration/"

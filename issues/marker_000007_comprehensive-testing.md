@@ -429,3 +429,71 @@ harness = false
 ## Notes
 
 This comprehensive testing suite ensures the CLI exclusion marker system is reliable, performant, and maintains compatibility while providing confidence for future enhancements and CLI generation capabilities.
+## Proposed Solution
+
+After analyzing the current CLI exclusion system implementation, I propose implementing a comprehensive testing suite with the following approach:
+
+### Current System Analysis
+The codebase already has a solid foundation:
+- `sah-marker-macros` provides the `#[cli_exclude]` attribute macro
+- `swissarmyhammer-tools::cli` implements the exclusion detection system with traits
+- CLI generation system in `swissarmyhammer-cli::generation` respects exclusions
+- Existing integration test shows basic functionality works
+
+### Testing Strategy Implementation
+
+#### 1. Unit Test Layer
+- **Attribute Macro Tests** (`sah-marker-macros/tests/`): Test compilation and attribute behavior
+- **Registry Detection Tests** (`swissarmyhammer-tools/src/cli/`): Test exclusion detection logic
+- **CLI Generation Tests** (`swissarmyhammer-cli/src/generation/`): Test generation with exclusions
+
+#### 2. Integration Test Layer  
+- **Registry Integration** (`swissarmyhammer-tools/tests/`): Test full registry with exclusion detection
+- **CLI Generation Integration** (`swissarmyhammer-cli/tests/`): Test end-to-end CLI generation pipeline
+- **Cross-System Integration**: Test MCP tool registration → exclusion detection → CLI generation
+
+#### 3. Property-Based Testing
+- **Exclusion Detection Properties**: Consistency of exclusion detection across multiple queries
+- **Generation Robustness**: Property-based validation of CLI generation with various tool configurations
+
+#### 4. End-to-End Testing
+- **Complete Workflow Tests**: Full cycle from tool registration to CLI command generation
+- **Real Tool Integration**: Testing with actual MCP tools marked with exclusions
+
+#### 5. Performance Testing
+- **Query Performance**: Benchmark exclusion detection with large tool registries
+- **Generation Performance**: Measure CLI generation performance with exclusion filtering
+
+#### 6. Error Handling Testing
+- **Edge Cases**: Empty registries, invalid configurations, malformed tool schemas
+- **Recovery Scenarios**: Error conditions and proper error propagation
+
+### Test Organization Structure
+```
+tests/cli_exclusion/
+├── unit/
+│   ├── attribute_macro_tests.rs
+│   ├── registry_detection_tests.rs
+│   └── cli_generation_unit_tests.rs
+├── integration/
+│   ├── registry_integration_tests.rs
+│   ├── cli_generation_integration_tests.rs
+│   └── cross_system_integration_tests.rs
+├── property/
+│   └── exclusion_properties.rs
+├── e2e/
+│   └── complete_workflow_tests.rs
+├── performance/
+│   └── exclusion_benchmarks.rs
+└── common/
+    └── test_utils.rs
+```
+
+### Implementation Plan
+1. Start with unit tests for core components
+2. Build up to integration tests
+3. Add property-based and performance tests
+4. Implement comprehensive error handling tests
+5. Create test utilities and CI integration
+
+This approach ensures the CLI exclusion system is thoroughly tested at all levels while maintaining compatibility with existing functionality.

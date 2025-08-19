@@ -51,6 +51,31 @@ jobs:
       - name: Linting
         run: cargo clippy -- -D warnings
 
+  coverage:
+    name: Test Coverage
+    runs-on: self-hosted
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install coverage tools
+        run: |
+          cargo install cargo-tarpaulin --force
+          python3 -m pip install --user bc || echo "bc not available via pip"
+      - name: Run comprehensive test coverage
+        run: ./scripts/test_coverage.sh
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            target/tarpaulin/*/tarpaulin-report.html
+            target/tarpaulin/*/tarpaulin-report.xml
+            target/tarpaulin/*/tarpaulin-report.json
+          retention-days: 30
+
   build:
     name: Build
     runs-on: self-hosted
