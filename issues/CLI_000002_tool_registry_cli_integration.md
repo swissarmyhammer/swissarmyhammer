@@ -183,3 +183,79 @@ mod cli_integration_tests {
 - Provides foundation for dynamic command generation
 - Maintains separation of concerns between MCP and CLI layers
 - Follows existing registry patterns in codebase
+
+## Proposed Solution
+
+I will implement CLI integration methods for the ToolRegistry by extending it with discovery and categorization capabilities. The solution will:
+
+### 1. CLI Discovery Methods
+- `get_cli_categories()` - Return sorted list of all categories from visible tools
+- `get_tools_for_category(category)` - Get filtered tools for a specific category  
+- `get_root_cli_tools()` - Get tools without categories (root level)
+- `get_tool_by_cli_path(path)` - Lookup tools by CLI path (category/name or name)
+
+### 2. Metadata Collection
+- Create `CliToolMetadata` struct to capture tool information needed for CLI generation
+- `get_cli_metadata()` method to collect metadata from all visible tools
+- Include CLI name, category, about text, schema, and MCP name
+
+### 3. Builder Pattern
+- `CliRegistryBuilder` for convenient CLI integration
+- Provides easy access to categories, tools by category, and root tools
+
+### 4. Testing Strategy
+- Comprehensive unit tests for all new methods
+- Test filtering logic (hidden tools excluded)
+- Test sorting behavior
+- Test CLI path resolution
+
+The implementation will build on the trait extensions from the previous step and maintain compatibility with existing tool registration patterns.
+## Implementation Notes
+
+Successfully implemented all CLI integration methods for ToolRegistry:
+
+### ✅ CLI Discovery Methods
+- `get_cli_categories()` - Returns sorted list of categories from visible tools
+- `get_tools_for_category(category)` - Gets filtered tools for specific category
+- `get_root_cli_tools()` - Gets tools without categories (root level)
+- `get_tool_by_cli_path(path)` - Resolves CLI paths to tools (supports "category/name" and "name" formats)
+
+### ✅ CliToolMetadata Struct
+Created comprehensive metadata structure capturing:
+- CLI name (`cli_name()`)
+- Category (`cli_category()`)
+- About text (`cli_about()` with fallback to `description()`)
+- JSON schema (`schema()`)
+- MCP name for registry lookups (`name()`)
+
+### ✅ Metadata Collection
+- `get_cli_metadata()` - Collects metadata from all CLI-visible tools
+- Excludes hidden tools automatically
+- Provides fallback from `cli_about()` to `description()`
+
+### ✅ CliRegistryBuilder Pattern
+Convenience wrapper providing:
+- `categories()` - Get all CLI categories
+- `tools_in_category(category)` - Get tools for category
+- `root_tools()` - Get root-level tools
+- `metadata()` - Get all CLI metadata
+- `find_tool(cli_path)` - Resolve CLI paths
+
+### ✅ Comprehensive Testing
+Added 20 new tests covering:
+- Category discovery and sorting
+- Tool filtering by category and visibility
+- CLI path resolution (category/name and name formats)
+- Hidden tool exclusion
+- Metadata collection and structure
+- Builder pattern methods
+- Integration with existing registration
+
+### ✅ Integration Verification
+- All 38 tool registry tests passing
+- No clippy warnings or errors
+- Code formatted with rustfmt
+- Maintains compatibility with existing tool registration patterns
+- Builds on CLI trait extensions from previous step
+
+The implementation provides a solid foundation for dynamic CLI command generation while maintaining clean separation between MCP and CLI concerns.
