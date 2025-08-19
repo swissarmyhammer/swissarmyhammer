@@ -22,6 +22,9 @@ pub async fn handle_migrate_command(
         MigrateCommands::Cleanup => {
             handle_migrate_cleanup().await?;
         }
+        MigrateCommands::Verify => {
+            handle_migrate_verify().await?;
+        }
     }
     Ok(())
 }
@@ -333,4 +336,121 @@ fn calculate_directory_size(path: &std::path::Path) -> Result<u64, Box<dyn std::
     }
 
     Ok(total_size)
+}
+
+async fn handle_migrate_verify() -> Result<(), Box<dyn std::error::Error>> {
+    println!("🔍 Verifying migration integrity...");
+    
+    let current_dir = std::env::current_dir()?;
+    let destination = current_dir.join(".swissarmyhammer/issues");
+    
+    if !destination.exists() {
+        println!("❌ No migrated issues directory found");
+        println!("   Expected: {}", destination.display());
+        return Ok(());
+    }
+    
+    // Look for backup to compare against
+    let swissarmyhammer_dir = current_dir.join(".swissarmyhammer");
+    let mut backup_path = None;
+    
+    if swissarmyhammer_dir.exists() {
+        for entry in std::fs::read_dir(&swissarmyhammer_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with("issues_backup_") {
+                        backup_path = Some(path);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    let backup = backup_path.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No backup found for verification. A backup is required to verify migration integrity."
+        )
+    })?;
+    
+    println!("📦 Using backup: {}", backup.file_name().unwrap().to_str().unwrap());
+    println!("🎯 Verifying: {}", destination.display());
+    println!();
+    
+    let validation = FileSystemIssueStorage::validate_migration_comprehensive(
+        &backup,
+        &destination,
+    )?;
+    
+    let report = validation.generate_report();
+    
+    // Display results
+    println!("📊 Verification Results");
+    println!("   Files verified: {}/{}", report.verified_files, report.total_files);
+    
+    if report.overall_success {
+        println!("✅ Migration verification passed");
+        println!("   ✓ File integrity check");
+        println!("   ✓ Content verification");
+        println!("   ✓ Directory structure preserved");
+        println!("   ✓ All critical checks passed");
+    } else {
+        println!("❌ Migration verification failed");
+        println!();
+        println!("Critical Issues:");
+        for issue in &report.issues {
+            println!("   🔴 {}", issue);
+        }
+    }
+    
+    if !report.warnings.is_empty() {
+        println!();
+        println!("Warnings:");
+        for warning in &report.warnings {
+            println!("   ⚠️  {}", warning);
+        }
+    }
+    
+    // Show detailed breakdown if there are issues
+    if !report.overall_success || !report.warnings.is_empty() {
+        println!();
+        println!("🔍 Detailed Analysis:");
+        
+        // File integrity details
+        if !validation.file_integrity.missing_files.is_empty() {
+            println!("   Missing files ({}):", validation.file_integrity.missing_files.len());
+            for file in validation.file_integrity.missing_files.iter().take(5) {
+                println!("     • {}", file.display());
+            }
+            if validation.file_integrity.missing_files.len() > 5 {
+                println!("     • ... and {} more", validation.file_integrity.missing_files.len() - 5);
+            }
+        }
+        
+        if !validation.file_integrity.corrupted_files.is_empty() {
+            println!("   Corrupted files ({}):", validation.file_integrity.corrupted_files.len());
+            for file in validation.file_integrity.corrupted_files.iter().take(5) {
+                println!("     • {}", file.display());
+            }
+            if validation.file_integrity.corrupted_files.len() > 5 {
+                println!("     • ... and {} more", validation.file_integrity.corrupted_files.len() - 5);
+            }
+        }
+        
+        if !validation.content_verification.mismatched_files.is_empty() {
+            println!("   Content mismatches ({}):", validation.content_verification.mismatched_files.len());
+            for file in validation.content_verification.mismatched_files.iter().take(5) {
+                println!("     • {}", file.display());
+            }
+            if validation.content_verification.mismatched_files.len() > 5 {
+                println!("     • ... and {} more", validation.content_verification.mismatched_files.len() - 5);
+            }
+        }
+    }
+    
+    Ok(())
 }

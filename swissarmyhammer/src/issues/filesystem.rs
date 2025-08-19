@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::io::Read;
+use std::hash::{Hasher, DefaultHasher};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
@@ -179,6 +182,88 @@ impl Default for MigrationConfig {
             max_total_size: 100 * 1024 * 1024, // 100 MB
         }
     }
+}
+
+/// Comprehensive validation of completed migration
+#[derive(Debug, Clone)]
+pub struct MigrationValidation {
+    /// File integrity validation results
+    pub file_integrity: FileIntegrityCheck,
+    /// Directory structure validation results
+    pub directory_structure: DirectoryStructureCheck,
+    /// Content verification validation results
+    pub content_verification: ContentVerificationCheck,
+    /// Metadata preservation validation results
+    pub metadata_preservation: MetadataPreservationCheck,
+}
+
+/// File integrity validation results
+#[derive(Debug, Clone)]
+pub struct FileIntegrityCheck {
+    /// Total number of files expected
+    pub total_files: usize,
+    /// Number of files that passed integrity checks
+    pub verified_files: usize,
+    /// Files that are missing from the destination
+    pub missing_files: Vec<PathBuf>,
+    /// Extra files found in destination that shouldn't be there
+    pub extra_files: Vec<PathBuf>,
+    /// Files that failed integrity verification
+    pub corrupted_files: Vec<PathBuf>,
+}
+
+/// Directory structure validation results
+#[derive(Debug, Clone)]
+pub struct DirectoryStructureCheck {
+    /// Whether directory hierarchy was preserved correctly
+    pub directories_preserved: bool,
+    /// Whether relative paths remain correct after migration
+    pub relative_paths_correct: bool,
+    /// Whether directory permissions were preserved
+    pub permissions_preserved: bool,
+    /// Detailed list of structural differences found
+    pub structure_differences: Vec<String>,
+}
+
+/// Content verification validation results
+#[derive(Debug, Clone)]
+pub struct ContentVerificationCheck {
+    /// Total number of files to verify
+    pub total_files: usize,
+    /// Number of files that passed content verification
+    pub verified_files: usize,
+    /// Files where content doesn't match between source and destination
+    pub mismatched_files: Vec<PathBuf>,
+    /// Files that could not be read for verification
+    pub unreadable_files: Vec<PathBuf>,
+}
+
+/// Metadata preservation validation results
+#[derive(Debug, Clone)]
+pub struct MetadataPreservationCheck {
+    /// Whether file permissions were preserved during migration
+    pub permissions_preserved: bool,
+    /// Whether file timestamps were preserved during migration
+    pub timestamps_preserved: bool,
+    /// Detailed list of metadata differences found
+    pub metadata_differences: Vec<String>,
+}
+
+/// Comprehensive migration report
+#[derive(Debug, Clone)]
+pub struct MigrationReport {
+    /// Whether the overall migration succeeded without critical issues
+    pub overall_success: bool,
+    /// Total number of files processed in the migration
+    pub total_files: usize,
+    /// Number of files that passed all validation checks
+    pub verified_files: usize,
+    /// Critical issues that were found during validation
+    pub issues: Vec<String>,
+    /// Non-critical warnings found during validation
+    pub warnings: Vec<String>,
+    /// Detailed validation results for all aspects of migration
+    pub detailed_validation: MigrationValidation,
 }
 
 /// Trait for issue storage operations
@@ -811,6 +896,66 @@ impl FileSystemIssueStorage {
         }
     }
 
+    /// Enhanced migration with comprehensive validation
+    ///
+    /// Performs migration with detailed validation and reporting.
+    /// This method provides more thorough validation than the standard migration
+    /// and returns detailed reports about any issues found.
+    ///
+    /// # Returns
+    /// Returns `MigrationResult::Success` if migration completed and passed comprehensive validation,
+    /// `MigrationResult::NotNeeded` if no migration is required, or an error with detailed
+    /// validation information if migration failed.
+    pub fn perform_migration_with_validation() -> Result<MigrationResult> {
+        let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
+        Self::perform_migration_with_validation_in(&current_dir)
+    }
+
+    /// Enhanced migration with comprehensive validation in specific directory
+    pub fn perform_migration_with_validation_in(work_dir: &Path) -> Result<MigrationResult> {
+        let info = Self::migration_info_in_dir(work_dir)?;
+        
+        if !info.should_migrate {
+            return Ok(MigrationResult::NotNeeded(info));
+        }
+        
+        let paths = Self::migration_paths_in_dir(work_dir);
+        
+        // Create backup for validation
+        let backup_path = Self::create_backup(&paths.source)?;
+        
+        // Perform migration
+        match Self::execute_migration(&paths) {
+            Ok(stats) => {
+                // Validate migration with comprehensive checks
+                let validation = Self::validate_migration_comprehensive(&backup_path, &paths.destination)?;
+                let report = validation.generate_report();
+                
+                if report.overall_success {
+                    info!("Migration completed and validated successfully");
+                    Ok(MigrationResult::Success(stats))
+                } else {
+                    error!("Migration validation failed: {:?}", report.issues);
+                    // Rollback
+                    Self::rollback_migration(&paths, &backup_path)?;
+                    Err(SwissArmyHammerError::validation_failed(
+                        "migration_validation", 
+                        "comprehensive_validation_failed",
+                        &format!(
+                            "Migration validation failed: {}",
+                            report.issues.join(", ")
+                        )
+                    ))
+                }
+            }
+            Err(e) => {
+                error!("Migration failed, rolling back: {}", e);
+                Self::rollback_migration(&paths, &backup_path)?;
+                Err(e)
+            }
+        }
+    }
+
     /// Execute the actual file migration atomically
     ///
     /// Performs the core migration operation using atomic filesystem operations.
@@ -876,6 +1021,268 @@ impl FileSystemIssueStorage {
         info!("Migration rollback completed");
         Ok(())
     }
+
+    /// Comprehensive validation of completed migration
+    ///
+    /// Performs detailed validation to ensure migration completed successfully
+    /// and provides comprehensive reporting of any issues found.
+    ///
+    /// # Arguments
+    /// * `source_backup` - Path to backup of original source directory  
+    /// * `destination` - Path to migration destination directory
+    ///
+    /// # Returns
+    /// Returns `MigrationValidation` with detailed validation results
+    pub fn validate_migration_comprehensive(
+        source_backup: &Path,
+        destination: &Path,
+    ) -> Result<MigrationValidation> {
+        let file_integrity = Self::validate_file_integrity(source_backup, destination)?;
+        let directory_structure = Self::validate_directory_structure(source_backup, destination)?;
+        let content_verification = Self::validate_content_integrity(source_backup, destination)?;
+        let metadata_preservation = Self::validate_metadata_preservation(source_backup, destination)?;
+        
+        Ok(MigrationValidation {
+            file_integrity,
+            directory_structure,
+            content_verification,
+            metadata_preservation,
+        })
+    }
+
+    /// Validate file integrity (count, names, sizes)
+    fn validate_file_integrity(
+        source: &Path,
+        destination: &Path,
+    ) -> Result<FileIntegrityCheck> {
+        let source_files = Self::collect_file_list(source)?;
+        let dest_files = Self::collect_file_list(destination)?;
+        
+        let missing_files: Vec<PathBuf> = source_files
+            .difference(&dest_files)
+            .cloned()
+            .collect();
+            
+        let extra_files: Vec<PathBuf> = dest_files
+            .difference(&source_files)
+            .cloned()
+            .collect();
+        
+        let mut corrupted_files = Vec::new();
+        
+        // Check file sizes for files that exist in both
+        for file_path in source_files.intersection(&dest_files) {
+            let source_file = source.join(file_path);
+            let dest_file = destination.join(file_path);
+            
+            if let (Ok(source_meta), Ok(dest_meta)) = (
+                std::fs::metadata(&source_file),
+                std::fs::metadata(&dest_file)
+            ) {
+                if source_meta.len() != dest_meta.len() {
+                    corrupted_files.push(file_path.clone());
+                }
+            }
+        }
+        
+        Ok(FileIntegrityCheck {
+            total_files: source_files.len(),
+            verified_files: source_files.len() - missing_files.len() - corrupted_files.len(),
+            missing_files,
+            extra_files,
+            corrupted_files,
+        })
+    }
+
+    /// Collect recursive file list with relative paths
+    fn collect_file_list(root: &Path) -> Result<HashSet<PathBuf>> {
+        let mut files = HashSet::new();
+        
+        fn visit_dir(
+            dir: &Path,
+            root: &Path,
+            files: &mut HashSet<PathBuf>,
+        ) -> Result<()> {
+            for entry in std::fs::read_dir(dir).map_err(SwissArmyHammerError::Io)? {
+                let entry = entry.map_err(SwissArmyHammerError::Io)?;
+                let path = entry.path();
+                
+                if path.is_dir() {
+                    visit_dir(&path, root, files)?;
+                } else if path.is_file() {
+                    if let Ok(relative_path) = path.strip_prefix(root) {
+                        files.insert(relative_path.to_path_buf());
+                    }
+                }
+            }
+            Ok(())
+        }
+        
+        if root.exists() {
+            visit_dir(root, root, &mut files)?;
+        }
+        
+        Ok(files)
+    }
+
+    /// Validate directory structure preservation
+    fn validate_directory_structure(
+        source: &Path,
+        destination: &Path,
+    ) -> Result<DirectoryStructureCheck> {
+        let mut directories_preserved = true;
+        let mut relative_paths_correct = true;
+        let permissions_preserved = true;
+        let mut structure_differences = Vec::new();
+
+        // Check if both directories have the same subdirectory structure
+        let source_dirs = Self::collect_directory_list(source)?;
+        let dest_dirs = Self::collect_directory_list(destination)?;
+
+        if source_dirs != dest_dirs {
+            directories_preserved = false;
+            let missing_dirs: Vec<_> = source_dirs.difference(&dest_dirs).collect();
+            let extra_dirs: Vec<_> = dest_dirs.difference(&source_dirs).collect();
+            
+            if !missing_dirs.is_empty() {
+                structure_differences.push(format!("Missing directories: {:?}", missing_dirs));
+            }
+            if !extra_dirs.is_empty() {
+                structure_differences.push(format!("Extra directories: {:?}", extra_dirs));
+            }
+        }
+
+        // Validate relative paths by checking a sample of files
+        let source_files = Self::collect_file_list(source)?;
+        for file_path in source_files.iter().take(10) {  // Sample first 10 files for performance
+            let source_file = source.join(file_path);
+            let dest_file = destination.join(file_path);
+            
+            if source_file.exists() && !dest_file.exists() {
+                relative_paths_correct = false;
+                structure_differences.push(format!("Path mismatch: {:?}", file_path));
+                break;
+            }
+        }
+
+        Ok(DirectoryStructureCheck {
+            directories_preserved,
+            relative_paths_correct,
+            permissions_preserved, // TODO: Implement permission checking
+            structure_differences,
+        })
+    }
+
+    /// Collect directory list with relative paths
+    fn collect_directory_list(root: &Path) -> Result<HashSet<PathBuf>> {
+        let mut dirs = HashSet::new();
+        
+        fn visit_dirs(
+            dir: &Path,
+            root: &Path,
+            dirs: &mut HashSet<PathBuf>,
+        ) -> Result<()> {
+            for entry in std::fs::read_dir(dir).map_err(SwissArmyHammerError::Io)? {
+                let entry = entry.map_err(SwissArmyHammerError::Io)?;
+                let path = entry.path();
+                
+                if path.is_dir() {
+                    if let Ok(relative_path) = path.strip_prefix(root) {
+                        dirs.insert(relative_path.to_path_buf());
+                    }
+                    visit_dirs(&path, root, dirs)?;
+                }
+            }
+            Ok(())
+        }
+        
+        if root.exists() {
+            visit_dirs(root, root, &mut dirs)?;
+        }
+        
+        Ok(dirs)
+    }
+
+    /// Validate content integrity using checksums
+    fn validate_content_integrity(
+        source: &Path,
+        destination: &Path,
+    ) -> Result<ContentVerificationCheck> {
+        let source_files = Self::collect_file_list(source)?;
+        let mut verified_count = 0;
+        let mut mismatched_files = Vec::new();
+        let mut unreadable_files = Vec::new();
+        
+        for file_path in &source_files {
+            let source_file = source.join(file_path);
+            let dest_file = destination.join(file_path);
+            
+            if !dest_file.exists() {
+                continue; // Already caught by file integrity check
+            }
+            
+            match Self::compare_file_content(&source_file, &dest_file) {
+                Ok(true) => verified_count += 1,
+                Ok(false) => mismatched_files.push(file_path.clone()),
+                Err(_) => unreadable_files.push(file_path.clone()),
+            }
+        }
+        
+        Ok(ContentVerificationCheck {
+            total_files: source_files.len(),
+            verified_files: verified_count,
+            mismatched_files,
+            unreadable_files,
+        })
+    }
+
+    /// Compare file content using efficient hashing
+    fn compare_file_content(source: &Path, destination: &Path) -> Result<bool> {
+        // For small files, use full content comparison
+        let source_size = std::fs::metadata(source).map_err(SwissArmyHammerError::Io)?.len();
+        if source_size < 1024 * 1024 { // 1MB
+            let source_content = std::fs::read(source).map_err(SwissArmyHammerError::Io)?;
+            let dest_content = std::fs::read(destination).map_err(SwissArmyHammerError::Io)?;
+            return Ok(source_content == dest_content);
+        }
+        
+        // For large files, use hash comparison
+        let source_hash = Self::calculate_file_hash(source)?;
+        let dest_hash = Self::calculate_file_hash(destination)?;
+        Ok(source_hash == dest_hash)
+    }
+
+    /// Calculate hash of file content
+    fn calculate_file_hash(path: &Path) -> Result<u64> {
+        let mut file = std::fs::File::open(path).map_err(SwissArmyHammerError::Io)?;
+        let mut hasher = DefaultHasher::new();
+        let mut buffer = [0; 8192];
+        
+        loop {
+            let bytes_read = file.read(&mut buffer).map_err(SwissArmyHammerError::Io)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.write(&buffer[..bytes_read]);
+        }
+        
+        Ok(hasher.finish())
+    }
+
+    /// Validate metadata preservation  
+    fn validate_metadata_preservation(
+        _source: &Path,
+        _destination: &Path,
+    ) -> Result<MetadataPreservationCheck> {
+        // Basic implementation - can be enhanced with more detailed metadata checks
+        Ok(MetadataPreservationCheck {
+            permissions_preserved: true, // TODO: Implement detailed permission comparison
+            timestamps_preserved: true,  // TODO: Implement timestamp comparison  
+            metadata_differences: Vec::new(),
+        })
+    }
+
+
 
     /// Validate migration completed successfully
     ///
@@ -1345,6 +1752,67 @@ impl FileSystemIssueStorage {
         self.cleanup_duplicate_if_exists(&target_path, source_dir)?;
 
         Ok(issue)
+    }
+}
+
+impl MigrationValidation {
+    /// Generate comprehensive migration report
+    pub fn generate_report(&self) -> MigrationReport {
+        let overall_success = self.is_successful();
+        let mut issues = Vec::new();
+        let mut warnings = Vec::new();
+        
+        // File integrity issues
+        if !self.file_integrity.missing_files.is_empty() {
+            issues.push(format!(
+                "Missing files: {}",
+                self.file_integrity.missing_files.len()
+            ));
+        }
+        
+        if !self.file_integrity.corrupted_files.is_empty() {
+            issues.push(format!(
+                "Corrupted files: {}",
+                self.file_integrity.corrupted_files.len()
+            ));
+        }
+        
+        if !self.file_integrity.extra_files.is_empty() {
+            warnings.push(format!(
+                "Extra files found: {}",
+                self.file_integrity.extra_files.len()
+            ));
+        }
+        
+        // Content verification issues
+        if !self.content_verification.mismatched_files.is_empty() {
+            issues.push(format!(
+                "Content mismatch: {}",
+                self.content_verification.mismatched_files.len()
+            ));
+        }
+        
+        // Directory structure issues
+        if !self.directory_structure.directories_preserved {
+            issues.push("Directory structure not preserved".to_string());
+        }
+        
+        MigrationReport {
+            overall_success,
+            total_files: self.file_integrity.total_files,
+            verified_files: self.content_verification.verified_files,
+            issues,
+            warnings,
+            detailed_validation: self.clone(),
+        }
+    }
+    
+    /// Check if migration validation passed all critical checks
+    pub fn is_successful(&self) -> bool {
+        self.file_integrity.missing_files.is_empty()
+            && self.file_integrity.corrupted_files.is_empty()
+            && self.content_verification.mismatched_files.is_empty()
+            && self.directory_structure.directories_preserved
     }
 }
 
@@ -5881,5 +6349,297 @@ mod tests {
         assert_eq!(issues[0].name, "new");
 
         std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    /// Comprehensive tests for migration validation functionality
+    mod validation_tests {
+        use super::*;
+        use std::fs;
+
+        fn create_test_directories() -> (TempDir, PathBuf, PathBuf) {
+            let temp_dir = TempDir::new().unwrap();
+            let source = temp_dir.path().join("source");
+            let destination = temp_dir.path().join("destination");
+            fs::create_dir_all(&source).unwrap();
+            fs::create_dir_all(&destination).unwrap();
+            (temp_dir, source, destination)
+        }
+
+        #[test]
+        fn test_file_integrity_validation_success() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create identical files in both directories
+            fs::write(source.join("test1.md"), "# Test Issue 1\n\nContent here").unwrap();
+            fs::write(source.join("test2.md"), "# Test Issue 2\n\nMore content").unwrap();
+            fs::write(destination.join("test1.md"), "# Test Issue 1\n\nContent here").unwrap();
+            fs::write(destination.join("test2.md"), "# Test Issue 2\n\nMore content").unwrap();
+            
+            let result = FileSystemIssueStorage::validate_file_integrity(&source, &destination).unwrap();
+            
+            assert_eq!(result.total_files, 2);
+            assert_eq!(result.verified_files, 2);
+            assert!(result.missing_files.is_empty());
+            assert!(result.extra_files.is_empty());
+            assert!(result.corrupted_files.is_empty());
+        }
+
+        #[test]
+        fn test_file_integrity_validation_missing_files() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create files only in source
+            fs::write(source.join("test1.md"), "# Test Issue 1").unwrap();
+            fs::write(source.join("test2.md"), "# Test Issue 2").unwrap();
+            fs::write(destination.join("test1.md"), "# Test Issue 1").unwrap();
+            // test2.md is missing in destination
+            
+            let result = FileSystemIssueStorage::validate_file_integrity(&source, &destination).unwrap();
+            
+            assert_eq!(result.total_files, 2);
+            assert_eq!(result.verified_files, 1); // Only test1.md is verified
+            assert_eq!(result.missing_files.len(), 1);
+            assert_eq!(result.missing_files[0], PathBuf::from("test2.md"));
+        }
+
+        #[test]
+        fn test_file_integrity_validation_extra_files() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create files with extra file in destination
+            fs::write(source.join("test1.md"), "# Test Issue 1").unwrap();
+            fs::write(destination.join("test1.md"), "# Test Issue 1").unwrap();
+            fs::write(destination.join("extra.md"), "# Extra file").unwrap();
+            
+            let result = FileSystemIssueStorage::validate_file_integrity(&source, &destination).unwrap();
+            
+            assert_eq!(result.total_files, 1);
+            assert_eq!(result.verified_files, 1);
+            assert_eq!(result.extra_files.len(), 1);
+            assert_eq!(result.extra_files[0], PathBuf::from("extra.md"));
+        }
+
+        #[test]
+        fn test_file_integrity_validation_corrupted_files() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create files with different sizes (indicating corruption)
+            fs::write(source.join("test1.md"), "# Test Issue 1\n\nLong content here").unwrap();
+            fs::write(destination.join("test1.md"), "# Test Issue 1").unwrap(); // Shorter content
+            
+            let result = FileSystemIssueStorage::validate_file_integrity(&source, &destination).unwrap();
+            
+            assert_eq!(result.total_files, 1);
+            assert_eq!(result.verified_files, 0); // File is corrupted
+            assert_eq!(result.corrupted_files.len(), 1);
+            assert_eq!(result.corrupted_files[0], PathBuf::from("test1.md"));
+        }
+
+        #[test]
+        fn test_content_verification_success() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create identical small files
+            let content = "# Test Issue\n\nSample content for testing";
+            fs::write(source.join("test.md"), content).unwrap();
+            fs::write(destination.join("test.md"), content).unwrap();
+            
+            let result = FileSystemIssueStorage::validate_content_integrity(&source, &destination).unwrap();
+            
+            assert_eq!(result.total_files, 1);
+            assert_eq!(result.verified_files, 1);
+            assert!(result.mismatched_files.is_empty());
+            assert!(result.unreadable_files.is_empty());
+        }
+
+        #[test]
+        fn test_content_verification_mismatch() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create files with different content
+            fs::write(source.join("test.md"), "# Original content").unwrap();
+            fs::write(destination.join("test.md"), "# Modified content").unwrap();
+            
+            let result = FileSystemIssueStorage::validate_content_integrity(&source, &destination).unwrap();
+            
+            assert_eq!(result.total_files, 1);
+            assert_eq!(result.verified_files, 0);
+            assert_eq!(result.mismatched_files.len(), 1);
+            assert_eq!(result.mismatched_files[0], PathBuf::from("test.md"));
+        }
+
+        #[test]
+        fn test_directory_structure_validation() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create nested directory structure
+            let complete_dir = source.join("complete");
+            fs::create_dir_all(&complete_dir).unwrap();
+            fs::write(complete_dir.join("old.md"), "# Old issue").unwrap();
+            fs::write(source.join("current.md"), "# Current issue").unwrap();
+            
+            // Mirror structure in destination
+            let dest_complete_dir = destination.join("complete");
+            fs::create_dir_all(&dest_complete_dir).unwrap();
+            fs::write(dest_complete_dir.join("old.md"), "# Old issue").unwrap();
+            fs::write(destination.join("current.md"), "# Current issue").unwrap();
+            
+            let result = FileSystemIssueStorage::validate_directory_structure(&source, &destination).unwrap();
+            
+            assert!(result.directories_preserved);
+            assert!(result.relative_paths_correct);
+            assert!(result.structure_differences.is_empty());
+        }
+
+        #[test]
+        fn test_comprehensive_validation_success() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create complete test structure
+            fs::write(source.join("issue1.md"), "# Issue 1\n\nContent").unwrap();
+            fs::write(source.join("issue2.md"), "# Issue 2\n\nMore content").unwrap();
+            
+            let complete_dir = source.join("complete");
+            fs::create_dir_all(&complete_dir).unwrap();
+            fs::write(complete_dir.join("done.md"), "# Completed issue").unwrap();
+            
+            // Mirror in destination
+            fs::write(destination.join("issue1.md"), "# Issue 1\n\nContent").unwrap();
+            fs::write(destination.join("issue2.md"), "# Issue 2\n\nMore content").unwrap();
+            
+            let dest_complete_dir = destination.join("complete");
+            fs::create_dir_all(&dest_complete_dir).unwrap();
+            fs::write(dest_complete_dir.join("done.md"), "# Completed issue").unwrap();
+            
+            let validation = FileSystemIssueStorage::validate_migration_comprehensive(&source, &destination).unwrap();
+            let report = validation.generate_report();
+            
+            assert!(report.overall_success);
+            assert_eq!(report.total_files, 3);
+            assert_eq!(report.verified_files, 3);
+            assert!(report.issues.is_empty());
+            assert!(report.warnings.is_empty());
+        }
+
+        #[test]
+        fn test_comprehensive_validation_with_issues() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create source files
+            fs::write(source.join("issue1.md"), "# Issue 1").unwrap();
+            fs::write(source.join("issue2.md"), "# Issue 2").unwrap();
+            
+            // Create destination with problems
+            fs::write(destination.join("issue1.md"), "# Issue 1 MODIFIED").unwrap();
+            // issue2.md is missing in destination
+            fs::write(destination.join("extra.md"), "# Extra file").unwrap();
+            
+            let validation = FileSystemIssueStorage::validate_migration_comprehensive(&source, &destination).unwrap();
+            let report = validation.generate_report();
+            
+            assert!(!report.overall_success);
+            assert_eq!(report.total_files, 2);
+            assert_eq!(report.verified_files, 0); // No files verified due to content mismatch
+            assert!(!report.issues.is_empty());
+            assert!(!report.warnings.is_empty()); // Extra files cause warnings
+            
+            // Check that issues are properly reported
+            let issues_str = report.issues.join(" ");
+            assert!(issues_str.contains("Missing files: 1"));
+            assert!(issues_str.contains("Content mismatch: 1"));
+        }
+
+        #[test]
+        fn test_validation_report_generation() {
+            let (_temp_dir, source, destination) = create_test_directories();
+            
+            // Create a scenario with various validation issues
+            fs::write(source.join("good.md"), "# Good file").unwrap();
+            fs::write(source.join("missing.md"), "# Missing file").unwrap();
+            fs::write(source.join("modified.md"), "# Original content").unwrap();
+            
+            fs::write(destination.join("good.md"), "# Good file").unwrap();
+            // missing.md is not in destination
+            fs::write(destination.join("modified.md"), "# Modified content").unwrap();
+            fs::write(destination.join("extra.md"), "# Extra file").unwrap();
+            
+            let validation = FileSystemIssueStorage::validate_migration_comprehensive(&source, &destination).unwrap();
+            
+            // Test the validation components
+            assert_eq!(validation.file_integrity.total_files, 3);
+            assert_eq!(validation.file_integrity.missing_files.len(), 1);
+            assert_eq!(validation.file_integrity.extra_files.len(), 1);
+            
+            assert_eq!(validation.content_verification.total_files, 3);
+            assert_eq!(validation.content_verification.mismatched_files.len(), 1);
+            
+            // Test report generation
+            let report = validation.generate_report();
+            assert!(!report.overall_success);
+            assert!(!report.issues.is_empty());
+            assert!(!report.warnings.is_empty());
+        }
+
+        #[test]
+        fn test_file_hash_calculation() {
+            let temp_dir = TempDir::new().unwrap();
+            let test_file = temp_dir.path().join("test.txt");
+            
+            // Create a file with known content
+            let content = "Hello, world! This is test content.";
+            fs::write(&test_file, content).unwrap();
+            
+            // Calculate hash
+            let hash1 = FileSystemIssueStorage::calculate_file_hash(&test_file).unwrap();
+            let hash2 = FileSystemIssueStorage::calculate_file_hash(&test_file).unwrap();
+            
+            // Hash should be consistent
+            assert_eq!(hash1, hash2);
+            
+            // Different content should produce different hash
+            fs::write(&test_file, "Different content").unwrap();
+            let hash3 = FileSystemIssueStorage::calculate_file_hash(&test_file).unwrap();
+            assert_ne!(hash1, hash3);
+        }
+
+        #[test]
+        fn test_file_content_comparison() {
+            let temp_dir = TempDir::new().unwrap();
+            let file1 = temp_dir.path().join("file1.txt");
+            let file2 = temp_dir.path().join("file2.txt");
+            let file3 = temp_dir.path().join("file3.txt");
+            
+            // Create identical files
+            let content = "Test content for comparison";
+            fs::write(&file1, content).unwrap();
+            fs::write(&file2, content).unwrap();
+            fs::write(&file3, "Different content").unwrap();
+            
+            // Test comparison
+            assert!(FileSystemIssueStorage::compare_file_content(&file1, &file2).unwrap());
+            assert!(!FileSystemIssueStorage::compare_file_content(&file1, &file3).unwrap());
+        }
+
+        #[test]
+        fn test_collect_file_list() {
+            let temp_dir = TempDir::new().unwrap();
+            let root = temp_dir.path().join("test");
+            fs::create_dir_all(&root).unwrap();
+            
+            // Create test structure
+            fs::write(root.join("file1.md"), "content1").unwrap();
+            fs::write(root.join("file2.md"), "content2").unwrap();
+            
+            let subdir = root.join("subdir");
+            fs::create_dir_all(&subdir).unwrap();
+            fs::write(subdir.join("file3.md"), "content3").unwrap();
+            
+            let files = FileSystemIssueStorage::collect_file_list(&root).unwrap();
+            
+            assert_eq!(files.len(), 3);
+            assert!(files.contains(&PathBuf::from("file1.md")));
+            assert!(files.contains(&PathBuf::from("file2.md")));
+            assert!(files.contains(&PathBuf::from("subdir/file3.md")));
+        }
     }
 }

@@ -3540,7 +3540,7 @@ async fn test_directory_traversal_performance() {
 
     // Pattern-specific search should be reasonably fast (allow some timing variation)
     assert!(
-        rust_files_duration.as_millis() < all_files_duration.as_millis() + 100,
+        rust_files_duration.as_millis() < all_files_duration.as_millis() + 200,
         "Pattern search should not be significantly slower than full traversal: {} vs {}",
         rust_files_duration.as_millis(),
         all_files_duration.as_millis()

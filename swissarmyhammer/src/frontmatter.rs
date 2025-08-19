@@ -35,13 +35,13 @@ pub struct Frontmatter {
 /// description: A test document
 /// ---
 ///
-/// # Main Content
+/// Main Content
 /// This is the body.
 /// "#;
 ///
 /// let result = parse_frontmatter(content).unwrap();
 /// assert!(result.metadata.is_some());
-/// assert!(result.content.contains("# Main Content"));
+/// assert!(result.content.contains("Main Content"));
 /// ```
 pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
     // Check for partial marker first - these don't have frontmatter
@@ -57,7 +57,7 @@ pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
         let parts: Vec<&str> = content.splitn(3, "---\n").collect();
         if parts.len() >= 3 {
             let yaml_content = parts[1];
-            let body_content = parts[2].trim_start().to_string();
+            let body_content = parts[2].to_string();
 
             // Parse YAML frontmatter
             let yaml_value: serde_yaml::Value =
@@ -191,7 +191,7 @@ Content after empty frontmatter
     }
 
     #[test]
-    fn test_parse_frontmatter_content_trimming() {
+    fn test_parse_frontmatter_content_preservation() {
         let content = r#"---
 title: Test
 ---
@@ -202,10 +202,11 @@ This should have leading whitespace preserved.
 
         let result = parse_frontmatter(content).unwrap();
         assert!(result.metadata.is_some());
-        // Content should be trimmed of leading newlines but preserve indentation
+        
+        // Content should preserve ALL whitespace after frontmatter, including newlines and indentation
         assert!(result
             .content
-            .starts_with("# Content with Leading Whitespace"));
+            .starts_with("\n    # Content with Leading Whitespace"));
         assert!(result
             .content
             .contains("This should have leading whitespace"));

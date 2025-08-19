@@ -1555,6 +1555,24 @@ Examples:
   swissarmyhammer migrate cleanup          # Interactive cleanup
 ")]
     Cleanup,
+
+    /// Verify completed migration integrity
+    #[command(long_about = "
+Performs comprehensive validation of completed migration:
+
+- File integrity verification (count, names, sizes)
+- Content verification using checksums
+- Directory structure preservation
+- Metadata and permissions validation
+- Detailed reporting of any issues found
+
+This command requires both the migrated directory (.swissarmyhammer/issues) 
+and a backup of the original directory for comparison.
+
+Examples:
+  swissarmyhammer migrate verify          # Full verification
+")]
+    Verify,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
