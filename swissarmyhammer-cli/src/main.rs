@@ -141,10 +141,11 @@ async fn main() {
         Some(Commands::Validate {
             quiet,
             format,
+            exclusions,
             workflow_dirs,
         }) => {
             tracing::info!("Running validate command");
-            run_validate(quiet, format, workflow_dirs)
+            run_validate(quiet, format, exclusions, workflow_dirs)
         }
         Some(Commands::Issue { subcommand }) => {
             tracing::info!("Running issue command");
@@ -370,10 +371,10 @@ async fn run_search(subcommand: cli::SearchCommands) -> i32 {
 /// - 0: Success (no errors or warnings)
 /// - 1: Warnings found
 /// - 2: Errors found
-fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<String>) -> i32 {
+fn run_validate(quiet: bool, format: cli::ValidateFormat, exclusions: bool, workflow_dirs: Vec<String>) -> i32 {
     use validate;
 
-    match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs) {
+    match validate::run_validate_command_with_dirs(quiet, format, exclusions, workflow_dirs) {
         Ok(exit_code) => exit_code,
         Err(e) => {
             tracing::error!("Validate error: {}", e);

@@ -70,9 +70,16 @@ pub mod attribute_detection;
 /// Comprehensive examples demonstrating the CLI exclusion system
 pub mod examples;
 
+/// CLI exclusion validation system
+pub mod validator;
+
 #[cfg(test)]
 mod integration_tests;
 
 pub use attribute_detection::{
     CliExclusionDetector, CliExclusionMarker, RegistryCliExclusionDetector, ToolCliMetadata,
+};
+pub use validator::{
+    DevUtilities, DocumentationGenerator, ExclusionValidator, ToolAnalysis, ToolSuggestion, 
+    ValidationConfig, ValidationIssue, ValidationReport, ValidationSummary, ValidationWarning,
 };
