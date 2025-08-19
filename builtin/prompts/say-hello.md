@@ -7,7 +7,7 @@ tags:
   - greeting
   - hello
   - example
-arguments:
+parameters:
   - name: name
     description: The name of the person to greet
     required: false
@@ -16,6 +16,10 @@ arguments:
     description: The language to greet in
     required: false
     default: English
+  - name: project_name
+    description: Name of the project
+    required: false
+    default: Swiss Army Hammer
 ---
 
 DO NOT run any tools to perform this task:

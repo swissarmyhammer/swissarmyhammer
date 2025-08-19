@@ -266,6 +266,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_when_file_does_not_exist() {
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
@@ -284,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_abort_file_cleanup_continues_on_permission_error() {
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
@@ -319,6 +321,11 @@ mod tests {
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
+
+        let abort_path = ".swissarmyhammer/.abort";
+
+        // Create the .swissarmyhammer directory if it doesn't exist
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
 
         // Create first abort file
         std::fs::write(abort_path_str, "first abort reason").unwrap();
@@ -514,6 +521,9 @@ mod tests {
         let abort_path_str = ".swissarmyhammer/.abort";
 
         // Create the .swissarmyhammer directory
+        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+
+        // Create the .swissarmyhammer directory if it doesn't exist
         std::fs::create_dir_all(".swissarmyhammer").unwrap();
 
         // Create abort file

@@ -126,13 +126,16 @@ pub fn run_search_command(
 
             let arguments = result
                 .prompt
-                .arguments
+                .parameters
                 .iter()
-                .map(|arg| SearchArgument {
-                    name: arg.name.clone(),
-                    description: arg.description.clone(),
-                    required: arg.required,
-                    default: arg.default.clone(),
+                .map(|param| SearchArgument {
+                    name: param.name.clone(),
+                    description: Some(param.description.clone()),
+                    required: param.required,
+                    default: param
+                        .default
+                        .as_ref()
+                        .and_then(|v| v.as_str().map(String::from)),
                 })
                 .collect();
 

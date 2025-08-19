@@ -8,7 +8,7 @@ tags:
   - usage
   - guide
   - documentation
-arguments:
+parameters:
   - name: topic
     description: Specific help topic to focus on (optional)
     required: false

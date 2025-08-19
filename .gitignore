@@ -73,3 +73,7 @@ doc/book
 tests/test-home/
 
 Cargo.lock
+
+# Test workflow files (not part of the project source)
+builtin/workflows/*-test.md
+.swissarmyhammer/workflows/

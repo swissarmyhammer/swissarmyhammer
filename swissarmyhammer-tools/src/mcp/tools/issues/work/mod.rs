@@ -120,12 +120,12 @@ impl McpTool for WorkIssueTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
+    use swissarmyhammer::test_utils::IsolatedTestHome;
     use tempfile::TempDir;
 
     #[test]
-    #[serial]
     fn test_create_abort_file() {
+        let _guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 

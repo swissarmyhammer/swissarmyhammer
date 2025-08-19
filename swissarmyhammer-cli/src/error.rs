@@ -79,6 +79,131 @@ pub fn handle_cli_result<T>(result: CliResult<T>) -> i32 {
     }
 }
 
+/// Convert parameter errors to CLI errors with enhanced context
+impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
+    fn from(error: swissarmyhammer::common::parameters::ParameterError) -> Self {
+        use swissarmyhammer::common::parameters::{ErrorMessageEnhancer, ParameterError};
+
+        let enhancer = ErrorMessageEnhancer::new();
+        let enhanced_error = enhancer.enhance_parameter_error(&error);
+
+        let exit_code = match &enhanced_error {
+            ParameterError::MaxAttemptsExceeded { .. } => EXIT_ERROR,
+            ParameterError::ValidationFailedWithContext { recoverable, .. }
+            | ParameterError::PatternMismatchEnhanced { recoverable, .. }
+            | ParameterError::InvalidChoiceEnhanced { recoverable, .. } => {
+                if *recoverable {
+                    EXIT_WARNING
+                } else {
+                    EXIT_ERROR
+                }
+            }
+            _ => EXIT_ERROR,
+        };
+
+        Self {
+            message: format_enhanced_parameter_error(&enhanced_error),
+            exit_code,
+            source: Some(Box::new(error)),
+        }
+    }
+}
+
+/// Format enhanced parameter errors for CLI display
+fn format_enhanced_parameter_error(
+    error: &swissarmyhammer::common::parameters::ParameterError,
+) -> String {
+    use swissarmyhammer::common::parameters::ParameterError;
+
+    match error {
+        ParameterError::ValidationFailedWithContext {
+            parameter, details, ..
+        } => {
+            let mut output = format!(
+                "❌ Parameter '{}' validation failed: {}",
+                parameter, details.message
+            );
+
+            if let Some(explanation) = &details.explanation {
+                output.push_str(&format!("\n   {explanation}"));
+            }
+
+            if !details.examples.is_empty() {
+                output.push_str(&format!("\n   Examples: {}", details.examples.join(", ")));
+            }
+
+            for suggestion in &details.suggestions {
+                output.push_str(&format!("\n💡 {suggestion}"));
+            }
+
+            output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
+            output.push_str("\n🔄 To fix this interactively, run: sah <command> --interactive");
+
+            output
+        }
+
+        ParameterError::PatternMismatchEnhanced {
+            parameter, details, ..
+        } => {
+            let mut output = format!(
+                "❌ Parameter '{}' format is invalid: '{}'",
+                parameter, details.value
+            );
+            output.push_str(&format!("\n   {}", details.pattern_description));
+
+            if !details.examples.is_empty() && details.examples.len() <= 3 {
+                output.push_str(&format!("\n   Examples: {}", details.examples.join(", ")));
+            } else if !details.examples.is_empty() {
+                output.push_str(&format!(
+                    "\n   Examples: {}",
+                    details.examples[..2].join(", ")
+                ));
+            }
+
+            output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
+            output.push_str("\n🔄 To fix this interactively, run: sah <command> --interactive");
+
+            output
+        }
+
+        ParameterError::InvalidChoiceEnhanced {
+            parameter, details, ..
+        } => {
+            let mut output = format!(
+                "❌ Parameter '{}' has invalid value: '{}'",
+                parameter, details.value
+            );
+
+            if let Some(suggestion) = &details.did_you_mean {
+                output.push_str(&format!("\n💡 Did you mean '{suggestion}'?"));
+            } else if details.choices.len() <= 5 {
+                output.push_str(&format!(
+                    "\n💡 Valid options: {}",
+                    details.choices.join(", ")
+                ));
+            } else {
+                output.push_str(&format!("\n💡 {} options available", details.choices.len()));
+            }
+
+            output.push_str("\n\n📖 For parameter details, run: sah <command> --help");
+            output.push_str("\n🔄 To fix this interactively, run: sah <command> --interactive");
+
+            output
+        }
+
+        ParameterError::MaxAttemptsExceeded {
+            parameter,
+            attempts,
+        } => {
+            format!("❌ Maximum retry attempts exceeded for parameter '{parameter}' ({attempts} attempts)\n\n📖 Use --help to see parameter requirements\n🔄 Check your input format and try again")
+        }
+
+        _ => {
+            format!("❌ Workflow parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
+        }
+    }
+}
+
 /// Convert MCP errors to CLI errors with appropriate exit codes
 impl From<rmcp::Error> for CliError {
     fn from(error: rmcp::Error) -> Self {

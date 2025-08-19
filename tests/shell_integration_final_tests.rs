@@ -4,7 +4,6 @@
 //! including integration validation, performance testing, security verification, and quality assurance.
 
 use assert_cmd::Command;
-use serial_test::serial;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -334,7 +333,6 @@ mod quality_assurance {
     use super::*;
 
     #[tokio::test]
-    #[serial]
     async fn test_cross_platform_behavior() {
         let _guard = IsolatedTestEnvironment::new();
         

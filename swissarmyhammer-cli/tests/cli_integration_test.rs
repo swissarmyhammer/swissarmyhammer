@@ -253,16 +253,16 @@ fn test_flow_test_with_set_variables() -> Result<()> {
             "flow",
             "test",
             "greeting",
-            "--set",
+            "--var",
             "name=TestUser",
-            "--set",
+            "--var",
             "language=Spanish",
         ])
         .output()?;
 
     assert!(
         output.status.success(),
-        "flow test with --set variables should succeed"
+        "flow test with --var variables should succeed"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -399,17 +399,17 @@ stateDiagram-v2
     Ok(())
 }
 
-/// Test flow test command with invalid set variable format
+/// Test flow test command with invalid var variable format
 #[test]
 fn test_flow_test_invalid_set_format() -> Result<()> {
     let output = Command::cargo_bin("sah")
         .unwrap()
-        .args(["flow", "test", "greeting", "--set", "invalid_format"])
+        .args(["flow", "test", "greeting", "--var", "invalid_format"])
         .output()?;
 
     assert!(
         !output.status.success(),
-        "flow test with invalid --set format should fail"
+        "flow test with invalid --var format should fail"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -433,8 +433,8 @@ fn test_flow_test_help() -> Result<()> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("--set"),
-        "help should mention --set parameter"
+        stdout.contains("--var"),
+        "help should mention --var parameter"
     );
     assert!(
         stdout.contains("--timeout"),
@@ -484,9 +484,9 @@ fn test_flow_test_empty_set_value() -> Result<()> {
             "flow",
             "test",
             "greeting",
-            "--set",
+            "--var",
             "name=",
-            "--set",
+            "--var",
             "language=English",
         ])
         .output()?;
@@ -509,9 +509,9 @@ fn test_flow_test_special_chars_in_set() -> Result<()> {
             "flow",
             "test",
             "greeting",
-            "--set",
+            "--var",
             "name=Test User 123",
-            "--set",
+            "--var",
             r#"language="English (US)""#,
         ])
         .output()?;
@@ -540,7 +540,7 @@ async fn test_concurrent_flow_test() -> Result<()> {
                     "flow",
                     "test",
                     "hello-world",
-                    "--set",
+                    "--var",
                     &format!("run_id={i}"),
                 ])
                 .output()
@@ -870,7 +870,7 @@ fn test_root_validate_invalid_yaml() -> Result<()> {
         r#"---
 title: Test Prompt
 description: This has invalid YAML
-arguments:
+parameters:
   - name: test
     required: yes  # Should be boolean true/false, not yes/no
     description
@@ -908,7 +908,7 @@ fn test_root_validate_missing_fields() -> Result<()> {
         prompts_dir.join("incomplete.md"),
         r#"---
 # Missing title and description
-arguments:
+parameters:
   - name: test
     required: true
 ---
@@ -960,7 +960,7 @@ fn test_root_validate_undefined_variables() -> Result<()> {
         r#"---
 title: Test Undefined Variables
 description: This uses variables not defined in arguments
-arguments:
+parameters:
   - name: defined_var
     required: true
 ---
@@ -1116,7 +1116,7 @@ fn test_root_validate_mixed_valid_invalid_prompts() -> Result<()> {
         r#"---
 title: Valid Prompt
 description: This is a valid prompt
-arguments:
+parameters:
   - name: test
     required: true
     default: "value"
@@ -1396,16 +1396,16 @@ fn test_root_validate_quiet_mode_warnings_behavior() -> Result<()> {
         r#"---
 title: Warning Only Prompt
 description: This prompt has a warning due to unused argument
-arguments:
+parameters:
   - name: unused_var
     required: false
     description: This variable is defined but not used in template
   - name: used_var
-    required: true
+    required: false
     description: This variable is used in template
 ---
 
-This prompt uses {{ used_var }} but not unused_var, creating a warning."#,
+This prompt uses {{ used_var | default: "default_value" }} but not unused_var, creating a warning."#,
     )?;
 
     // Test in quiet mode - should produce no output for warnings only
@@ -1477,7 +1477,7 @@ fn test_root_validate_quiet_mode_with_errors_and_warnings() -> Result<()> {
         r#"---
 title: Warning Prompt
 description: This prompt has warnings
-arguments:
+parameters:
   - name: unused_var
     required: false
     description: This variable is not used
@@ -1495,7 +1495,7 @@ This prompt uses {{ used_var }} but not unused_var."#,
         r#"---
 title: Test Undefined Variables
 description: This uses variables not defined in arguments
-arguments:
+parameters:
   - name: defined_var
     required: true
 ---

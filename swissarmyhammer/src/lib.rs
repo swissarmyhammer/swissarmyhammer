@@ -72,6 +72,9 @@ pub mod plugins;
 /// Workflow system for state-based execution
 pub mod workflow;
 
+/// Shared frontmatter parsing functionality
+pub mod frontmatter;
+
 /// Issue tracking and management
 pub mod issues;
 
@@ -135,7 +138,7 @@ pub use prompt_resolver::PromptResolver;
 pub use file_loader::FileSource as PromptSource;
 
 /// Core prompt management types and functionality
-pub use prompts::{ArgumentSpec, Prompt, PromptLibrary, PromptLoader};
+pub use prompts::{Prompt, PromptLibrary, PromptLoader};
 
 /// Storage backends and abstractions
 pub use storage::{PromptStorage, StorageBackend};

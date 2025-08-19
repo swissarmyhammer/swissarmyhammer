@@ -97,6 +97,11 @@ reqwest = { workspace = true }
 # Progress bars and user interface
 indicatif = { workspace = true }
 
+# CLI argument parsing
+clap = { workspace = true }
+dialoguer = { workspace = true }
+is-terminal = { workspace = true }
+
 
 [features]
 default = ["semantic-search"]

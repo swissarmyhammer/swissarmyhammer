@@ -2,7 +2,7 @@
 name: review-accessibility
 title: Accessibility Review
 description: Review code for accessibility compliance and best practices
-arguments:
+parameters:
   - name: wcag_level
     description: WCAG compliance level target (A, AA, AAA)
     required: false

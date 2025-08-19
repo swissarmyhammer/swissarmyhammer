@@ -2,7 +2,7 @@
 name: prompts-improve
 title: Improve Existing Prompt
 description: Analyze and enhance existing prompts for better effectiveness
-arguments:
+parameters:
   - name: prompt_content
     description: The current prompt content (including YAML front matter)
     required: true

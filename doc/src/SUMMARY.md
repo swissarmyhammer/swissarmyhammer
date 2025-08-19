@@ -14,6 +14,7 @@
 - [Features Overview](features-overview.md)
 - [Prompts](prompts.md)
 - [Workflows](workflows.md)
+- [Workflow Parameters](workflow-parameters.md)
 - [Template System](templates.md)
 
 # Features
@@ -52,6 +53,10 @@
 - [Basic Examples](examples/basic.md)
 - [Advanced Examples](examples/advanced.md)
 - [Integration Examples](examples/integration.md)
+- [Workflow Parameters](examples/workflow-parameters/)
+  - [Basic Parameter Usage](examples/workflow-parameters/basic-parameters.md)
+  - [Advanced Features](examples/workflow-parameters/advanced-features.md)
+  - [Migration Guide](examples/workflow-parameters/migration-guide.md)
 
 # Troubleshooting
 

@@ -345,14 +345,14 @@ impl Drop for IsolatedTestHome {
 
 /// RAII helper that isolates both HOME directory and current working directory for tests
 /// This prevents abort file pollution between tests by ensuring each test runs in its own environment
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub struct IsolatedTestEnvironment {
     _home_guard: IsolatedTestHome,
     _temp_dir: TempDir,
     original_cwd: PathBuf,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl IsolatedTestEnvironment {
     /// Creates a new isolated test environment with temporary HOME and current working directory.
     ///
@@ -384,7 +384,7 @@ impl IsolatedTestEnvironment {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl Drop for IsolatedTestEnvironment {
     fn drop(&mut self) {
         // Restore original working directory
@@ -577,6 +577,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial]
     fn test_setup_test_home() {
         let _guard = IsolatedTestHome::new();
 

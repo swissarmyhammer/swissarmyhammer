@@ -1582,8 +1582,9 @@ mod tests {
         git_ops.create_work_branch("test_issue").unwrap();
 
         // Switch back to main and delete feature branch
-        git_ops.checkout_branch("main").unwrap();
-        git_ops.delete_branch("feature/test", true).unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
+        git_ops.delete_branch("feature/test").unwrap();
 
         // Auto merge should fail because the source branch (feature/test) was deleted
         // and reflog-based detection cannot find a valid target branch
@@ -1757,7 +1758,8 @@ mod tests {
             git_ops.create_work_branch("detailed_issue").unwrap();
 
             // Switch back and try to merge to nonexistent branch
-            git_ops.checkout_branch("main").unwrap();
+            let main_branch = git_ops.main_branch().unwrap();
+            git_ops.checkout_branch(&main_branch).unwrap();
             let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
             assert!(result.is_err());
 

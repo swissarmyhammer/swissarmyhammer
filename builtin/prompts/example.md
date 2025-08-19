@@ -8,7 +8,7 @@ tags:
   - template
   - demo
   - tutorial
-arguments:
+parameters:
   - name: task
     description: The task or operation to demonstrate
     required: true
@@ -21,6 +21,10 @@ arguments:
     description: Complexity level (simple, moderate, advanced)
     required: false
     default: moderate
+  - name: project_name
+    description: Name of the project being worked on
+    required: false
+    default: Example Project
 ---
 
 # Example Prompt: {{ task | capitalize }}

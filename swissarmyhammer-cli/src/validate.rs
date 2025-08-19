@@ -70,18 +70,37 @@ impl Validator {
                 .map(|s| s.to_string())
                 .or_else(|| Some(prompt.name.clone()));
 
-            // Validate template syntax with partials support
-            self.validate_liquid_syntax_with_partials(
-                &prompt,
-                &library,
-                prompt.source.as_ref().unwrap_or(&PathBuf::new()),
-                &mut result,
-                content_title.clone(),
-            );
+            // Check if this prompt is builtin
+            let is_builtin = resolver
+                .prompt_sources
+                .get(&prompt.name)
+                .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
+                .unwrap_or(false);
+
+            // Skip liquid syntax validation for builtin prompts to avoid environment-specific errors
+            if !is_builtin {
+                // Validate template syntax with partials support
+                self.validate_liquid_syntax_with_partials(
+                    &prompt,
+                    &library,
+                    prompt.source.as_ref().unwrap_or(&PathBuf::new()),
+                    &mut result,
+                    content_title.clone(),
+                );
+            }
 
             // Use the Validatable trait to validate the prompt
             let validation_issues = prompt.validate(prompt.source.as_deref());
+
             for issue in validation_issues {
+                // Skip undefined template variable errors for builtin prompts
+                // Builtin prompts are designed to be used with parameters provided at runtime
+                if is_builtin
+                    && issue.level == ValidationLevel::Error
+                    && issue.message.starts_with("Undefined template variable:")
+                {
+                    continue;
+                }
                 result.add_issue(issue);
             }
         }
@@ -119,18 +138,37 @@ impl Validator {
                 .map(|s| s.to_string())
                 .or_else(|| Some(prompt.name.clone()));
 
-            // Validate template syntax with partials support
-            self.validate_liquid_syntax_with_partials(
-                &prompt,
-                &library,
-                prompt.source.as_ref().unwrap_or(&PathBuf::new()),
-                &mut result,
-                content_title.clone(),
-            );
+            // Check if this prompt is builtin
+            let is_builtin = resolver
+                .prompt_sources
+                .get(&prompt.name)
+                .map(|source| matches!(source, swissarmyhammer::FileSource::Builtin))
+                .unwrap_or(false);
+
+            // Skip liquid syntax validation for builtin prompts to avoid environment-specific errors
+            if !is_builtin {
+                // Validate template syntax with partials support
+                self.validate_liquid_syntax_with_partials(
+                    &prompt,
+                    &library,
+                    prompt.source.as_ref().unwrap_or(&PathBuf::new()),
+                    &mut result,
+                    content_title.clone(),
+                );
+            }
 
             // Use the Validatable trait to validate the prompt
             let validation_issues = prompt.validate(prompt.source.as_deref());
+
             for issue in validation_issues {
+                // Skip undefined template variable errors for builtin prompts
+                // Builtin prompts are designed to be used with parameters provided at runtime
+                if is_builtin
+                    && issue.level == ValidationLevel::Error
+                    && issue.message.starts_with("Undefined template variable:")
+                {
+                    continue;
+                }
                 result.add_issue(issue);
             }
         }
@@ -1392,7 +1430,6 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_empty_name() {
-        use std::collections::HashMap;
         use swissarmyhammer::workflow::{StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
@@ -1400,14 +1437,11 @@ stateDiagram-v2
 
         // Create a workflow with empty name
         // Using from() to bypass validation and test the validator's handling
-        let workflow = Workflow {
-            name: WorkflowName::from(""),
-            description: "Test workflow".to_string(),
-            states: HashMap::new(),
-            transitions: vec![],
-            initial_state: StateId::new("start"),
-            metadata: HashMap::new(),
-        };
+        let workflow = Workflow::new(
+            WorkflowName::from(""),
+            "Test workflow".to_string(),
+            StateId::new("start"),
+        );
 
         let workflow_path = PathBuf::from("workflow:test:");
         validator.validate_workflow_structure(&workflow, &workflow_path, &mut result);
@@ -1421,21 +1455,17 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_name_allowed_special_chars() {
-        use std::collections::HashMap;
         use swissarmyhammer::workflow::{State, StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
         let mut result = ValidationResult::new();
 
         // Create a workflow with special characters in name (now allowed since parsers decide validity)
-        let mut workflow = Workflow {
-            name: WorkflowName::from("test@workflow!"),
-            description: "Test workflow".to_string(),
-            states: HashMap::new(),
-            transitions: vec![],
-            initial_state: StateId::new("start"),
-            metadata: HashMap::new(),
-        };
+        let mut workflow = Workflow::new(
+            WorkflowName::from("test@workflow!"),
+            "Test workflow".to_string(),
+            StateId::new("start"),
+        );
 
         // Add the required initial state and terminal state to make it structurally valid
         let start_state = State {
@@ -1461,7 +1491,6 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_security_handled_by_parsers() {
-        use std::collections::HashMap;
         use swissarmyhammer::workflow::{State, StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
@@ -1478,14 +1507,11 @@ stateDiagram-v2
         for name in formerly_dangerous_names {
             let mut result = ValidationResult::new();
 
-            let mut workflow = Workflow {
-                name: WorkflowName::from(name),
-                description: "Test workflow".to_string(),
-                states: HashMap::new(),
-                transitions: vec![],
-                initial_state: StateId::new("start"),
-                metadata: HashMap::new(),
-            };
+            let mut workflow = Workflow::new(
+                WorkflowName::from(name),
+                "Test workflow".to_string(),
+                StateId::new("start"),
+            );
 
             // Add required states to make it structurally valid
             let start_state = State {

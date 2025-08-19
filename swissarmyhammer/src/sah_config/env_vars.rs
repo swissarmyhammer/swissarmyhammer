@@ -241,7 +241,7 @@ impl Default for EnvVarProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
+    use crate::test_utils::IsolatedTestEnvironment;
 
     #[test]
     fn test_new_processor() {
@@ -250,8 +250,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_substitute_with_default() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         // Ensure variable is not set
@@ -264,8 +264,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_substitute_with_env_var() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         env::set_var("TEST_DB_HOST", "production.example.com");
@@ -280,8 +280,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_substitute_required_variable_found() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         env::set_var("TEST_REQUIRED_VAR", "required_value");
@@ -296,8 +296,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_substitute_required_variable_missing() {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new().unwrap();
 
         env::remove_var("TEST_MISSING_REQUIRED");
@@ -310,8 +310,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_multiple_substitutions() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         env::set_var("DB_HOST", "db.example.com");
@@ -448,8 +448,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_empty_default_value() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         env::remove_var("TEST_EMPTY_DEFAULT");
@@ -461,8 +461,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_special_characters_in_default() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         env::remove_var("TEST_SPECIAL_DEFAULT");
@@ -475,8 +475,8 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_same_variable_multiple_times() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
         env::set_var("TEST_REPEATED_VAR", "repeated_value");

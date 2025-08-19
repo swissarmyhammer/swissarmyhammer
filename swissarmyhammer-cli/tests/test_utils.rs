@@ -62,7 +62,7 @@ pub fn create_test_prompt_files(prompts_dir: &Path) -> Result<()> {
         yaml_content.push_str(&format!("description: Test prompt for {name}\n"));
 
         if !args.is_empty() {
-            yaml_content.push_str("arguments:\n");
+            yaml_content.push_str("parameters:\n");
             for (arg_name, desc, required) in args {
                 yaml_content.push_str(&format!("  - name: {arg_name}\n"));
                 yaml_content.push_str(&format!("    description: {desc}\n"));
