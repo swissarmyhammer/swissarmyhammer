@@ -361,10 +361,48 @@ impl IsolatedTestEnvironment {
     /// - A temporary current working directory
     /// - Automatic restoration of original directories on drop
     pub fn new() -> std::io::Result<Self> {
+        // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
+        for attempt in 1..=3 {
+            match Self::try_create() {
+                Ok(env) => return Ok(env),
+                Err(e) if attempt < 3 => {
+                    // Add small delay before retry to reduce contention
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
+    }
+    
+    /// Try to create an isolated test environment (single attempt)
+    fn try_create() -> std::io::Result<Self> {
         let original_cwd = std::env::current_dir()?;
         let home_guard = IsolatedTestHome::new();
         let temp_dir = TempDir::new()?;
-        std::env::set_current_dir(temp_dir.path())?;
+        
+        // Ensure the temporary directory exists and is accessible before changing to it
+        let temp_path = temp_dir.path();
+        if !temp_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Temporary directory does not exist: {:?}", temp_path)
+            ));
+        }
+        
+        // Verify we can access the directory
+        match std::fs::read_dir(temp_path) {
+            Ok(_) => {},
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Cannot access temporary directory {:?}: {}", temp_path, e)
+                ));
+            }
+        }
+        
+        std::env::set_current_dir(temp_path)?;
 
         Ok(Self {
             _home_guard: home_guard,
