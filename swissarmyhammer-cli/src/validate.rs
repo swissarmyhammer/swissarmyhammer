@@ -789,20 +789,20 @@ fn run_exclusion_validation(quiet: bool, format: ValidateFormat) -> Result<i32> 
 
     // Create tool registry
     let registry = ToolRegistry::new();
-    
+
     // Get exclusion detector from registry
     let detector = registry.create_cli_exclusion_detector();
-    
+
     // Create validator
     let config = ValidationConfig::default();
     let validator = ExclusionValidator::new(config);
-    
+
     // Run validation
     let report = validator.validate_all(&detector);
-    
+
     // Print results
     print_exclusion_results(&report, format, quiet)?;
-    
+
     // Return appropriate exit code
     if report.has_issues() {
         Ok(EXIT_ERROR)
@@ -831,13 +831,10 @@ fn print_exclusion_text_results(
     quiet: bool,
 ) -> Result<()> {
     use swissarmyhammer_tools::cli::{ValidationIssue, ValidationWarning};
-    
+
     if report.issues.is_empty() && report.warnings.is_empty() {
         if !quiet {
-            println!(
-                "{} CLI exclusion system validation passed!",
-                "✓".green()
-            );
+            println!("{} CLI exclusion system validation passed!", "✓".green());
             println!("  Total tools: {}", report.summary.total_tools);
             println!("  CLI eligible: {}", report.summary.eligible_tools);
             println!("  CLI excluded: {}", report.summary.excluded_tools);
@@ -848,7 +845,11 @@ fn print_exclusion_text_results(
     // Print issues
     for issue in &report.issues {
         match issue {
-            ValidationIssue::SuggestExclusion { tool_name, reason, confidence } => {
+            ValidationIssue::SuggestExclusion {
+                tool_name,
+                reason,
+                confidence,
+            } => {
                 println!(
                     "{} [SUGGEST] Tool '{}' should probably be excluded from CLI",
                     "!".red(),
@@ -871,7 +872,10 @@ fn print_exclusion_text_results(
                     tool_name.bold()
                 );
             }
-            ValidationIssue::InconsistentNaming { tool_name, suggested_name } => {
+            ValidationIssue::InconsistentNaming {
+                tool_name,
+                suggested_name,
+            } => {
                 println!(
                     "{} [NAMING] Tool '{}' has inconsistent naming, suggest '{}'",
                     "!".red(),
@@ -886,7 +890,11 @@ fn print_exclusion_text_results(
     if !quiet {
         for warning in &report.warnings {
             match warning {
-                ValidationWarning::MayBenefitFromExclusion { tool_name, reason, confidence } => {
+                ValidationWarning::MayBenefitFromExclusion {
+                    tool_name,
+                    reason,
+                    confidence,
+                } => {
                     println!(
                         "{} [MAYBE] Tool '{}' might benefit from exclusion",
                         "?".yellow(),
@@ -895,7 +903,10 @@ fn print_exclusion_text_results(
                     println!("    Reason: {reason}");
                     println!("    Confidence: {:.1}%", confidence * 100.0);
                 }
-                ValidationWarning::VagueExclusionReason { tool_name, current_reason } => {
+                ValidationWarning::VagueExclusionReason {
+                    tool_name,
+                    current_reason,
+                } => {
                     println!(
                         "{} [VAGUE] Tool '{}' has vague exclusion reason",
                         "?".yellow(),
@@ -915,18 +926,30 @@ fn print_exclusion_text_results(
         println!("  CLI eligible: {}", report.summary.eligible_tools);
         println!("  CLI excluded: {}", report.summary.excluded_tools);
     }
-    
+
     if report.has_issues() {
-        println!("  Issues: {}", report.summary.issues_found.to_string().red());
+        println!(
+            "  Issues: {}",
+            report.summary.issues_found.to_string().red()
+        );
     }
     if report.has_warnings() && !quiet {
-        println!("  Warnings: {}", report.summary.warnings_found.to_string().yellow());
+        println!(
+            "  Warnings: {}",
+            report.summary.warnings_found.to_string().yellow()
+        );
     }
 
     if report.has_issues() {
-        println!("\n{} CLI exclusion validation failed with issues.", "✗".red());
+        println!(
+            "\n{} CLI exclusion validation failed with issues.",
+            "✗".red()
+        );
     } else if report.has_warnings() {
-        println!("\n{} CLI exclusion validation completed with warnings.", "⚠".yellow());
+        println!(
+            "\n{} CLI exclusion validation completed with warnings.",
+            "⚠".yellow()
+        );
     } else {
         println!("\n{} CLI exclusion validation passed!", "✓".green());
     }
@@ -940,7 +963,7 @@ fn print_exclusion_json_results(
 ) -> Result<()> {
     use serde::Serialize;
     use swissarmyhammer_tools::cli::{ValidationIssue, ValidationWarning};
-    
+
     #[derive(Serialize)]
     struct JsonExclusionResult {
         summary: JsonExclusionSummary,
@@ -995,13 +1018,15 @@ fn print_exclusion_json_results(
         .issues
         .iter()
         .map(|issue| match issue {
-            ValidationIssue::SuggestExclusion { tool_name, reason, confidence } => {
-                JsonExclusionIssue::SuggestExclusion {
-                    tool_name: tool_name.clone(),
-                    reason: reason.clone(),
-                    confidence: *confidence,
-                }
-            }
+            ValidationIssue::SuggestExclusion {
+                tool_name,
+                reason,
+                confidence,
+            } => JsonExclusionIssue::SuggestExclusion {
+                tool_name: tool_name.clone(),
+                reason: reason.clone(),
+                confidence: *confidence,
+            },
             ValidationIssue::MissingExclusionReason { tool_name } => {
                 JsonExclusionIssue::MissingExclusionReason {
                     tool_name: tool_name.clone(),
@@ -1012,12 +1037,13 @@ fn print_exclusion_json_results(
                     tool_name: tool_name.clone(),
                 }
             }
-            ValidationIssue::InconsistentNaming { tool_name, suggested_name } => {
-                JsonExclusionIssue::InconsistentNaming {
-                    tool_name: tool_name.clone(),
-                    suggested_name: suggested_name.clone(),
-                }
-            }
+            ValidationIssue::InconsistentNaming {
+                tool_name,
+                suggested_name,
+            } => JsonExclusionIssue::InconsistentNaming {
+                tool_name: tool_name.clone(),
+                suggested_name: suggested_name.clone(),
+            },
         })
         .collect();
 
@@ -1025,19 +1051,22 @@ fn print_exclusion_json_results(
         .warnings
         .iter()
         .map(|warning| match warning {
-            ValidationWarning::MayBenefitFromExclusion { tool_name, reason, confidence } => {
-                JsonExclusionWarning::MayBenefitFromExclusion {
-                    tool_name: tool_name.clone(),
-                    reason: reason.clone(),
-                    confidence: *confidence,
-                }
-            }
-            ValidationWarning::VagueExclusionReason { tool_name, current_reason } => {
-                JsonExclusionWarning::VagueExclusionReason {
-                    tool_name: tool_name.clone(),
-                    current_reason: current_reason.clone(),
-                }
-            }
+            ValidationWarning::MayBenefitFromExclusion {
+                tool_name,
+                reason,
+                confidence,
+            } => JsonExclusionWarning::MayBenefitFromExclusion {
+                tool_name: tool_name.clone(),
+                reason: reason.clone(),
+                confidence: *confidence,
+            },
+            ValidationWarning::VagueExclusionReason {
+                tool_name,
+                current_reason,
+            } => JsonExclusionWarning::VagueExclusionReason {
+                tool_name: tool_name.clone(),
+                current_reason: current_reason.clone(),
+            },
         })
         .collect();
 

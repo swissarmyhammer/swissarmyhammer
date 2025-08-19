@@ -80,6 +80,6 @@ pub use attribute_detection::{
     CliExclusionDetector, CliExclusionMarker, RegistryCliExclusionDetector, ToolCliMetadata,
 };
 pub use validator::{
-    DevUtilities, DocumentationGenerator, ExclusionValidator, ToolAnalysis, ToolSuggestion, 
+    DevUtilities, DocumentationGenerator, ExclusionValidator, ToolAnalysis, ToolSuggestion,
     ValidationConfig, ValidationIssue, ValidationReport, ValidationSummary, ValidationWarning,
 };
