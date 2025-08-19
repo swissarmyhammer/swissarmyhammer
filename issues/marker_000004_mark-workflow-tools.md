@@ -157,3 +157,65 @@ pub fn register_issue_tools(registry: &mut ToolRegistry) {
 ## Notes
 
 This step implements the primary use case for the CLI exclusion system by marking the specific tools identified in the specification that should not be exposed as CLI commands due to their workflow-specific nature.
+## Proposed Solution
+
+I will implement the CLI exclusion marking by:
+
+1. **Applying the `#[cli_exclude]` Attribute**: Adding the `#[sah_marker_macros::cli_exclude]` attribute to the three target tools:
+   - `issue_work` tool: Handles git branch operations within workflow context
+   - `issue_merge` tool: Manages complex merge operations with state coordination
+   - `abort_create` tool: Internal workflow termination mechanism
+
+2. **Implementing the CliExclusionMarker Trait**: Each marked tool will implement the `CliExclusionMarker` trait with the required `is_cli_excluded()` method returning `true`.
+
+3. **Adding Comprehensive Documentation**: Enhanced rustdoc comments explaining:
+   - Why each tool is excluded from CLI
+   - The workflow context these tools require
+   - CLI alternatives where applicable
+   - References to the exclusion system documentation
+
+4. **Following Established Patterns**: Using the same implementation pattern already established in the codebase, as I can see from the grep results that this system is already partially implemented.
+
+5. **Testing Strategy**: Running compilation tests and MCP functionality tests to ensure the exclusions work correctly without breaking existing functionality.
+
+The implementation will be consistent with the established CLI exclusion system architecture and follow the existing code patterns in the repository.
+## Implementation Completed
+
+I have successfully implemented the CLI exclusion marking for all target workflow tools:
+
+### ✅ Tools Updated
+
+1. **`issue_work` Tool** (already had exclusion): `/swissarmyhammer-tools/src/mcp/tools/issues/work/mod.rs`
+   - Attribute: `#[sah_marker_macros::cli_exclude]` 
+   - Trait: `CliExclusionMarker` implemented
+   - Reason: "MCP workflow state transition tool - requires MCP context and uses abort file patterns"
+   - Documentation: Comprehensive rustdoc explaining why it's excluded and CLI alternatives
+
+2. **`issue_merge` Tool** (already had exclusion): `/swissarmyhammer-tools/src/mcp/tools/issues/merge/mod.rs`
+   - Attribute: `#[sah_marker_macros::cli_exclude]`
+   - Trait: `CliExclusionMarker` implemented  
+   - Reason: "MCP workflow orchestration tool - requires coordinated state management and uses abort file patterns"
+   - Documentation: Clear explanation of workflow context requirements
+
+3. **`abort_create` Tool** (newly added exclusion): `/swissarmyhammer-tools/src/mcp/tools/abort/create/mod.rs`
+   - Attribute: `#[sah_marker_macros::cli_exclude]` ✅ ADDED
+   - Trait: `CliExclusionMarker` implemented ✅ ADDED
+   - Reason: "MCP workflow error handling tool - creates internal abort state files for workflow coordination"
+   - Documentation: Enhanced with CLI exclusion explanation and alternatives
+
+### ✅ Testing Results
+
+- **Compilation**: ✅ All tools compile successfully with exclusion attributes
+- **MCP Functionality**: ✅ All excluded tools still function correctly in MCP context
+- **CLI Exclusion Detection**: ✅ Registry correctly identifies excluded tools
+- **Integration Tests**: ✅ All CLI integration tests pass, including `test_registry_detects_excluded_issue_tools`
+
+### ✅ Code Quality
+
+- All changes follow established patterns in the codebase
+- Documentation is comprehensive and explains exclusion rationale
+- CLI alternatives are provided where applicable
+- Error handling and functionality remain intact
+- Tests verify exclusion detection works correctly
+
+The implementation follows the established CLI exclusion system architecture and ensures that workflow-specific tools are properly marked for MCP-only usage while maintaining their full functionality within the workflow context.

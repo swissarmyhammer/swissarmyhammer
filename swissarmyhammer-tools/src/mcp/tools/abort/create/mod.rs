@@ -4,6 +4,7 @@
 //! The tool creates a `.swissarmyhammer/.abort` file containing the abort reason, enabling
 //! file-based abort detection throughout the workflow system.
 
+use crate::cli::CliExclusionMarker;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
@@ -20,8 +21,26 @@ pub struct AbortCreateRequest {
 }
 
 /// Tool for creating abort files to signal workflow termination
+///
+/// This tool is designed for MCP workflow error handling and should not
+/// be exposed as a CLI command since it creates internal abort state files
+/// that are intended for workflow coordination, not direct user operations.
+///
+/// For direct workflow termination, users can interrupt the process using
+/// standard shell controls (Ctrl+C) or workflow-specific cancellation mechanisms.
+#[sah_marker_macros::cli_exclude]
 #[derive(Default)]
 pub struct AbortCreateTool;
+
+impl CliExclusionMarker for AbortCreateTool {
+    fn is_cli_excluded(&self) -> bool {
+        true
+    }
+
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        Some("MCP workflow error handling tool - creates internal abort state files for workflow coordination")
+    }
+}
 
 impl AbortCreateTool {
     /// Creates a new instance of the AbortCreateTool
