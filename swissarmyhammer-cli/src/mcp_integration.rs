@@ -58,11 +58,12 @@ impl CliToolContext {
 
     /// Create issue storage backend
     fn create_issue_storage(
-        current_dir: &std::path::Path,
+        _current_dir: &std::path::Path,
     ) -> Result<IssueStorageArc, Box<dyn std::error::Error>> {
-        let issues_dir = current_dir.join("issues");
+        // Use the updated new_default() method instead of hardcoded path
+        // This respects .swissarmyhammer/issues with fallback to issues for backward compatibility
         Ok(Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(issues_dir)?,
+            swissarmyhammer::issues::FileSystemIssueStorage::new_default()?,
         ))))
     }
 
