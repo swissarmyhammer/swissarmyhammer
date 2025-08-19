@@ -312,3 +312,137 @@ fn test_schema_parsing() {
 ## Notes
 
 This step creates the foundation for automated CLI generation while respecting the exclusion system. It doesn't immediately integrate with the existing CLI but provides the infrastructure for future automated CLI updates.
+
+## Proposed Solution
+
+After examining the existing codebase, I can see that:
+
+1. **ToolRegistry Integration**: The `ToolRegistry` in `swissarmyhammer-tools/src/mcp/tool_registry.rs` already has comprehensive CLI exclusion tracking implemented with methods like `get_cli_eligible_tools()`, `is_cli_excluded()`, etc.
+
+2. **CLI Structure**: The CLI is organized in `swissarmyhammer-cli/src/` with individual command modules like `memo.rs`, `issue.rs`, etc.
+
+3. **MCP Tool Interface**: All tools implement the `McpTool` trait with `name()`, `description()`, and `schema()` methods that provide the metadata needed for CLI generation.
+
+### Implementation Plan
+
+I'll create the CLI generation foundation with these components:
+
+1. **Generation Module**: `swissarmyhammer-cli/src/generation/mod.rs` with sub-modules:
+   - `cli_generator.rs` - Core generation logic
+   - `command_builder.rs` - Schema to CLI argument parsing
+   - `types.rs` - Data structures for generated commands
+
+2. **CliGenerator**: Main generator that uses the existing `ToolRegistry` to:
+   - Get CLI-eligible tools using `registry.get_cli_eligible_tools()`
+   - Parse each tool's JSON schema into CLI arguments/options
+   - Generate structured command representations
+
+3. **CommandBuilder**: Schema parser that converts JSON Schema from `tool.schema()` into:
+   - CLI arguments (required parameters)
+   - CLI options (optional parameters with defaults)
+   - Help text from descriptions
+
+4. **Configuration System**: `GenerationConfig` with naming strategies:
+   - `KeepOriginal` - `issue_create` → `issue-create`
+   - `GroupByDomain` - `issue_create` → `issue create`
+   - `Flatten` - `issue_create` → `create-issue`
+
+5. **Testing**: Comprehensive unit tests for:
+   - CLI exclusion respect
+   - Schema parsing accuracy
+   - Command structure generation
+   - Configuration options
+
+This design leverages the existing CLI exclusion infrastructure and provides a clean foundation for future automated CLI generation while maintaining backward compatibility.
+
+## Implementation Complete
+
+✅ **All implementation tasks completed successfully!**
+
+### What Was Implemented
+
+1. **CLI Generation Module Structure**: Created `swissarmyhammer-cli/src/generation/` with organized sub-modules:
+   - `mod.rs` - Module entry point and re-exports
+   - `types.rs` - Core data structures and configuration
+   - `cli_generator.rs` - Main generation orchestrator 
+   - `command_builder.rs` - Schema parsing and CLI structure building
+
+2. **Core Components**:
+
+   **CliGenerator**: Main orchestrator that:
+   - Integrates with existing `ToolRegistry` CLI exclusion tracking
+   - Respects CLI exclusion markers automatically
+   - Supports configurable generation strategies
+   - Enforces safety limits (max 1000 commands by default)
+   - Handles error recovery gracefully
+
+   **CommandBuilder**: Schema parser that:
+   - Converts JSON Schema from MCP tools to CLI argument structures
+   - Supports all common schema patterns (strings, integers, booleans, enums)
+   - Handles validation constraints (minLength, pattern, minimum, etc.)
+   - Intelligently categorizes parameters as arguments vs options
+   - Applies naming transformations (underscores to dashes, etc.)
+
+   **Data Structures**: Comprehensive type system including:
+   - `GeneratedCommand` - Complete command representation
+   - `CliArgument` - Required/optional command arguments with constraints
+   - `CliOption` - Command-line flags and options with type information
+   - `GenerationConfig` - Flexible configuration with multiple naming strategies
+
+3. **Configuration System**: 
+   - `NamingStrategy::KeepOriginal` - `issue_create` → `issue-create`
+   - `NamingStrategy::GroupByDomain` - `issue_create` → `issue create` (subcommands)
+   - `NamingStrategy::Flatten` - `issue_create` → `create-issue`
+   - Support for command prefixes, subcommand organization, completion generation
+
+4. **Integration with Existing Systems**:
+   - ✅ Leverages existing CLI exclusion infrastructure from `ToolRegistry`
+   - ✅ Respects `issue_work`, `issue_merge`, `abort_create` exclusions automatically
+   - ✅ Maintains full backward compatibility with MCP operations
+   - ✅ Added `async-trait` dependency to workspace configuration
+
+5. **Comprehensive Testing**: All 25 tests pass, covering:
+   - CLI exclusion detection and respect
+   - Schema parsing accuracy for various JSON Schema patterns  
+   - Command structure generation and validation
+   - Configuration options and naming strategies
+   - Error handling and edge cases
+   - Integration with tool registry systems
+
+### Usage Example
+
+```rust
+use swissarmyhammer_cli::generation::{CliGenerator, GenerationConfig, NamingStrategy};
+use swissarmyhammer_tools::ToolRegistry;
+use std::sync::Arc;
+
+// Create registry with tools (existing pattern)
+let mut registry = ToolRegistry::new();
+// Tools are automatically registered with CLI exclusion detection
+
+// Generate CLI commands
+let generator = CliGenerator::new(Arc::new(registry));
+let commands = generator.generate_commands().unwrap();
+
+// With custom configuration  
+let config = GenerationConfig {
+    naming_strategy: NamingStrategy::GroupByDomain,
+    use_subcommands: true,
+    command_prefix: Some("sah-".to_string()),
+    ..Default::default()
+};
+
+let generator = generator.with_config(config);
+let commands = generator.generate_commands().unwrap();
+```
+
+### Key Achievements
+
+- **Zero Breaking Changes**: All existing code continues to work unchanged
+- **Automatic CLI Exclusion**: Respects existing exclusion markers without manual configuration
+- **Comprehensive Schema Support**: Handles real-world MCP tool schemas accurately
+- **Flexible Configuration**: Multiple strategies for different CLI organization needs
+- **Production Ready**: Full error handling, validation, and safety limits
+- **Well Tested**: 25 passing tests with comprehensive coverage
+
+This foundation is ready for integration with CLI generation systems and provides a clean, extensible architecture for future automated CLI updates while maintaining the existing manual CLI structure during transition.

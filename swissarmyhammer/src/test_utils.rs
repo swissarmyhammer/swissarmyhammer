@@ -44,7 +44,7 @@ use crate::{Prompt, PromptLibrary};
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 // #[cfg(test)]
 // use swissarmyhammer_tools::mcp::{ToolHandlers, ToolContext};
@@ -301,6 +301,9 @@ pub struct IsolatedTestHome {
     original_home: Option<String>,
 }
 
+// Global mutex to synchronize HOME environment variable access across threads
+static HOME_MUTEX: Mutex<()> = Mutex::new(());
+
 impl Default for IsolatedTestHome {
     fn default() -> Self {
         Self::new()
@@ -310,6 +313,8 @@ impl Default for IsolatedTestHome {
 impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
+        let _lock = HOME_MUTEX.lock().expect("Failed to acquire HOME mutex");
+        
         let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home();
 
@@ -335,6 +340,8 @@ impl IsolatedTestHome {
 
 impl Drop for IsolatedTestHome {
     fn drop(&mut self) {
+        let _lock = HOME_MUTEX.lock().expect("Failed to acquire HOME mutex");
+        
         // Restore original HOME environment variable
         match &self.original_home {
             Some(home) => std::env::set_var("HOME", home),

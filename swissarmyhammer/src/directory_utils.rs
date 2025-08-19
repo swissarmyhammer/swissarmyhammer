@@ -28,7 +28,12 @@ pub fn find_swissarmyhammer_dirs_upward(start_path: &Path, exclude_home: bool) -
     let mut depth = 0;
 
     // Get home directory for exclusion check
-    let home_swissarmyhammer = dirs::home_dir().map(|home| home.join(".swissarmyhammer"));
+    // Use same logic as VFS: env::var("HOME") first, then dirs::home_dir()
+    let home_swissarmyhammer = if let Ok(home_str) = std::env::var("HOME") {
+        Some(PathBuf::from(home_str).join(".swissarmyhammer"))
+    } else {
+        dirs::home_dir().map(|home| home.join(".swissarmyhammer"))
+    };
 
     loop {
         if depth >= MAX_DIRECTORY_DEPTH {
