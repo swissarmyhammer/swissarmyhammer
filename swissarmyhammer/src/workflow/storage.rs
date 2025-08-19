@@ -1099,10 +1099,11 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_workflow_resolver_user_workflows() {
-        use crate::test_utils::create_isolated_test_home;
+        use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
 
-        let _env = create_isolated_test_home();
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
         let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
