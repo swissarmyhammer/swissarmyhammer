@@ -90,7 +90,7 @@ impl MemoryProfiler {
         } else if bytes >= 1_000 {
             format!("{:.1} KB", bytes as f64 / 1_000.0)
         } else {
-            format!("{} bytes", bytes)
+            format!("{bytes} bytes")
         }
     }
 }
@@ -178,7 +178,7 @@ async fn test_read_tool_execution_success_cases() {
     );
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "File read should succeed: {:?}", result);
+    assert!(result.is_ok(), "File read should succeed: {result:?}");
 
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
@@ -221,8 +221,7 @@ async fn test_read_tool_offset_limit_functionality() {
     let result = tool.execute(arguments, &context).await;
     assert!(
         result.is_ok(),
-        "File read with offset/limit should succeed: {:?}",
-        result
+        "File read with offset/limit should succeed: {result:?}"
     );
 
     let call_result = result.unwrap();
@@ -330,7 +329,7 @@ async fn test_read_tool_missing_file_error() {
 
     // Verify error contains helpful information
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(
         error_msg.contains("Parent directory does not exist")
             || error_msg.contains("not found")
@@ -352,7 +351,7 @@ async fn test_read_tool_relative_path_error() {
     assert!(result.is_err(), "Relative path should be rejected");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(error_msg.contains("absolute"));
 }
 
@@ -370,7 +369,7 @@ async fn test_read_tool_empty_path_error() {
     assert!(result.is_err(), "Empty path should be rejected");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(
         error_msg.contains("absolute, not relative")
             || error_msg.contains("empty")
@@ -422,9 +421,7 @@ async fn test_read_tool_path_traversal_protection() {
                 error_msg.contains("blocked pattern")
                     || error_msg.contains("not found")
                     || error_msg.contains("No such file"),
-                "Path traversal should be blocked or file not found: {} (error: {})",
-                dangerous_path,
-                error_msg
+                "Path traversal should be blocked or file not found: {dangerous_path} (error: {error_msg})"
             );
         }
         // If it succeeds, the file either doesn't exist or is blocked properly
@@ -443,7 +440,7 @@ async fn test_read_tool_handles_large_files_safely() {
 
     let mut large_content = String::new();
     for i in 1..=1000 {
-        large_content.push_str(&format!("Line {} content\n", i));
+        large_content.push_str(&format!("Line {i} content\n"));
     }
     fs::write(&test_file, &large_content).unwrap();
 
@@ -596,7 +593,7 @@ async fn test_read_tool_parameter_validation_errors() {
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Should reject offset over 1,000,000");
     if let Err(e) = result {
-        let error_msg = format!("{:?}", e);
+        let error_msg = format!("{e:?}");
         assert!(error_msg.contains("offset must be less than 1,000,000"));
     }
 
@@ -608,7 +605,7 @@ async fn test_read_tool_parameter_validation_errors() {
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Should reject zero limit");
     if let Err(e) = result {
-        let error_msg = format!("{:?}", e);
+        let error_msg = format!("{e:?}");
         assert!(error_msg.contains("limit must be greater than 0"));
     }
 
@@ -620,7 +617,7 @@ async fn test_read_tool_parameter_validation_errors() {
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Should reject limit over 100,000");
     if let Err(e) = result {
-        let error_msg = format!("{:?}", e);
+        let error_msg = format!("{e:?}");
         assert!(error_msg.contains("limit must be less than or equal to 100,000"));
     }
 
@@ -631,7 +628,7 @@ async fn test_read_tool_parameter_validation_errors() {
     let result = tool.execute(arguments, &context).await;
     assert!(result.is_err(), "Should reject empty path");
     if let Err(e) = result {
-        let error_msg = format!("{:?}", e);
+        let error_msg = format!("{e:?}");
         assert!(error_msg.contains("absolute_path cannot be empty"));
     }
 }
@@ -683,7 +680,7 @@ async fn test_read_tool_permission_denied_scenarios() {
     // Note: This test may pass on systems where we can't actually restrict permissions
     if result.is_err() {
         let error_msg = format!("{:?}", result.unwrap_err());
-        println!("Permission denied test error: {}", error_msg);
+        println!("Permission denied test error: {error_msg}");
     }
 }
 
@@ -715,11 +712,7 @@ async fn test_read_tool_large_file_handling() {
     let result = tool.execute(arguments, &context).await;
     let duration = start_time.elapsed();
 
-    assert!(
-        result.is_ok(),
-        "Large file read should succeed: {:?}",
-        result
-    );
+    assert!(result.is_ok(), "Large file read should succeed: {result:?}");
     assert!(
         duration.as_secs() < 5,
         "Large file read should complete quickly"
@@ -844,7 +837,7 @@ async fn test_glob_tool_basic_pattern_matching() {
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(&full_path, format!("Content of {file_path}")).unwrap();
     }
 
     // Test basic glob pattern
@@ -853,7 +846,7 @@ async fn test_glob_tool_basic_pattern_matching() {
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "Basic glob should succeed: {:?}", result);
+    assert!(result.is_ok(), "Basic glob should succeed: {result:?}");
 
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
@@ -910,7 +903,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(&full_path, format!("Content of {file_path}")).unwrap();
     }
 
     // Test with advanced gitignore
@@ -994,7 +987,7 @@ async fn test_glob_tool_case_sensitivity() {
 
     for file_path in &test_files {
         let full_path = temp_dir.path().join(file_path);
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(&full_path, format!("Content of {file_path}")).unwrap();
     }
 
     // Test case insensitive (default) - use basic glob to avoid filesystem case issues
@@ -1103,8 +1096,7 @@ async fn test_glob_tool_modification_time_sorting() {
         // Both conditions should be true for proper sorting
         assert!(
             first_file_is_new && second_file_is_old,
-            "Files should be sorted by modification time (recent first). Found order: {:?}",
-            lines
+            "Files should be sorted by modification time (recent first). Found order: {lines:?}"
         );
     }
 }
@@ -1171,7 +1163,7 @@ async fn test_glob_tool_recursive_patterns() {
         if let Some(parent) = full_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        fs::write(&full_path, format!("Content of {}", file_path)).unwrap();
+        fs::write(&full_path, format!("Content of {file_path}")).unwrap();
     }
 
     // Test recursive Rust file search
@@ -1269,7 +1261,7 @@ async fn test_grep_tool_basic_pattern_matching() {
     arguments.insert("path".to_string(), json!(temp_dir.path().to_string_lossy()));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "Basic grep should succeed: {:?}", result);
+    assert!(result.is_ok(), "Basic grep should succeed: {result:?}");
 
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
@@ -1320,8 +1312,7 @@ async fn test_grep_tool_file_type_filtering() {
     let result = tool.execute(arguments, &context).await;
     assert!(
         result.is_ok(),
-        "File type filtering should succeed: {:?}",
-        result
+        "File type filtering should succeed: {result:?}"
     );
 
     let call_result = result.unwrap();
@@ -1372,11 +1363,7 @@ async fn test_grep_tool_glob_filtering() {
     arguments.insert("glob".to_string(), json!("*.rs")); // Simplified glob pattern
 
     let result = tool.execute(arguments, &context).await;
-    assert!(
-        result.is_ok(),
-        "Glob filtering should succeed: {:?}",
-        result
-    );
+    assert!(result.is_ok(), "Glob filtering should succeed: {result:?}");
 
     let call_result = result.unwrap();
     let response_text = if let Some(content_item) = call_result.content.first() {
@@ -1389,14 +1376,13 @@ async fn test_grep_tool_glob_filtering() {
     };
 
     // Should find VERSION in Rust files (basic glob test)
-    println!("Glob filtering response: {}", response_text);
+    println!("Glob filtering response: {response_text}");
     // With a *.rs glob, we should find matches in Rust files
     assert!(
         response_text.contains("4 matches")
             || response_text.contains("VERSION")
             || response_text.contains("matches in"),
-        "Should find matches with *.rs glob pattern. Got: {}",
-        response_text
+        "Should find matches with *.rs glob pattern. Got: {response_text}"
     );
 }
 
@@ -1540,8 +1526,7 @@ async fn test_grep_tool_output_modes() {
     assert!(
         (response_text.contains("2") && response_text.contains("files"))
             || response_text.contains("Files with matches (2)"),
-        "Response should indicate 2 files found. Got: {}",
-        response_text
+        "Response should indicate 2 files found. Got: {response_text}"
     );
 
     // Test count mode
@@ -1569,8 +1554,7 @@ async fn test_grep_tool_output_modes() {
     // Should find 3-4 matches across files (3 target + 1 Target)
     assert!(
         response_text.contains("3") || response_text.contains("4"),
-        "Should find 3-4 matches across files. Got: {}",
-        response_text
+        "Should find 3-4 matches across files. Got: {response_text}"
     );
 }
 
@@ -1590,15 +1574,14 @@ async fn test_grep_tool_error_handling() {
     assert!(result.is_err(), "Invalid regex should fail");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     // The error might come from ripgrep or the regex engine - both are acceptable
     assert!(
         error_msg.contains("Invalid regex pattern")
             || error_msg.contains("regex")
             || error_msg.contains("failed")
             || error_msg.contains("search failed"),
-        "Error message should indicate regex or search failure: {}",
-        error_msg
+        "Error message should indicate regex or search failure: {error_msg}"
     );
 
     // Test non-existent directory
@@ -1610,7 +1593,7 @@ async fn test_grep_tool_error_handling() {
     assert!(result.is_err(), "Non-existent directory should fail");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(error_msg.contains("does not exist") || error_msg.contains("not found"));
 
     // Test invalid output mode
@@ -1736,8 +1719,7 @@ async fn test_grep_tool_ripgrep_fallback_behavior() {
     assert!(
         response_text.contains("Engine: ripgrep")
             || response_text.contains("Engine: regex fallback"),
-        "Response should indicate which engine was used. Got: {}",
-        response_text
+        "Response should indicate which engine was used. Got: {response_text}"
     );
 
     // Should include timing information
@@ -1861,7 +1843,7 @@ async fn test_write_tool_execution_success_cases() {
     arguments.insert("content".to_string(), json!(test_content));
 
     let result = tool.execute(arguments, &context).await;
-    assert!(result.is_ok(), "File write should succeed: {:?}", result);
+    assert!(result.is_ok(), "File write should succeed: {result:?}");
 
     let call_result = result.unwrap();
     assert_eq!(call_result.is_error, Some(false));
@@ -2011,7 +1993,7 @@ async fn test_write_tool_error_handling() {
     assert!(result.is_err(), "Relative path should be rejected");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(error_msg.contains("absolute"));
 }
 
@@ -2072,8 +2054,7 @@ async fn test_edit_tool_single_replacement_success() {
     let result = tool.execute(arguments, &context).await;
     assert!(
         result.is_ok(),
-        "Single replacement should succeed: {:?}",
-        result
+        "Single replacement should succeed: {result:?}"
     );
 
     let call_result = result.unwrap();
@@ -2140,7 +2121,7 @@ async fn test_edit_tool_string_not_found_error() {
     assert!(result.is_err(), "Edit with non-existent string should fail");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(error_msg.contains("not found") || error_msg.contains("does not contain"));
 }
 
@@ -2258,7 +2239,7 @@ async fn test_edit_tool_file_not_exists_error() {
     assert!(result.is_err(), "Edit on non-existent file should fail");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(error_msg.contains("does not exist") || error_msg.contains("not found"));
 }
 
@@ -2282,7 +2263,7 @@ async fn test_edit_tool_empty_parameters_error() {
     assert!(result.is_err(), "Edit with empty old_string should fail");
 
     let error = result.unwrap_err();
-    let error_msg = format!("{:?}", error);
+    let error_msg = format!("{error:?}");
     assert!(error_msg.contains("cannot be empty") || error_msg.contains("required"));
 }
 
@@ -2713,15 +2694,13 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
         let read_result = read_tool.execute(read_args, &context).await;
         // Should either fail due to validation or file not found
         if let Err(error) = read_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 error_msg.contains("blocked pattern")
                     || error_msg.contains("not found")
                     || error_msg.contains("absolute")
                     || error_msg.contains("No such file"),
-                "Read tool should block or fail path traversal: {} (error: {})",
-                dangerous_path,
-                error_msg
+                "Read tool should block or fail path traversal: {dangerous_path} (error: {error_msg})"
             );
         }
 
@@ -2734,8 +2713,7 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
         // Should fail due to path validation
         assert!(
             write_result.is_err(),
-            "Write tool should reject path traversal: {}",
-            dangerous_path
+            "Write tool should reject path traversal: {dangerous_path}"
         );
 
         let write_error = format!("{:?}", write_result.unwrap_err());
@@ -2744,8 +2722,7 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
                 || write_error.contains("invalid")
                 || write_error.contains("dangerous")
                 || write_error.contains("traversal"),
-            "Write error should indicate path validation failure: {}",
-            write_error
+            "Write error should indicate path validation failure: {write_error}"
         );
 
         // Test edit tool
@@ -2758,8 +2735,7 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
         // Should fail due to path validation or file not found
         assert!(
             edit_result.is_err(),
-            "Edit tool should reject path traversal: {}",
-            dangerous_path
+            "Edit tool should reject path traversal: {dangerous_path}"
         );
 
         // Test glob tool with dangerous paths
@@ -2770,14 +2746,13 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
         let glob_result = glob_tool.execute(glob_args, &context).await;
         // Should either fail or be handled safely
         if let Err(error) = glob_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 error_msg.contains("does not exist")
                     || error_msg.contains("invalid")
                     || error_msg.contains("blocked")
                     || error_msg.contains("dangerous"),
-                "Glob error should be handled safely: {}",
-                error_msg
+                "Glob error should be handled safely: {error_msg}"
             );
         }
 
@@ -2789,14 +2764,13 @@ async fn test_comprehensive_path_traversal_protection_all_tools() {
         let grep_result = grep_tool.execute(grep_args, &context).await;
         // Should either fail or be handled safely
         if let Err(error) = grep_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 error_msg.contains("does not exist")
                     || error_msg.contains("invalid")
                     || error_msg.contains("blocked")
                     || error_msg.contains("dangerous"),
-                "Grep error should be handled safely: {}",
-                error_msg
+                "Grep error should be handled safely: {error_msg}"
             );
         }
     }
@@ -2837,9 +2811,9 @@ async fn test_symlink_attack_prevention() {
         let read_result = read_tool.execute(read_args, &context).await;
         // Should either handle symlinks safely or reject them
         if let Err(error) = read_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             // Error is acceptable for security
-            println!("Symlink read rejected (secure): {}", error_msg);
+            println!("Symlink read rejected (secure): {error_msg}");
         } else {
             // If it succeeds, it should only read safe content
             let read_call_result = read_result.unwrap();
@@ -2906,11 +2880,8 @@ async fn test_workspace_boundary_enforcement() {
         let read_result = read_tool.execute(read_args, &context).await;
         // Should either fail due to permissions or be handled safely
         if let Err(error) = read_result {
-            let error_msg = format!("{:?}", error);
-            println!(
-                "Restricted read blocked: {} - {}",
-                restricted_path, error_msg
-            );
+            let error_msg = format!("{error:?}");
+            println!("Restricted read blocked: {restricted_path} - {error_msg}");
         }
 
         // Test write tool (should not be able to write to system locations)
@@ -2921,11 +2892,8 @@ async fn test_workspace_boundary_enforcement() {
         let write_result = write_tool.execute(write_args, &context).await;
         // Should fail due to permissions or validation
         if let Err(error) = write_result {
-            let error_msg = format!("{:?}", error);
-            println!(
-                "Restricted write blocked: {} - {}",
-                restricted_path, error_msg
-            );
+            let error_msg = format!("{error:?}");
+            println!("Restricted write blocked: {restricted_path} - {error_msg}");
         } else {
             // If it somehow succeeds, verify the file wasn't actually modified
             let actual_content = fs::read_to_string(restricted_path).unwrap_or_default();
@@ -2970,11 +2938,10 @@ async fn test_malformed_input_handling() {
         let read_result = read_tool.execute(read_args, &context).await;
         // Should handle malformed input gracefully
         if let Err(error) = read_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 !error_msg.contains("panic") && !error_msg.contains("thread"),
-                "Should handle malformed input gracefully, not panic: {}",
-                error_msg
+                "Should handle malformed input gracefully, not panic: {error_msg}"
             );
         }
 
@@ -2986,7 +2953,7 @@ async fn test_malformed_input_handling() {
         let write_result = write_tool.execute(write_args, &context).await;
         // Should validate and reject malformed paths
         if let Err(error) = write_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 error_msg.contains("invalid")
                     || error_msg.contains("empty")
@@ -2994,8 +2961,7 @@ async fn test_malformed_input_handling() {
                     || error_msg.contains("directory")
                     || error_msg.contains("permission")
                     || error_msg.contains("Read-only"),
-                "Should provide clear validation error: {}",
-                error_msg
+                "Should provide clear validation error: {error_msg}"
             );
         }
 
@@ -3006,11 +2972,10 @@ async fn test_malformed_input_handling() {
         let glob_result = glob_tool.execute(glob_args, &context).await;
         // Should handle malformed patterns gracefully
         if let Err(error) = glob_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 !error_msg.contains("panic"),
-                "Glob should handle malformed patterns gracefully: {}",
-                error_msg
+                "Glob should handle malformed patterns gracefully: {error_msg}"
             );
         }
 
@@ -3021,13 +2986,12 @@ async fn test_malformed_input_handling() {
         let grep_result = grep_tool.execute(grep_args, &context).await;
         // Should handle malformed regex patterns gracefully
         if let Err(error) = grep_result {
-            let error_msg = format!("{:?}", error);
+            let error_msg = format!("{error:?}");
             assert!(
                 error_msg.contains("Invalid regex")
                     || error_msg.contains("pattern")
                     || !error_msg.contains("panic"),
-                "Grep should handle malformed regex gracefully: {}",
-                error_msg
+                "Grep should handle malformed regex gracefully: {error_msg}"
             );
         }
     }
@@ -3064,17 +3028,11 @@ async fn test_permission_escalation_prevention() {
         let write_result = write_tool.execute(write_args, &context).await;
         // Should fail due to permissions or validation
         if let Err(error) = write_result {
-            let error_msg = format!("{:?}", error);
-            println!(
-                "Privileged write blocked: {} - {}",
-                privileged_location, error_msg
-            );
+            let error_msg = format!("{error:?}");
+            println!("Privileged write blocked: {privileged_location} - {error_msg}");
         } else {
             // If somehow successful, verify no actual privilege escalation occurred
-            println!(
-                "Warning: Write to {} succeeded unexpectedly",
-                privileged_location
-            );
+            println!("Warning: Write to {privileged_location} succeeded unexpectedly");
         }
 
         // Test edit tool
@@ -3086,11 +3044,8 @@ async fn test_permission_escalation_prevention() {
         let edit_result = edit_tool.execute(edit_args, &context).await;
         // Should fail due to permissions or file not existing
         if let Err(error) = edit_result {
-            let error_msg = format!("{:?}", error);
-            println!(
-                "Privileged edit blocked: {} - {}",
-                privileged_location, error_msg
-            );
+            let error_msg = format!("{error:?}");
+            println!("Privileged edit blocked: {privileged_location} - {error_msg}");
         }
     }
 }
@@ -3121,13 +3076,12 @@ async fn test_resource_exhaustion_protection() {
     let read_result = read_tool.execute(read_args, &context).await;
     // Should either handle gracefully or reject excessive values
     if let Err(error) = read_result {
-        let error_msg = format!("{:?}", error);
+        let error_msg = format!("{error:?}");
         assert!(
             error_msg.contains("offset")
                 || error_msg.contains("limit")
                 || error_msg.contains("too large"),
-            "Should validate excessive offset/limit values: {}",
-            error_msg
+            "Should validate excessive offset/limit values: {error_msg}"
         );
     }
 
@@ -3142,8 +3096,8 @@ async fn test_resource_exhaustion_protection() {
     let write_result = write_tool.execute(write_args, &context).await;
     // Should either handle large content gracefully or have size limits
     if let Err(error) = write_result {
-        let error_msg = format!("{:?}", error);
-        println!("Large content write rejected: {}", error_msg);
+        let error_msg = format!("{error:?}");
+        println!("Large content write rejected: {error_msg}");
     }
 
     // Test glob with patterns that could cause excessive recursion
@@ -3156,8 +3110,8 @@ async fn test_resource_exhaustion_protection() {
     let glob_result = glob_tool.execute(glob_args, &context).await;
     // Should handle complex patterns without hanging
     if let Err(error) = glob_result {
-        let error_msg = format!("{:?}", error);
-        println!("Complex glob pattern handled: {}", error_msg);
+        let error_msg = format!("{error:?}");
+        println!("Complex glob pattern handled: {error_msg}");
     }
 }
 
@@ -3224,10 +3178,7 @@ async fn test_concurrent_file_operations_safety() {
         }
     }
 
-    println!(
-        "Concurrent operations: {} succeeded, {} failed",
-        success_count, error_count
-    );
+    println!("Concurrent operations: {success_count} succeeded, {error_count} failed");
 
     // Verify the file system remains consistent
     assert!(shared_file.exists());
@@ -3276,7 +3227,7 @@ async fn test_large_file_read_performance() {
     let start_time = std::time::Instant::now();
     fs::write(&large_file, &content).unwrap();
     let write_duration = start_time.elapsed();
-    println!("File creation took: {:?}", write_duration);
+    println!("File creation took: {write_duration:?}");
 
     // Benchmark full file read
     let mut arguments = serde_json::Map::new();
@@ -3290,13 +3241,12 @@ async fn test_large_file_read_performance() {
     let read_duration = start_time.elapsed();
 
     assert!(result.is_ok());
-    println!("Full file read took: {:?}", read_duration);
+    println!("Full file read took: {read_duration:?}");
 
     // Benchmark should complete within reasonable time (30 seconds)
     assert!(
         read_duration.as_secs() < 30,
-        "Large file read took too long: {:?}",
-        read_duration
+        "Large file read took too long: {read_duration:?}"
     );
 
     // Benchmark offset/limit read performance
@@ -3309,20 +3259,18 @@ async fn test_large_file_read_performance() {
     let offset_duration = start_time.elapsed();
 
     assert!(result.is_ok());
-    println!("Offset/limit read took: {:?}", offset_duration);
+    println!("Offset/limit read took: {offset_duration:?}");
 
     // Offset reads may not always be faster than full reads depending on implementation
     // This is a performance characteristic that could vary based on the underlying implementation
     println!(
-        "Performance comparison - Full read: {:?}, Offset read: {:?}",
-        read_duration, offset_duration
+        "Performance comparison - Full read: {read_duration:?}, Offset read: {offset_duration:?}"
     );
 
     // Just ensure offset read completes within reasonable time (not necessarily faster than full read)
     assert!(
         offset_duration.as_secs() < 10,
-        "Offset read took too long: {:?}",
-        offset_duration
+        "Offset read took too long: {offset_duration:?}"
     );
 }
 
@@ -3340,7 +3288,7 @@ async fn test_large_file_write_performance() {
     let mut content = String::new();
     for i in 0..500 {
         // Generate ~6-7MB of content
-        content.push_str(&format!("Section {}: {}", i, chunk));
+        content.push_str(&format!("Section {i}: {chunk}"));
     }
 
     println!(
@@ -3357,22 +3305,21 @@ async fn test_large_file_write_performance() {
     let write_duration = start_time.elapsed();
 
     if let Err(ref e) = result {
-        println!("Write error: {:?}", e);
+        println!("Write error: {e:?}");
     }
     assert!(result.is_ok());
-    println!("Large file write took: {:?}", write_duration);
+    println!("Large file write took: {write_duration:?}");
 
     // Write should complete within reasonable time (30 seconds)
     assert!(
         write_duration.as_secs() < 30,
-        "Large file write took too long: {:?}",
-        write_duration
+        "Large file write took too long: {write_duration:?}"
     );
 
     // Verify file was written correctly
     assert!(large_file.exists());
     let file_size = fs::metadata(&large_file).unwrap().len();
-    println!("Written file size: {} bytes", file_size);
+    println!("Written file size: {file_size} bytes");
     assert!(file_size > 5_000_000, "File should be at least 5MB"); // Adjusted for 10MB write tool limit
 }
 
@@ -3419,7 +3366,7 @@ async fn test_large_file_edit_performance() {
     let single_edit_duration = start_time.elapsed();
 
     assert!(result.is_ok());
-    println!("Single edit in large file took: {:?}", single_edit_duration);
+    println!("Single edit in large file took: {single_edit_duration:?}");
 
     // Test replace_all performance
     let mut edit_all_args = serde_json::Map::new();
@@ -3436,18 +3383,16 @@ async fn test_large_file_edit_performance() {
     let replace_all_duration = start_time.elapsed();
 
     assert!(result.is_ok());
-    println!("Replace all in large file took: {:?}", replace_all_duration);
+    println!("Replace all in large file took: {replace_all_duration:?}");
 
     // Both operations should complete within reasonable time
     assert!(
         single_edit_duration.as_secs() < 10,
-        "Single edit took too long: {:?}",
-        single_edit_duration
+        "Single edit took too long: {single_edit_duration:?}"
     );
     assert!(
         replace_all_duration.as_secs() < 60,
-        "Replace all took too long: {:?}",
-        replace_all_duration
+        "Replace all took too long: {replace_all_duration:?}"
     );
 }
 
@@ -3465,19 +3410,19 @@ async fn test_directory_traversal_performance() {
 
     // Create nested directory structure
     for dir_level in 0..10 {
-        let level_dir = base_path.join(format!("level_{}", dir_level));
+        let level_dir = base_path.join(format!("level_{dir_level}"));
         fs::create_dir_all(&level_dir).unwrap();
 
         // Create subdirectories at each level
         for sub_dir in 0..20 {
-            let sub_path = level_dir.join(format!("subdir_{}", sub_dir));
+            let sub_path = level_dir.join(format!("subdir_{sub_dir}"));
             fs::create_dir_all(&sub_path).unwrap();
 
             // Create files in each subdirectory
             for file_num in 0..50 {
                 let file_extensions = [".rs", ".txt", ".json", ".md", ".toml"];
                 let ext = file_extensions[file_num % file_extensions.len()];
-                let file_path = sub_path.join(format!("file_{}{}", file_num, ext));
+                let file_path = sub_path.join(format!("file_{file_num}{ext}"));
                 fs::write(
                     &file_path,
                     format!("Content for file {} in {}", file_num, sub_path.display()),
@@ -3488,7 +3433,7 @@ async fn test_directory_traversal_performance() {
     }
 
     let setup_duration = start_time.elapsed();
-    println!("Directory setup took: {:?}", setup_duration);
+    println!("Directory setup took: {setup_duration:?}");
 
     // Test glob performance for all files
     let mut glob_args = serde_json::Map::new();
@@ -3504,20 +3449,18 @@ async fn test_directory_traversal_performance() {
     let files_found = extract_text_content(&response.content[0].raw)
         .lines()
         .count();
-    println!("Found {} files in {:?}", files_found, all_files_duration);
+    println!("Found {files_found} files in {all_files_duration:?}");
 
     // Should find many files (at least 10000)
     assert!(
         files_found >= 10000,
-        "Should find at least 10,000 files, found {}",
-        files_found
+        "Should find at least 10,000 files, found {files_found}"
     );
 
     // Traversal should complete within reasonable time
     assert!(
         all_files_duration.as_secs() < 30,
-        "Directory traversal took too long: {:?}",
-        all_files_duration
+        "Directory traversal took too long: {all_files_duration:?}"
     );
 
     // Test specific pattern performance
@@ -3533,10 +3476,7 @@ async fn test_directory_traversal_performance() {
     let rust_files_found = extract_text_content(&rust_response.content[0].raw)
         .lines()
         .count();
-    println!(
-        "Found {} Rust files in {:?}",
-        rust_files_found, rust_files_duration
-    );
+    println!("Found {rust_files_found} Rust files in {rust_files_duration:?}");
 
     // Pattern-specific search should be reasonably fast (allow some timing variation)
     assert!(
@@ -3552,9 +3492,7 @@ async fn test_directory_traversal_performance() {
     assert!(
         rust_files_found >= expected_rust_files - tolerance
             && rust_files_found <= expected_rust_files + tolerance,
-        "Expected around {} Rust files, found {}",
-        expected_rust_files,
-        rust_files_found
+        "Expected around {expected_rust_files} Rust files, found {rust_files_found}"
     );
 }
 
@@ -3580,11 +3518,11 @@ async fn test_grep_performance_large_codebase() {
 
     // Create many files with the patterns
     for dir_idx in 0..50 {
-        let dir_path = base_path.join(format!("module_{}", dir_idx));
+        let dir_path = base_path.join(format!("module_{dir_idx}"));
         fs::create_dir_all(&dir_path).unwrap();
 
         for file_idx in 0..100 {
-            let file_path = dir_path.join(format!("file_{}.rs", file_idx));
+            let file_path = dir_path.join(format!("file_{file_idx}.rs"));
             let template_idx = (dir_idx + file_idx) % code_templates.len();
             let content = format!(
                 "// File {}/{}\n{}\n// Additional content to make file larger\n{}\n",
@@ -3613,7 +3551,7 @@ async fn test_grep_performance_large_codebase() {
     ];
 
     for (pattern, description) in test_cases.iter() {
-        println!("Testing: {}", description);
+        println!("Testing: {description}");
 
         let mut grep_args = serde_json::Map::new();
         grep_args.insert("pattern".to_string(), json!(pattern));
@@ -3624,11 +3562,7 @@ async fn test_grep_performance_large_codebase() {
         let result = grep_tool.execute(grep_args, &context).await;
         let grep_duration = start_time.elapsed();
 
-        assert!(
-            result.is_ok(),
-            "Grep should succeed for pattern: {}",
-            pattern
-        );
+        assert!(result.is_ok(), "Grep should succeed for pattern: {pattern}");
 
         let response = result.unwrap();
         let response_text = extract_text_content(&response.content[0].raw);
@@ -3640,30 +3574,23 @@ async fn test_grep_performance_large_codebase() {
             response_text.lines().count()
         };
 
-        println!(
-            "  Pattern '{}': {} matches in {:?}",
-            pattern, matches_found, grep_duration
-        );
+        println!("  Pattern '{pattern}': {matches_found} matches in {grep_duration:?}");
 
         // Grep should complete within reasonable time even for large codebases
         assert!(
             grep_duration.as_secs() < 20,
-            "Grep took too long for pattern '{}': {:?}",
-            pattern,
-            grep_duration
+            "Grep took too long for pattern '{pattern}': {grep_duration:?}"
         );
 
         // Verify expected match counts
         match *pattern {
             "target_pattern" => assert!(
                 matches_found >= 1,
-                "Should find some target_pattern matches (found {})",
-                matches_found
+                "Should find some target_pattern matches (found {matches_found})"
             ),
             "fn main" => assert!(
                 matches_found >= 1,
-                "Should find some main functions (found {})",
-                matches_found
+                "Should find some main functions (found {matches_found})"
             ),
             "nonexistent_pattern_xyz" => assert_eq!(
                 matches_found, 0,
@@ -3691,7 +3618,7 @@ async fn test_large_file_read_memory_usage() {
     let chunk = "Memory usage test content with realistic data patterns. ".repeat(20);
     let mut content = String::new();
     for i in 0..1000 {
-        content.push_str(&format!("Block {}: {}", i, chunk));
+        content.push_str(&format!("Block {i}: {chunk}"));
     }
 
     println!(
@@ -3700,7 +3627,7 @@ async fn test_large_file_read_memory_usage() {
     );
     let write_result = fs::write(&large_file, &content);
     if let Err(ref e) = write_result {
-        println!("fs::write error: {:?}", e);
+        println!("fs::write error: {e:?}");
     }
     write_result.unwrap();
 
@@ -3725,7 +3652,7 @@ async fn test_large_file_read_memory_usage() {
             "Read tool success: response has {} content items",
             r.content.len()
         ),
-        Err(e) => panic!("Read tool error: {}", e),
+        Err(e) => panic!("Read tool error: {e}"),
     }
 
     if let Some(delta) = profiler.memory_delta() {
@@ -3794,7 +3721,7 @@ async fn test_large_file_write_memory_usage() {
     let chunk = "Memory profiling write test content with varied patterns. ".repeat(100);
     let mut content = String::new();
     for i in 0..1000 {
-        content.push_str(&format!("Section {}: {}", i, chunk));
+        content.push_str(&format!("Section {i}: {chunk}"));
     }
 
     println!(
@@ -3963,10 +3890,10 @@ async fn test_concurrent_operations_memory_usage() {
         let temp_dir_path = temp_dir.path().to_path_buf();
 
         join_set.spawn(async move {
-            let file_path = temp_dir_path.join(format!("concurrent_file_{}.txt", i));
+            let file_path = temp_dir_path.join(format!("concurrent_file_{i}.txt"));
 
             // Generate content for each file
-            let content = format!("Concurrent test content for file {}\n", i).repeat(1000);
+            let content = format!("Concurrent test content for file {i}\n").repeat(1000);
 
             // Write file
             let write_tool = registry_clone.get_tool("files_write").unwrap();
@@ -4053,11 +3980,11 @@ async fn test_high_concurrency_stress_test() {
         let temp_dir_path = temp_dir.path().to_path_buf();
 
         join_set.spawn(async move {
-            let file_path = temp_dir_path.join(format!("stress_test_file_{}.txt", i));
+            let file_path = temp_dir_path.join(format!("stress_test_file_{i}.txt"));
 
             // Generate varied content sizes to stress different code paths
             let content_size = 1000 + (i % 10) * 500; // Vary from 1K to 5.5K characters
-            let content = format!("Stress test content for file {}\n", i).repeat(content_size);
+            let content = format!("Stress test content for file {i}\n").repeat(content_size);
 
             // Write file
             let write_tool = registry_clone.get_tool("files_write").unwrap();
@@ -4120,8 +4047,7 @@ async fn test_high_concurrency_stress_test() {
     let total_duration = start_time.elapsed();
 
     println!(
-        "High concurrency test completed: {} succeeded, {} failed in {:?}",
-        success_count, error_count, total_duration
+        "High concurrency test completed: {success_count} succeeded, {error_count} failed in {total_duration:?}"
     );
 
     // Check memory usage
@@ -4147,8 +4073,7 @@ async fn test_high_concurrency_stress_test() {
     // Most operations should succeed (allow for some failures due to resource constraints)
     assert!(
         success_count >= 90,
-        "At least 90% of operations should succeed, got {}/100",
-        success_count
+        "At least 90% of operations should succeed, got {success_count}/100"
     );
     assert!(
         total_duration.as_secs() < 120,
@@ -4159,8 +4084,7 @@ async fn test_high_concurrency_stress_test() {
     let files_created = std::fs::read_dir(temp_dir.path()).unwrap().count();
     assert!(
         files_created >= 90,
-        "Should create at least 90 files, created {}",
-        files_created
+        "Should create at least 90 files, created {files_created}"
     );
 }
 
@@ -4176,8 +4100,8 @@ async fn test_mixed_operation_concurrency_stress() {
     // Create some base files for read/edit operations
     let base_files = 20;
     for i in 0..base_files {
-        let file_path = temp_dir.path().join(format!("base_file_{}.txt", i));
-        let content = format!("Base content for file {} that can be edited\n", i).repeat(100);
+        let file_path = temp_dir.path().join(format!("base_file_{i}.txt"));
+        let content = format!("Base content for file {i} that can be edited\n").repeat(100);
         std::fs::write(&file_path, content).unwrap();
     }
 
@@ -4192,8 +4116,8 @@ async fn test_mixed_operation_concurrency_stress() {
         let temp_dir_path = temp_dir.path().to_path_buf();
 
         join_set.spawn(async move {
-            let file_path = temp_dir_path.join(format!("new_file_{}.txt", i));
-            let content = format!("New file content {}\n", i).repeat(50 + i % 50);
+            let file_path = temp_dir_path.join(format!("new_file_{i}.txt"));
+            let content = format!("New file content {i}\n").repeat(50 + i % 50);
 
             let write_tool = registry_clone.get_tool("files_write").unwrap();
             let mut write_args = serde_json::Map::new();
@@ -4212,7 +4136,7 @@ async fn test_mixed_operation_concurrency_stress() {
 
         join_set.spawn(async move {
             let file_index = i % base_files; // Cycle through base files
-            let file_path = temp_dir_path.join(format!("base_file_{}.txt", file_index));
+            let file_path = temp_dir_path.join(format!("base_file_{file_index}.txt"));
 
             let read_tool = registry_clone.get_tool("files_read").unwrap();
             let mut read_args = serde_json::Map::new();
@@ -4233,7 +4157,7 @@ async fn test_mixed_operation_concurrency_stress() {
 
         join_set.spawn(async move {
             let file_index = i % base_files; // Cycle through base files
-            let file_path = temp_dir_path.join(format!("base_file_{}.txt", file_index));
+            let file_path = temp_dir_path.join(format!("base_file_{file_index}.txt"));
 
             let edit_tool = registry_clone.get_tool("files_edit").unwrap();
             let mut edit_args = serde_json::Map::new();
@@ -4291,20 +4215,17 @@ async fn test_mixed_operation_concurrency_stress() {
     let total_duration = start_time.elapsed();
 
     println!(
-        "Mixed operation concurrency completed: {} succeeded, {} failed in {:?}",
-        success_count, error_count, total_duration
+        "Mixed operation concurrency completed: {success_count} succeeded, {error_count} failed in {total_duration:?}"
     );
 
     // Most operations should succeed
     assert!(
         success_count >= 100,
-        "At least 100/110 operations should succeed, got {}",
-        success_count
+        "At least 100/110 operations should succeed, got {success_count}"
     );
     assert!(
         error_count <= 10,
-        "Should have at most 10 errors, got {}",
-        error_count
+        "Should have at most 10 errors, got {error_count}"
     );
     assert!(
         total_duration.as_secs() < 60,
@@ -4360,8 +4281,8 @@ async fn test_concurrent_file_access_patterns() {
         let temp_dir_path = temp_dir.path().to_path_buf();
 
         join_set.spawn(async move {
-            let file_path = temp_dir_path.join(format!("concurrent_write_{}.txt", i));
-            let content = format!("Concurrent write operation {}\n", i).repeat(100);
+            let file_path = temp_dir_path.join(format!("concurrent_write_{i}.txt"));
+            let content = format!("Concurrent write operation {i}\n").repeat(100);
 
             let write_tool = registry_clone.get_tool("files_write").unwrap();
             let mut write_args = serde_json::Map::new();
@@ -4410,8 +4331,7 @@ async fn test_concurrent_file_access_patterns() {
     let total_duration = start_time.elapsed();
 
     println!(
-        "Concurrent file access test completed: {} succeeded, {} failed in {:?}",
-        success_count, error_count, total_duration
+        "Concurrent file access test completed: {success_count} succeeded, {error_count} failed in {total_duration:?}"
     );
 
     // All operations should succeed as they're designed to be compatible
@@ -4507,11 +4427,10 @@ async fn test_write_read_roundtrip_properties() {
                 let read_content = extract_text_content(&response.content[0].raw);
                 assert_eq!(
                     read_content, content,
-                    "Content mismatch for file: {}",
-                    file_path
+                    "Content mismatch for file: {file_path}"
                 );
             }
-            Err(e) => panic!("Read failed for file {}: {:?}", file_path, e),
+            Err(e) => panic!("Read failed for file {file_path}: {e:?}"),
         }
     }
 }
@@ -4597,8 +4516,8 @@ async fn test_glob_pattern_consistency_properties() {
 
         // Create files with specified extensions
         for (i, ext) in extensions.iter().enumerate() {
-            let file_path = temp_dir.path().join(format!("test_file_{}.{}", i, ext));
-            let content = format!("Content for file {}", i);
+            let file_path = temp_dir.path().join(format!("test_file_{i}.{ext}"));
+            let content = format!("Content for file {i}");
 
             let mut write_args = serde_json::Map::new();
             write_args.insert("file_path".to_string(), json!(file_path.to_string_lossy()));
@@ -4633,8 +4552,7 @@ async fn test_glob_pattern_consistency_properties() {
 
             assert_eq!(
                 files_found, expected_count,
-                "Glob pattern '{}' should find {} files",
-                pattern, expected_count
+                "Glob pattern '{pattern}' should find {expected_count} files"
             );
         }
     }
@@ -4649,7 +4567,7 @@ async fn test_read_offset_limit_consistency_properties() {
 
     // Create content with multiple lines for line-based testing
     let lines: Vec<String> = (1..=20)
-        .map(|i| format!("Line {}: Content for line {}", i, i))
+        .map(|i| format!("Line {i}: Content for line {i}"))
         .collect();
     let content = lines.join("\n");
     let temp_dir = TempDir::new().unwrap();
@@ -4745,7 +4663,7 @@ async fn test_grep_pattern_robustness_properties() {
     ];
 
     for (i, (content, _pattern, _should_match)) in test_cases.iter().enumerate() {
-        let file_path = temp_dir.path().join(format!("grep_test_{}.txt", i));
+        let file_path = temp_dir.path().join(format!("grep_test_{i}.txt"));
 
         // Write file
         let mut write_args = serde_json::Map::new();
@@ -4773,9 +4691,7 @@ async fn test_grep_pattern_robustness_properties() {
                 if *should_match {
                     assert!(
                         matches_found > 0,
-                        "Pattern '{}' should find matches in content '{}'",
-                        pattern,
-                        content
+                        "Pattern '{pattern}' should find matches in content '{content}'"
                     );
                 } else if content.is_empty() {
                     // Empty files might not be found at all
@@ -4785,15 +4701,13 @@ async fn test_grep_pattern_robustness_properties() {
                     // but the pattern shouldn't be in the content
                     assert!(
                         !content.contains(pattern),
-                        "Content '{}' should not contain pattern '{}'",
-                        content,
-                        pattern
+                        "Content '{content}' should not contain pattern '{pattern}'"
                     );
                 }
             }
             Err(_) => {
                 // Some patterns might cause regex errors, which is acceptable
-                println!("Grep failed for pattern '{}' (acceptable)", pattern);
+                println!("Grep failed for pattern '{pattern}' (acceptable)");
             }
         }
     }

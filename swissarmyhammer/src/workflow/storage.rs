@@ -1103,12 +1103,36 @@ mod tests {
         use std::fs;
 
         let _env = create_isolated_test_home();
-        let swissarmyhammer_dir = std::env::var("HOME").unwrap() + "/.swissarmyhammer";
-        let user_workflows_dir = PathBuf::from(&swissarmyhammer_dir).join("workflows");
+        let home_dir = std::env::var("HOME").unwrap();
+        let swissarmyhammer_dir = PathBuf::from(&home_dir).join(".swissarmyhammer");
+        let user_workflows_dir = swissarmyhammer_dir.join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
-        // Create a test workflow file in user workflows directory
-        let workflow_file = user_workflows_dir.join("user_workflow.md");
+        // Create a completely separate directory tree outside of the temp home
+        // to avoid path resolution issues with symlinks on macOS
+        use tempfile::TempDir;
+        let temp_work_dir = TempDir::new().unwrap();
+        let work_subdir = temp_work_dir.path().join("project").join("subdir");
+        fs::create_dir_all(&work_subdir).unwrap();
+
+        // Change current directory to the separate work directory
+        let original_dir = std::env::current_dir().unwrap();
+        let _ = std::env::set_current_dir(&work_subdir);
+
+        // Ensure we restore directory on panic or normal exit
+        struct DirGuard {
+            original_dir: PathBuf,
+        }
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original_dir);
+            }
+        }
+        let _guard = DirGuard { original_dir };
+
+        // Create a test workflow file in user workflows directory with a unique name
+        let unique_name = format!("user_workflow_test_{}", std::process::id());
+        let workflow_file = user_workflows_dir.join(format!("{unique_name}.md"));
         let workflow_content = r"---
 name: User Test Workflow
 description: A user workflow for testing
@@ -1133,13 +1157,17 @@ stateDiagram-v2
         let workflows = storage.list_workflows().unwrap();
         let workflow = workflows
             .iter()
-            .find(|w| w.name.as_str() == "user_workflow")
-            .expect("Could not find user_workflow in loaded workflows");
+            .find(|w| w.name.as_str() == unique_name)
+            .unwrap_or_else(|| panic!("Could not find {unique_name} in loaded workflows"));
 
-        assert_eq!(workflow.name.as_str(), "user_workflow");
+        assert_eq!(workflow.name.as_str(), unique_name);
+
+        // Verify it's tracked as a User workflow
         assert_eq!(
             resolver.workflow_sources.get(&workflow.name),
-            Some(&FileSource::User)
+            Some(&FileSource::User),
+            "Workflow should be tracked as User source. Current sources: {:?}",
+            resolver.workflow_sources
         );
     }
 
