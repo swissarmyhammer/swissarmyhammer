@@ -201,6 +201,79 @@ if detector.is_cli_excluded("issue_work") {
 }
 ```
 
+### Real-World Integration Example
+
+Here's how the system works in practice:
+
+```rust
+use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
+use swissarmyhammer_tools::cli::CliExclusionDetector;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Registry automatically detects exclusions during tool registration
+    let mut registry = ToolRegistry::new();
+    
+    // Register tools - exclusions detected automatically
+    registry.register_tool(Box::new(CreateMemoTool::default()))?;     // CLI-eligible
+    registry.register_tool(Box::new(IssueWorkTool::default()))?;      // MCP-only
+    registry.register_tool(Box::new(IssueMergeTool::default()))?;     // MCP-only
+    registry.register_tool(Box::new(AbortCreateTool::default()))?;    // MCP-only
+    
+    // Get CLI generation metadata
+    let detector = registry.as_exclusion_detector();
+    
+    // Generate CLI commands for eligible tools only
+    generate_cli_commands(&detector)?;
+    
+    // Generate documentation about excluded tools  
+    generate_mcp_only_documentation(&detector)?;
+    
+    Ok(())
+}
+
+fn generate_cli_commands<T: CliExclusionDetector>(detector: &T) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Generating CLI commands for eligible tools:");
+    
+    for tool_name in detector.get_cli_eligible_tools() {
+        let metadata = detector.get_tool_metadata(&tool_name).unwrap();
+        println!("  {} - {}", tool_name, metadata.description.unwrap_or("No description"));
+        
+        // Generate actual CLI command definition
+        generate_clap_command(&tool_name, &metadata)?;
+    }
+    
+    Ok(())
+}
+
+fn generate_mcp_only_documentation<T: CliExclusionDetector>(detector: &T) -> Result<(), Box<dyn std::error::Error>> {
+    println!("\\nMCP-Only Tools (excluded from CLI):");
+    
+    for tool_name in detector.get_excluded_tools() {
+        let metadata = detector.get_tool_metadata(&tool_name).unwrap();
+        println!("  {} - {}", 
+            tool_name, 
+            metadata.exclusion_reason.unwrap_or("Workflow orchestration tool")
+        );
+        
+        // Generate alternative CLI commands documentation
+        if let Some(alternative) = get_cli_alternative(&tool_name) {
+            println!("    Alternative: {}", alternative);
+        }
+    }
+    
+    Ok(())
+}
+
+fn get_cli_alternative(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "issue_work" => Some("git checkout -b issue/name"),
+        "issue_merge" => Some("git merge issue/name"),
+        "abort_create" => Some("Ctrl+C or kill signal"),
+        _ => None,
+    }
+}
+```
+
 ### Extension Methods
 
 The registry provides convenient extension methods:
@@ -398,6 +471,204 @@ Always test both positive and negative cases:
 - Exclusion reasons are accurate and helpful
 - Registry integration works correctly
 
+## Developer Guide
+
+### Creating New Tools with Exclusion Awareness
+
+When creating new MCP tools, follow this decision process:
+
+#### Step 1: Analyze Tool Purpose
+
+Ask these key questions:
+- **User Intent**: Would a user reasonably want to call this directly?
+- **Context Dependency**: Does this require MCP workflow context?
+- **Error Patterns**: Does this use abort files for error handling?
+- **State Coordination**: Does this coordinate state between systems?
+
+#### Step 2: Implementation Pattern
+
+```rust
+// For user-facing tools (CLI + MCP)
+/// Tool for creating memos with user-provided content
+/// 
+/// This tool provides direct value to CLI users and works
+/// independently without requiring MCP workflow context.
+#[derive(Default)]
+pub struct CreateMemoTool;
+
+impl McpTool for CreateMemoTool {
+    fn name(&self) -> &'static str { "memo_create" }
+    // ... standard implementation
+}
+
+// Note: No CliExclusionMarker - defaults to CLI-eligible
+```
+
+```rust
+// For workflow tools (MCP-only)  
+/// Tool for coordinating issue workflow state transitions
+///
+/// This tool manages git branch operations within issue workflows,
+/// uses abort files for error handling, and requires MCP context.
+/// CLI users should use: git checkout -b issue/name
+#[cli_exclude]
+#[derive(Default)]
+pub struct IssueWorkTool;
+
+impl McpTool for IssueWorkTool {
+    fn name(&self) -> &'static str { "issue_work" }
+    // ... implementation with abort file usage
+}
+
+impl CliExclusionMarker for IssueWorkTool {
+    fn is_cli_excluded(&self) -> bool {
+        true
+    }
+
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        Some("MCP workflow state transition - requires MCP context and uses abort patterns")
+    }
+}
+```
+
+#### Step 3: Documentation Standards
+
+Always document the exclusion decision:
+
+```rust
+/// # Tool Classification: MCP-Only
+///
+/// This tool is excluded from CLI generation because:
+/// 
+/// 1. **MCP Context Dependency**: Requires workflow state coordination
+/// 2. **Abort File Patterns**: Uses `create_abort_file_current_dir()` for error handling
+/// 3. **Git State Management**: Coordinates complex git operations with issue storage
+/// 4. **CLI Alternative Available**: Users should use `git checkout -b issue/name`
+///
+/// ## Usage in MCP Workflows
+/// 
+/// ```javascript
+/// // Called from Claude Code workflows
+/// await tools.issue_work({ name: "feature-xyz" });
+/// ```
+///
+/// ## CLI Alternative
+///
+/// ```bash
+/// # Direct git operations for CLI users
+/// git checkout -b issue/feature-xyz
+/// ```
+#[cli_exclude]
+pub struct IssueWorkTool;
+```
+
+#### Step 4: Testing Pattern
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swissarmyhammer_tools::cli::CliExclusionMarker;
+
+    #[test]
+    fn test_exclusion_configuration() {
+        let tool = IssueWorkTool::default();
+        
+        // Verify exclusion status
+        assert!(tool.is_cli_excluded());
+        
+        // Verify exclusion reason is documented
+        let reason = tool.exclusion_reason().unwrap();
+        assert!(reason.contains("MCP workflow"));
+        assert!(reason.contains("context"));
+        
+        // Verify tool name matches expectation
+        assert_eq!(tool.name(), "issue_work");
+    }
+
+    #[test]
+    fn test_inclusion_default() {
+        let tool = CreateMemoTool::default();
+        
+        // Default implementation should be CLI-eligible  
+        assert!(!tool.is_cli_excluded());
+        assert!(tool.exclusion_reason().is_none());
+    }
+
+    #[test]
+    fn test_registry_integration() {
+        let mut registry = ToolRegistry::new();
+        registry.register_tool(Box::new(IssueWorkTool::default())).unwrap();
+        registry.register_tool(Box::new(CreateMemoTool::default())).unwrap();
+        
+        let detector = registry.as_exclusion_detector();
+        
+        // Verify exclusion detection
+        assert!(detector.is_cli_excluded("issue_work"));
+        assert!(!detector.is_cli_excluded("memo_create"));
+        
+        // Verify bulk operations
+        let excluded = detector.get_excluded_tools();
+        let eligible = detector.get_cli_eligible_tools();
+        
+        assert!(excluded.contains(&"issue_work".to_string()));
+        assert!(eligible.contains(&"memo_create".to_string()));
+    }
+}
+```
+
+### Common Patterns and Examples
+
+#### Workflow Orchestration Pattern
+
+```rust
+/// Tools that coordinate multiple operations in workflows
+#[cli_exclude]
+pub struct WorkflowCoordinatorTool {
+    // Complex state management
+    // Abort file error handling  
+    // Multi-system coordination
+}
+
+impl CliExclusionMarker for WorkflowCoordinatorTool {
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        Some("Workflow orchestration requires MCP context for state coordination")
+    }
+}
+```
+
+#### Error Recovery Pattern
+
+```rust  
+/// Tools that handle workflow error recovery
+#[cli_exclude]
+pub struct ErrorRecoveryTool {
+    // Abort file creation
+    // Workflow termination
+    // State rollback
+}
+
+impl CliExclusionMarker for ErrorRecoveryTool {
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        Some("Error recovery tool - uses abort file patterns for workflow termination")
+    }
+}
+```
+
+#### User Content Pattern
+
+```rust
+/// Tools that create or manage user content directly
+#[derive(Default)]
+pub struct ContentManagementTool {
+    // Direct user value
+    // Independent operation
+    // No complex state coordination
+}
+
+// No CliExclusionMarker implementation = CLI-eligible by default
+```
+
 ## Migration Guide
 
 ### For Existing Tools
@@ -407,6 +678,19 @@ Always test both positive and negative cases:
 3. **Implement Trait**: Implement `CliExclusionMarker` with appropriate reason
 4. **Update Documentation**: Document the exclusion decision
 5. **Add Tests**: Test exclusion behavior and integration
+
+### Migration Checklist
+
+```markdown
+- [ ] Analyzed tool purpose against decision criteria
+- [ ] Added #[cli_exclude] attribute if appropriate  
+- [ ] Implemented CliExclusionMarker trait with clear reason
+- [ ] Updated tool documentation with exclusion rationale
+- [ ] Added CLI alternative documentation where applicable
+- [ ] Created comprehensive tests for exclusion behavior
+- [ ] Verified registry integration works correctly
+- [ ] Updated any existing CLI generation to respect exclusions
+```
 
 ### For CLI Generation Systems
 
@@ -426,3 +710,80 @@ The system is designed to be:
 - **Developer-Friendly**: Good error messages and testing support
 
 Tools should be excluded when they are designed for MCP workflow operations and require specific context that CLI users cannot provide. The decision should be based on the tool's purpose, dependencies, and intended usage patterns.
+
+## Troubleshooting
+
+### Common Issues
+
+#### Tool Not Detected as Excluded
+
+**Symptoms:**
+- Tool appears in CLI-eligible list when it should be excluded
+- CLI generation includes tools marked with `#[cli_exclude]`
+
+**Diagnosis:**
+```rust
+#[test]
+fn debug_exclusion_detection() {
+    let tool = SuspectedExcludedTool::default();
+    
+    // Check attribute presence (compile-time verification)
+    println!("Tool name: {}", tool.name());
+    
+    // Check trait implementation
+    println!("Is excluded: {}", tool.is_cli_excluded());
+    println!("Reason: {:?}", tool.exclusion_reason());
+    
+    // Check registry integration
+    let mut registry = ToolRegistry::new();
+    registry.register_tool(Box::new(tool)).unwrap();
+    let detector = registry.as_exclusion_detector();
+    
+    println!("Registry sees as excluded: {}", 
+             detector.is_cli_excluded("suspected_tool"));
+}
+```
+
+**Solutions:**
+1. Verify both `#[cli_exclude]` attribute AND `CliExclusionMarker` trait are implemented
+2. Ensure trait implementation returns `true` from `is_cli_excluded()`
+3. Check tool name matches between trait and registry registration
+4. Verify macro is imported: `use sah_marker_macros::cli_exclude;`
+
+#### Inconsistent CLI Generation
+
+**Symptoms:**
+- Some excluded tools still appear in generated CLI
+- CLI help shows tools that shouldn't be there
+
+**Solutions:**
+1. Ensure CLI generation code uses `get_cli_eligible_tools()` not all tools
+2. Verify exclusion detector is created from the same registry used in CLI generation
+3. Check for cached or stale CLI generation results
+4. Validate that CLI generation respects the detector interface
+
+#### Missing Exclusion Reasons
+
+**Solutions:**
+```rust
+impl CliExclusionMarker for MyTool {
+    fn is_cli_excluded(&self) -> bool {
+        true
+    }
+
+    fn exclusion_reason(&self) -> Option<&'static str> {
+        // Always provide a clear, helpful reason
+        Some("MCP workflow coordination tool - requires context and uses abort patterns")
+    }
+}
+```
+
+### Best Practices Summary
+
+1. **Always implement both attribute and trait** for excluded tools
+2. **Provide clear, actionable exclusion reasons** that help users understand alternatives
+3. **Test exclusion behavior comprehensively** including registry integration
+4. **Document CLI alternatives** for excluded workflow tools
+5. **Use consistent naming patterns** between tool names and exclusion references
+6. **Cache exclusion queries** when processing large tool sets
+7. **Validate exclusion decisions** against the documented criteria
