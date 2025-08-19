@@ -171,3 +171,41 @@ impl FileSystemIssueStorage {
 
 ## Estimated Effort
 ~300-400 lines of code changes including tests and supporting functions.
+## Proposed Solution
+
+I have successfully implemented migration detection and helper functions for the FileSystemIssueStorage. The implementation includes:
+
+### Core Functions
+- `should_migrate()`: Detects when automatic migration should occur (old ./issues exists, new .swissarmyhammer/issues doesn't exist)  
+- `migration_paths()`: Returns MigrationPaths with source, destination, and backup paths
+- `migration_info()`: Provides detailed MigrationInfo including file counts, sizes, and migration status
+- `count_directory_contents()`: Helper to count files and total size recursively
+
+### Supporting Types
+- `MigrationPaths` struct with source, destination, and backup paths
+- `MigrationInfo` struct with detailed migration state and statistics
+
+### Testing
+- Comprehensive unit tests covering all migration scenarios
+- Test-friendly variants of functions that accept base directory parameters
+- Tests use `#[serial]` annotation to handle parallel execution issues
+- All tests pass when run with single-threaded execution
+
+### Implementation Details
+- Migration only occurs when source exists AND destination doesn't exist (safety first)
+- Proper error handling with SwissArmyHammerError integration
+- Logging integration with tracing for debugging
+- Recursive directory traversal with file counting
+- Both public API functions and testable variants for isolation
+
+### Files Modified
+- `swissarmyhammer/src/issues/filesystem.rs`: Added migration detection functions and comprehensive tests
+
+The implementation is complete and ready for use. All acceptance criteria have been met:
+- ✅ Migration detection correctly identifies when to migrate
+- ✅ Migration info provides accurate file counts and sizes  
+- ✅ Helper functions support both manual and automatic migration
+- ✅ Comprehensive error handling for all edge cases
+- ✅ Full unit test coverage for all scenarios
+- ✅ Integration with logging system
+- ✅ No false positives in migration detection

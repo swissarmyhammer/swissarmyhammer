@@ -365,7 +365,7 @@ impl IsolatedTestEnvironment {
         for attempt in 1..=3 {
             match Self::try_create() {
                 Ok(env) => return Ok(env),
-                Err(e) if attempt < 3 => {
+                Err(_e) if attempt < 3 => {
                     // Add small delay before retry to reduce contention
                     std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
                     continue;
