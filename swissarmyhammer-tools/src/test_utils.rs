@@ -37,7 +37,7 @@ pub async fn create_test_context() -> ToolContext {
 }
 
 /// Test environment specifically designed for issue-related testing
-/// 
+///
 /// Provides convenient setup and access to issue directories following
 /// the new `.swissarmyhammer/issues` structure.
 #[cfg(test)]
@@ -65,27 +65,27 @@ impl TestIssueEnvironment {
         let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
         let issues_dir = swissarmyhammer_dir.join("issues");
         let complete_dir = issues_dir.join("complete");
-        
+
         // Create directory structure
         std::fs::create_dir_all(&complete_dir).expect("Failed to create directory structure");
-        
+
         Self {
             temp_dir,
             issues_dir,
             complete_dir,
         }
     }
-    
+
     /// Create a FileSystemIssueStorage using this test environment
     pub fn storage(&self) -> FileSystemIssueStorage {
         FileSystemIssueStorage::new(self.issues_dir.clone()).unwrap()
     }
-    
+
     /// Get the root path of the test environment
     pub fn path(&self) -> &Path {
         self.temp_dir.path()
     }
-    
+
     /// Get the .swissarmyhammer directory path
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
         self.temp_dir.path().join(".swissarmyhammer")

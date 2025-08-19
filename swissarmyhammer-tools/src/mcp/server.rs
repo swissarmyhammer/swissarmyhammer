@@ -95,29 +95,29 @@ impl McpServer {
             let original_dir = std::env::current_dir().map_err(|e| {
                 SwissArmyHammerError::Other(format!("Failed to get current directory: {e}"))
             })?;
-            
+
             let needs_dir_change = work_dir != original_dir;
-            
+
             // Set working directory context for storage creation if different from current
             if needs_dir_change {
                 std::env::set_current_dir(&work_dir).map_err(|e| {
                     SwissArmyHammerError::Other(format!("Failed to set working directory: {e}"))
                 })?;
             }
-            
+
             // Create storage using new default behavior (handles .swissarmyhammer/issues vs issues)
             let storage_result = FileSystemIssueStorage::new_default().map_err(|e| {
                 tracing::error!("Failed to create issue storage: {}", e);
                 SwissArmyHammerError::Other(format!("Failed to create issue storage: {e}"))
             });
-            
+
             // Always restore original working directory if we changed it
             if needs_dir_change {
                 if let Err(e) = std::env::set_current_dir(&original_dir) {
                     tracing::warn!("Failed to restore original working directory: {}", e);
                 }
             }
-            
+
             Box::new(storage_result?) as Box<dyn IssueStorage>
         };
 
