@@ -1495,7 +1495,7 @@ Examples:
   swissarmyhammer migrate status           # Show current status
 ")]
     Status,
-    
+
     /// Perform migration with confirmation
     #[command(long_about = "
 Performs the issue directory migration from ./issues to .swissarmyhammer/issues.
@@ -1517,16 +1517,16 @@ Examples:
         /// Skip confirmation prompt
         #[arg(long, help = "Skip confirmation prompt")]
         force: bool,
-        
+
         /// Create backup before migration
         #[arg(long, help = "Create backup before migration")]
         backup: bool,
-        
+
         /// Dry run - show what would be migrated
         #[arg(long, help = "Dry run - show what would be migrated")]
         dry_run: bool,
     },
-    
+
     /// Check if migration is possible
     #[command(long_about = "
 Validates migration prerequisites and reports potential issues:
@@ -1541,7 +1541,7 @@ Examples:
   swissarmyhammer migrate check            # Check prerequisites
 ")]
     Check,
-    
+
     /// Clean up migration artifacts
     #[command(long_about = "
 Manages migration backup artifacts:

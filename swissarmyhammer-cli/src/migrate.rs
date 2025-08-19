@@ -1,8 +1,6 @@
 use crate::cli::MigrateCommands;
 use std::io::{self, Write};
-use swissarmyhammer::issues::filesystem::{
-    FileSystemIssueStorage, MigrationResult,
-};
+use swissarmyhammer::issues::filesystem::{FileSystemIssueStorage, MigrationResult};
 
 pub async fn handle_migrate_command(
     command: MigrateCommands,
@@ -43,7 +41,7 @@ async fn handle_migrate_status() -> Result<(), Box<dyn std::error::Error>> {
         );
         println!("   Target: .swissarmyhammer/issues/");
         println!();
-        println!("Run 'swissarmyhammer migrate run' to perform migration");
+        println!("Run 'sah migrate run' to perform migration");
     } else if info.source_exists && info.destination_exists {
         println!("⚠️  Both directories exist");
         println!("   Legacy: ./issues/");
@@ -149,10 +147,7 @@ async fn handle_migrate_check() -> Result<(), Box<dyn std::error::Error>> {
             paths.destination.display()
         );
     } else {
-        println!(
-            "✅ Destination available: {}",
-            paths.destination.display()
-        );
+        println!("✅ Destination available: {}", paths.destination.display());
     }
 
     // Check parent directory permissions
@@ -161,29 +156,17 @@ async fn handle_migrate_check() -> Result<(), Box<dyn std::error::Error>> {
             match std::fs::metadata(parent) {
                 Ok(metadata) => {
                     if metadata.permissions().readonly() {
-                        println!(
-                            "❌ Parent directory is read-only: {}",
-                            parent.display()
-                        );
+                        println!("❌ Parent directory is read-only: {}", parent.display());
                     } else {
-                        println!(
-                            "✅ Parent directory is writable: {}",
-                            parent.display()
-                        );
+                        println!("✅ Parent directory is writable: {}", parent.display());
                     }
                 }
                 Err(e) => {
-                    println!(
-                        "⚠️  Cannot check parent directory permissions: {}",
-                        e
-                    );
+                    println!("⚠️  Cannot check parent directory permissions: {}", e);
                 }
             }
         } else {
-            println!(
-                "ℹ️  Parent directory will be created: {}",
-                parent.display()
-            );
+            println!("ℹ️  Parent directory will be created: {}", parent.display());
         }
     }
 
@@ -273,7 +256,7 @@ async fn handle_migrate_cleanup() -> Result<(), Box<dyn std::error::Error>> {
 // Helper function for backup creation during migration
 async fn perform_migration_with_backup() -> Result<MigrationResult, Box<dyn std::error::Error>> {
     let paths = FileSystemIssueStorage::migration_paths()?;
-    
+
     // Create backup first
     println!("📦 Creating backup...");
     let current_dir = std::env::current_dir()?;
@@ -281,44 +264,52 @@ async fn perform_migration_with_backup() -> Result<MigrationResult, Box<dyn std:
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let backup_dir = current_dir.join(".swissarmyhammer").join(format!("issues_backup_{}", timestamp));
-    
+    let backup_dir = current_dir
+        .join(".swissarmyhammer")
+        .join(format!("issues_backup_{}", timestamp));
+
     if paths.source.exists() {
         copy_directory(&paths.source, &backup_dir)?;
         println!("✅ Backup created: {}", backup_dir.display());
     }
-    
+
     // Now perform the migration
     match FileSystemIssueStorage::perform_migration() {
         Ok(result) => Ok(result),
         Err(e) => {
             // If migration fails, the backup is still available for manual recovery
-            println!("⚠️  Migration failed, but backup is available at: {}", backup_dir.display());
+            println!(
+                "⚠️  Migration failed, but backup is available at: {}",
+                backup_dir.display()
+            );
             Err(e.into())
         }
     }
 }
 
 // Helper function to copy a directory recursively
-fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn copy_directory(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !src.exists() {
         return Ok(());
     }
-    
+
     std::fs::create_dir_all(dst)?;
-    
+
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        
+
         if src_path.is_file() {
             std::fs::copy(&src_path, &dst_path)?;
         } else if src_path.is_dir() {
             copy_directory(&src_path, &dst_path)?;
         }
     }
-    
+
     Ok(())
 }
 
