@@ -455,7 +455,15 @@ impl FileSystemIssueStorage {
             })?
             .join(&backup_name);
 
-        Self::copy_directory_recursive(source, &backup_path)?;
+        Self::copy_directory_recursive(source, &backup_path)
+            .map_err(|e| SwissArmyHammerError::operation_failed(
+                "backup creation",
+                format!("Failed to backup {} to {}: {}", 
+                    source.display(), 
+                    backup_path.display(), 
+                    e
+                )
+            ))?;
 
         debug!("Created backup at: {}", backup_path.display());
         Ok(backup_path)
@@ -471,17 +479,38 @@ impl FileSystemIssueStorage {
     /// * `source` - Source directory to copy from
     /// * `destination` - Destination directory to copy to
     fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
-        std::fs::create_dir_all(destination).map_err(SwissArmyHammerError::Io)?;
+        std::fs::create_dir_all(destination)
+            .map_err(|e| SwissArmyHammerError::file_operation_error(
+                "create backup directory",
+                destination.display().to_string(),
+                e
+            ))?;
 
-        for entry in std::fs::read_dir(source).map_err(SwissArmyHammerError::Io)? {
-            let entry = entry.map_err(SwissArmyHammerError::Io)?;
+        for entry in std::fs::read_dir(source)
+            .map_err(|e| SwissArmyHammerError::file_operation_error(
+                "read source directory",
+                source.display().to_string(),
+                e
+            ))? 
+        {
+            let entry = entry
+                .map_err(|e| SwissArmyHammerError::file_operation_error(
+                    "read directory entry",
+                    source.display().to_string(),
+                    e
+                ))?;
             let path = entry.path();
             let dest_path = destination.join(entry.file_name());
 
             if path.is_dir() {
                 Self::copy_directory_recursive(&path, &dest_path)?;
             } else {
-                std::fs::copy(&path, &dest_path).map_err(SwissArmyHammerError::Io)?;
+                std::fs::copy(&path, &dest_path)
+                    .map_err(|e| SwissArmyHammerError::file_operation_error(
+                        "copy file during backup",
+                        format!("{} -> {}", path.display(), dest_path.display()),
+                        e
+                    ))?;
             }
         }
 
@@ -5140,19 +5169,21 @@ mod tests {
         // Perform migration
         let result = FileSystemIssueStorage::perform_migration().unwrap();
 
-        match result {
-            MigrationResult::Success(stats) => {
-                assert_eq!(stats.files_moved, 0);
-                assert_eq!(stats.bytes_moved, 0);
-                assert!(stats.duration > std::time::Duration::from_nanos(0));
-
-                // Verify destination exists and source is gone
-                let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
-                assert!(new_path.exists());
-                assert!(!issues_dir.exists());
+        let stats = match result {
+            MigrationResult::Success(stats) => stats,
+            result => {
+                panic!("Expected MigrationResult::Success for empty directory, got: {:?}", result);
             }
-            _ => panic!("Expected migration success for empty directory"),
-        }
+        };
+        
+        assert_eq!(stats.files_moved, 0);
+        assert_eq!(stats.bytes_moved, 0);
+        assert!(stats.duration > std::time::Duration::from_nanos(0));
+
+        // Verify destination exists and source is gone
+        let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
+        assert!(new_path.exists());
+        assert!(!issues_dir.exists());
 
         std::env::set_current_dir(original_dir).unwrap();
     }
@@ -5171,31 +5202,38 @@ mod tests {
         std::fs::create_dir_all(&complete_dir).unwrap();
 
         // Create test files
-        std::fs::write(issues_dir.join("active_issue.md"), "Active issue content").unwrap();
+        let active_content = "Active issue content";
+        let completed_content = "Completed issue content";
+        std::fs::write(issues_dir.join("active_issue.md"), active_content).unwrap();
         std::fs::write(
             complete_dir.join("completed_issue.md"),
-            "Completed issue content",
+            completed_content,
         )
         .unwrap();
+
+        // Calculate expected byte count
+        let expected_bytes = active_content.len() + completed_content.len();
 
         // Perform migration
         let result = FileSystemIssueStorage::perform_migration().unwrap();
 
-        match result {
-            MigrationResult::Success(stats) => {
-                assert_eq!(stats.files_moved, 2);
-                assert_eq!(stats.bytes_moved, 43); // Combined content length
-
-                // Verify structure is preserved
-                let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
-                let new_complete = new_path.join("complete");
-
-                assert!(new_path.join("active_issue.md").exists());
-                assert!(new_complete.join("completed_issue.md").exists());
-                assert!(!issues_dir.exists());
+        let stats = match result {
+            MigrationResult::Success(stats) => stats,
+            result => {
+                panic!("Expected MigrationResult::Success for nested structure, got: {:?}", result);
             }
-            _ => panic!("Expected migration success for nested structure"),
-        }
+        };
+        
+        assert_eq!(stats.files_moved, 2);
+        assert_eq!(stats.bytes_moved, expected_bytes as u64);
+
+        // Verify structure is preserved
+        let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
+        let new_complete = new_path.join("complete");
+
+        assert!(new_path.join("active_issue.md").exists());
+        assert!(new_complete.join("completed_issue.md").exists());
+        assert!(!issues_dir.exists());
 
         std::env::set_current_dir(original_dir).unwrap();
     }
@@ -5213,15 +5251,17 @@ mod tests {
 
         let result = FileSystemIssueStorage::perform_migration().unwrap();
 
-        match result {
-            MigrationResult::NotNeeded(info) => {
-                assert!(!info.should_migrate);
-                assert!(!info.source_exists);
-                assert_eq!(info.file_count, 0);
-                assert_eq!(info.total_size, 0);
+        let info = match result {
+            MigrationResult::NotNeeded(info) => info,
+            result => {
+                panic!("Expected MigrationResult::NotNeeded, got: {:?}", result);
             }
-            _ => panic!("Expected migration not needed"),
-        }
+        };
+        
+        assert!(!info.should_migrate);
+        assert!(!info.source_exists);
+        assert_eq!(info.file_count, 0);
+        assert_eq!(info.total_size, 0);
 
         std::env::set_current_dir(original_dir).unwrap();
     }
@@ -5307,20 +5347,23 @@ mod tests {
         // Create issues directory to trigger migration
         let issues_dir = temp_dir.path().join("issues");
         std::fs::create_dir_all(&issues_dir).unwrap();
-        std::fs::write(issues_dir.join("test.md"), "test").unwrap();
+        let test_content = "test";
+        std::fs::write(issues_dir.join("test.md"), test_content).unwrap();
 
         // Use new_default_with_migration
         let (storage, migration_result) =
             FileSystemIssueStorage::new_default_with_migration().unwrap();
 
         // Verify migration occurred
-        match migration_result {
-            Some(MigrationResult::Success(stats)) => {
-                assert_eq!(stats.files_moved, 1);
-                assert_eq!(stats.bytes_moved, 4);
+        let stats = match migration_result {
+            Some(MigrationResult::Success(stats)) => stats,
+            result => {
+                panic!("Expected Some(MigrationResult::Success), got: {:?}", result);
             }
-            _ => panic!("Expected successful migration"),
-        }
+        };
+        
+        assert_eq!(stats.files_moved, 1);
+        assert_eq!(stats.bytes_moved, test_content.len() as u64);
 
         // Verify storage works correctly
         let issues = storage.list_issues().await.unwrap();
