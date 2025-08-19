@@ -604,7 +604,7 @@ mod tests {
         // Test that nested IsolatedTestHome correctly restores the HOME set by the outer guard
         let outer_guard = IsolatedTestHome::new();
         let outer_home = std::env::var("HOME").expect("HOME not set");
-        
+
         {
             let _inner_guard = IsolatedTestHome::new();
             let inner_home = std::env::var("HOME").expect("HOME not set");
@@ -617,7 +617,7 @@ mod tests {
         let restored_home = std::env::var("HOME").expect("HOME not set");
         assert_eq!(outer_home, restored_home);
         assert!(PathBuf::from(&restored_home).exists());
-        
+
         // Don't drop outer_guard until the end so we maintain isolation
         drop(outer_guard);
     }
