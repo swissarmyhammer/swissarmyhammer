@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, error, info, warn};
 
 // IssueNumber type eliminated - we now use issue names (filename without .md) as the primary identifier
 
@@ -114,6 +114,46 @@ pub struct MigrationInfo {
     pub total_size: u64,
 }
 
+/// Result of a migration operation
+#[derive(Debug)]
+pub enum MigrationResult {
+    /// Migration completed successfully
+    Success(MigrationStats),
+    /// Migration was not needed
+    NotNeeded(MigrationInfo),
+}
+
+/// Statistics from a completed migration
+#[derive(Debug)]
+pub struct MigrationStats {
+    /// Number of files moved during migration
+    pub files_moved: usize,
+    /// Total bytes moved during migration  
+    pub bytes_moved: u64,
+    /// Time taken for the migration
+    pub duration: std::time::Duration,
+}
+
+/// Migration-specific error types
+#[derive(Debug, thiserror::Error)]
+pub enum MigrationError {
+    /// Backup creation failed before migration
+    #[error("Backup creation failed: {0}")]
+    BackupFailed(#[source] SwissArmyHammerError),
+    /// Migration execution failed during file operations
+    #[error("Migration execution failed: {0}")]
+    ExecutionFailed(#[source] SwissArmyHammerError),
+    /// Rollback failed when trying to restore original state
+    #[error("Rollback failed: {0}")]
+    RollbackFailed(#[source] SwissArmyHammerError),
+    /// Validation failed after migration completed
+    #[error("Validation failed: {reason}")]
+    ValidationFailed {
+        /// The reason for validation failure
+        reason: String,
+    },
+}
+
 /// Trait for issue storage operations
 #[async_trait::async_trait]
 pub trait IssueStorage: Send + Sync {
@@ -210,6 +250,31 @@ impl FileSystemIssueStorage {
     pub fn new_default() -> Result<Self> {
         let issues_dir = Self::default_directory()?;
         Self::new(issues_dir)
+    }
+
+    /// Create a new FileSystemIssueStorage with optional automatic migration
+    ///
+    /// This enhanced version of `new_default` checks if migration should occur
+    /// and performs it automatically before creating the storage instance.
+    /// This provides a seamless upgrade path for repositories.
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (storage_instance, optional_migration_result)
+    /// where the migration result is `Some` if migration was performed,
+    /// or `None` if no migration was needed.
+    pub fn new_default_with_migration() -> Result<(Self, Option<MigrationResult>)> {
+        // Check if migration should occur
+        let migration_result = if Self::should_migrate()? {
+            Some(Self::perform_migration()?)
+        } else {
+            None
+        };
+
+        // Create storage with new defaults
+        let storage = Self::new_default()?;
+
+        Ok((storage, migration_result))
     }
 
     /// Get the default issues directory path with backward compatibility
@@ -363,6 +428,241 @@ impl FileSystemIssueStorage {
         );
 
         Ok((file_count, total_size))
+    }
+
+    /// Create backup of source directory before migration
+    ///
+    /// Creates a timestamped backup copy of the source directory to enable rollback
+    /// if migration fails. The backup is created in the same parent directory as the source.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - Path to the source directory to backup
+    ///
+    /// # Returns
+    ///
+    /// Returns the path to the created backup directory
+    fn create_backup(source: &Path) -> Result<PathBuf> {
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let backup_name = format!("issues_backup_{}", timestamp);
+        let backup_path = source
+            .parent()
+            .ok_or_else(|| {
+                SwissArmyHammerError::invalid_file_path(
+                    &source.display().to_string(),
+                    "Source directory must have a parent directory",
+                )
+            })?
+            .join(&backup_name);
+
+        Self::copy_directory_recursive(source, &backup_path)?;
+
+        debug!("Created backup at: {}", backup_path.display());
+        Ok(backup_path)
+    }
+
+    /// Copy directory recursively for backup creation
+    ///
+    /// Performs a deep copy of a directory tree, preserving the structure and content
+    /// of all files and subdirectories. This is used to create backups before migration.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - Source directory to copy from
+    /// * `destination` - Destination directory to copy to
+    fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<()> {
+        std::fs::create_dir_all(destination).map_err(SwissArmyHammerError::Io)?;
+
+        for entry in std::fs::read_dir(source).map_err(SwissArmyHammerError::Io)? {
+            let entry = entry.map_err(SwissArmyHammerError::Io)?;
+            let path = entry.path();
+            let dest_path = destination.join(entry.file_name());
+
+            if path.is_dir() {
+                Self::copy_directory_recursive(&path, &dest_path)?;
+            } else {
+                std::fs::copy(&path, &dest_path).map_err(SwissArmyHammerError::Io)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Perform automatic migration with full safety checks
+    ///
+    /// This is the main entry point for automatic migration. It performs comprehensive
+    /// safety checks, creates backups, executes the migration atomically, and provides
+    /// rollback capability if any step fails.
+    ///
+    /// # Returns
+    ///
+    /// Returns `MigrationResult::Success` if migration completed successfully,
+    /// `MigrationResult::NotNeeded` if no migration is required, or an error
+    /// if migration failed (with automatic rollback attempted).
+    pub fn perform_migration() -> Result<MigrationResult> {
+        let info = Self::migration_info()?;
+
+        if !info.should_migrate {
+            return Ok(MigrationResult::NotNeeded(info));
+        }
+
+        info!(
+            "Starting issues directory migration: {} files ({} bytes)",
+            info.file_count, info.total_size
+        );
+
+        let paths = Self::migration_paths()?;
+
+        // Create backup before migration
+        let backup_path = Self::create_backup(&paths.source)?;
+
+        match Self::execute_migration(&paths) {
+            Ok(stats) => {
+                // Validate the migration completed correctly
+                match Self::validate_migration(&paths, &stats) {
+                    Ok(()) => {
+                        info!("Migration completed successfully");
+                        Ok(MigrationResult::Success(stats))
+                    }
+                    Err(e) => {
+                        error!("Migration validation failed, attempting rollback: {}", e);
+                        Self::rollback_migration(&paths, &backup_path)?;
+                        Err(SwissArmyHammerError::validation_failed(
+                            "migration_validation",
+                            "failed",
+                            &format!("Migration validation failed: {}", e),
+                        ))
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Migration execution failed, attempting rollback: {}", e);
+                Self::rollback_migration(&paths, &backup_path)?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Execute the actual file migration atomically
+    ///
+    /// Performs the core migration operation using atomic filesystem operations.
+    /// Uses `fs::rename` for atomic directory moves when possible, ensuring the
+    /// migration is all-or-nothing.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Migration paths containing source and destination
+    ///
+    /// # Returns
+    ///
+    /// Returns `MigrationStats` with timing and transfer information
+    fn execute_migration(paths: &MigrationPaths) -> Result<MigrationStats> {
+        let start_time = std::time::Instant::now();
+
+        // Ensure destination parent directory exists
+        if let Some(parent) = paths.destination.parent() {
+            std::fs::create_dir_all(parent).map_err(SwissArmyHammerError::Io)?;
+        }
+
+        // Get file count and size before migration for stats
+        let (file_count, total_size) = Self::count_directory_contents(&paths.source)?;
+
+        // Perform atomic move operation
+        std::fs::rename(&paths.source, &paths.destination).map_err(SwissArmyHammerError::Io)?;
+
+        let duration = start_time.elapsed();
+
+        debug!(
+            "Migration execution completed: {} files, {} bytes, {:?}",
+            file_count, total_size, duration
+        );
+
+        Ok(MigrationStats {
+            files_moved: file_count,
+            bytes_moved: total_size,
+            duration,
+        })
+    }
+
+    /// Rollback migration by restoring from backup
+    ///
+    /// Restores the original directory structure when migration fails.
+    /// This function removes any partial migration artifacts and restores
+    /// the source directory from the previously created backup.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Migration paths for cleanup
+    /// * `backup_path` - Path to the backup directory to restore from
+    fn rollback_migration(paths: &MigrationPaths, backup_path: &Path) -> Result<()> {
+        warn!("Rolling back migration");
+
+        // Remove partial destination if it exists
+        if paths.destination.exists() {
+            std::fs::remove_dir_all(&paths.destination).map_err(SwissArmyHammerError::Io)?;
+        }
+
+        // Restore from backup
+        std::fs::rename(backup_path, &paths.source).map_err(SwissArmyHammerError::Io)?;
+
+        info!("Migration rollback completed");
+        Ok(())
+    }
+
+    /// Validate migration completed successfully
+    ///
+    /// Performs comprehensive validation to ensure the migration completed correctly.
+    /// Checks that files were moved properly and that the expected counts match.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Migration paths to validate
+    /// * `expected_stats` - Expected statistics from the migration
+    fn validate_migration(paths: &MigrationPaths, expected_stats: &MigrationStats) -> Result<()> {
+        // Check destination exists
+        if !paths.destination.exists() {
+            return Err(SwissArmyHammerError::validation_failed(
+                "migration_destination",
+                &paths.destination.display().to_string(),
+                "Destination directory does not exist after migration",
+            ));
+        }
+
+        // Check source no longer exists
+        if paths.source.exists() {
+            return Err(SwissArmyHammerError::validation_failed(
+                "migration_source",
+                &paths.source.display().to_string(),
+                "Source directory still exists after migration",
+            ));
+        }
+
+        // Validate file count and size
+        let (actual_files, actual_size) = Self::count_directory_contents(&paths.destination)?;
+        if actual_files != expected_stats.files_moved {
+            return Err(SwissArmyHammerError::validation_failed(
+                "migration_file_count",
+                &actual_files.to_string(),
+                &format!(
+                    "File count mismatch: expected {}, got {}",
+                    expected_stats.files_moved, actual_files
+                ),
+            ));
+        }
+
+        if actual_size != expected_stats.bytes_moved {
+            return Err(SwissArmyHammerError::validation_failed(
+                "migration_size",
+                &actual_size.to_string(),
+                &format!(
+                    "Size mismatch: expected {} bytes, got {} bytes",
+                    expected_stats.bytes_moved, actual_size
+                ),
+            ));
+        }
+
+        debug!("Migration validation passed");
+        Ok(())
     }
 
     /// Parse issue from file path
@@ -4821,5 +5121,242 @@ mod tests {
             // Restore original directory
             std::env::set_current_dir(original_dir).unwrap();
         }
+    }
+
+    // Migration Tests
+
+    #[tokio::test]
+    #[serial]
+    async fn test_migration_with_empty_directory() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Create empty issues directory
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+
+        // Perform migration
+        let result = FileSystemIssueStorage::perform_migration().unwrap();
+
+        match result {
+            MigrationResult::Success(stats) => {
+                assert_eq!(stats.files_moved, 0);
+                assert_eq!(stats.bytes_moved, 0);
+                assert!(stats.duration > std::time::Duration::from_nanos(0));
+
+                // Verify destination exists and source is gone
+                let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
+                assert!(new_path.exists());
+                assert!(!issues_dir.exists());
+            }
+            _ => panic!("Expected migration success for empty directory"),
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_migration_with_nested_structure() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Create nested directory structure
+        let issues_dir = temp_dir.path().join("issues");
+        let complete_dir = issues_dir.join("complete");
+        std::fs::create_dir_all(&complete_dir).unwrap();
+
+        // Create test files
+        std::fs::write(issues_dir.join("active_issue.md"), "Active issue content").unwrap();
+        std::fs::write(
+            complete_dir.join("completed_issue.md"),
+            "Completed issue content",
+        )
+        .unwrap();
+
+        // Perform migration
+        let result = FileSystemIssueStorage::perform_migration().unwrap();
+
+        match result {
+            MigrationResult::Success(stats) => {
+                assert_eq!(stats.files_moved, 2);
+                assert_eq!(stats.bytes_moved, 43); // Combined content length
+
+                // Verify structure is preserved
+                let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
+                let new_complete = new_path.join("complete");
+
+                assert!(new_path.join("active_issue.md").exists());
+                assert!(new_complete.join("completed_issue.md").exists());
+                assert!(!issues_dir.exists());
+            }
+            _ => panic!("Expected migration success for nested structure"),
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_migration_not_needed() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Create .swissarmyhammer directory (indicating migration not needed)
+        std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer")).unwrap();
+
+        let result = FileSystemIssueStorage::perform_migration().unwrap();
+
+        match result {
+            MigrationResult::NotNeeded(info) => {
+                assert!(!info.should_migrate);
+                assert!(!info.source_exists);
+                assert_eq!(info.file_count, 0);
+                assert_eq!(info.total_size, 0);
+            }
+            _ => panic!("Expected migration not needed"),
+        }
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_backup_creation() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create source directory with content
+        let source = temp_dir.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("file1.txt"), "content1").unwrap();
+        std::fs::write(source.join("file2.txt"), "content2").unwrap();
+
+        // Create backup
+        let backup_path = FileSystemIssueStorage::create_backup(&source).unwrap();
+
+        // Verify backup exists and contains expected files
+        assert!(backup_path.exists());
+        assert!(backup_path.join("file1.txt").exists());
+        assert!(backup_path.join("file2.txt").exists());
+
+        // Verify content is identical
+        let backup_content1 = std::fs::read_to_string(backup_path.join("file1.txt")).unwrap();
+        let backup_content2 = std::fs::read_to_string(backup_path.join("file2.txt")).unwrap();
+        assert_eq!(backup_content1, "content1");
+        assert_eq!(backup_content2, "content2");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_migration_rollback_on_validation_failure() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Create issues directory with content
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test_issue.md"), "test content").unwrap();
+
+        // This test simulates rollback by manually corrupting the destination after migration
+        // to trigger validation failure. In a real scenario, this would happen due to I/O errors.
+        let destination = temp_dir.path().join(".swissarmyhammer").join("issues");
+
+        // Create the parent directory
+        std::fs::create_dir_all(&destination.parent().unwrap()).unwrap();
+
+        // Perform migration steps manually to test rollback
+        let paths = FileSystemIssueStorage::migration_paths().unwrap();
+        let backup_path = FileSystemIssueStorage::create_backup(&issues_dir).unwrap();
+
+        // Execute migration
+        let stats = FileSystemIssueStorage::execute_migration(&paths).unwrap();
+
+        // Simulate validation failure by removing a file from destination
+        std::fs::remove_file(destination.join("test_issue.md")).unwrap();
+
+        // Validation should fail
+        let validation_result = FileSystemIssueStorage::validate_migration(&paths, &stats);
+        assert!(validation_result.is_err());
+
+        // Perform rollback
+        FileSystemIssueStorage::rollback_migration(&paths, &backup_path).unwrap();
+
+        // Verify rollback restored original state
+        assert!(issues_dir.exists());
+        assert!(issues_dir.join("test_issue.md").exists());
+        assert!(!destination.exists());
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_new_default_with_migration() {
+        let original_dir = std::env::current_dir().unwrap();
+
+        let temp_dir = TempDir::new().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        // Create issues directory to trigger migration
+        let issues_dir = temp_dir.path().join("issues");
+        std::fs::create_dir_all(&issues_dir).unwrap();
+        std::fs::write(issues_dir.join("test.md"), "test").unwrap();
+
+        // Use new_default_with_migration
+        let (storage, migration_result) =
+            FileSystemIssueStorage::new_default_with_migration().unwrap();
+
+        // Verify migration occurred
+        match migration_result {
+            Some(MigrationResult::Success(stats)) => {
+                assert_eq!(stats.files_moved, 1);
+                assert_eq!(stats.bytes_moved, 4);
+            }
+            _ => panic!("Expected successful migration"),
+        }
+
+        // Verify storage works correctly
+        let issues = storage.list_issues().await.unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].name, "test");
+
+        std::env::set_current_dir(original_dir).unwrap();
+    }
+
+    #[test]
+    fn test_copy_directory_recursive() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create complex source structure
+        let source = temp_dir.path().join("source");
+        let nested = source.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        std::fs::write(source.join("root_file.txt"), "root content").unwrap();
+        std::fs::write(nested.join("nested_file.txt"), "nested content").unwrap();
+
+        // Copy recursively
+        let destination = temp_dir.path().join("destination");
+        FileSystemIssueStorage::copy_directory_recursive(&source, &destination).unwrap();
+
+        // Verify structure is preserved
+        assert!(destination.exists());
+        assert!(destination.join("root_file.txt").exists());
+        assert!(destination.join("nested").exists());
+        assert!(destination.join("nested").join("nested_file.txt").exists());
+
+        // Verify content is identical
+        let root_content = std::fs::read_to_string(destination.join("root_file.txt")).unwrap();
+        let nested_content =
+            std::fs::read_to_string(destination.join("nested").join("nested_file.txt")).unwrap();
+        assert_eq!(root_content, "root content");
+        assert_eq!(nested_content, "nested content");
     }
 }
