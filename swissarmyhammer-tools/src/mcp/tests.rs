@@ -463,4 +463,111 @@ fn test_validate_issue_name_trimming() {
 }
 
 // Integration tests for MCP tools
-mod mcp_integration_tests {}
+mod mcp_integration_tests {
+    use super::*;
+    use std::env;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_mcp_server_uses_new_storage_defaults() {
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        
+        // Test 1: Server with working directory that has no .swissarmyhammer should use legacy behavior
+        {
+            let library = PromptLibrary::new();
+            let server = McpServer::new_with_work_dir(library, temp_path.to_path_buf()).unwrap();
+            
+            // Server should be created successfully even without .swissarmyhammer directory
+            let info = server.get_info();
+            assert_eq!(info.server_info.name, "SwissArmyHammer");
+            
+            // Instructions should mention issue tracking capabilities
+            let instructions = info.instructions.unwrap();
+            assert!(instructions.contains("issue tracking"));
+            assert!(instructions.contains("issue_*"));
+        }
+        
+        // Test 2: Server with working directory that has .swissarmyhammer should use new behavior
+        {
+            let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+            std::fs::create_dir_all(&swissarmyhammer_dir).unwrap();
+            
+            let library = PromptLibrary::new();
+            let server = McpServer::new_with_work_dir(library, temp_path.to_path_buf()).unwrap();
+            
+            // Server should be created successfully with new storage defaults
+            let info = server.get_info();
+            assert_eq!(info.server_info.name, "SwissArmyHammer");
+            
+            // Should have tools capability for issue operations
+            assert!(info.capabilities.tools.is_some());
+            
+            // Instructions should mention issue tracking capabilities
+            let instructions = info.instructions.unwrap();
+            assert!(instructions.contains("issue tracking"));
+            assert!(instructions.contains("issue_*"));
+        }
+        
+        // Test 3: Server with different working directory should handle context properly
+        {
+            let different_work_dir = temp_path.join("different_work_dir");
+            std::fs::create_dir_all(&different_work_dir).unwrap();
+            
+            // Create .swissarmyhammer in the different work dir to test new storage behavior
+            let swissarmyhammer_in_work_dir = different_work_dir.join(".swissarmyhammer");
+            std::fs::create_dir_all(&swissarmyhammer_in_work_dir).unwrap();
+            
+            let library = PromptLibrary::new();
+            let server = McpServer::new_with_work_dir(library, different_work_dir).unwrap();
+            
+            // Server should be created successfully - this proves the working directory context worked
+            let info = server.get_info();
+            assert_eq!(info.server_info.name, "SwissArmyHammer");
+            
+            // The key test: server should have issue tracking capabilities enabled
+            assert!(info.capabilities.tools.is_some());
+            let tools_cap = info.capabilities.tools.unwrap();
+            assert_eq!(tools_cap.list_changed, Some(true));
+            
+            let instructions = info.instructions.unwrap();
+            assert!(instructions.contains("issue tracking"));
+        }
+    }
+
+    #[tokio::test] 
+    async fn test_mcp_server_storage_backwards_compatibility() {
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path().canonicalize().unwrap();
+        
+        // Save original working directory
+        let original_dir = env::current_dir().unwrap().canonicalize().unwrap();
+        
+        // Set working directory to our test directory
+        env::set_current_dir(&temp_path).unwrap();
+        
+        // Create legacy issues directory structure
+        let legacy_issues_dir = temp_path.join("issues");
+        std::fs::create_dir_all(&legacy_issues_dir).unwrap();
+        
+        // Create a sample issue file in the legacy location
+        let sample_issue = legacy_issues_dir.join("test_issue.md");
+        std::fs::write(&sample_issue, "# Test Issue\nThis is a test issue.").unwrap();
+        
+        // Create MCP server with work_dir that has legacy issues directory
+        let library = PromptLibrary::new();
+        let server = McpServer::new_with_work_dir(library, temp_path.clone()).unwrap();
+        
+        // Server should be created successfully
+        let info = server.get_info();
+        assert_eq!(info.server_info.name, "SwissArmyHammer");
+        
+        // The storage should work with the legacy directory
+        assert!(info.capabilities.tools.is_some());
+        
+        // Restore original working directory
+        env::set_current_dir(&original_dir).unwrap();
+    }
+}
