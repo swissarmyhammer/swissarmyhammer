@@ -121,6 +121,12 @@ pub struct ValidationReport {
     pub summary: ValidationSummary,
 }
 
+impl Default for ValidationReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ValidationReport {
     /// Create a new empty validation report
     pub fn new() -> Self {
@@ -208,7 +214,7 @@ impl DevUtilities {
     /// Analyze all tools and provide development insights
     pub fn analyze_all_tools<D: CliExclusionDetector>(detector: &D) -> Vec<ToolAnalysis> {
         let all_metadata = detector.get_all_tool_metadata();
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         all_metadata.into_iter()
             .map(|metadata| Self::analyze_tool(&metadata, &validator))
@@ -257,7 +263,7 @@ impl DevUtilities {
         if let Some((pattern, confidence)) = pattern_matches.first() {
             if *confidence >= 0.8 && !metadata.is_cli_excluded {
                 return ToolSuggestion::ShouldExclude {
-                    reason: format!("Tool contains '{}' pattern suggesting MCP-only usage", pattern),
+                    reason: format!("Tool contains '{pattern}' pattern suggesting MCP-only usage"),
                     confidence: *confidence,
                 };
             }
@@ -342,7 +348,8 @@ impl DocumentationGenerator {
         let mut doc = String::new();
         doc.push_str("# CLI Excluded Tools\n\n");
         doc.push_str("This document lists all MCP tools that are excluded from CLI generation.\n\n");
-        doc.push_str(&format!("**Total excluded tools:** {}\n\n", excluded_tools.len()));
+        let excluded_count = excluded_tools.len();
+        doc.push_str(&format!("**Total excluded tools:** {excluded_count}\n\n"));
         
         if excluded_tools.is_empty() {
             doc.push_str("*No tools are currently excluded from CLI generation.*\n");
@@ -361,12 +368,13 @@ impl DocumentationGenerator {
         }
         
         for (category, tools) in by_reason {
-            doc.push_str(&format!("## {}\n\n", category));
+            doc.push_str(&format!("## {category}\n\n"));
             
             for tool in tools {
-                doc.push_str(&format!("### `{}`\n\n", tool.name));
+                let tool_name = &tool.name;
+                doc.push_str(&format!("### `{tool_name}`\n\n"));
                 if let Some(reason) = &tool.exclusion_reason {
-                    doc.push_str(&format!("**Reason:** {}\n\n", reason));
+                    doc.push_str(&format!("**Reason:** {reason}\n\n"));
                 } else {
                     doc.push_str("**Reason:** *Not specified*\n\n");
                 }
@@ -386,14 +394,22 @@ impl DocumentationGenerator {
         
         // Statistics section
         doc.push_str("## Summary Statistics\n\n");
-        doc.push_str(&format!("- **Total tools:** {}\n", stats.get("total_tools").unwrap_or(&0)));
-        doc.push_str(&format!("- **CLI excluded:** {}\n", stats.get("excluded_tools").unwrap_or(&0)));
-        doc.push_str(&format!("- **CLI eligible:** {}\n", stats.get("total_tools").unwrap_or(&0) - stats.get("excluded_tools").unwrap_or(&0)));
-        doc.push_str(&format!("- **Should exclude:** {}\n", stats.get("should_exclude").unwrap_or(&0)));
-        doc.push_str(&format!("- **Should include:** {}\n", stats.get("should_include").unwrap_or(&0)));
-        doc.push_str(&format!("- **Need better reasons:** {}\n", stats.get("need_better_reasons").unwrap_or(&0)));
-        doc.push_str(&format!("- **Correctly configured:** {}\n", stats.get("correctly_configured").unwrap_or(&0)));
-        doc.push_str("\n");
+        let total_tools = stats.get("total_tools").unwrap_or(&0);
+        let excluded_tools = stats.get("excluded_tools").unwrap_or(&0);
+        let cli_eligible = total_tools - excluded_tools;
+        let should_exclude = stats.get("should_exclude").unwrap_or(&0);
+        let should_include = stats.get("should_include").unwrap_or(&0);
+        let need_better_reasons = stats.get("need_better_reasons").unwrap_or(&0);
+        let correctly_configured = stats.get("correctly_configured").unwrap_or(&0);
+        
+        doc.push_str(&format!("- **Total tools:** {total_tools}\n"));
+        doc.push_str(&format!("- **CLI excluded:** {excluded_tools}\n"));
+        doc.push_str(&format!("- **CLI eligible:** {cli_eligible}\n"));
+        doc.push_str(&format!("- **Should exclude:** {should_exclude}\n"));
+        doc.push_str(&format!("- **Should include:** {should_include}\n"));
+        doc.push_str(&format!("- **Need better reasons:** {need_better_reasons}\n"));
+        doc.push_str(&format!("- **Correctly configured:** {correctly_configured}\n"));
+        doc.push('\n');
         
         // Suggestions sections
         let should_exclude: Vec<_> = analyses.iter()
@@ -412,13 +428,14 @@ impl DocumentationGenerator {
             doc.push_str("## Tools That Should Be Excluded\n\n");
             for analysis in should_exclude {
                 if let ToolSuggestion::ShouldExclude { reason, confidence } = &analysis.suggestion {
-                    doc.push_str(&format!("### `{}` (confidence: {:.1})\n\n", analysis.name, confidence));
-                    doc.push_str(&format!("**Reason:** {}\n\n", reason));
+                    let name = &analysis.name;
+                    doc.push_str(&format!("### `{name}` (confidence: {confidence:.1})\n\n"));
+                    doc.push_str(&format!("**Reason:** {reason}\n\n"));
                     doc.push_str("**Pattern matches:**\n");
                     for (pattern, conf) in &analysis.pattern_matches {
-                        doc.push_str(&format!("- `{}` (confidence: {:.1})\n", pattern, conf));
+                        doc.push_str(&format!("- `{pattern}` (confidence: {conf:.1})\n"));
                     }
-                    doc.push_str("\n");
+                    doc.push('\n');
                 }
             }
         }
@@ -427,10 +444,11 @@ impl DocumentationGenerator {
             doc.push_str("## Tools That Should Be Included\n\n");
             for analysis in should_include {
                 if let ToolSuggestion::ShouldInclude { reason } = &analysis.suggestion {
-                    doc.push_str(&format!("### `{}`\n\n", analysis.name));
-                    doc.push_str(&format!("**Reason:** {}\n\n", reason));
+                    let name = &analysis.name;
+                    doc.push_str(&format!("### `{name}`\n\n"));
+                    doc.push_str(&format!("**Reason:** {reason}\n\n"));
                     if let Some(current_reason) = &analysis.exclusion_reason {
-                        doc.push_str(&format!("**Current exclusion reason:** {}\n\n", current_reason));
+                        doc.push_str(&format!("**Current exclusion reason:** {current_reason}\n\n"));
                     }
                 }
             }
@@ -440,9 +458,10 @@ impl DocumentationGenerator {
             doc.push_str("## Tools Needing Better Exclusion Reasons\n\n");
             for analysis in improve_reason {
                 if let ToolSuggestion::ImproveReason { current_reason, suggestion } = &analysis.suggestion {
-                    doc.push_str(&format!("### `{}`\n\n", analysis.name));
-                    doc.push_str(&format!("**Current reason:** {}\n\n", current_reason));
-                    doc.push_str(&format!("**Suggestion:** {}\n\n", suggestion));
+                    let name = &analysis.name;
+                    doc.push_str(&format!("### `{name}`\n\n"));
+                    doc.push_str(&format!("**Current reason:** {current_reason}\n\n"));
+                    doc.push_str(&format!("**Suggestion:** {suggestion}\n\n"));
                 }
             }
         }
@@ -479,7 +498,7 @@ impl ExclusionValidator {
     }
 
     /// Create a validator with default configuration
-    pub fn default() -> Self {
+    pub fn with_default_config() -> Self {
         Self::new(ValidationConfig::default())
     }
 
@@ -588,20 +607,14 @@ impl ExclusionValidator {
                 if let Some((_, current_confidence, _)) = &best_match {
                     if confidence > *current_confidence {
                         best_match = Some((
-                            format!(
-                                "Contains workflow indicator '{}' suggesting MCP-only usage",
-                                pattern
-                            ),
+                            format!("Contains workflow indicator '{pattern}' suggesting MCP-only usage"),
                             confidence,
                             pattern
                         ));
                     }
                 } else {
                     best_match = Some((
-                        format!(
-                            "Contains workflow indicator '{}' suggesting MCP-only usage",
-                            pattern
-                        ),
+                        format!("Contains workflow indicator '{pattern}' suggesting MCP-only usage"),
                         confidence,
                         pattern
                     ));
@@ -659,13 +672,13 @@ mod tests {
         let validator = ExclusionValidator::new(config);
         assert!(validator.config.check_missing_exclusions);
         
-        let default_validator = ExclusionValidator::default();
+        let default_validator = ExclusionValidator::with_default_config();
         assert!(default_validator.config.check_exclusion_reasoning);
     }
 
     #[test] 
     fn test_should_probably_be_excluded() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         let (reason, confidence) = validator.should_probably_be_excluded("issue_work").unwrap();
         
@@ -689,7 +702,7 @@ mod tests {
 
     #[test]
     fn test_validate_exclusion_consistency() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         // Create test metadata
         let mut metadata_map = HashMap::new();
@@ -715,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_validate_exclusion_reasoning() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         // Create test metadata with missing reasoning
         let mut metadata_map = HashMap::new();
@@ -752,7 +765,7 @@ mod tests {
 
     #[test]
     fn test_validate_all_summary() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         let mut metadata_map = HashMap::new();
         metadata_map.insert("tool1".to_string(), ToolCliMetadata::included("tool1"));
@@ -769,7 +782,7 @@ mod tests {
 
     #[test]
     fn test_dev_utilities_tool_analysis() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         // Test tool that should be excluded
         let should_exclude_metadata = ToolCliMetadata::included("issue_work");
@@ -777,7 +790,7 @@ mod tests {
         
         assert_eq!(analysis.name, "issue_work");
         assert!(!analysis.is_excluded);
-        assert!(analysis.pattern_matches.len() > 0);
+        assert!(!analysis.pattern_matches.is_empty());
         assert!(matches!(analysis.suggestion, ToolSuggestion::ShouldExclude { .. }));
         
         if let ToolSuggestion::ShouldExclude { confidence, .. } = analysis.suggestion {
@@ -787,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_dev_utilities_correctly_configured() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         // Test properly excluded tool
         let excluded_metadata = ToolCliMetadata::excluded("issue_work", "MCP workflow management only");
@@ -807,7 +820,7 @@ mod tests {
 
     #[test]
     fn test_dev_utilities_improve_reason() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         // Test excluded tool with poor reason but has pattern matches
         let poor_reason_metadata = ToolCliMetadata::excluded("tool_work", "Bad");
@@ -828,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_dev_utilities_should_include() {
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         
         // Test tool that is excluded but has no pattern matches
         let excluded_no_pattern = ToolCliMetadata::excluded("normal_excluded_tool", "Some reason");
@@ -987,7 +1000,7 @@ mod tests {
         let detector = RegistryCliExclusionDetector::new(metadata_map);
         
         // Test validation system
-        let validator = ExclusionValidator::default();
+        let validator = ExclusionValidator::with_default_config();
         let report = validator.validate_all(&detector);
         
         assert_eq!(report.summary.total_tools, 9);

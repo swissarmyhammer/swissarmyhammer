@@ -854,7 +854,7 @@ fn print_exclusion_text_results(
                     "!".red(),
                     tool_name.bold()
                 );
-                println!("    Reason: {}", reason);
+                println!("    Reason: {reason}");
                 println!("    Confidence: {:.1}%", confidence * 100.0);
             }
             ValidationIssue::MissingExclusionReason { tool_name } => {
@@ -892,7 +892,7 @@ fn print_exclusion_text_results(
                         "?".yellow(),
                         tool_name.bold()
                     );
-                    println!("    Reason: {}", reason);
+                    println!("    Reason: {reason}");
                     println!("    Confidence: {:.1}%", confidence * 100.0);
                 }
                 ValidationWarning::VagueExclusionReason { tool_name, current_reason } => {
