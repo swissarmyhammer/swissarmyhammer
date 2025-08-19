@@ -88,8 +88,8 @@ fn test_multiple_cli_exclude_in_module() {
     #[derive(Default)]
     struct Tool2;
 
-    let _tool1 = Tool1::default();
-    let _tool2 = Tool2::default();
+    let _tool1 = Tool1;
+    let _tool2 = Tool2;
 }
 
 /// Test that cli_exclude works with generic structs

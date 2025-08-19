@@ -419,7 +419,7 @@ impl ToolRegistry {
     ///
     /// let registry = ToolRegistry::new();
     /// let detector = registry.create_cli_exclusion_detector();
-    /// 
+    ///
     /// let excluded_tools = detector.get_excluded_tools();
     /// println!("MCP-only tools: {:?}", excluded_tools);
     /// ```
@@ -427,7 +427,8 @@ impl ToolRegistry {
         use crate::cli::{RegistryCliExclusionDetector, ToolCliMetadata};
         use std::collections::HashMap;
 
-        let metadata_cache: HashMap<String, ToolCliMetadata> = self.tools
+        let metadata_cache: HashMap<String, ToolCliMetadata> = self
+            .tools
             .iter()
             .map(|(name, tool)| {
                 let metadata = if let Some(_any) = tool.as_any() {
@@ -437,8 +438,8 @@ impl ToolRegistry {
                     // For now, we'll check tool names against known excluded tools
                     if name == "issue_work" || name == "issue_merge" {
                         ToolCliMetadata::excluded(
-                            name, 
-                            "MCP workflow orchestration tool - not suitable for direct CLI usage"
+                            name,
+                            "MCP workflow orchestration tool - not suitable for direct CLI usage",
                         )
                     } else {
                         ToolCliMetadata::included(name)
@@ -447,7 +448,7 @@ impl ToolRegistry {
                     // Tool doesn't provide as_any implementation, include by default
                     ToolCliMetadata::included(name)
                 };
-                
+
                 (name.clone(), metadata)
             })
             .collect();

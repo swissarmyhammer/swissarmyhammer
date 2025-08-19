@@ -46,7 +46,7 @@ impl WriteFileTool {
         }
 
         // Create temporary file in same directory as target
-        let temp_file_name = format!("{}.tmp", file_path.display());
+let temp_file_name = format!("{}.tmp", file_path.display());
         let temp_path = Path::new(&temp_file_name);
 
         debug!(
@@ -190,7 +190,7 @@ impl McpTool for WriteFileTool {
         // Perform atomic write operation
         let bytes_written = Self::write_file_atomic(&path_buf, &request.content)?;
 
-        let success_message = format!(
+let success_message = format!(
             "Successfully wrote {} bytes to {}",
             bytes_written, request.file_path
         );

@@ -60,5 +60,3 @@ pub use sah_marker_macros::cli_exclude;
 
 /// Version of this crate
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-

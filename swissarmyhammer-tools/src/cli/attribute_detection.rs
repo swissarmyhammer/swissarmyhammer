@@ -68,10 +68,10 @@ use std::collections::HashMap;
 pub struct ToolCliMetadata {
     /// The unique name of the tool
     pub name: String,
-    
+
     /// Whether this tool is marked for CLI exclusion
     pub is_cli_excluded: bool,
-    
+
     /// Optional human-readable reason for exclusion
     ///
     /// This provides context for why a tool is excluded from CLI generation,
@@ -101,7 +101,7 @@ impl ToolCliMetadata {
             exclusion_reason: None,
         }
     }
-    
+
     /// Create metadata for a CLI-excluded tool
     ///
     /// # Arguments
@@ -114,7 +114,7 @@ impl ToolCliMetadata {
     /// ```rust
     /// # use swissarmyhammer_tools::cli::ToolCliMetadata;
     /// let metadata = ToolCliMetadata::excluded(
-    ///     "issue_work", 
+    ///     "issue_work",
     ///     "MCP workflow orchestration only"
     /// );
     /// assert!(metadata.is_cli_excluded);
@@ -178,7 +178,7 @@ pub trait CliExclusionMarker: Send + Sync {
     fn is_cli_excluded(&self) -> bool {
         false
     }
-    
+
     /// Returns an optional human-readable reason for CLI exclusion
     ///
     /// This should provide context about why the tool is excluded from CLI
@@ -250,7 +250,7 @@ pub trait CliExclusionDetector {
     /// # }
     /// ```
     fn is_cli_excluded(&self, tool_name: &str) -> bool;
-    
+
     /// Get all tools marked for CLI exclusion
     ///
     /// Returns a vector of tool names that should be excluded from CLI
@@ -271,7 +271,7 @@ pub trait CliExclusionDetector {
     /// # }
     /// ```
     fn get_excluded_tools(&self) -> Vec<String>;
-    
+
     /// Get all tools eligible for CLI generation
     ///
     /// Returns a vector of tool names that should be included in CLI
@@ -294,7 +294,7 @@ pub trait CliExclusionDetector {
     /// # }
     /// ```
     fn get_cli_eligible_tools(&self) -> Vec<String>;
-    
+
     /// Get detailed metadata for all tools
     ///
     /// Returns complete metadata for all registered tools, including both
@@ -313,8 +313,8 @@ pub trait CliExclusionDetector {
     /// let all_metadata = detector.get_all_tool_metadata();
     /// for metadata in all_metadata {
     ///     if metadata.is_cli_excluded {
-    ///         println!("Excluded: {} - {}", 
-    ///             metadata.name, 
+    ///         println!("Excluded: {} - {}",
+    ///             metadata.name,
     ///             metadata.exclusion_reason.unwrap_or("No reason given")
     ///         );
     ///     }
@@ -369,7 +369,7 @@ impl RegistryCliExclusionDetector {
     /// let mut metadata = HashMap::new();
     /// metadata.insert("tool1".to_string(), ToolCliMetadata::included("tool1"));
     /// metadata.insert("tool2".to_string(), ToolCliMetadata::excluded("tool2", "MCP only"));
-    /// 
+    ///
     /// let detector = RegistryCliExclusionDetector::new(metadata);
     /// ```
     pub fn new(metadata_cache: HashMap<String, ToolCliMetadata>) -> Self {
@@ -384,7 +384,7 @@ impl CliExclusionDetector for RegistryCliExclusionDetector {
             .map(|metadata| metadata.is_cli_excluded)
             .unwrap_or(false)
     }
-    
+
     fn get_excluded_tools(&self) -> Vec<String> {
         self.metadata_cache
             .values()
@@ -392,7 +392,7 @@ impl CliExclusionDetector for RegistryCliExclusionDetector {
             .map(|metadata| metadata.name.clone())
             .collect()
     }
-    
+
     fn get_cli_eligible_tools(&self) -> Vec<String> {
         self.metadata_cache
             .values()
@@ -400,7 +400,7 @@ impl CliExclusionDetector for RegistryCliExclusionDetector {
             .map(|metadata| metadata.name.clone())
             .collect()
     }
-    
+
     fn get_all_tool_metadata(&self) -> Vec<ToolCliMetadata> {
         self.metadata_cache.values().cloned().collect()
     }
@@ -409,10 +409,10 @@ impl CliExclusionDetector for RegistryCliExclusionDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
     use async_trait::async_trait;
     use rmcp::model::CallToolResult;
     use rmcp::Error as McpError;
-    use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 
     /// Mock tool for testing that implements CLI exclusion
     #[derive(Default)]
@@ -447,7 +447,9 @@ mod tests {
             _arguments: serde_json::Map<String, serde_json::Value>,
             _context: &ToolContext,
         ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("mock excluded executed"))
+            Ok(BaseToolImpl::create_success_response(
+                "mock excluded executed",
+            ))
         }
 
         fn as_any(&self) -> Option<&dyn std::any::Any> {
@@ -455,41 +457,12 @@ mod tests {
         }
     }
 
-    /// Mock tool for testing that is CLI-eligible (default behavior)
-    #[derive(Default)]
-    struct IncludedMockTool;
 
-    #[async_trait]
-    impl McpTool for IncludedMockTool {
-        fn name(&self) -> &'static str {
-            "included_mock"
-        }
-
-        fn description(&self) -> &'static str {
-            "Mock tool for testing inclusion"
-        }
-
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({})
-        }
-
-        async fn execute(
-            &self,
-            _arguments: serde_json::Map<String, serde_json::Value>,
-            _context: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("mock included executed"))
-        }
-
-        fn as_any(&self) -> Option<&dyn std::any::Any> {
-            Some(self)
-        }
-    }
 
     #[test]
     fn test_tool_cli_metadata_included() {
         let metadata = ToolCliMetadata::included("test_tool");
-        
+
         assert_eq!(metadata.name, "test_tool");
         assert!(!metadata.is_cli_excluded);
         assert!(metadata.exclusion_reason.is_none());
@@ -498,7 +471,7 @@ mod tests {
     #[test]
     fn test_tool_cli_metadata_excluded() {
         let metadata = ToolCliMetadata::excluded("test_tool", "Test reason");
-        
+
         assert_eq!(metadata.name, "test_tool");
         assert!(metadata.is_cli_excluded);
         assert_eq!(metadata.exclusion_reason.unwrap(), "Test reason");
@@ -508,9 +481,9 @@ mod tests {
     fn test_cli_exclusion_marker_default() {
         #[derive(Default)]
         struct DefaultTool;
-        
+
         impl CliExclusionMarker for DefaultTool {}
-        
+
         let tool = DefaultTool;
         assert!(!tool.is_cli_excluded());
         assert!(tool.exclusion_reason().is_none());
@@ -520,23 +493,26 @@ mod tests {
     fn test_cli_exclusion_marker_excluded() {
         let tool = ExcludedMockTool;
         assert!(tool.is_cli_excluded());
-        assert_eq!(tool.exclusion_reason().unwrap(), "Test exclusion for mock tool");
+        assert_eq!(
+            tool.exclusion_reason().unwrap(),
+            "Test exclusion for mock tool"
+        );
     }
 
     #[test]
     fn test_registry_cli_exclusion_detector_creation() {
         let mut metadata = HashMap::new();
         metadata.insert(
-            "included_tool".to_string(), 
-            ToolCliMetadata::included("included_tool")
+            "included_tool".to_string(),
+            ToolCliMetadata::included("included_tool"),
         );
         metadata.insert(
             "excluded_tool".to_string(),
-            ToolCliMetadata::excluded("excluded_tool", "Test exclusion")
+            ToolCliMetadata::excluded("excluded_tool", "Test exclusion"),
         );
 
         let detector = RegistryCliExclusionDetector::new(metadata);
-        
+
         assert!(!detector.is_cli_excluded("included_tool"));
         assert!(detector.is_cli_excluded("excluded_tool"));
         assert!(!detector.is_cli_excluded("nonexistent_tool"));
@@ -545,22 +521,16 @@ mod tests {
     #[test]
     fn test_registry_detector_get_excluded_tools() {
         let mut metadata = HashMap::new();
-        metadata.insert(
-            "tool1".to_string(),
-            ToolCliMetadata::included("tool1")
-        );
+        metadata.insert("tool1".to_string(), ToolCliMetadata::included("tool1"));
         metadata.insert(
             "excluded1".to_string(),
-            ToolCliMetadata::excluded("excluded1", "Reason 1")
+            ToolCliMetadata::excluded("excluded1", "Reason 1"),
         );
         metadata.insert(
             "excluded2".to_string(),
-            ToolCliMetadata::excluded("excluded2", "Reason 2")
+            ToolCliMetadata::excluded("excluded2", "Reason 2"),
         );
-        metadata.insert(
-            "tool2".to_string(),
-            ToolCliMetadata::included("tool2")
-        );
+        metadata.insert("tool2".to_string(), ToolCliMetadata::included("tool2"));
 
         let detector = RegistryCliExclusionDetector::new(metadata);
         let mut excluded = detector.get_excluded_tools();
@@ -574,15 +544,15 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert(
             "eligible1".to_string(),
-            ToolCliMetadata::included("eligible1")
+            ToolCliMetadata::included("eligible1"),
         );
         metadata.insert(
             "excluded1".to_string(),
-            ToolCliMetadata::excluded("excluded1", "Reason 1")
+            ToolCliMetadata::excluded("excluded1", "Reason 1"),
         );
         metadata.insert(
             "eligible2".to_string(),
-            ToolCliMetadata::included("eligible2")
+            ToolCliMetadata::included("eligible2"),
         );
 
         let detector = RegistryCliExclusionDetector::new(metadata);
@@ -595,25 +565,24 @@ mod tests {
     #[test]
     fn test_registry_detector_get_all_tool_metadata() {
         let mut metadata = HashMap::new();
-        metadata.insert(
-            "tool1".to_string(),
-            ToolCliMetadata::included("tool1")
-        );
+        metadata.insert("tool1".to_string(), ToolCliMetadata::included("tool1"));
         metadata.insert(
             "excluded_tool".to_string(),
-            ToolCliMetadata::excluded("excluded_tool", "Test reason")
+            ToolCliMetadata::excluded("excluded_tool", "Test reason"),
         );
 
         let detector = RegistryCliExclusionDetector::new(metadata);
         let all_metadata = detector.get_all_tool_metadata();
-        
+
         assert_eq!(all_metadata.len(), 2);
-        
+
         // Find metadata by tool name for testing
-        let tool1_metadata = all_metadata.iter()
+        let tool1_metadata = all_metadata
+            .iter()
             .find(|m| m.name == "tool1")
             .expect("tool1 metadata should exist");
-        let excluded_metadata = all_metadata.iter()
+        let excluded_metadata = all_metadata
+            .iter()
             .find(|m| m.name == "excluded_tool")
             .expect("excluded_tool metadata should exist");
 
@@ -621,13 +590,16 @@ mod tests {
         assert!(tool1_metadata.exclusion_reason.is_none());
 
         assert!(excluded_metadata.is_cli_excluded);
-        assert_eq!(excluded_metadata.exclusion_reason.as_deref(), Some("Test reason"));
+        assert_eq!(
+            excluded_metadata.exclusion_reason.as_deref(),
+            Some("Test reason")
+        );
     }
 
     #[test]
     fn test_empty_detector() {
         let detector = RegistryCliExclusionDetector::new(HashMap::new());
-        
+
         assert!(detector.get_excluded_tools().is_empty());
         assert!(detector.get_cli_eligible_tools().is_empty());
         assert!(detector.get_all_tool_metadata().is_empty());

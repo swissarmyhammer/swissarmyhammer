@@ -11,7 +11,7 @@ mod tests {
     #[test]
     fn test_registry_detects_excluded_issue_tools() {
         let mut registry = ToolRegistry::new();
-        
+
         // Register some tools including the excluded ones
         registry.register(crate::mcp::tools::issues::work::WorkIssueTool::new());
         registry.register(crate::mcp::tools::issues::merge::MergeIssueTool::new());
@@ -23,7 +23,7 @@ mod tests {
         // Check that issue_work and issue_merge are excluded
         assert!(detector.is_cli_excluded("issue_work"));
         assert!(detector.is_cli_excluded("issue_merge"));
-        
+
         // Check that other issue tools are included
         assert!(!detector.is_cli_excluded("issue_create"));
         assert!(!detector.is_cli_excluded("issue_list"));
@@ -52,15 +52,17 @@ mod tests {
         let all_metadata = detector.get_all_tool_metadata();
 
         // Find the work tool metadata
-        let work_metadata = all_metadata.iter()
+        let work_metadata = all_metadata
+            .iter()
             .find(|m| m.name == "issue_work")
             .expect("issue_work metadata should be present");
 
         assert!(work_metadata.is_cli_excluded);
         assert!(work_metadata.exclusion_reason.is_some());
 
-        // Find the create tool metadata  
-        let create_metadata = all_metadata.iter()
+        // Find the create tool metadata
+        let create_metadata = all_metadata
+            .iter()
             .find(|m| m.name == "issue_create")
             .expect("issue_create metadata should be present");
 

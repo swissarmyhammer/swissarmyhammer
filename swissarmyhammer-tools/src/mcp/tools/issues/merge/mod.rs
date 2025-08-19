@@ -2,6 +2,7 @@
 //!
 //! This module provides the MergeIssueTool for merging issue work branches.
 
+use crate::cli::CliExclusionMarker;
 use crate::mcp::responses::create_success_response;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::types::MergeIssueRequest;
@@ -9,7 +10,6 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use swissarmyhammer::common::create_abort_file_current_dir;
-use crate::cli::CliExclusionMarker;
 
 /// Tool for merging an issue work branch
 ///

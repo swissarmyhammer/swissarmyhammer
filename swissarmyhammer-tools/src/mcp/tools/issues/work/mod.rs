@@ -2,6 +2,7 @@
 //!
 //! This module provides the WorkIssueTool for switching to work on a specific issue.
 
+use crate::cli::CliExclusionMarker;
 use crate::mcp::responses::create_success_response;
 use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
@@ -10,10 +11,9 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use swissarmyhammer::common::create_abort_file_current_dir;
-use crate::cli::CliExclusionMarker;
 
 /// Tool for switching to work on an issue
-/// 
+///
 /// This tool is designed for MCP workflow state transitions and should not
 /// be exposed as a CLI command since it requires specific MCP context and
 /// uses MCP-specific error handling patterns like abort files.
