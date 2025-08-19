@@ -1,6 +1,6 @@
 //! # CLI Exclusion System for SwissArmyHammer Tools
 //!
-//! This module provides infrastructure for marking MCP tools that should be excluded 
+//! This module provides infrastructure for marking MCP tools that should be excluded
 //! from CLI generation, along with utilities for CLI generation systems to detect
 //! and respect these exclusions.
 //!
@@ -62,7 +62,7 @@
 //! can be obtained from tool registries that implement the appropriate
 //! extension methods.
 //!
-//! For complete usage patterns and examples, see the 
+//! For complete usage patterns and examples, see the
 //! [CLI Exclusion System Documentation](https://docs.rs/swissarmyhammer-tools/latest/swissarmyhammer_tools/cli/index.html).
 
 pub mod attribute_detection;

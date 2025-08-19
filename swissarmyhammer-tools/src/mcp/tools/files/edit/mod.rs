@@ -101,7 +101,7 @@ impl EditFileTool {
         let path = validate_file_path(file_path)?;
         if !path.exists() {
             return Err(McpError::invalid_request(
-format!("File does not exist: {file_path}"),
+                format!("File does not exist: {file_path}"),
                 None,
             ));
         }
@@ -111,7 +111,7 @@ format!("File does not exist: {file_path}"),
         let old_string_count = matches.len();
         if old_string_count == 0 {
             return Err(McpError::invalid_request(
-format!("String '{old_string}' not found in file"),
+                format!("String '{old_string}' not found in file"),
                 None,
             ));
         }
@@ -153,7 +153,7 @@ format!("String '{old_string}' not found in file"),
 
         if had_decode_errors {
             return Err(McpError::internal_error(
-format!(
+                format!(
                     "Failed to decode file with detected encoding {}",
                     encoding.name()
                 ),
@@ -224,7 +224,7 @@ format!(
         };
 
         // Step 7: Create temporary file in same directory as original
-let temp_file_name = format!("{}.tmp.{}", path.display(), std::process::id());
+        let temp_file_name = format!("{}.tmp.{}", path.display(), std::process::id());
         let temp_path = path
             .parent()
             .ok_or_else(|| {
@@ -328,7 +328,7 @@ let temp_file_name = format!("{}.tmp.{}", path.display(), std::process::id());
 
         if had_errors {
             return Err(McpError::internal_error(
-format!("Failed to encode content with encoding {}", encoding.name()),
+                format!("Failed to encode content with encoding {}", encoding.name()),
                 None,
             ));
         }
@@ -446,7 +446,7 @@ impl McpTool for EditFileTool {
         )?;
 
         // Create detailed success response
-let success_message = format!(
+        let success_message = format!(
             "Successfully edited file: {} | {} replacements made | {} bytes written | Encoding: {} | Line endings: {} | Metadata preserved: {}",
             request.file_path,
             edit_result.replacements_made,

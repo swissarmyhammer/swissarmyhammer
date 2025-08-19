@@ -88,7 +88,7 @@ pub fn validate_file_path(path: &str) -> Result<PathBuf, McpError> {
                     if let Some(parent) = path_buf.parent() {
                         if !parent.exists() {
                             return Err(McpError::invalid_request(
-format!("Parent directory does not exist: {}", parent.display()),
+                                format!("Parent directory does not exist: {}", parent.display()),
                                 None,
                             ));
                         }
@@ -97,15 +97,15 @@ format!("Parent directory does not exist: {}", parent.display()),
                     Ok(path_buf)
                 }
                 ErrorKind::PermissionDenied => Err(McpError::invalid_request(
-format!("Permission denied accessing path: {}", path_buf.display()),
+                    format!("Permission denied accessing path: {}", path_buf.display()),
                     None,
                 )),
                 ErrorKind::InvalidInput => Err(McpError::invalid_request(
-format!("Invalid path format: {}", path_buf.display()),
+                    format!("Invalid path format: {}", path_buf.display()),
                     None,
                 )),
                 _ => Err(McpError::invalid_request(
-format!("Failed to resolve path '{}': {}", path_buf.display(), e),
+                    format!("Failed to resolve path '{}': {}", path_buf.display(), e),
                     None,
                 )),
             }
@@ -130,7 +130,7 @@ pub fn file_exists(path: &Path) -> Result<bool, McpError> {
     match path.try_exists() {
         Ok(exists) => Ok(exists),
         Err(e) => Err(McpError::internal_error(
-format!("Failed to check file existence: {e}"),
+            format!("Failed to check file existence: {e}"),
             None,
         )),
     }
@@ -150,7 +150,7 @@ format!("Failed to check file existence: {e}"),
 /// * `Result<std::fs::Metadata, McpError>` - File metadata or error
 pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
     std::fs::metadata(path)
-.map_err(|e| McpError::invalid_request(format!("Failed to get file metadata: {e}"), None))
+        .map_err(|e| McpError::invalid_request(format!("Failed to get file metadata: {e}"), None))
 }
 
 /// Ensure a directory exists, creating it if necessary
@@ -168,7 +168,7 @@ pub fn get_file_metadata(path: &Path) -> Result<std::fs::Metadata, McpError> {
 pub fn ensure_directory_exists(dir_path: &Path) -> Result<(), McpError> {
     if !dir_path.exists() {
         std::fs::create_dir_all(dir_path).map_err(|e| {
-McpError::internal_error(format!("Failed to create directory: {e}"), None)
+            McpError::internal_error(format!("Failed to create directory: {e}"), None)
         })?;
     }
     Ok(())

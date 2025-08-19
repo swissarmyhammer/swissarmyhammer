@@ -37,17 +37,17 @@
 #![warn(missing_docs)]
 
 /// CLI-related utilities for SwissArmyHammer tools
-/// 
-/// This module provides infrastructure for marking MCP tools that should be excluded 
+///
+/// This module provides infrastructure for marking MCP tools that should be excluded
 /// from CLI generation, along with utilities for CLI generation systems to detect
 /// and respect these exclusions.
-/// 
+///
 /// Key components:
 /// - [`cli::CliExclusionMarker`]: Trait for tools to declare CLI exclusion status
 /// - [`cli::CliExclusionDetector`]: Interface for querying tool exclusion status  
 /// - [`cli::ToolCliMetadata`]: Structured metadata about tool CLI eligibility
 /// - [`cli::RegistryCliExclusionDetector`]: Registry-based detector implementation
-/// 
+///
 /// CLI generation systems should use the [`cli::CliExclusionDetector`] trait to
 /// determine which tools to include in generated CLI commands.
 pub mod cli;

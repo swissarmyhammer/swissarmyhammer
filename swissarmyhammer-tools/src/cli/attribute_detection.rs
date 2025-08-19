@@ -457,8 +457,6 @@ mod tests {
         }
     }
 
-
-
     #[test]
     fn test_tool_cli_metadata_included() {
         let metadata = ToolCliMetadata::included("test_tool");

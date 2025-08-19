@@ -1,6 +1,6 @@
 //! # SAH Marker Macros
 //!
-//! Procedural macros for SwissArmyHammer marker attributes, providing infrastructure 
+//! Procedural macros for SwissArmyHammer marker attributes, providing infrastructure
 //! for marking MCP tools with metadata that can be used by CLI generation systems
 //! and other tooling.
 //!
@@ -23,7 +23,7 @@
 //!
 //! ## Integration with CLI Exclusion System
 //!
-//! Tools marked with `#[cli_exclude]` should also implement the `CliExclusionMarker` 
+//! Tools marked with `#[cli_exclude]` should also implement the `CliExclusionMarker`
 //! trait from `swissarmyhammer_tools::cli` to provide runtime queryable exclusion status:
 //!
 //! ```rust
