@@ -199,3 +199,78 @@ let storage = test_env.storage();
 - Focus on maintaining existing test patterns while supporting new structure
 - Consider creating migration-specific test helpers
 - Ensure test utilities support both legacy and new directory structures for migration testing
+
+## Proposed Solution
+
+Based on my analysis of the current test infrastructure, here's my implementation plan:
+
+### 1. Update create_test_context() in swissarmyhammer-tools/src/test_utils.rs
+- Change `PathBuf::from("./test_issues")` to use the new `.swissarmyhammer/test_issues` structure
+- This maintains test isolation while using the new directory pattern
+
+### 2. Add TestIssueEnvironment Helper
+- Create a new helper struct specifically for issue-related tests
+- Provides convenient methods for accessing issues and complete directories
+- Uses the standard `.swissarmyhammer/issues` structure
+
+### 3. Update create_isolated_test_home() in swissarmyhammer/src/test_utils.rs
+- Add creation of `issues` and `issues/complete` directories to the mock structure
+- This ensures all test environments have the proper directory layout
+
+### 4. Add Helper Methods to IsolatedTestEnvironment
+- Add `issues_dir()` and `complete_dir()` methods for easy access
+- Maintain backward compatibility with existing test code
+
+The implementation will follow TDD principles:
+1. Update the existing test utilities to use the new structure
+2. Run existing tests to ensure no regressions
+3. Add new test helpers as needed
+4. Verify all tests pass with the new directory structure
+
+This approach maintains backward compatibility while providing the new directory structure for future tests.
+
+## Implementation Complete
+
+I have successfully updated the test utilities to use the new `.swissarmyhammer/issues` directory structure. Here's what was implemented:
+
+### 1. Updated `create_test_context()` in swissarmyhammer-tools/src/test_utils.rs
+- Changed from `"./test_issues"` to `"./.swissarmyhammer/test_issues"`
+- This maintains backward compatibility while using the new structure
+
+### 2. Added `TestIssueEnvironment` Helper Struct
+- New helper struct specifically for issue-related testing
+- Includes convenient methods: `storage()`, `path()`, `swissarmyhammer_dir()`
+- Automatically creates the full `.swissarmyhammer/issues` structure with `complete/` subdirectory
+- Includes proper documentation and Default implementation
+
+### 3. Updated `create_isolated_test_home()` in swissarmyhammer/src/test_utils.rs
+- Added creation of `issues` and `issues/complete` directories to the mock structure
+- Ensures all test environments have the proper directory layout
+
+### 4. Added Helper Methods to `IsolatedTestEnvironment`
+- Added `issues_dir()` method for easy access to issues directory
+- Added `complete_dir()` method for easy access to completed issues directory
+- Maintains backward compatibility with existing code
+
+### 5. Quality Assurance
+- All tests pass (367 MCP tool tests + 8 test utility tests)
+- No clippy warnings
+- Added proper documentation for all new code
+- Followed existing patterns and conventions
+
+### Pattern for Usage
+
+Tests can now use either pattern:
+
+```rust
+// Simple issue-specific testing
+let test_env = TestIssueEnvironment::new();
+let storage = test_env.storage();
+
+// Full environment isolation
+let _guard = IsolatedTestEnvironment::new()?;
+let issues_dir = _guard.issues_dir();
+let complete_dir = _guard.complete_dir();
+```
+
+The implementation maintains full backward compatibility while providing the new directory structure needed for the migration.

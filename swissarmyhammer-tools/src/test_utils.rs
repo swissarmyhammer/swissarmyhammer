@@ -2,11 +2,12 @@
 
 use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::ToolContext;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
+use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 /// Creates a test context with mock storage backends for testing MCP tools
@@ -16,7 +17,7 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 #[cfg(test)]
 pub async fn create_test_context() -> ToolContext {
     let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-        FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
+        FileSystemIssueStorage::new(PathBuf::from("./.swissarmyhammer/test_issues")).unwrap(),
     )));
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
@@ -33,4 +34,60 @@ pub async fn create_test_context() -> ToolContext {
         memo_storage,
         rate_limiter,
     )
+}
+
+/// Test environment specifically designed for issue-related testing
+/// 
+/// Provides convenient setup and access to issue directories following
+/// the new `.swissarmyhammer/issues` structure.
+#[cfg(test)]
+pub struct TestIssueEnvironment {
+    /// Temporary directory that will be automatically cleaned up
+    pub temp_dir: TempDir,
+    /// Path to the issues directory within the test environment
+    pub issues_dir: PathBuf,
+    /// Path to the completed issues directory within the test environment
+    pub complete_dir: PathBuf,
+}
+
+#[cfg(test)]
+impl Default for TestIssueEnvironment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+impl TestIssueEnvironment {
+    /// Create a new test environment with proper .swissarmyhammer/issues structure
+    pub fn new() -> Self {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
+        let issues_dir = swissarmyhammer_dir.join("issues");
+        let complete_dir = issues_dir.join("complete");
+        
+        // Create directory structure
+        std::fs::create_dir_all(&complete_dir).expect("Failed to create directory structure");
+        
+        Self {
+            temp_dir,
+            issues_dir,
+            complete_dir,
+        }
+    }
+    
+    /// Create a FileSystemIssueStorage using this test environment
+    pub fn storage(&self) -> FileSystemIssueStorage {
+        FileSystemIssueStorage::new(self.issues_dir.clone()).unwrap()
+    }
+    
+    /// Get the root path of the test environment
+    pub fn path(&self) -> &Path {
+        self.temp_dir.path()
+    }
+    
+    /// Get the .swissarmyhammer directory path
+    pub fn swissarmyhammer_dir(&self) -> PathBuf {
+        self.temp_dir.path().join(".swissarmyhammer")
+    }
 }

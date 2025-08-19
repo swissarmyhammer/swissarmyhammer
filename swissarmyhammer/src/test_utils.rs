@@ -274,6 +274,9 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
     std::fs::create_dir_all(sah_dir.join("workflows"))
         .expect("Failed to create workflows directory");
     std::fs::create_dir_all(sah_dir.join("todo")).expect("Failed to create todo directory");
+    std::fs::create_dir_all(sah_dir.join("issues")).expect("Failed to create issues directory");
+    std::fs::create_dir_all(sah_dir.join("issues/complete"))
+        .expect("Failed to create issues/complete directory");
 
     (temp_dir, home_path)
 }
@@ -419,6 +422,16 @@ impl IsolatedTestEnvironment {
     /// Get the path to the .swissarmyhammer directory in the isolated home
     pub fn swissarmyhammer_dir(&self) -> PathBuf {
         self._home_guard.swissarmyhammer_dir()
+    }
+
+    /// Get the path to the issues directory in the isolated home
+    pub fn issues_dir(&self) -> PathBuf {
+        self.swissarmyhammer_dir().join("issues")
+    }
+
+    /// Get the path to the completed issues directory in the isolated home
+    pub fn complete_dir(&self) -> PathBuf {
+        self.issues_dir().join("complete")
     }
 }
 
