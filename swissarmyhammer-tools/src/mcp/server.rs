@@ -106,11 +106,12 @@ impl McpServer {
             }
 
             // Create storage with automatic migration and detailed logging
-            let storage_result = FileSystemIssueStorage::new_default_with_migration_info().map_err(|e| {
-                tracing::error!("Failed to create issue storage: {}", e);
-                SwissArmyHammerError::Other(format!("Failed to create issue storage: {e}"))
-            });
-            
+            let storage_result =
+                FileSystemIssueStorage::new_default_with_migration_info().map_err(|e| {
+                    tracing::error!("Failed to create issue storage: {}", e);
+                    SwissArmyHammerError::Other(format!("Failed to create issue storage: {e}"))
+                });
+
             // Log migration results for MCP server
             let (storage, migration_result) = storage_result?;
             if let Some(result) = migration_result {
@@ -126,7 +127,7 @@ impl McpServer {
                     }
                 }
             }
-            
+
             // Always restore original working directory if we changed it
             if needs_dir_change {
                 if let Err(e) = std::env::set_current_dir(&original_dir) {
