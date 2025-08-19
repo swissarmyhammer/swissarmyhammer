@@ -4,4 +4,5 @@ pub mod error;
 pub mod exit_codes;
 pub mod mcp_integration;
 pub mod parameter_cli;
+pub mod schema_conversion;
 pub mod validate;

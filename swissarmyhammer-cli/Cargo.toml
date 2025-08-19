@@ -45,6 +45,7 @@ serde_json = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
+thiserror = "1.0"
 
 # Logging
 tracing = { workspace = true }
