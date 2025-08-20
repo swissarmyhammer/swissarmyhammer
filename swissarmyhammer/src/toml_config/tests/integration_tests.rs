@@ -4,11 +4,13 @@
 //! template integration, and complex real-world scenarios.
 
 use crate::toml_config::{load_repo_config, parse_config_string, ConfigValue};
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
 /// Test end-to-end configuration loading from filesystem
 #[test]
+#[serial]
 fn test_end_to_end_config_loading() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -233,6 +235,7 @@ fn test_end_to_end_config_loading() {
 
 /// Test template integration with configuration variables
 #[test]
+#[serial]
 fn test_template_integration() {
     let config_content = concat!(
         "project_name = \"MyAwesomeProject\"\n",
@@ -317,6 +320,7 @@ fn test_template_integration() {
 
 /// Test file discovery from different directory structures
 #[test]
+#[serial]
 fn test_file_discovery_from_different_directories() {
     use std::panic;
 

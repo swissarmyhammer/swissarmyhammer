@@ -62,6 +62,9 @@ swissarmyhammer-cli/.swissarmyhammer
 # SwissArmyHammer temporary todo files
 .swissarmyhammer/todo/
 
+# SwissArmyHammer memo files (temporary)
+.swissarmyhammer/memos/
+
 
 
 
