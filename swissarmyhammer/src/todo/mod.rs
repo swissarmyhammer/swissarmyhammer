@@ -230,16 +230,18 @@ pub struct MarkCompleteTodoRequest {
 
 /// Determine the correct todo directory path
 ///
-/// Returns `.swissarmyhammer/todo/` in the current repo root if in a Git repository,
-/// otherwise in the current working directory.
+/// Returns `.swissarmyhammer/todo/` in the Git repository root.
+/// Requires being within a Git repository - no fallback to current directory.
 pub fn get_todo_directory() -> Result<PathBuf> {
-    let base_dir = directory_utils::find_repository_or_current_directory().map_err(|e| {
-        SwissArmyHammerError::Other(format!("Failed to determine base directory: {e}"))
-    })?;
+    let swissarmyhammer_dir = directory_utils::get_or_create_swissarmyhammer_directory()
+        .map_err(|e| SwissArmyHammerError::Other(format!(
+            "Todo operations require a Git repository. Please run this command from within a Git repository. Error: {}",
+            e
+        )))?;
 
-    let todo_dir = base_dir.join(".swissarmyhammer").join("todo");
+    let todo_dir = swissarmyhammer_dir.join("todo");
 
-    // Ensure directory exists
+    // Ensure todo subdirectory exists
     fs::create_dir_all(&todo_dir).map_err(|e| {
         SwissArmyHammerError::Other(format!("Failed to create todo directory: {e}"))
     })?;
@@ -359,5 +361,25 @@ mod tests {
         assert!(validate_todo_list_name("invalid/name").is_err());
         assert!(validate_todo_list_name("invalid\\name").is_err());
         assert!(validate_todo_list_name("invalid:name").is_err());
+    }
+
+    #[test]
+    fn test_get_todo_directory_git_repository_requirement() {
+        // Test 1: Outside Git repository - should fail
+        use std::env;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let original_dir = env::current_dir().unwrap();
+
+        // Change to non-git directory
+        env::set_current_dir(temp_dir.path()).unwrap();
+        let result = get_todo_directory();
+        env::set_current_dir(original_dir).unwrap();
+
+        // Should fail with clear message
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Todo operations require a Git repository"));
     }
 }

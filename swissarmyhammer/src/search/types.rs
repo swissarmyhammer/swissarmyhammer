@@ -299,7 +299,8 @@ impl SemanticConfig {
         }
 
         // Try Git repository .swissarmyhammer directory first
-        if let Some(swissarmyhammer_dir) = crate::directory_utils::find_swissarmyhammer_directory() {
+        if let Some(swissarmyhammer_dir) = crate::directory_utils::find_swissarmyhammer_directory()
+        {
             let semantic_db_path = swissarmyhammer_dir.join("semantic.db");
             tracing::debug!(
                 "Using Git repository semantic database at: {}",
@@ -900,19 +901,19 @@ mod tests {
         // when we're in a Git repository with .swissarmyhammer, the database path
         // points to that directory. Since the exact path comparison is difficult
         // with temporary directories, we'll validate the path structure instead.
-        
+
         // Create a simple config and verify it follows expected patterns
         let config = SemanticConfig::default();
-        
+
         // Should always contain semantic.db
         assert!(config
             .database_path
             .to_string_lossy()
             .contains("semantic.db"));
-        
+
         // The path should either:
         // 1. Be in a Git repository's .swissarmyhammer (contains .swissarmyhammer)
-        // 2. Be a home directory fallback (contains .swissarmyhammer) 
+        // 2. Be a home directory fallback (contains .swissarmyhammer)
         // 3. Be a relative fallback (.swissarmyhammer/semantic.db)
         let path_str = config.database_path.to_string_lossy();
         assert!(
@@ -951,13 +952,13 @@ mod tests {
         );
     }
 
-    #[test] 
+    #[test]
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        
+
         // Create Git repository without .swissarmyhammer directory
         fs::create_dir(temp_dir.path().join(".git")).unwrap();
         // Note: intentionally NOT creating .swissarmyhammer
@@ -976,7 +977,7 @@ mod tests {
             .database_path
             .to_string_lossy()
             .contains("semantic.db"));
-        
+
         // Should either be home directory or relative fallback
         let path_str = config.database_path.to_string_lossy();
         assert!(
@@ -992,7 +993,10 @@ mod tests {
         let test_db_path = temp_dir.path().join("test_semantic.db");
 
         // Set environment variable override
-        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", test_db_path.to_string_lossy().to_string());
+        std::env::set_var(
+            "SWISSARMYHAMMER_SEMANTIC_DB_PATH",
+            test_db_path.to_string_lossy().to_string(),
+        );
 
         let config = SemanticConfig::default();
 

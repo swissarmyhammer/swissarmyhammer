@@ -146,7 +146,9 @@ impl McpServer {
                 // Fallback to temporary directory for tests
                 let temp_dir = std::env::temp_dir().join("swissarmyhammer-mcp-test");
                 std::fs::create_dir_all(&temp_dir).map_err(|err| {
-                    SwissArmyHammerError::Other(format!("Failed to create temporary memo directory: {err}"))
+                    SwissArmyHammerError::Other(format!(
+                        "Failed to create temporary memo directory: {err}"
+                    ))
                 })?;
                 Box::new(MarkdownMemoStorage::new(temp_dir)) as Box<dyn MemoStorage>
             }
