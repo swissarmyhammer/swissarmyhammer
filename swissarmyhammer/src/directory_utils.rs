@@ -234,7 +234,7 @@ fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
 pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
     let git_root = find_git_repository_root()?;
     let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
-    
+
     if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
         Some(swissarmyhammer_dir)
     } else {
@@ -258,26 +258,28 @@ pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
 /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
 pub fn get_or_create_swissarmyhammer_directory() -> crate::error::Result<PathBuf> {
     use crate::error::SwissArmyHammerError;
-    
-    let git_root = find_git_repository_root()
-        .ok_or(SwissArmyHammerError::NotInGitRepository)?;
-    
+
+    let git_root = find_git_repository_root().ok_or(SwissArmyHammerError::NotInGitRepository)?;
+
     let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
-    
+
     if swissarmyhammer_dir.exists() {
         if !swissarmyhammer_dir.is_dir() {
             return Err(SwissArmyHammerError::directory_creation(
                 std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
-                    format!("{} exists but is not a directory", swissarmyhammer_dir.display())
-                )
+                    format!(
+                        "{} exists but is not a directory",
+                        swissarmyhammer_dir.display()
+                    ),
+                ),
             ));
         }
     } else {
         std::fs::create_dir_all(&swissarmyhammer_dir)
             .map_err(SwissArmyHammerError::directory_creation)?;
     }
-    
+
     Ok(swissarmyhammer_dir)
 }
 
@@ -350,12 +352,15 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change directory");
 
         let result = find_git_repository_root();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            base.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -373,7 +378,10 @@ mod tests {
         let result = find_git_repository_root_from(&level2);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            base.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -391,7 +399,7 @@ mod tests {
         env::set_current_dir(&level1).expect("Failed to change to test directory");
 
         let result = find_git_repository_root();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
@@ -440,7 +448,10 @@ mod tests {
 
         // Should find the .git directory well within depth limit
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            base.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -450,20 +461,27 @@ mod tests {
         let base = temp_dir.path();
 
         // Create .git as a file instead of directory (as in git worktree)
-        fs::write(base.join(".git"), "gitdir: /some/other/path/.git/worktrees/test").unwrap();
+        fs::write(
+            base.join(".git"),
+            "gitdir: /some/other/path/.git/worktrees/test",
+        )
+        .unwrap();
 
         // Change to this directory and test
         let original_dir = env::current_dir().unwrap();
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = find_git_repository_root();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         // Should still find the repository root (git worktree or submodule case)
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            base.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -475,7 +493,7 @@ mod tests {
         let level1 = base.join("level1");
         let level2 = level1.join("level2");
         fs::create_dir_all(&level2).unwrap();
-        
+
         // Create .git directories at multiple levels
         fs::create_dir(base.join(".git")).unwrap();
         fs::create_dir(level1.join(".git")).unwrap();
@@ -485,7 +503,10 @@ mod tests {
 
         // Should find the nearest .git directory (level1, not base)
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(), level1.canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            level1.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -522,7 +543,7 @@ mod tests {
 
         // Test from different levels
         assert!(find_git_repository_root_from(base).is_some()); // depth 0
-        assert!(find_git_repository_root_from(&level1).is_some()); // depth 1  
+        assert!(find_git_repository_root_from(&level1).is_some()); // depth 1
         assert!(find_git_repository_root_from(&level2).is_some()); // depth 2
         assert!(find_git_repository_root_from(&level3).is_some()); // depth 3
     }
@@ -542,13 +563,15 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = find_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(), 
-                   base.join(".swissarmyhammer").canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            base.join(".swissarmyhammer").canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -565,7 +588,7 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = find_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
@@ -586,7 +609,7 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = find_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
@@ -609,7 +632,7 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = find_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
@@ -627,7 +650,7 @@ mod tests {
         let subdir1 = base.join("src");
         let subdir2 = subdir1.join("lib");
         fs::create_dir_all(&subdir2).unwrap();
-        
+
         fs::create_dir(base.join(".git")).unwrap();
         fs::create_dir(base.join(".swissarmyhammer")).unwrap();
 
@@ -636,13 +659,15 @@ mod tests {
         env::set_current_dir(&subdir2).expect("Failed to change to test directory");
 
         let result = find_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap().canonicalize().unwrap(),
-                   base.join(".swissarmyhammer").canonicalize().unwrap());
+        assert_eq!(
+            result.unwrap().canonicalize().unwrap(),
+            base.join(".swissarmyhammer").canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -659,15 +684,17 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
-        assert_eq!(swissarmyhammer_dir.canonicalize().unwrap(),
-                   base.join(".swissarmyhammer").canonicalize().unwrap());
-        
+        assert_eq!(
+            swissarmyhammer_dir.canonicalize().unwrap(),
+            base.join(".swissarmyhammer").canonicalize().unwrap()
+        );
+
         // Verify directory was created
         assert!(base.join(".swissarmyhammer").exists());
         assert!(base.join(".swissarmyhammer").is_dir());
@@ -688,14 +715,16 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
-        assert_eq!(swissarmyhammer_dir.canonicalize().unwrap(),
-                   base.join(".swissarmyhammer").canonicalize().unwrap());
+        assert_eq!(
+            swissarmyhammer_dir.canonicalize().unwrap(),
+            base.join(".swissarmyhammer").canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -712,7 +741,7 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
@@ -735,7 +764,7 @@ mod tests {
         let subdir1 = base.join("src");
         let subdir2 = subdir1.join("components");
         fs::create_dir_all(&subdir2).unwrap();
-        
+
         fs::create_dir(base.join(".git")).unwrap();
 
         // Test from nested subdirectory
@@ -743,15 +772,17 @@ mod tests {
         env::set_current_dir(&subdir2).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
-        assert_eq!(swissarmyhammer_dir.canonicalize().unwrap(),
-                   base.join(".swissarmyhammer").canonicalize().unwrap());
-        
+        assert_eq!(
+            swissarmyhammer_dir.canonicalize().unwrap(),
+            base.join(".swissarmyhammer").canonicalize().unwrap()
+        );
+
         // Verify directory was created at repository root, not in subdirectory
         assert!(base.join(".swissarmyhammer").exists());
         assert!(base.join(".swissarmyhammer").is_dir());
@@ -773,7 +804,7 @@ mod tests {
         env::set_current_dir(base).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
@@ -796,7 +827,7 @@ mod tests {
         // Create nested structure with .git at multiple levels
         let subdir = base.join("nested-repo");
         fs::create_dir_all(&subdir).unwrap();
-        
+
         // Create .git directories at both levels
         fs::create_dir(base.join(".git")).unwrap();
         fs::create_dir(subdir.join(".git")).unwrap();
@@ -806,17 +837,19 @@ mod tests {
         env::set_current_dir(&subdir).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
-        
+
         // Should create .swissarmyhammer in the nearest Git repository root (nested-repo)
-        assert_eq!(swissarmyhammer_dir.canonicalize().unwrap(),
-                   subdir.join(".swissarmyhammer").canonicalize().unwrap());
-        
+        assert_eq!(
+            swissarmyhammer_dir.canonicalize().unwrap(),
+            subdir.join(".swissarmyhammer").canonicalize().unwrap()
+        );
+
         // Verify directory was created in nested repo, not parent repo
         assert!(subdir.join(".swissarmyhammer").exists());
         assert!(subdir.join(".swissarmyhammer").is_dir());
@@ -843,7 +876,7 @@ mod tests {
         env::set_current_dir(&current).expect("Failed to change to test directory");
 
         let result = get_or_create_swissarmyhammer_directory();
-        
+
         // Restore original directory
         let _ = env::set_current_dir(original_dir);
 
