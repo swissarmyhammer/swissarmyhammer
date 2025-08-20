@@ -1,11 +1,31 @@
 use crate::cli::FileCommands;
+use crate::error::{CliError, format_component_specific_git_error};
+use crate::exit_codes::EXIT_ERROR;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;
 use std::io::{self, Read};
 
 /// Handle file-related CLI commands
 pub async fn handle_file_command(command: FileCommands) -> Result<(), Box<dyn std::error::Error>> {
-    let context = CliToolContext::new().await?;
+    let context = CliToolContext::new().await.map_err(|e| {
+        match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+            Some(swissarmyhammer::SwissArmyHammerError::NotInGitRepository) => {
+                CliError {
+                    message: format_component_specific_git_error(
+                        "File operations",
+                        "File tools operate within the Git repository context for workspace validation."
+                    ),
+                    exit_code: EXIT_ERROR,
+                    source: None,
+                }
+            }
+            _ => CliError {
+                message: format!("Failed to initialize file operations: {e}"),
+                exit_code: EXIT_ERROR,
+                source: None,
+            }
+        }
+    })?;
 
     match command {
         FileCommands::Read {

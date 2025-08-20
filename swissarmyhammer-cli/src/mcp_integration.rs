@@ -24,6 +24,14 @@ pub struct CliToolContext {
 }
 
 impl CliToolContext {
+    /// Check if Git operations are required and available, failing with appropriate error if not
+    pub async fn require_git_repository(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let git_ops = self.tool_context.git_ops.lock().await;
+        if git_ops.is_none() {
+            return Err(Box::new(swissarmyhammer::SwissArmyHammerError::NotInGitRepository));
+        }
+        Ok(())
+    }
     /// Create a new CLI tool context with all necessary storage backends
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let current_dir = std::env::current_dir()?;

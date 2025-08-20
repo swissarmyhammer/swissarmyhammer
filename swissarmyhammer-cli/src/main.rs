@@ -312,25 +312,39 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
 }
 
 async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
+    use error::CliError;
     use issue;
 
     match issue::handle_issue_command(subcommand).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
-            tracing::error!("Issue error: {}", e);
-            EXIT_WARNING
+            // Check if this is a CliError and preserve exit code
+            if let Some(cli_error) = e.downcast_ref::<CliError>() {
+                tracing::error!("Issue error: {}", cli_error);
+                cli_error.exit_code
+            } else {
+                tracing::error!("Issue error: {}", e);
+                EXIT_WARNING
+            }
         }
     }
 }
 
 async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
+    use error::CliError;
     use memo;
 
     match memo::handle_memo_command(subcommand).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
-            tracing::error!("Memo error: {}", e);
-            EXIT_WARNING
+            // Check if this is a CliError and preserve exit code
+            if let Some(cli_error) = e.downcast_ref::<CliError>() {
+                tracing::error!("Memo error: {}", cli_error);
+                cli_error.exit_code
+            } else {
+                tracing::error!("Memo error: {}", e);
+                EXIT_WARNING
+            }
         }
     }
 }

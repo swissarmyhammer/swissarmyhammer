@@ -79,6 +79,97 @@ pub fn handle_cli_result<T>(result: CliResult<T>) -> i32 {
     }
 }
 
+/// Centralized error message formatting functions for Git repository requirements
+
+/// Format a generic Git repository requirement error message
+fn format_git_repository_requirement_error() -> String {
+    format!(
+        "❌ Git repository required\n\n\
+        SwissArmyHammer operations require a Git repository context.\n\
+        \n\
+        Solutions:\n\
+        • Run this command from within a Git repository\n\
+        • Initialize a Git repository: git init\n\
+        • Clone an existing repository: git clone <url>\n\
+        \n\
+        Current directory: {}", 
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unable to determine>".to_string())
+    )
+}
+
+/// Format directory creation error message
+fn format_directory_creation_error(details: &str) -> String {
+    format!(
+        "❌ Failed to create .swissarmyhammer directory\n\n\
+        Error: {details}\n\
+        \n\
+        SwissArmyHammer requires a .swissarmyhammer directory to store:\n\
+        • Memos in .swissarmyhammer/memos/\n\
+        • Todo lists in .swissarmyhammer/todo/\n\
+        • Search index in .swissarmyhammer/semantic.db\n\
+        • Workflow runs in .swissarmyhammer/runs/\n\
+        \n\
+        Solutions:\n\
+        • Check directory permissions in current location\n\
+        • Ensure you have write access to create directories\n\
+        • Try running from a different directory with write permissions"
+    )
+}
+
+/// Format directory access error message
+fn format_directory_access_error(details: &str) -> String {
+    format!(
+        "❌ Git repository found but .swissarmyhammer directory is not accessible\n\n\
+        Error: {details}\n\
+        \n\
+        The .swissarmyhammer directory exists but cannot be accessed.\n\
+        \n\
+        Solutions:\n\
+        • Check directory permissions: ls -la .swissarmyhammer/\n\
+        • Ensure read/write access: chmod 755 .swissarmyhammer/\n\
+        • Verify the directory is not corrupted or locked\n\
+        • Try running with appropriate permissions"
+    )
+}
+
+/// Format Git repository not found error message
+fn format_git_repository_not_found_error(path: &str) -> String {
+    format!(
+        "❌ Git repository not found\n\n\
+        No Git repository found at: {path}\n\
+        \n\
+        SwissArmyHammer requires a Git repository context for:\n\
+        • Issue tracking and branch management\n\
+        • Workflow execution and state tracking\n\
+        • File organization at repository root\n\
+        \n\
+        Solutions:\n\
+        • Navigate to an existing Git repository\n\
+        • Initialize a new Git repository: git init\n\
+        • Clone an existing repository: git clone <url>"
+    )
+}
+
+/// Format component-specific Git repository requirement error
+pub fn format_component_specific_git_error(component: &str, explanation: &str) -> String {
+    format!(
+        "❌ {component} require a Git repository\n\n\
+        {explanation}\n\
+        \n\
+        Solutions:\n\
+        • Run this command from within a Git repository\n\
+        • Initialize a Git repository: git init\n\
+        • Clone an existing repository: git clone <url>\n\
+        \n\
+        Current directory: {}", 
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unable to determine>".to_string())
+    )
+}
+
 /// Convert parameter errors to CLI errors with enhanced context
 impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
     fn from(error: swissarmyhammer::common::parameters::ParameterError) -> Self {
@@ -200,6 +291,39 @@ fn format_enhanced_parameter_error(
 
         _ => {
             format!("❌ Workflow parameter error: {error}\n\n📖 For parameter details, run: sah <command> --help\n🔄 To fix this interactively, run: sah <command> --interactive")
+        }
+    }
+}
+
+/// Convert SwissArmyHammer errors to CLI errors with specific handling for Git repository requirements
+impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
+    fn from(err: swissarmyhammer::SwissArmyHammerError) -> Self {
+        match err {
+            swissarmyhammer::SwissArmyHammerError::NotInGitRepository => CliError {
+                message: format_git_repository_requirement_error(),
+                exit_code: EXIT_ERROR,
+                source: Some(Box::new(err)),
+            },
+            swissarmyhammer::SwissArmyHammerError::DirectoryCreation(ref details) => CliError {
+                message: format_directory_creation_error(details),
+                exit_code: EXIT_ERROR,
+                source: Some(Box::new(err)),
+            },
+            swissarmyhammer::SwissArmyHammerError::DirectoryAccess(ref details) => CliError {
+                message: format_directory_access_error(details),
+                exit_code: EXIT_ERROR,
+                source: Some(Box::new(err)),
+            },
+            swissarmyhammer::SwissArmyHammerError::GitRepositoryNotFound { ref path } => CliError {
+                message: format_git_repository_not_found_error(path),
+                exit_code: EXIT_ERROR,
+                source: Some(Box::new(err)),
+            },
+            _ => CliError {
+                message: err.to_string(),
+                exit_code: EXIT_ERROR,
+                source: Some(Box::new(err)),
+            },
         }
     }
 }

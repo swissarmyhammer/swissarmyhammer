@@ -1316,6 +1316,17 @@ fn test_root_validate_special_chars_in_paths() -> Result<()> {
 fn test_issue_create_with_optional_names() -> Result<()> {
     let temp_dir = TempDir::new()?;
 
+    // Initialize git repository since issue commands require Git
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(temp_dir.path())
+        .output()
+        .expect("Failed to initialize git repository");
+    
+    // Create .swissarmyhammer directory
+    std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer"))
+        .expect("Failed to create .swissarmyhammer directory");
+
     // Test creating a named issue
     let output = Command::cargo_bin("sah")
         .unwrap()

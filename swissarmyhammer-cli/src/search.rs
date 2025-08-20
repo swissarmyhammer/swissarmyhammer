@@ -8,6 +8,7 @@ use tabled::{
 };
 
 use crate::cli::{OutputFormat, PromptSource, PromptSourceArg, SearchCommands};
+use crate::error::format_component_specific_git_error;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;
 use swissarmyhammer::{
@@ -327,6 +328,25 @@ async fn run_semantic_index(patterns: &[String], force: bool) -> Result<()> {
     let context = CliToolContext::new()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create CLI context: {}", e))?;
+
+    // Check for Git repository requirement for search indexing
+    context
+        .require_git_repository()
+        .await
+        .map_err(|e| {
+            match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+                Some(swissarmyhammer::SwissArmyHammerError::NotInGitRepository) => {
+                    anyhow::anyhow!(
+                        "{}",
+                        format_component_specific_git_error(
+                            "Search indexing",
+                            "Search index is stored in .swissarmyhammer/semantic.db at the Git repository root."
+                        )
+                    )
+                }
+                _ => anyhow::anyhow!("Failed to check Git repository requirement: {}", e)
+            }
+        })?;
     let args =
         context.create_arguments(vec![("patterns", json!(patterns)), ("force", json!(force))]);
 
@@ -359,6 +379,25 @@ async fn run_semantic_query_with_format(
     let context = CliToolContext::new()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create CLI context: {}", e))?;
+
+    // Check for Git repository requirement for search operations
+    context
+        .require_git_repository()
+        .await
+        .map_err(|e| {
+            match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+                Some(swissarmyhammer::SwissArmyHammerError::NotInGitRepository) => {
+                    anyhow::anyhow!(
+                        "{}",
+                        format_component_specific_git_error(
+                            "Search operations",
+                            "Search index is stored in .swissarmyhammer/semantic.db at the Git repository root."
+                        )
+                    )
+                }
+                _ => anyhow::anyhow!("Failed to check Git repository requirement: {}", e)
+            }
+        })?;
     let args = context.create_arguments(vec![("query", json!(query)), ("limit", json!(limit))]);
 
     let result = context

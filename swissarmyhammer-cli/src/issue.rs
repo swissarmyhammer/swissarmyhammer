@@ -1,4 +1,6 @@
 use crate::cli::{IssueCommands, OutputFormat};
+use crate::error::{CliError, format_component_specific_git_error};
+use crate::exit_codes::EXIT_ERROR;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;
 use std::io::{self, Read};
@@ -8,6 +10,27 @@ pub async fn handle_issue_command(
     command: IssueCommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let context = CliToolContext::new().await?;
+    
+    // Check for Git repository requirement for issue operations
+    context.require_git_repository().await.map_err(|e| {
+        match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+            Some(swissarmyhammer::SwissArmyHammerError::NotInGitRepository) => {
+                CliError {
+                    message: format_component_specific_git_error(
+                        "Issue operations",
+                        "Issues are stored in .swissarmyhammer/issues/ at the Git repository root and require Git for branch management."
+                    ),
+                    exit_code: EXIT_ERROR,
+                    source: None,
+                }
+            }
+            _ => CliError {
+                message: format!("Failed to check Git repository requirement: {e}"),
+                exit_code: EXIT_ERROR,
+                source: None,
+            }
+        }
+    })?;
 
     match command {
         IssueCommands::Create {

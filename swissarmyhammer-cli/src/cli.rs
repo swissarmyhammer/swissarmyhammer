@@ -244,10 +244,13 @@ Examples:
         #[arg(long = "workflow-dir", value_name = "DIR", hide = true)]
         workflow_dirs: Vec<String>,
     },
-    /// Issue management commands
+    /// Issue management commands (requires Git repository)
     #[command(long_about = "
 Manage issues with comprehensive CLI commands for creating, updating, and tracking work items.
-Issues are stored as markdown files in the ./issues directory with automatic numbering.
+
+⚠️ REQUIREMENTS: Must be run from within a Git repository.
+Issues are stored as markdown files in .swissarmyhammer/issues/ at the Git repository root.
+Git integration is required for branch management and workflow operations.
 
 Basic usage:
   swissarmyhammer issue create [name]           # Create new issue
@@ -274,10 +277,12 @@ Examples:
         #[command(subcommand)]
         subcommand: IssueCommands,
     },
-    /// Memoranda (memo) management commands
+    /// Memoranda (memo) management commands (requires Git repository)
     #[command(long_about = "
 Manage memos with comprehensive CLI commands for creating, updating, and tracking structured text notes.
-Memos are stored as markdown files with filename-based identifiers and filesystem-based timestamping.
+
+⚠️ REQUIREMENTS: Must be run from within a Git repository.
+Memos are stored as markdown files in .swissarmyhammer/memos/ at the Git repository root.
 
 Basic usage:
   swissarmyhammer memo create <title>           # Create new memo
@@ -345,9 +350,12 @@ Examples:
         #[command(subcommand)]
         subcommand: FileCommands,
     },
-    /// Semantic search commands
+    /// Semantic search commands (requires Git repository)
     #[command(long_about = "
 Manage semantic search functionality for indexing and searching source code files using vector embeddings.
+
+⚠️ REQUIREMENTS: Must be run from within a Git repository.
+Search index is stored in .swissarmyhammer/semantic.db at the Git repository root.
 Uses mistral.rs for embeddings, DuckDB for vector storage, and TreeSitter for parsing.
 
 Basic usage:

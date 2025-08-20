@@ -1,4 +1,6 @@
 use crate::cli::MemoCommands;
+use crate::error::{CliError, format_component_specific_git_error};
+use crate::exit_codes::EXIT_ERROR;
 use crate::mcp_integration::CliToolContext;
 use rmcp::model::CallToolResult;
 use serde_json::json;
@@ -6,6 +8,27 @@ use std::io::{self, Read};
 
 pub async fn handle_memo_command(command: MemoCommands) -> Result<(), Box<dyn std::error::Error>> {
     let context = CliToolContext::new().await?;
+    
+    // Check for Git repository requirement for memo operations
+    context.require_git_repository().await.map_err(|e| {
+        match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
+            Some(swissarmyhammer::SwissArmyHammerError::NotInGitRepository) => {
+                CliError {
+                    message: format_component_specific_git_error(
+                        "Memo operations",
+                        "Memos are stored in .swissarmyhammer/memos/ at the Git repository root."
+                    ),
+                    exit_code: EXIT_ERROR,
+                    source: None,
+                }
+            }
+            _ => CliError {
+                message: format!("Failed to check Git repository requirement: {e}"),
+                exit_code: EXIT_ERROR,
+                source: None,
+            }
+        }
+    })?;
 
     match command {
         MemoCommands::Create { title, content } => {
