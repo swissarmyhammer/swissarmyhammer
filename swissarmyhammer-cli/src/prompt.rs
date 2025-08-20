@@ -84,7 +84,7 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             // For now, just call the existing list command with validation info
             // This gives us a way to show that validate is working
             if !quiet {
-                println!("Validating prompt files... (format: {:?})", format);
+                println!("Validating prompt files... (format: {format:?})");
             }
             list::run_list_command(
                 crate::cli::OutputFormat::Table,

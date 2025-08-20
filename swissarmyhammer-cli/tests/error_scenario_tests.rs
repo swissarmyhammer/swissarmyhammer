@@ -172,8 +172,8 @@ fn test_invalid_memo_operations() -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     assert!(
-        stderr.contains("required") 
-            || stderr.contains("missing") 
+        stderr.contains("required")
+            || stderr.contains("missing")
             || stderr.contains("title")
             || stderr.contains("unrecognized subcommand"),
         "Should show error for missing memo title or static CLI fallback error: {stderr}"
@@ -284,7 +284,7 @@ fn test_invalid_command_arguments() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     // Should show clap usage error for invalid enum value OR fallback to static CLI error
     assert!(
-        stderr.contains("invalid value") 
+        stderr.contains("invalid value")
             || stderr.contains("possible values")
             || stderr.contains("unrecognized subcommand"),
         "Should show enum validation error or static CLI fallback error: {stderr}"

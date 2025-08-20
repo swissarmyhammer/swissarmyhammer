@@ -77,11 +77,13 @@ fn test_search_index_with_force() -> Result<()> {
 
     // Dynamic CLI returns JSON response, check for expected structure
     assert!(
-        !stdout.is_empty() && (
-            stdout.contains("indexed_files") // JSON response field
+        !stdout.is_empty()
+            && (
+                stdout.contains("indexed_files") // JSON response field
             || stdout.contains("message") // JSON success message field
-            || stderr.contains("No files found matching pattern") // Expected for nonexistent pattern
-        ),
+            || stderr.contains("No files found matching pattern")
+                // Expected for nonexistent pattern
+            ),
         "should show indexing response in JSON format: stdout={stdout}, stderr={stderr}"
     );
 
@@ -101,14 +103,16 @@ fn test_search_query() -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Dynamic CLI returns JSON response from search query MCP tool  
+    // Dynamic CLI returns JSON response from search query MCP tool
     // The response should be JSON format with query information
     assert!(
-        !stdout.is_empty() && (
-            stdout.contains("query") // JSON response contains query field
+        !stdout.is_empty()
+            && (
+                stdout.contains("query") // JSON response contains query field
             || stdout.contains("results") // JSON structure for search results
-            || stderr.contains("No search index found") // Expected error if no index
-        ),
+            || stderr.contains("No search index found")
+                // Expected error if no index
+            ),
         "should show search response in JSON format: stdout={stdout}, stderr={stderr}"
     );
 

@@ -317,7 +317,7 @@ impl McpFormatter {
             "issue" => "📋",
             _ => "",
         };
-        
+
         if count == total {
             let plural_name = if count == 1 {
                 item_name.to_string()
@@ -433,7 +433,7 @@ mod tests {
             McpFormatter::format_list_summary("item", 3, 10),
             "Showing 3 of 10 items"
         );
-        
+
         // Test with memo (with emoji)
         assert_eq!(
             McpFormatter::format_list_summary("memo", 1, 1),

@@ -132,12 +132,17 @@ impl SchemaConverter {
         for (prop_name, prop_schema) in prop_vec {
             let is_required = required.contains(&prop_name.as_str());
             let make_positional = is_required && !first_required_processed;
-            
+
             if make_positional {
                 first_required_processed = true;
             }
 
-            let arg = Self::json_schema_property_to_clap_arg(prop_name, prop_schema, &required, make_positional)?;
+            let arg = Self::json_schema_property_to_clap_arg(
+                prop_name,
+                prop_schema,
+                &required,
+                make_positional,
+            )?;
             args.push(arg);
         }
 
@@ -175,9 +180,7 @@ impl SchemaConverter {
             Some(Value::String(s)) => Some(s.as_str()),
             Some(Value::Array(arr)) => {
                 // For union types, find the first non-null type
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .find(|&s| s != "null")
+                arr.iter().filter_map(|v| v.as_str()).find(|&s| s != "null")
             }
             _ => None,
         };
@@ -230,27 +233,30 @@ impl SchemaConverter {
                     if let Ok(valid_values) = values {
                         help_text =
                             format!("{} (valid values: {})", help_text, valid_values.join(", "));
-                        
+
                         // Create a static string slice for the enum values
                         let enum_values_static: Vec<&'static str> = valid_values
                             .into_iter()
                             .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
                             .collect();
-                        
+
                         // Build arg with enum validation using clap's value_parser
-                        let name_static: &'static str = Box::leak(name.to_string().into_boxed_str());
-                        let long_name_static: &'static str = Box::leak(name.to_string().into_boxed_str());
-                        let help_static: &'static str = Box::leak(help_text.clone().into_boxed_str());
-                        
+                        let name_static: &'static str =
+                            Box::leak(name.to_string().into_boxed_str());
+                        let long_name_static: &'static str =
+                            Box::leak(name.to_string().into_boxed_str());
+                        let help_static: &'static str =
+                            Box::leak(help_text.clone().into_boxed_str());
+
                         let mut arg = Arg::new(name_static)
                             .long(long_name_static)
                             .help(help_static)
                             .value_parser(enum_values_static);
-                        
+
                         if required.contains(&name) {
                             arg = arg.required(true);
                         }
-                        
+
                         return Ok(arg);
                     }
                 }
@@ -341,7 +347,12 @@ impl SchemaConverter {
                                 .unwrap_or_default()
                                 .cloned()
                                 .collect();
-                            Value::Array(values.into_iter().map(|v| Value::Number(v.into())).collect())
+                            Value::Array(
+                                values
+                                    .into_iter()
+                                    .map(|v| Value::Number(v.into()))
+                                    .collect(),
+                            )
                         }
                         Some("number") => {
                             let values: Vec<f64> = matches
@@ -349,7 +360,17 @@ impl SchemaConverter {
                                 .unwrap_or_default()
                                 .cloned()
                                 .collect();
-                            Value::Array(values.into_iter().map(|v| Value::Number(serde_json::Number::from_f64(v).unwrap_or_else(|| 0.into()))).collect())
+                            Value::Array(
+                                values
+                                    .into_iter()
+                                    .map(|v| {
+                                        Value::Number(
+                                            serde_json::Number::from_f64(v)
+                                                .unwrap_or_else(|| 0.into()),
+                                        )
+                                    })
+                                    .collect(),
+                            )
                         }
                         _ => {
                             // Default to string array
@@ -501,7 +522,7 @@ mod tests {
         let price_arg = &args[0];
         assert_eq!(price_arg.get_id(), "price");
         assert!(price_arg.is_required_set());
-        
+
         let help_text = price_arg
             .get_help()
             .map(|s| s.to_string())
@@ -528,7 +549,7 @@ mod tests {
         let config_arg = &args[0];
         assert_eq!(config_arg.get_id(), "config");
         assert!(config_arg.is_required_set());
-        
+
         let help_text = config_arg
             .get_help()
             .map(|s| s.to_string())

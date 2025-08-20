@@ -36,21 +36,24 @@ use swissarmyhammer::SwissArmyHammerError;
 use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 
 /// Initialize MCP infrastructure (tool registry and context)
-/// 
+///
 /// This function uses resilient initialization to ensure the dynamic CLI system
 /// works even when some components fail to initialize. It provides fallbacks
 /// and default implementations to maximize availability.
-async fn create_mcp_infrastructure() -> Result<(Arc<ToolRegistry>, Arc<ToolContext>), Box<dyn std::error::Error>> {
-    use swissarmyhammer_tools::{
-        register_file_tools, register_issue_tools, register_memo_tools,
-        register_notify_tools, register_search_tools, register_shell_tools,
-        register_todo_tools, register_web_fetch_tools, register_web_search_tools,
-    };
+async fn create_mcp_infrastructure(
+) -> Result<(Arc<ToolRegistry>, Arc<ToolContext>), Box<dyn std::error::Error>> {
     use swissarmyhammer::common::rate_limiter::get_rate_limiter;
     use swissarmyhammer::git::GitOperations;
     use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
-    use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage, mock_storage::MockMemoStorage};
+    use swissarmyhammer::memoranda::{
+        mock_storage::MockMemoStorage, MarkdownMemoStorage, MemoStorage,
+    };
     use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
+    use swissarmyhammer_tools::{
+        register_file_tools, register_issue_tools, register_memo_tools, register_notify_tools,
+        register_search_tools, register_shell_tools, register_todo_tools, register_web_fetch_tools,
+        register_web_search_tools,
+    };
     use tokio::sync::{Mutex, RwLock};
 
     // Get current working directory - use current dir or temp as fallback
@@ -68,26 +71,35 @@ async fn create_mcp_infrastructure() -> Result<(Arc<ToolRegistry>, Arc<ToolConte
                 Box::new(fs_storage)
             }
             Err(e) => {
-                tracing::debug!("Filesystem issue storage failed ({}), creating directory and retrying", e);
+                tracing::debug!(
+                    "Filesystem issue storage failed ({}), creating directory and retrying",
+                    e
+                );
                 // Try to create the directory and retry
                 if let Err(mkdir_err) = std::fs::create_dir_all(&issues_dir) {
                     tracing::warn!("Failed to create issues directory: {}", mkdir_err);
                 }
-                
+
                 match FileSystemIssueStorage::new(issues_dir) {
                     Ok(fs_storage) => {
                         tracing::debug!("Successfully created filesystem issue storage after directory creation");
                         Box::new(fs_storage)
                     }
                     Err(retry_err) => {
-                        tracing::warn!("Issue storage still failed, using temp directory fallback: {}", retry_err);
+                        tracing::warn!(
+                            "Issue storage still failed, using temp directory fallback: {}",
+                            retry_err
+                        );
                         // Try temp directory as final fallback
                         let temp_issues_dir = std::env::temp_dir().join("sah-issues");
                         if let Err(temp_err) = std::fs::create_dir_all(&temp_issues_dir) {
                             tracing::error!("Failed to create temp issues directory: {}", temp_err);
-                            return Err(format!("Failed to initialize any issue storage: {}", retry_err).into());
+                            return Err(format!(
+                                "Failed to initialize any issue storage: {retry_err}"
+                            )
+                            .into());
                         }
-                        
+
                         match FileSystemIssueStorage::new(temp_issues_dir) {
                             Ok(temp_storage) => {
                                 tracing::debug!("Using temporary directory issue storage");
@@ -95,7 +107,10 @@ async fn create_mcp_infrastructure() -> Result<(Arc<ToolRegistry>, Arc<ToolConte
                             }
                             Err(temp_storage_err) => {
                                 tracing::error!("Even temp storage failed: {}", temp_storage_err);
-                                return Err(format!("Failed to initialize any issue storage: {}", retry_err).into());
+                                return Err(format!(
+                                    "Failed to initialize any issue storage: {retry_err}"
+                                )
+                                .into());
                             }
                         }
                     }
@@ -172,44 +187,39 @@ async fn create_mcp_infrastructure() -> Result<(Arc<ToolRegistry>, Arc<ToolConte
     Ok((Arc::new(tool_registry), tool_context))
 }
 
-
-
-
-
-
 /// Try to parse and execute command using dynamic CLI builder
 /// Returns Some(exit_code) if handled, None if should fallback to static CLI
 async fn try_dynamic_cli(args: &[String]) -> Option<i32> {
     use tokio::time::{timeout, Duration};
-    
+
     tracing::debug!("Starting try_dynamic_cli with args: {:?}", args);
-    
+
     // Enable dynamic CLI for E2E tests (subprocess calls with SWISSARMYHAMMER_TEST_MODE set)
     let is_e2e_test = std::env::var("SWISSARMYHAMMER_TEST_MODE").is_ok();
     if is_e2e_test {
         tracing::debug!("E2E test mode detected, ensuring dynamic CLI is enabled");
     }
-    
+
     // Disable dynamic CLI during unit tests to prevent hanging, but allow it for E2E tests
     if cfg!(test) && !is_e2e_test {
         tracing::debug!("Unit test environment detected, disabling dynamic CLI");
         return None;
     }
-    
+
     // Only disable dynamic CLI when explicitly requested
     if std::env::var("SAH_DISABLE_DYNAMIC_CLI").is_ok() {
         tracing::debug!("Dynamic CLI explicitly disabled via SAH_DISABLE_DYNAMIC_CLI, falling back to static CLI");
         return None;
     }
-    
-    // Attempt to create MCP infrastructure with timeout 
+
+    // Attempt to create MCP infrastructure with timeout
     // Use longer timeout in test/CI environments
     let is_ci = std::env::var("CI").is_ok();
     let has_cargo_target = std::env::var("CARGO_TARGET_DIR").is_ok();
     let has_test_in_args = args.iter().any(|arg| arg.contains("test"));
     // Additional test environment detection - CLI subprocess tests set this flag
     let is_cli_test = is_e2e_test;
-    
+
     // Check for explicit timeout override first
     let timeout_secs = if let Ok(timeout_str) = std::env::var("SAH_MCP_TIMEOUT") {
         timeout_str.parse::<u64>().unwrap_or(300)
@@ -218,118 +228,141 @@ async fn try_dynamic_cli(args: &[String]) -> Option<i32> {
         300 // 5 minutes for CI/test environments - tests can be very slow due to cold start and compilation
     } else {
         tracing::debug!("Normal CLI usage detected, using 10s timeout");
-        10  // 10 seconds for normal CLI usage
+        10 // 10 seconds for normal CLI usage
     };
-    
+
     let infrastructure_future = create_mcp_infrastructure();
-    let (tool_registry, tool_context) = match timeout(Duration::from_secs(timeout_secs), infrastructure_future).await {
-        Ok(Ok((registry, context))) => {
-            tracing::debug!("MCP infrastructure initialization successful");
-            (registry, context)
-        },
-        Ok(Err(e)) => {
-            tracing::debug!("MCP infrastructure initialization failed: {}, falling back to static CLI", e);
-            // In test environments, also warn so we can see what's failing
-            if is_ci || has_cargo_target || has_test_in_args || is_cli_test {
-                tracing::warn!("MCP infrastructure initialization failed in test environment: {}", e);
+    let (tool_registry, tool_context) =
+        match timeout(Duration::from_secs(timeout_secs), infrastructure_future).await {
+            Ok(Ok((registry, context))) => {
+                tracing::debug!("MCP infrastructure initialization successful");
+                (registry, context)
             }
-            return None;
-        }
-        Err(_) => {
-            tracing::debug!("MCP infrastructure initialization timed out after {}s, falling back to static CLI", timeout_secs);
-            // In test environments, also warn about timeouts
-            if is_ci || has_cargo_target || has_test_in_args || is_cli_test {
-                tracing::warn!("MCP infrastructure initialization timed out after {}s in test environment", timeout_secs);
+            Ok(Err(e)) => {
+                tracing::debug!(
+                    "MCP infrastructure initialization failed: {}, falling back to static CLI",
+                    e
+                );
+                // In test environments, also warn so we can see what's failing
+                if is_ci || has_cargo_target || has_test_in_args || is_cli_test {
+                    tracing::warn!(
+                        "MCP infrastructure initialization failed in test environment: {}",
+                        e
+                    );
+                }
+                return None;
             }
-            return None;
-        }
-    };
-    
+            Err(_) => {
+                tracing::debug!(
+                "MCP infrastructure initialization timed out after {}s, falling back to static CLI",
+                timeout_secs
+            );
+                // In test environments, also warn about timeouts
+                if is_ci || has_cargo_target || has_test_in_args || is_cli_test {
+                    tracing::warn!(
+                        "MCP infrastructure initialization timed out after {}s in test environment",
+                        timeout_secs
+                    );
+                }
+                return None;
+            }
+        };
+
     // Create dynamic CLI builder
     let cli_builder = CliBuilder::new(tool_registry.clone());
     let categories = tool_registry.get_cli_categories();
-    tracing::debug!("About to build dynamic CLI with {} categories: {:?}", categories.len(), categories);
+    tracing::debug!(
+        "About to build dynamic CLI with {} categories: {:?}",
+        categories.len(),
+        categories
+    );
     let cli = match cli_builder.build_cli() {
         Ok(cli) => {
             tracing::debug!("Dynamic CLI built successfully");
             cli
-        },
+        }
         Err(e) => {
-            tracing::debug!("Dynamic CLI build failed: {}, falling back to static CLI", e);
+            tracing::debug!(
+                "Dynamic CLI build failed: {}, falling back to static CLI",
+                e
+            );
             return None;
         }
     };
-    
-
 
     // Try to parse arguments with dynamic CLI
     tracing::debug!("Trying to parse args with dynamic CLI: {:?}", args);
-    
+
     let matches = match cli.try_get_matches_from(args) {
         Ok(matches) => {
             tracing::debug!("Dynamic CLI parsing successful");
             tracing::debug!("Subcommand name: {:?}", matches.subcommand_name());
             matches
-        },
+        }
         Err(e) => {
             tracing::debug!("Dynamic CLI parsing failed: {}", e);
-            
+
             // Check if this is just a help display or version request
             use clap::error::ErrorKind;
             tracing::debug!("Error kind: {:?}", e.kind());
             match e.kind() {
                 ErrorKind::DisplayHelp => {
                     // Print help to stdout (where clap normally sends --help)
-                    println!("{}", e);
+                    println!("{e}");
                     tracing::debug!("Help displayed, exiting successfully");
                     return Some(EXIT_SUCCESS);
-                },
+                }
                 ErrorKind::DisplayVersion => {
                     // Print version to stdout (where clap normally sends --version)
-                    println!("{}", e);
+                    println!("{e}");
                     tracing::debug!("Version displayed, exiting successfully");
                     return Some(EXIT_SUCCESS);
-                },
+                }
                 _ => {
                     // Check if this is a validation error for a command we recognize
                     // If so, show the validation error instead of falling back to static CLI
                     if let Some(subcommand) = args.get(1) {
                         let categories = tool_registry.get_cli_categories();
-                        if categories.contains(&subcommand) {
+                        if categories.contains(subcommand) {
                             // This is a dynamic command with validation error - show the error
-                            eprintln!("{}", e);
-                            tracing::debug!("Dynamic command validation error shown, exiting with failure");
+                            eprintln!("{e}");
+                            tracing::debug!(
+                                "Dynamic command validation error shown, exiting with failure"
+                            );
                             return Some(EXIT_ERROR);
                         }
                     }
-                    
+
                     // Real parsing error for unknown command, fall back to static CLI
-                    tracing::debug!("Real parsing error, falling back to static CLI: {:?}", e.kind());
+                    tracing::debug!(
+                        "Real parsing error, falling back to static CLI: {:?}",
+                        e.kind()
+                    );
                     return None;
                 }
             }
         }
     };
-    
+
     tracing::debug!("About to check if command is dynamic");
-    
+
     // Check if this is a dynamic command
     let is_dynamic = is_dynamic_command(&matches, &cli_builder);
     tracing::debug!("Checking if command is dynamic: {}", is_dynamic);
-    
+
     if is_dynamic {
         tracing::debug!("Command recognized as dynamic, extracting command info");
         let command_info = match cli_builder.extract_command_info(&matches) {
             Some(info) => {
                 tracing::debug!("Successfully extracted command info: {:?}", info);
                 info
-            },
+            }
             None => {
                 tracing::error!("Failed to extract command info for dynamic command");
                 return Some(EXIT_ERROR);
             }
         };
-        
+
         tracing::debug!("About to execute dynamic command with executor");
         // Execute dynamic command
         let executor = DynamicCommandExecutor::new(tool_registry, tool_context);
@@ -337,10 +370,10 @@ async fn try_dynamic_cli(args: &[String]) -> Option<i32> {
             Ok(()) => {
                 tracing::debug!("Dynamic command execution completed successfully");
                 Some(EXIT_SUCCESS)
-            },
+            }
             Err(e) => {
                 // Print user-friendly error message to stderr
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {e}");
                 // Also log for debugging
                 tracing::error!("Dynamic command execution failed: {}", e);
                 Some(EXIT_ERROR)
@@ -353,32 +386,31 @@ async fn try_dynamic_cli(args: &[String]) -> Option<i32> {
     }
 }
 
-
-
 /// Handle original static CLI commands
 async fn handle_original_command(cli: Cli) -> i32 {
     use cli::Commands;
-    
+
     // Set up logging based on CLI flags
     if !cli.quiet {
         setup_logging(cli.verbose, cli.debug).unwrap_or_else(|_| {
             eprintln!("Warning: Failed to initialize logging");
         });
     }
-    
+
     match cli.command {
-        None | Some(Commands::Serve { .. }) => run_server().await,
+        None | Some(Commands::Serve) => run_server().await,
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Prompt { subcommand }) => run_prompt(subcommand).await,
         Some(Commands::Completion { shell }) => run_completions(shell),
         Some(Commands::Flow { subcommand }) => run_flow(subcommand).await,
-        Some(Commands::Validate { format, quiet, workflow_dirs }) => {
-            run_validate(quiet, format, workflow_dirs)
-        }
+        Some(Commands::Validate {
+            format,
+            quiet,
+            workflow_dirs,
+        }) => run_validate(quiet, format, workflow_dirs),
         Some(Commands::Plan { plan_filename }) => run_plan(plan_filename).await,
         Some(Commands::Config { subcommand }) => run_config(subcommand).await,
         Some(Commands::Implement) => run_implement().await,
-
         // Note: Dynamic commands are handled in try_dynamic_cli, not here
     }
 }
@@ -386,7 +418,7 @@ async fn handle_original_command(cli: Cli) -> i32 {
 /// Set up logging based on CLI arguments
 fn setup_logging(verbose: bool, debug: bool) -> Result<(), Box<dyn std::error::Error>> {
     use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
-    
+
     let log_level = if debug {
         "debug"
     } else if verbose {
@@ -394,16 +426,16 @@ fn setup_logging(verbose: bool, debug: bool) -> Result<(), Box<dyn std::error::E
     } else {
         "warn"
     };
-    
+
     let env_filter = std::env::var("RUST_LOG")
-        .map(|env_log| format!("ort=warn,rmcp=warn,{}", env_log))
-        .unwrap_or_else(|_| format!("ort=warn,rmcp=warn,{}", log_level));
-    
+        .map(|env_log| format!("ort=warn,rmcp=warn,{env_log}"))
+        .unwrap_or_else(|_| format!("ort=warn,rmcp=warn,{log_level}"));
+
     let _ = registry()
         .with(EnvFilter::new(env_filter))
         .with(fmt::layer().with_writer(std::io::stderr))
         .try_init();
-    
+
     Ok(())
 }
 
@@ -420,8 +452,8 @@ fn setup_mcp_logging() -> Result<(), Box<dyn std::error::Error>> {
     create_dir_all(&log_dir)?;
 
     // Get log file name from environment variable or use default
-    let log_filename = std::env::var("SWISSARMYHAMMER_LOG_FILE")
-        .unwrap_or_else(|_| "mcp.log".to_string());
+    let log_filename =
+        std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
     let log_file_path = log_dir.join(log_filename);
 
     // Create the log file
@@ -430,9 +462,8 @@ fn setup_mcp_logging() -> Result<(), Box<dyn std::error::Error>> {
     let file_writer = FileWriterGuard::new(shared_file);
 
     // Set up environment filter - default to info level for MCP server
-    let log_level = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| "info".to_string());
-    let env_filter = format!("ort=warn,rmcp=warn,{}", log_level);
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let env_filter = format!("ort=warn,rmcp=warn,{log_level}");
 
     // Initialize tracing with file output
     registry()
@@ -450,7 +481,7 @@ fn setup_mcp_logging() -> Result<(), Box<dyn std::error::Error>> {
 async fn main() {
     // Try dynamic CLI first, since it includes more commands
     let args: Vec<String> = std::env::args().collect();
-    
+
     // Fast path for basic help/version without arguments
     if args.len() <= 1 {
         let mut cmd = Cli::command();
@@ -458,41 +489,39 @@ async fn main() {
         println!(); // Add newline
         process::exit(EXIT_SUCCESS);
     }
-    
+
     // Check if this is the serve command and set up appropriate logging
     let is_serve_command = args.len() >= 2 && args[1] == "serve";
-    
+
     // Initialize logging appropriately
     if is_serve_command {
         // Set up MCP file logging for serve command
         if let Err(e) = setup_mcp_logging() {
-            eprintln!("Warning: Failed to initialize MCP logging: {}", e);
+            eprintln!("Warning: Failed to initialize MCP logging: {e}");
             // Fallback to stderr logging
             use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
-            let log_level = std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "warn".to_string());
+            let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string());
             let _ = registry()
-                .with(EnvFilter::new(format!("ort=warn,rmcp=warn,{}", log_level)))
+                .with(EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}")))
                 .with(fmt::layer().with_writer(std::io::stderr))
                 .try_init();
         }
     } else {
         // Initialize basic logging for non-serve commands
         use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
-        let log_level = std::env::var("RUST_LOG")
-            .unwrap_or_else(|_| "warn".to_string());
+        let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string());
         let _ = registry()
-            .with(EnvFilter::new(format!("ort=warn,rmcp=warn,{}", log_level)))
+            .with(EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}")))
             .with(fmt::layer().with_writer(std::io::stderr))
             .try_init();
     }
-    
+
     // Try to parse with dynamic CLI first
     let dynamic_result = try_dynamic_cli(&args).await;
     if let Some(exit_code) = dynamic_result {
         process::exit(exit_code);
     }
-    
+
     // Fall back to static CLI parsing
     let cli = Cli::parse_args();
 

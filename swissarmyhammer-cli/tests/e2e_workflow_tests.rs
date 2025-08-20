@@ -220,7 +220,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
             "issue",
             "create",
             "--name",
-            "e2e_lifecycle_test", 
+            "e2e_lifecycle_test",
             "# E2E Lifecycle Test\n\nThis issue tests the complete lifecycle workflow.",
         ])
         .current_dir(&temp_path)
@@ -685,13 +685,7 @@ fn test_fast_smoke_workflow() -> Result<()> {
 
     // Quick memo operations
     run_optimized_command(
-        &[
-            "memo",
-            "create",
-            "--title",
-            "Smoke Test",
-            "Fast test memo",
-        ],
+        &["memo", "create", "--title", "Smoke Test", "Fast test memo"],
         &temp_path,
     )?
     .assert()

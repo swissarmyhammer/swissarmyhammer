@@ -1,7 +1,6 @@
 use anyhow::Result;
 use rmcp::model::{CallToolResult, RawContent};
 
-
 /// Formatter for MCP tool responses optimized for CLI display
 ///
 /// The ResponseFormatter handles the conversion of MCP tool responses
@@ -17,8 +16,7 @@ impl ResponseFormatter {
     pub fn format_response(result: &CallToolResult) -> Result<String> {
         if result.is_error.unwrap_or(false) {
             // Extract error message from content
-            Self::format_success_content(&result.content)
-                .map(|text| format!("Error: {}", text))
+            Self::format_success_content(&result.content).map(|text| format!("Error: {text}"))
         } else {
             Self::format_success_content(&result.content)
         }
@@ -55,17 +53,12 @@ impl ResponseFormatter {
 
         Ok(output)
     }
-
-
 }
-
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rmcp::model::{Annotated, RawContent, RawTextContent};
-
 
     fn create_success_result(text: &str) -> CallToolResult {
         CallToolResult {
@@ -145,7 +138,4 @@ mod tests {
         let formatted = ResponseFormatter::format_response(&result).unwrap();
         assert_eq!(formatted, "[Image content - not displayable in CLI]");
     }
-
-
-
 }

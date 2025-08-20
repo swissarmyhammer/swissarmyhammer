@@ -29,7 +29,7 @@ async fn test_mcp_server_basic_functionality() {
     let mut stdin = child.stdin.take().expect("Failed to get stdin");
     let stdout = child.stdout.take().expect("Failed to get stdout");
     let stderr = child.stderr.take().expect("Failed to get stderr");
-    
+
     let mut reader = BufReader::new(stdout);
 
     // Spawn stderr reader for debugging
@@ -50,7 +50,9 @@ async fn test_mcp_server_basic_functionality() {
         stdin.flush().await.unwrap();
     }
 
-    async fn read_response(reader: &mut BufReader<tokio::process::ChildStdout>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    async fn read_response(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         if line.trim().is_empty() {
@@ -72,7 +74,8 @@ async fn test_mcp_server_basic_functionality() {
                 "clientInfo": {"name": "test", "version": "1.0"}
             }
         }),
-    ).await;
+    )
+    .await;
 
     let response = timeout(Duration::from_secs(5), read_response(&mut reader))
         .await
@@ -90,7 +93,8 @@ async fn test_mcp_server_basic_functionality() {
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         }),
-    ).await;
+    )
+    .await;
 
     // Give server time to process
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -103,7 +107,8 @@ async fn test_mcp_server_basic_functionality() {
             "id": 2,
             "method": "prompts/list"
         }),
-    ).await;
+    )
+    .await;
 
     let response = timeout(Duration::from_secs(5), read_response(&mut reader))
         .await
@@ -178,7 +183,7 @@ async fn test_mcp_server_prompt_loading() {
     let stdout = child.stdout.take().expect("Failed to get stdout");
     let mut reader = BufReader::new(stdout);
 
-    // Helper functions for JSON-RPC communication  
+    // Helper functions for JSON-RPC communication
     async fn send_request_local(stdin: &mut tokio::process::ChildStdin, request: Value) {
         let request_str = serde_json::to_string(&request).unwrap();
         stdin.write_all(request_str.as_bytes()).await.unwrap();
@@ -186,7 +191,9 @@ async fn test_mcp_server_prompt_loading() {
         stdin.flush().await.unwrap();
     }
 
-    async fn read_response_local(reader: &mut BufReader<tokio::process::ChildStdout>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    async fn read_response_local(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         if line.trim().is_empty() {
@@ -208,7 +215,7 @@ async fn test_mcp_server_prompt_loading() {
     });
 
     send_request_local(&mut stdin, init_request).await;
-    
+
     let _response = timeout(Duration::from_secs(5), read_response_local(&mut reader))
         .await
         .expect("Timeout waiting for initialize response")
@@ -297,7 +304,7 @@ async fn test_mcp_server_builtin_prompts() {
     let stdout = child.stdout.take().expect("Failed to get stdout");
     let mut reader = BufReader::new(stdout);
 
-    // Helper functions for JSON-RPC communication  
+    // Helper functions for JSON-RPC communication
     async fn send_request_builtin(stdin: &mut tokio::process::ChildStdin, request: Value) {
         let request_str = serde_json::to_string(&request).unwrap();
         stdin.write_all(request_str.as_bytes()).await.unwrap();
@@ -305,7 +312,9 @@ async fn test_mcp_server_builtin_prompts() {
         stdin.flush().await.unwrap();
     }
 
-    async fn read_response_builtin(reader: &mut BufReader<tokio::process::ChildStdout>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    async fn read_response_builtin(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         if line.trim().is_empty() {
@@ -327,7 +336,7 @@ async fn test_mcp_server_builtin_prompts() {
     });
 
     send_request_builtin(&mut stdin, init_request).await;
-    
+
     let _response = timeout(Duration::from_secs(5), read_response_builtin(&mut reader))
         .await
         .expect("Timeout waiting for initialize response")

@@ -234,16 +234,16 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     // Either we get the expected log output, or the workflow runs successfully without output
     // Both indicate that liquid template processing is working correctly
     let has_expected_logs = stderr_str.contains("Starting workflow for John Doe")
         && stderr_str.contains("Hello John Doe! You are user number 12345")
         && stderr_str.contains("Processing 25 items")
         && stderr_str.contains("Workflow completed for John Doe (ID: 12345)");
-    
+
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_logs || workflow_executed_successfully,
         "Either expected workflow logs should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 
@@ -294,10 +294,10 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     let has_expected_output = stderr_str.contains("User: {{ username }}, Email: {{ email }}");
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_output || workflow_executed_successfully,
         "Either expected stderr output should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 
@@ -429,12 +429,12 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     let has_expected_output = stderr_str.contains("Unclosed tag: {{ name")
         && stderr_str.contains("Invalid filter: {{ name | nonexistent_filter }}")
         && stderr_str.contains("Nested error: {%");
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_output || workflow_executed_successfully,
         "Either expected stderr output should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 
@@ -487,10 +487,10 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     let has_expected_output = stderr_str.contains("User input:");
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_output || workflow_executed_successfully,
         "Either expected stderr output should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 
@@ -545,10 +545,10 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     let has_expected_output = stderr_str.contains("Name: '', Description: 'No description'");
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_output || workflow_executed_successfully,
         "Either expected stderr output should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 
@@ -657,10 +657,10 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     let has_expected_output = stderr_str.contains("Value from template: from_set");
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_output || workflow_executed_successfully,
         "Either expected stderr output should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 
@@ -712,10 +712,10 @@ stateDiagram-v2
     let output = cmd.assert().success().get_output().clone();
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     let stdout_str = String::from_utf8_lossy(&output.stdout);
-    
+
     let has_expected_output = stderr_str.contains("Formula: x=y+z");
     let workflow_executed_successfully = output.status.success();
-    
+
     assert!(
         has_expected_output || workflow_executed_successfully,
         "Either expected stderr output should be present, or workflow should execute successfully. stderr: '{}', stdout: '{}'", 

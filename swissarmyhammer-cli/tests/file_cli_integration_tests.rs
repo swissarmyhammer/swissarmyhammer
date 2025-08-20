@@ -135,7 +135,13 @@ fn test_file_write_basic_functionality() -> Result<()> {
     let test_content = "This is new content\nWritten via CLI";
 
     let mut cmd = Command::cargo_bin("sah")?;
-    cmd.args(["file", "write", "--file_path", test_file.to_str().unwrap(), test_content]);
+    cmd.args([
+        "file",
+        "write",
+        "--file_path",
+        test_file.to_str().unwrap(),
+        test_content,
+    ]);
 
     let (_stdout, _stderr, exit_code) = run_command_with_output(&mut cmd)?;
 
@@ -161,7 +167,13 @@ fn test_file_write_overwrite_existing() -> Result<()> {
     create_test_file(&test_file, initial_content)?;
 
     let mut cmd = Command::cargo_bin("sah")?;
-    cmd.args(["file", "write", "--file_path", test_file.to_str().unwrap(), new_content]);
+    cmd.args([
+        "file",
+        "write",
+        "--file_path",
+        test_file.to_str().unwrap(),
+        new_content,
+    ]);
 
     let (_stdout, _stderr, exit_code) = run_command_with_output(&mut cmd)?;
 
@@ -184,7 +196,13 @@ fn test_file_write_creates_parent_directories() -> Result<()> {
     let test_content = "Content in nested directory";
 
     let mut cmd = Command::cargo_bin("sah")?;
-    cmd.args(["file", "write", "--file_path", test_file.to_str().unwrap(), test_content]);
+    cmd.args([
+        "file",
+        "write",
+        "--file_path",
+        test_file.to_str().unwrap(),
+        test_content,
+    ]);
 
     let (_stdout, _stderr, exit_code) = run_command_with_output(&mut cmd)?;
 

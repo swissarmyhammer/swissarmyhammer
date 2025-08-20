@@ -73,10 +73,11 @@ async fn test_mcp_logging_to_current_directory() {
         std::thread::sleep(Duration::from_millis(100));
         attempts += 1;
     }
-    
+
     assert!(
         log_content.contains("MCP server"),
-        "Log should contain MCP server messages, but got: {}", log_content
+        "Log should contain MCP server messages, but got: {}",
+        log_content
     );
 
     // Verify no logs in home directory
@@ -176,13 +177,13 @@ async fn test_mcp_logging_creates_directory() {
 
     // Verify log file was created
     let log_file = log_dir.join("mcp.log");
-    
+
     // Wait for log file to be created
     let mut attempts = 0;
     while !log_file.exists() && attempts < 50 {
         std::thread::sleep(Duration::from_millis(100));
         attempts += 1;
     }
-    
+
     assert!(log_file.exists(), "Log file should be created");
 }

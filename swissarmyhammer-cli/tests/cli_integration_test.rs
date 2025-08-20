@@ -1322,7 +1322,7 @@ fn test_issue_create_with_optional_names() -> Result<()> {
         .args(["--help"])
         .current_dir(&temp_dir)
         .output()?;
-    
+
     let help_text = String::from_utf8_lossy(&help_output.stdout);
     println!("Help output: {}", help_text);
     assert!(
@@ -1334,18 +1334,20 @@ fn test_issue_create_with_optional_names() -> Result<()> {
     // Test creating a named issue with positional content argument
     let output = Command::cargo_bin("sah")
         .unwrap()
-        .args([
-            "issue",
-            "create", 
-            "This is a test issue with a name",
-        ])
+        .args(["issue", "create", "This is a test issue with a name"])
         .env("RUST_LOG", "debug")
         .current_dir(&temp_dir)
         .output()?;
 
     if !output.status.success() {
-        println!("Issue create failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
-        println!("Issue create failed with stdout: {}", String::from_utf8_lossy(&output.stdout));
+        println!(
+            "Issue create failed with stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!(
+            "Issue create failed with stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     assert!(
@@ -1360,7 +1362,10 @@ fn test_issue_create_with_optional_names() -> Result<()> {
         "should show creation confirmation"
     );
     // FIXME: Once CLI builder supports positional names, update this test
-    assert!(stdout.contains("01"), "should show the generated issue ULID");
+    assert!(
+        stdout.contains("01"),
+        "should show the generated issue ULID"
+    );
 
     // Test creating a nameless issue with minimal content
     let output = Command::cargo_bin("sah")
@@ -1384,11 +1389,7 @@ fn test_issue_create_with_optional_names() -> Result<()> {
     // Test creating a nameless issue with content (using positional argument)
     let output = Command::cargo_bin("sah")
         .unwrap()
-        .args([
-            "issue",
-            "create",
-            "This is a nameless issue with content",
-        ])
+        .args(["issue", "create", "This is a nameless issue with content"])
         .current_dir(&temp_dir)
         .output()?;
 

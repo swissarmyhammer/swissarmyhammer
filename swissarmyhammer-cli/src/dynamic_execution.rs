@@ -103,12 +103,12 @@ impl DynamicCommandExecutor {
         let formatted_output = ResponseFormatter::format_response(result)
             .with_context(|| "Failed to format tool response")?;
 
-        // Handle different result types appropriately  
+        // Handle different result types appropriately
         if result.is_error.unwrap_or(false) {
-            eprintln!("{}", formatted_output);
+            eprintln!("{formatted_output}");
             std::process::exit(1);
         } else {
-            println!("{}", formatted_output);
+            println!("{formatted_output}");
         }
 
         Ok(())
@@ -119,8 +119,6 @@ impl DynamicCommandExecutor {
 pub fn is_dynamic_command(matches: &ArgMatches, builder: &CliBuilder) -> bool {
     builder.extract_command_info(matches).is_some()
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -164,8 +162,6 @@ mod tests {
             Ok(BaseToolImpl::create_success_response("Test executed"))
         }
     }
-
-
 
     #[tokio::test]
     async fn test_command_info_extraction() {

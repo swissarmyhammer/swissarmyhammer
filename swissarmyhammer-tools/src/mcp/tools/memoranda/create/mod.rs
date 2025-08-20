@@ -80,7 +80,9 @@ impl McpTool for CreateMemoTool {
                 tracing::info!("Created memo {}", memo.id);
                 Ok(BaseToolImpl::create_success_response(format!(
                     "✅ Created memo: {}\n🆔 ID: {}\n📅 Created: {}",
-                    memo.title, memo.id, memo.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    memo.title,
+                    memo.id,
+                    memo.created_at.format("%Y-%m-%d %H:%M:%S UTC")
                 )))
             }
             Err(e) => Err(McpErrorHandler::handle_error(e, "create memo")),
