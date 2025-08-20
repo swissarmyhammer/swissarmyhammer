@@ -76,8 +76,7 @@ async fn test_mcp_logging_to_current_directory() {
 
     assert!(
         log_content.contains("MCP server"),
-        "Log should contain MCP server messages, but got: {}",
-        log_content
+        "Log should contain MCP server messages, but got: {log_content}"
     );
 
     // Verify no logs in home directory

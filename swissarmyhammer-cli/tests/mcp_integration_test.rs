@@ -37,7 +37,7 @@ async fn test_mcp_server_basic_functionality() {
         let mut stderr_reader = BufReader::new(stderr);
         let mut line = String::new();
         while stderr_reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-            eprint!("SERVER: {}", line);
+            eprint!("SERVER: {line}");
             line.clear();
         }
     });
@@ -172,7 +172,7 @@ async fn test_mcp_server_prompt_loading() {
         let mut stderr_reader = BufReader::new(stderr);
         let mut line = String::new();
         while stderr_reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-            eprint!("SERVER: {}", line);
+            eprint!("SERVER: {line}");
             line.clear();
         }
     });

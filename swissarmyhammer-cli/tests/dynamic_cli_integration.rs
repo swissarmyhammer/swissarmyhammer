@@ -7,7 +7,7 @@ use swissarmyhammer::test_utils::create_test_home_guard;
 #[test]
 fn test_dynamic_cli_help_includes_mcp_commands() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("--help")
         .assert()
@@ -29,7 +29,7 @@ fn test_dynamic_cli_help_includes_mcp_commands() {
 #[test]
 fn test_dynamic_issue_command_help() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("issue")
         .arg("--help")
@@ -46,7 +46,7 @@ fn test_dynamic_issue_command_help() {
 #[test]
 fn test_dynamic_memo_command_help() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("memo")
         .arg("--help")
@@ -63,7 +63,7 @@ fn test_dynamic_memo_command_help() {
 #[test]
 fn test_dynamic_file_command_help() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("file")
         .arg("--help")
@@ -79,7 +79,7 @@ fn test_dynamic_file_command_help() {
 #[test]
 fn test_dynamic_shell_command_help() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("shell")
         .arg("--help")
@@ -91,7 +91,7 @@ fn test_dynamic_shell_command_help() {
 #[test]
 fn test_static_commands_still_work() {
     let _guard = create_test_home_guard();
-    
+
     // Test that prompt command (static) still works
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("prompt")
@@ -107,7 +107,7 @@ fn test_static_commands_still_work() {
 #[test]
 fn test_flow_command_still_works() {
     let _guard = create_test_home_guard();
-    
+
     // Test that flow command (static) still works
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("flow")
@@ -123,19 +123,16 @@ fn test_flow_command_still_works() {
 #[test]
 fn test_issue_list_command_executes() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("issue")
-        .arg("list")
-        .assert()
-        .success(); // Should not fail, even if no issues exist
+    cmd.arg("issue").arg("list").assert().success(); // Should not fail, even if no issues exist
 }
 
 /// Test that dynamic commands handle invalid subcommands properly
 #[test]
 fn test_dynamic_command_invalid_subcommand() {
     let _guard = create_test_home_guard();
-    
+
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("issue")
         .arg("invalid-subcommand")
@@ -149,7 +146,7 @@ fn test_dynamic_command_invalid_subcommand() {
 #[test]
 fn test_cli_handles_tool_loading_gracefully() {
     let _guard = create_test_home_guard();
-    
+
     // Even if MCP tools fail to load for some reason, the CLI should still show help
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("--help")
@@ -161,7 +158,7 @@ fn test_cli_handles_tool_loading_gracefully() {
 #[test]
 fn test_completion_generation_works() {
     let _guard = create_test_home_guard();
-    
+
     // Test that shell completion generation works (dynamic commands are runtime-only)
     let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.arg("completion")

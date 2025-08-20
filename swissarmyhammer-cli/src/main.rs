@@ -633,8 +633,6 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
     }
 }
 
-
-
 /// Runs the validate command to check prompt files and workflows for syntax and best practices.
 ///
 /// This function validates:
@@ -824,5 +822,3 @@ async fn run_implement() -> i32 {
         }
     }
 }
-
-

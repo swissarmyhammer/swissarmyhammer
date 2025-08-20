@@ -775,16 +775,6 @@ for better discoverability and clearer intent.
     },
 }
 
-
-
-
-
-
-
-
-
-
-
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommands {
     /// Display current configuration
@@ -823,8 +813,6 @@ pub enum ConfigCommands {
         format: OutputFormat,
     },
 }
-
-
 
 impl Cli {
     pub fn parse_args() -> Self {
@@ -1490,7 +1478,7 @@ mod tests {
         assert!(!cli.quiet);
     }
 
-    // Note: Issue, Memo, File, Search, WebSearch, and Shell commands 
+    // Note: Issue, Memo, File, Search, WebSearch, and Shell commands
     // are now handled by dynamic MCP-based CLI generation
     #[test]
     fn test_plan_command() {
