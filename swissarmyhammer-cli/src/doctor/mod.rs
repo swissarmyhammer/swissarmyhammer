@@ -42,6 +42,33 @@ const SYSTEM_CHECK_KEYWORDS: &[&str] = &["PATH", "permissions", "Binary", "Insta
 const CONFIG_CHECK_KEYWORDS: &[&str] = &["Claude", "config"];
 const PROMPT_CHECK_KEYWORDS: &[&str] = &["prompt", "YAML"];
 const WORKFLOW_CHECK_KEYWORDS: &[&str] = &["Workflow", "workflow"];
+const MIGRATION_CHECK_KEYWORDS: &[&str] = &["Migration", "migration", "directory consolidation"];
+
+/// Grouping of checks by category for organized display
+#[derive(Debug)]
+pub struct CheckGroups<'a> {
+    /// System-level checks (installation, PATH, permissions)
+    pub system_checks: Vec<&'a Check>,
+    /// Configuration checks (Claude Code, MCP setup)
+    pub config_checks: Vec<&'a Check>,
+    /// Prompt-related checks (directories, YAML parsing)
+    pub prompt_checks: Vec<&'a Check>,
+    /// Workflow system checks (directories, parsing, storage)
+    pub workflow_checks: Vec<&'a Check>,
+    /// Migration validation checks (directory consolidation, conflicts)
+    pub migration_checks: Vec<&'a Check>,
+}
+
+/// Count of checks by status for summary display
+#[derive(Debug)]
+pub struct CheckCounts {
+    /// Number of checks that passed
+    pub ok_count: usize,
+    /// Number of checks with warnings
+    pub warning_count: usize,
+    /// Number of checks with errors
+    pub error_count: usize,
+}
 
 /// Main diagnostic tool for SwissArmyHammer system health checks
 ///
@@ -72,6 +99,22 @@ impl Doctor {
     /// - 1: Warnings detected
     /// - 2: Errors detected
     pub fn run_diagnostics(&mut self) -> Result<i32> {
+        self.run_diagnostics_with_options(false)
+    }
+
+    /// Run diagnostic checks with specific options
+    ///
+    /// # Arguments
+    ///
+    /// * `migration` - If true, include migration validation checks
+    ///
+    /// # Returns
+    ///
+    /// Returns an exit code:
+    /// - 0: All checks passed
+    /// - 1: Warnings detected
+    /// - 2: Errors detected
+    pub fn run_diagnostics_with_options(&mut self, migration: bool) -> Result<i32> {
         println!("{}", "🔨 SwissArmyHammer Doctor".bold().blue());
         println!("{}", "Running diagnostics...".dimmed());
         println!();
@@ -81,6 +124,11 @@ impl Doctor {
         self.run_configuration_checks()?;
         self.run_prompt_checks()?;
         self.run_workflow_checks()?;
+        
+        // Run migration checks if requested
+        if migration {
+            self.run_migration_checks()?;
+        }
 
         // Print results
         self.print_results();
@@ -120,6 +168,13 @@ impl Doctor {
         Ok(())
     }
 
+    /// Run migration validation checks
+    fn run_migration_checks(&mut self) -> Result<()> {
+        checks::check_migration_status(&mut self.checks)?;
+        checks::check_migration_conflicts(&mut self.checks)?;
+        Ok(())
+    }
+
     /// Print the results
     ///
     /// Displays all diagnostic results grouped by category:
@@ -139,6 +194,7 @@ impl Doctor {
         self.print_check_category(&check_groups.config_checks, "Configuration:", use_color);
         self.print_check_category(&check_groups.prompt_checks, "Prompts:", use_color);
         self.print_check_category(&check_groups.workflow_checks, "Workflows:", use_color);
+        self.print_check_category(&check_groups.migration_checks, "Migration:", use_color);
 
         // Print summary
         self.print_summary(use_color);
@@ -184,6 +240,15 @@ impl Doctor {
                 .iter()
                 .filter(|c| {
                     WORKFLOW_CHECK_KEYWORDS
+                        .iter()
+                        .any(|&keyword| c.name.contains(keyword))
+                })
+                .collect(),
+            migration_checks: self
+                .checks
+                .iter()
+                .filter(|c| {
+                    MIGRATION_CHECK_KEYWORDS
                         .iter()
                         .any(|&keyword| c.name.contains(keyword))
                 })

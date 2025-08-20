@@ -123,9 +123,9 @@ async fn main() {
             tracing::debug!("Starting MCP server");
             run_server().await
         }
-        Some(Commands::Doctor) => {
-            tracing::debug!("Running diagnostics");
-            run_doctor()
+        Some(Commands::Doctor { migration }) => {
+            tracing::debug!("Running diagnostics with migration={}", migration);
+            run_doctor_with_options(migration)
         }
         Some(Commands::Prompt { subcommand }) => {
             tracing::debug!("Running prompt command");
@@ -259,11 +259,11 @@ async fn run_server() -> i32 {
     EXIT_SUCCESS
 }
 
-fn run_doctor() -> i32 {
+fn run_doctor_with_options(migration: bool) -> i32 {
     use doctor::Doctor;
 
     let mut doctor = Doctor::new();
-    match doctor.run_diagnostics() {
+    match doctor.run_diagnostics_with_options(migration) {
         Ok(exit_code) => exit_code,
         Err(e) => {
             tracing::error!("Doctor error: {}", e);
