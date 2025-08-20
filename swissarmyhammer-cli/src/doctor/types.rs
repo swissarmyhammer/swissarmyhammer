@@ -232,20 +232,6 @@ impl CheckBuilder {
     }
 }
 
-/// Groups of checks organized by category
-pub(crate) struct CheckGroups<'a> {
-    pub system_checks: Vec<&'a Check>,
-    pub config_checks: Vec<&'a Check>,
-    pub prompt_checks: Vec<&'a Check>,
-    pub workflow_checks: Vec<&'a Check>,
-}
-
-/// Count of checks by status
-pub(crate) struct CheckCounts {
-    pub ok_count: usize,
-    pub warning_count: usize,
-    pub error_count: usize,
-}
 
 #[cfg(test)]
 mod tests {
