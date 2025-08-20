@@ -345,14 +345,12 @@ impl Drop for IsolatedTestHome {
 
 /// RAII helper that isolates both HOME directory and current working directory for tests
 /// This prevents abort file pollution between tests by ensuring each test runs in its own environment
-#[cfg(any(test, feature = "test-utils"))]
 pub struct IsolatedTestEnvironment {
     _home_guard: IsolatedTestHome,
     _temp_dir: TempDir,
     original_cwd: PathBuf,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 impl IsolatedTestEnvironment {
     /// Creates a new isolated test environment with temporary HOME and current working directory.
     ///
@@ -362,8 +360,14 @@ impl IsolatedTestEnvironment {
     /// - Automatic restoration of original directories on drop
     pub fn new() -> std::io::Result<Self> {
         let original_cwd = std::env::current_dir()?;
+
+        // Create the home guard first
         let home_guard = IsolatedTestHome::new();
-        let temp_dir = TempDir::new()?;
+
+        // Try to create the temp directory with retries and better error handling
+        let temp_dir = Self::create_temp_dir_with_retry()?;
+
+        // Change to the temporary directory
         std::env::set_current_dir(temp_dir.path())?;
 
         Ok(Self {
@@ -371,6 +375,53 @@ impl IsolatedTestEnvironment {
             _temp_dir: temp_dir,
             original_cwd,
         })
+    }
+
+    /// Create a temporary directory with retry logic for better robustness
+    fn create_temp_dir_with_retry() -> std::io::Result<TempDir> {
+        let mut attempts = 0;
+        let max_attempts = 3;
+
+        loop {
+            attempts += 1;
+
+            match TempDir::new() {
+                Ok(temp_dir) => return Ok(temp_dir),
+                Err(e) if attempts < max_attempts => {
+                    eprintln!("Attempt {attempts} to create temp dir failed: {e}, retrying...");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("Failed to create temporary directory after {attempts} attempts");
+                    eprintln!("Last error: {} (kind: {:?})", e, e.kind());
+
+                    // Try creating in a different location as fallback
+                    match Self::create_fallback_temp_dir() {
+                        Ok(temp_dir) => {
+                            eprintln!(
+                                "Successfully created fallback temp dir at: {:?}",
+                                temp_dir.path()
+                            );
+                            return Ok(temp_dir);
+                        }
+                        Err(fallback_e) => {
+                            eprintln!("Fallback temp dir creation also failed: {fallback_e}");
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Create a temporary directory in an alternative location as fallback
+    fn create_fallback_temp_dir() -> std::io::Result<TempDir> {
+        // Try creating in the current directory as a fallback
+        let current_dir = std::env::current_dir()?;
+
+        // Use TempDir::new_in to create a temp directory in the current directory
+        TempDir::new_in(current_dir)
     }
 
     /// Get the path to the isolated home directory
@@ -384,11 +435,27 @@ impl IsolatedTestEnvironment {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 impl Drop for IsolatedTestEnvironment {
     fn drop(&mut self) {
-        // Restore original working directory
-        let _ = std::env::set_current_dir(&self.original_cwd);
+        // Restore original working directory, but handle case where it no longer exists
+        if let Err(e) = std::env::set_current_dir(&self.original_cwd) {
+            eprintln!(
+                "Failed to restore working directory {:?}: {}",
+                self.original_cwd, e
+            );
+
+            // Try to set to a known good directory as fallback
+            if let Ok(home) = std::env::var("HOME") {
+                if let Err(e2) = std::env::set_current_dir(&home) {
+                    eprintln!("Failed to set working directory to HOME {home}: {e2}");
+                    // As a last resort, try root directory
+                    let _ = std::env::set_current_dir("/");
+                }
+            } else {
+                // No HOME variable, try root directory
+                let _ = std::env::set_current_dir("/");
+            }
+        }
     }
 }
 
@@ -397,7 +464,17 @@ impl Drop for IsolatedTestEnvironment {
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
 /// better error handling and consistent behavior across tests.
 pub fn create_temp_dir() -> TempDir {
-    TempDir::new().expect("Failed to create temporary directory for test")
+    match TempDir::new() {
+        Ok(temp_dir) => temp_dir,
+        Err(e) => {
+            eprintln!("Failed to create temp dir with TempDir::new(): {e}");
+            eprintln!("Attempting fallback creation...");
+
+            // Fallback: try to create in current directory
+            let current_dir = std::env::current_dir().expect("Failed to get current directory");
+            TempDir::new_in(current_dir).expect("Failed to create fallback temp dir")
+        }
+    }
 }
 
 /// Create a set of standard test prompts for testing

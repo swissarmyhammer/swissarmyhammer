@@ -48,6 +48,18 @@ impl McpTool for CreateMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "create"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Create a new memo with title and content")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -67,8 +79,10 @@ impl McpTool for CreateMemoTool {
             Ok(memo) => {
                 tracing::info!("Created memo {}", memo.id);
                 Ok(BaseToolImpl::create_success_response(format!(
-                    "Successfully created memo '{}' with ID: {}\n\nTitle: {}\nContent: {}",
-                    memo.title, memo.id, memo.title, memo.content
+                    "✅ Created memo: {}\n🆔 ID: {}\n📅 Created: {}",
+                    memo.title,
+                    memo.id,
+                    memo.created_at.format("%Y-%m-%d %H:%M:%S UTC")
                 )))
             }
             Err(e) => Err(McpErrorHandler::handle_error(e, "create memo")),

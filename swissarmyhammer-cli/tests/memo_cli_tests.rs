@@ -18,7 +18,9 @@ use tempfile::{NamedTempFile, TempDir};
 
 /// Helper to create a CLI command with environment setup
 fn memo_cmd() -> Command {
-    Command::cargo_bin("sah").unwrap()
+    let mut cmd = Command::cargo_bin("sah").unwrap();
+    cmd.env("SWISSARMYHAMMER_TEST_MODE", "1"); // Enable dynamic CLI for E2E tests
+    cmd
 }
 
 /// Helper to create a memo command with custom memos directory
@@ -44,9 +46,13 @@ fn test_cli_memo_create_basic() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Test Memo Title"])
-        .arg("--content")
-        .arg("This is test content for the memo")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Test Memo Title",
+            "This is test content for the memo",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("✅ Created memo: Test Memo Title"))
@@ -60,7 +66,7 @@ fn test_cli_memo_create_without_content() {
 
     // Create memo without --content flag, should prompt for stdin but fail in test environment
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "No Content Memo"])
+        .args(["memo", "create", "--title", "No Content Memo", "-"])
         .write_stdin("")
         .assert()
         .success()
@@ -72,7 +78,7 @@ fn test_cli_memo_create_with_stdin() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Stdin Memo", "--content", "-"])
+        .args(["memo", "create", "--title", "Stdin Memo", "-"])
         .write_stdin("Content from stdin\nMultiple lines\nOf text")
         .assert()
         .success()
@@ -84,9 +90,13 @@ fn test_cli_memo_create_unicode() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "🚀 Unicode Test with 中文"])
-        .arg("--content")
-        .arg("Content with émojis 🎉 and unicode chars: ñáéíóú, 中文测试")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "🚀 Unicode Test with 中文",
+            "Content with émojis 🎉 and unicode chars: ñáéíóú, 中文测试",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -99,9 +109,7 @@ fn test_cli_memo_create_empty_title() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", ""])
-        .arg("--content")
-        .arg("Content with empty title")
+        .args(["memo", "create", "--title", "", "Content with empty title"])
         .assert()
         .success()
         .stdout(predicate::str::contains("✅ Created memo:"));
@@ -113,9 +121,13 @@ fn test_cli_memo_create_large_content() {
     let large_content = "x".repeat(50_000); // 50KB content
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Large Content Memo"])
-        .arg("--content")
-        .arg(&large_content)
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Large Content Memo",
+            &large_content,
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -142,9 +154,13 @@ fn test_cli_memo_list_with_memos() {
     let memo_titles = ["First Memo", "Second Memo", "Third Memo"];
     for title in &memo_titles {
         memo_cmd_with_dir(&temp_dir)
-            .args(["memo", "create", title])
-            .arg("--content")
-            .arg(format!("Content for {title}"))
+            .args([
+                "memo",
+                "create",
+                "--title",
+                title,
+                &format!("Content for {title}"),
+            ])
             .assert()
             .success();
     }
@@ -168,9 +184,13 @@ fn test_cli_memo_get_basic() {
 
     // Create a memo first
     let create_output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Get Test Memo"])
-        .arg("--content")
-        .arg("Content for get test")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Get Test Memo",
+            "Content for get test",
+        ])
         .output()
         .unwrap();
 
@@ -197,9 +217,7 @@ fn test_cli_memo_get_invalid_id() {
         .args(["memo", "get", "invalid/memo/id"]) // Use forward slashes which are forbidden
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "Memo ID contains invalid character",
-        ));
+        .stderr(predicate::str::contains("Invalid memo ID format"));
 }
 
 #[test]
@@ -219,9 +237,13 @@ fn test_cli_memo_update_basic() {
 
     // Create a memo first
     let create_output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Update Test Memo"])
-        .arg("--content")
-        .arg("Original content")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Update Test Memo",
+            "Original content",
+        ])
         .output()
         .unwrap();
 
@@ -229,12 +251,16 @@ fn test_cli_memo_update_basic() {
 
     // Update the memo
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "update", &memo_id])
-        .arg("--content")
-        .arg("Updated content via CLI")
+        .args([
+            "memo",
+            "update",
+            "--id",
+            &memo_id,
+            "Updated content via CLI",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("✅ Updated memo:"))
+        .stdout(predicate::str::contains("Successfully updated memo:"))
         .stdout(predicate::str::contains("Update Test Memo"))
         .stdout(predicate::str::contains("Updated content via CLI"));
 }
@@ -245,9 +271,13 @@ fn test_cli_memo_update_with_stdin() {
 
     // Create a memo first
     let create_output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Stdin Update Test"])
-        .arg("--content")
-        .arg("Original content")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Stdin Update Test",
+            "Original content",
+        ])
         .output()
         .unwrap();
 
@@ -255,11 +285,11 @@ fn test_cli_memo_update_with_stdin() {
 
     // Update with stdin
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "update", &memo_id, "--content", "-"])
+        .args(["memo", "update", "--id", &memo_id, "-"])
         .write_stdin("Updated content from stdin\nWith multiple lines")
         .assert()
         .success()
-        .stdout(predicate::str::contains("✅ Updated memo:"));
+        .stdout(predicate::str::contains("Successfully updated memo:"));
 }
 
 #[test]
@@ -267,14 +297,10 @@ fn test_cli_memo_update_invalid_id() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "update", "invalid*id"]) // Use asterisk which is forbidden
-        .arg("--content")
-        .arg("New content")
+        .args(["memo", "update", "--id", "invalid*id", "New content"]) // Use asterisk which is forbidden
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "Memo ID contains invalid character",
-        ));
+        .stderr(predicate::str::contains("Invalid memo ID format"));
 }
 
 #[test]
@@ -282,9 +308,13 @@ fn test_cli_memo_update_nonexistent() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "update", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])
-        .arg("--content")
-        .arg("New content")
+        .args([
+            "memo",
+            "update",
+            "--id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "New content",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("not found"));
@@ -296,9 +326,13 @@ fn test_cli_memo_delete_basic() {
 
     // Create a memo first
     let create_output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Delete Test Memo"])
-        .arg("--content")
-        .arg("To be deleted")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Delete Test Memo",
+            "To be deleted",
+        ])
         .output()
         .unwrap();
 
@@ -309,7 +343,9 @@ fn test_cli_memo_delete_basic() {
         .args(["memo", "delete", &memo_id])
         .assert()
         .success()
-        .stdout(predicate::str::contains("🗑️ Deleted memo:"))
+        .stdout(predicate::str::contains(
+            "Successfully deleted memo with ID",
+        ))
         .stdout(predicate::str::contains(&memo_id));
 
     // Verify it's deleted by trying to get it
@@ -328,9 +364,7 @@ fn test_cli_memo_delete_invalid_id() {
         .args(["memo", "delete", "invalid?id"]) // Use question mark which is forbidden
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "Memo ID contains invalid character",
-        ));
+        .stderr(predicate::str::contains("Invalid memo ID format"));
 }
 
 #[test]
@@ -358,9 +392,7 @@ fn test_cli_memo_search_basic() {
 
     for (title, content) in &test_data {
         memo_cmd_with_dir(&temp_dir)
-            .args(["memo", "create", title])
-            .arg("--content")
-            .arg(content)
+            .args(["memo", "create", "--title", title, content])
             .assert()
             .success();
     }
@@ -381,9 +413,13 @@ fn test_cli_memo_search_case_insensitive() {
 
     // Create a memo with mixed case
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "CamelCase Title"])
-        .arg("--content")
-        .arg("Content with MixedCase words")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "CamelCase Title",
+            "Content with MixedCase words",
+        ])
         .assert()
         .success();
 
@@ -407,9 +443,7 @@ fn test_cli_memo_search_no_results() {
 
     // Create a memo
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Test Memo"])
-        .arg("--content")
-        .arg("Test content")
+        .args(["memo", "create", "--title", "Test Memo", "Test content"])
         .assert()
         .success();
 
@@ -419,7 +453,7 @@ fn test_cli_memo_search_no_results() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "ℹ️ No memos found matching 'nonexistent'",
+            "No memos found matching query: 'nonexistent'",
         ));
 }
 
@@ -429,9 +463,7 @@ fn test_cli_memo_search_empty_query() {
 
     // Create a memo
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Test Memo"])
-        .arg("--content")
-        .arg("Test content")
+        .args(["memo", "create", "--title", "Test Memo", "Test content"])
         .assert()
         .success();
 
@@ -449,23 +481,35 @@ fn test_cli_memo_search_special_characters() {
 
     // Create memos with different types of special content
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Email Content"])
-        .arg("--content")
-        .arg("Contact support at help@example.com")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Email Content",
+            "Contact support at help@example.com",
+        ])
         .assert()
         .success();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Programming Notes"])
-        .arg("--content")
-        .arg("Use C++ for performance-critical code")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Programming Notes",
+            "Use C++ for performance-critical code",
+        ])
         .assert()
         .success();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "File Path"])
-        .arg("--content")
-        .arg("Config file located at /usr/local/bin/config")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "File Path",
+            "Config file located at /usr/local/bin/config",
+        ])
         .assert()
         .success();
 
@@ -500,12 +544,10 @@ fn test_cli_memo_context_empty() {
     let temp_dir = TempDir::new().unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "context"])
+        .args(["memo", "get-all-context"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "ℹ️ No memos available for context",
-        ));
+        .stdout(predicate::str::contains("No memos available"));
 }
 
 #[test]
@@ -515,18 +557,22 @@ fn test_cli_memo_context_with_memos() {
     // Create some memos
     for i in 1..=3 {
         memo_cmd_with_dir(&temp_dir)
-            .args(["memo", "create", &format!("Context Memo {i}")])
-            .arg("--content")
-            .arg(format!("Context content for memo {i}"))
+            .args([
+                "memo",
+                "create",
+                "--title",
+                &format!("Context Memo {i}"),
+                &format!("Context content for memo {i}"),
+            ])
             .assert()
             .success();
     }
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "context"])
+        .args(["memo", "get-all-context"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("📄 All memo context (3 memos)"))
+        .stdout(predicate::str::contains("All memo context (3 memos):"))
         .stdout(predicate::str::contains("Context Memo 1"))
         .stdout(predicate::str::contains("Context Memo 2"))
         .stdout(predicate::str::contains("Context Memo 3"))
@@ -540,9 +586,13 @@ fn test_cli_memo_context_ordering() {
     // Create memos with delays to ensure different timestamps
     for i in 1..=3 {
         memo_cmd_with_dir(&temp_dir)
-            .args(["memo", "create", &format!("Ordered Memo {i}")])
-            .arg("--content")
-            .arg(format!("Content {i}"))
+            .args([
+                "memo",
+                "create",
+                "--title",
+                &format!("Ordered Memo {i}"),
+                &format!("Content {i}"),
+            ])
             .assert()
             .success();
 
@@ -551,7 +601,7 @@ fn test_cli_memo_context_ordering() {
     }
 
     let output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "context"])
+        .args(["memo", "get-all-context"])
         .output()
         .unwrap();
 
@@ -584,12 +634,13 @@ fn test_cli_memo_help() {
 
 #[test]
 fn test_cli_memo_create_help() {
-    memo_cmd()
+    let temp_dir = TempDir::new().unwrap();
+    memo_cmd_with_dir(&temp_dir)
         .args(["memo", "create", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Create a new memo"))
-        .stdout(predicate::str::contains("--content"));
+        .stdout(predicate::str::contains("<content>"));
 }
 
 #[test]
@@ -603,7 +654,8 @@ fn test_cli_memo_invalid_command() {
 
 #[test]
 fn test_cli_memo_create_missing_title() {
-    memo_cmd()
+    let temp_dir = TempDir::new().unwrap();
+    memo_cmd_with_dir(&temp_dir)
         .args(["memo", "create"])
         .assert()
         .failure()
@@ -654,9 +706,13 @@ fn test_cli_memo_workflow() {
 
     // 1. Create a memo
     let create_output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Workflow Test"])
-        .arg("--content")
-        .arg("Original workflow content")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Workflow Test",
+            "Original workflow content",
+        ])
         .output()
         .unwrap();
 
@@ -680,12 +736,16 @@ fn test_cli_memo_workflow() {
 
     // 4. Update the memo
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "update", &memo_id])
-        .arg("--content")
-        .arg("Updated workflow content")
+        .args([
+            "memo",
+            "update",
+            "--id",
+            &memo_id,
+            "Updated workflow content",
+        ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("✅ Updated memo:"));
+        .stdout(predicate::str::contains("Successfully updated memo:"));
 
     // 5. Search for the memo
     memo_cmd_with_dir(&temp_dir)
@@ -701,7 +761,7 @@ fn test_cli_memo_workflow() {
         .args(["memo", "delete", &memo_id])
         .assert()
         .success()
-        .stdout(predicate::str::contains("🗑️ Deleted memo:"));
+        .stdout(predicate::str::contains("Successfully deleted memo"));
 
     // 7. List memos again (should be empty)
     memo_cmd_with_dir(&temp_dir)
@@ -719,9 +779,13 @@ fn test_cli_memo_content_with_newlines() {
 
     // Create memo with multiline content
     let create_output = memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Multiline Test"])
-        .arg("--content")
-        .arg(multiline_content)
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Multiline Test",
+            multiline_content,
+        ])
         .output()
         .unwrap();
 
@@ -755,9 +819,7 @@ fn test_cli_memo_special_title_characters() {
 
     for title in &special_titles {
         memo_cmd_with_dir(&temp_dir)
-            .args(["memo", "create", title])
-            .arg("--content")
-            .arg("Special content")
+            .args(["memo", "create", "--title", title, "Special content"])
             .assert()
             .success()
             .stdout(predicate::str::contains(format!(
@@ -770,7 +832,7 @@ fn test_cli_memo_special_title_characters() {
         .args(["memo", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("📝 Found 5 memos"));
+        .stdout(predicate::str::contains("Found 5 memos:"));
 }
 
 #[test]
@@ -783,12 +845,17 @@ fn test_cli_memo_concurrent_operations() {
             let temp_dir_path = temp_dir.path().to_path_buf();
             std::thread::spawn(move || {
                 let mut cmd = Command::cargo_bin("sah").unwrap();
+                cmd.env("SWISSARMYHAMMER_TEST_MODE", "1"); // Enable dynamic CLI for E2E tests
                 cmd.env("SWISSARMYHAMMER_MEMOS_DIR", temp_dir_path.join("memos"));
-                cmd.args(["memo", "create", &format!("Concurrent Memo {i}")])
-                    .arg("--content")
-                    .arg(format!("Content for concurrent memo {i}"))
-                    .assert()
-                    .success();
+                cmd.args([
+                    "memo",
+                    "create",
+                    "--title",
+                    &format!("Concurrent Memo {i}"),
+                    &format!("Content for concurrent memo {i}"),
+                ])
+                .assert()
+                .success();
             })
         })
         .collect();
@@ -803,7 +870,7 @@ fn test_cli_memo_concurrent_operations() {
         .args(["memo", "list"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("📝 Found 5 memos"));
+        .stdout(predicate::str::contains("Found 5 memos:"));
 }
 
 #[test]
@@ -812,9 +879,13 @@ fn test_cli_memo_exit_codes() {
 
     // Success cases should return 0
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "Exit Code Test"])
-        .arg("--content")
-        .arg("Test content")
+        .args([
+            "memo",
+            "create",
+            "--title",
+            "Exit Code Test",
+            "Test content",
+        ])
         .assert()
         .code(0);
 
@@ -850,7 +921,7 @@ fn test_cli_memo_file_from_temp() {
     let file_content = fs::read_to_string(temp_file.path()).unwrap();
 
     memo_cmd_with_dir(&temp_dir)
-        .args(["memo", "create", "File Content Test", "--content", "-"])
+        .args(["memo", "create", "--title", "File Content Test", "-"])
         .write_stdin(file_content)
         .assert()
         .success()
@@ -871,11 +942,13 @@ mod stress_tests {
 
         for i in 1..=num_memos {
             memo_cmd_with_dir(&temp_dir)
-                .args(["memo", "create", &format!("Stress Test Memo {i}")])
-                .arg("--content")
-                .arg(format!(
-                    "Content for stress test memo {i} with additional text"
-                ))
+                .args([
+                    "memo",
+                    "create",
+                    "--title",
+                    &format!("Stress Test Memo {i}"),
+                    &format!("Content for stress test memo {i} with additional text"),
+                ])
                 .assert()
                 .success();
         }
@@ -886,7 +959,7 @@ mod stress_tests {
             .assert()
             .success()
             .stdout(predicate::str::contains(format!(
-                "📝 Found {num_memos} memos"
+                "Found {num_memos} memos:"
             )));
     }
 }

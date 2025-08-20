@@ -135,6 +135,18 @@ impl McpTool for GlobFileTool {
             response_parts.join("\n"),
         ))
     }
+
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("file")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "glob"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Fast file pattern matching with advanced filtering and .gitignore support")
+    }
 }
 
 /// Maximum number of files to return (performance optimization)

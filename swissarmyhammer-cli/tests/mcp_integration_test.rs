@@ -1,60 +1,65 @@
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::time::timeout;
 
 mod test_utils;
+#[allow(unused_imports)]
 use test_utils::ProcessGuard;
 
 /// Simple MCP integration test that verifies the server works correctly
 #[tokio::test]
-#[ignore = "MCP integration tests hang due to blocking I/O - needs async/timeout redesign"]
+#[ignore = "MCP integration tests require subprocess communication fixes - fixed hanging but has broken pipe issues"]
 async fn test_mcp_server_basic_functionality() {
-    // Start the MCP server process
-    let child = Command::new("cargo")
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
+    // Start the MCP server process with async support
+    let mut child = Command::new("cargo")
         .args(["run", "--bin", "swissarmyhammer", "--", "serve"])
         .current_dir("..") // Run from project root
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to start MCP server");
 
-    let mut child = ProcessGuard(child);
-
     // Give the server time to start
-    std::thread::sleep(Duration::from_millis(1000));
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
-    let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
-    let stdout = child.0.stdout.take().expect("Failed to get stdout");
-    let stderr = child.0.stderr.take().expect("Failed to get stderr");
+    let mut stdin = child.stdin.take().expect("Failed to get stdin");
+    let stdout = child.stdout.take().expect("Failed to get stdout");
+    let stderr = child.stderr.take().expect("Failed to get stderr");
+
     let mut reader = BufReader::new(stdout);
 
     // Spawn stderr reader for debugging
-    std::thread::spawn(move || {
-        let stderr_reader = BufReader::new(stderr);
-        for line in stderr_reader.lines().map_while(Result::ok) {
-            eprintln!("SERVER: {line}");
+    tokio::spawn(async move {
+        let mut stderr_reader = BufReader::new(stderr);
+        let mut line = String::new();
+        while stderr_reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            eprint!("SERVER: {}", line);
+            line.clear();
         }
     });
 
-    // Helper to send JSON-RPC request
-    let send_request = |stdin: &mut std::process::ChildStdin, request: Value| {
+    // Helper functions for JSON-RPC communication
+    async fn send_request(stdin: &mut tokio::process::ChildStdin, request: Value) {
         let request_str = serde_json::to_string(&request).unwrap();
-        writeln!(stdin, "{request_str}").unwrap();
-        stdin.flush().unwrap();
-    };
+        stdin.write_all(request_str.as_bytes()).await.unwrap();
+        stdin.write_all(b"\n").await.unwrap();
+        stdin.flush().await.unwrap();
+    }
 
-    // Helper to read JSON-RPC response
-    let read_response = |reader: &mut BufReader<std::process::ChildStdout>| -> Result<Value, Box<dyn std::error::Error>> {
+    async fn read_response(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let mut line = String::new();
-        reader.read_line(&mut line)?;
+        reader.read_line(&mut line).await?;
         if line.trim().is_empty() {
             return Err("Empty response".into());
         }
         Ok(serde_json::from_str(line.trim())?)
-    };
+    }
 
     // Step 1: Initialize
     send_request(
@@ -69,11 +74,12 @@ async fn test_mcp_server_basic_functionality() {
                 "clientInfo": {"name": "test", "version": "1.0"}
             }
         }),
-    );
+    )
+    .await;
 
-    let response = timeout(Duration::from_secs(5), async { read_response(&mut reader) })
+    let response = timeout(Duration::from_secs(5), read_response(&mut reader))
         .await
-        .expect("Timeout")
+        .expect("Timeout waiting for initialize response")
         .expect("Failed to read initialize response");
 
     assert_eq!(response["jsonrpc"], "2.0");
@@ -87,10 +93,11 @@ async fn test_mcp_server_basic_functionality() {
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         }),
-    );
+    )
+    .await;
 
     // Give server time to process
-    std::thread::sleep(Duration::from_millis(100));
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Step 3: List prompts
     send_request(
@@ -100,25 +107,27 @@ async fn test_mcp_server_basic_functionality() {
             "id": 2,
             "method": "prompts/list"
         }),
-    );
+    )
+    .await;
 
-    let response = timeout(Duration::from_secs(5), async { read_response(&mut reader) })
+    let response = timeout(Duration::from_secs(5), read_response(&mut reader))
         .await
-        .expect("Timeout")
+        .expect("Timeout waiting for prompts/list response")
         .expect("Failed to read prompts/list response");
 
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 2);
     assert!(response["result"]["prompts"].is_array());
 
-    // Clean up (handled by ProcessGuard drop)
+    // Clean up
+    let _ = child.kill().await;
 
     println!("✅ Basic MCP server test passed!");
 }
 
 /// Test that MCP server loads prompts from the same directories as CLI
 #[tokio::test]
-#[ignore = "MCP integration tests hang due to blocking I/O - needs async/timeout redesign"]
+#[ignore = "MCP integration tests require subprocess communication fixes - fixed hanging but has broken pipe issues"]
 async fn test_mcp_server_prompt_loading() {
     use tempfile::TempDir;
 
@@ -142,34 +151,56 @@ async fn test_mcp_server_prompt_loading() {
     eprintln!("Test prompt: {test_prompt:?}");
     eprintln!("Test prompt exists: {}", test_prompt.exists());
 
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
     // Start MCP server with HOME set to temp dir
-    let child = Command::new("cargo")
+    let mut child = Command::new("cargo")
         .args(["run", "--bin", "swissarmyhammer", "--", "serve"])
         .current_dir("..")
         .env("HOME", temp_dir.path())
         .env("RUST_LOG", "debug")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to start MCP server");
 
-    let mut child = ProcessGuard(child);
-
     // Spawn stderr reader for debugging
-    let stderr = child.0.stderr.take().expect("Failed to get stderr");
-    std::thread::spawn(move || {
-        let stderr_reader = BufReader::new(stderr);
-        for line in stderr_reader.lines().map_while(Result::ok) {
-            eprintln!("SERVER: {line}");
+    let stderr = child.stderr.take().expect("Failed to get stderr");
+    tokio::spawn(async move {
+        let mut stderr_reader = BufReader::new(stderr);
+        let mut line = String::new();
+        while stderr_reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+            eprint!("SERVER: {}", line);
+            line.clear();
         }
     });
 
-    std::thread::sleep(Duration::from_millis(1000));
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
-    let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
-    let stdout = child.0.stdout.take().expect("Failed to get stdout");
+    let mut stdin = child.stdin.take().expect("Failed to get stdin");
+    let stdout = child.stdout.take().expect("Failed to get stdout");
     let mut reader = BufReader::new(stdout);
+
+    // Helper functions for JSON-RPC communication
+    async fn send_request_local(stdin: &mut tokio::process::ChildStdin, request: Value) {
+        let request_str = serde_json::to_string(&request).unwrap();
+        stdin.write_all(request_str.as_bytes()).await.unwrap();
+        stdin.write_all(b"\n").await.unwrap();
+        stdin.flush().await.unwrap();
+    }
+
+    async fn read_response_local(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        if line.trim().is_empty() {
+            return Err("Empty response".into());
+        }
+        Ok(serde_json::from_str(line.trim())?)
+    }
 
     // Initialize
     let init_request = json!({
@@ -183,18 +214,18 @@ async fn test_mcp_server_prompt_loading() {
         }
     });
 
-    writeln!(stdin, "{}", serde_json::to_string(&init_request).unwrap()).unwrap();
-    stdin.flush().unwrap();
+    send_request_local(&mut stdin, init_request).await;
 
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).unwrap();
+    let _response = timeout(Duration::from_secs(5), read_response_local(&mut reader))
+        .await
+        .expect("Timeout waiting for initialize response")
+        .expect("Failed to read initialize response");
 
     // Send initialized notification
     let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-    writeln!(stdin, "{}", serde_json::to_string(&initialized).unwrap()).unwrap();
-    stdin.flush().unwrap();
+    send_request_local(&mut stdin, initialized).await;
 
-    std::thread::sleep(Duration::from_millis(100));
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // List prompts
     let list_request = json!({
@@ -203,12 +234,12 @@ async fn test_mcp_server_prompt_loading() {
         "method": "prompts/list"
     });
 
-    writeln!(stdin, "{}", serde_json::to_string(&list_request).unwrap()).unwrap();
-    stdin.flush().unwrap();
+    send_request_local(&mut stdin, list_request).await;
 
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).unwrap();
-    let response: Value = serde_json::from_str(&response_line).unwrap();
+    let response = timeout(Duration::from_secs(5), read_response_local(&mut reader))
+        .await
+        .expect("Timeout waiting for prompts/list response")
+        .expect("Failed to read prompts/list response");
 
     // Debug: Print the response to see what's loaded
     eprintln!("Prompts response: {response}");
@@ -244,32 +275,53 @@ async fn test_mcp_server_prompt_loading() {
         prompts.len()
     );
 
-    // Clean up (handled by ProcessGuard drop)
+    // Clean up
+    let _ = child.kill().await;
 
     println!("✅ MCP prompt loading test passed!");
 }
 
 /// Test that MCP server loads built-in prompts
 #[tokio::test]
-#[ignore = "MCP integration tests hang due to blocking I/O - needs async/timeout redesign"]
+#[ignore = "MCP integration tests require subprocess communication fixes - fixed hanging but has broken pipe issues"]
 async fn test_mcp_server_builtin_prompts() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
     // Start MCP server
-    let child = Command::new("cargo")
+    let mut child = Command::new("cargo")
         .args(["run", "--bin", "swissarmyhammer", "--", "serve"])
         .current_dir("..")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("Failed to start MCP server");
 
-    let mut child = ProcessGuard(child);
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
-    std::thread::sleep(Duration::from_millis(1000));
-
-    let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
-    let stdout = child.0.stdout.take().expect("Failed to get stdout");
+    let mut stdin = child.stdin.take().expect("Failed to get stdin");
+    let stdout = child.stdout.take().expect("Failed to get stdout");
     let mut reader = BufReader::new(stdout);
+
+    // Helper functions for JSON-RPC communication
+    async fn send_request_builtin(stdin: &mut tokio::process::ChildStdin, request: Value) {
+        let request_str = serde_json::to_string(&request).unwrap();
+        stdin.write_all(request_str.as_bytes()).await.unwrap();
+        stdin.write_all(b"\n").await.unwrap();
+        stdin.flush().await.unwrap();
+    }
+
+    async fn read_response_builtin(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        if line.trim().is_empty() {
+            return Err("Empty response".into());
+        }
+        Ok(serde_json::from_str(line.trim())?)
+    }
 
     // Initialize
     let init_request = json!({
@@ -283,18 +335,18 @@ async fn test_mcp_server_builtin_prompts() {
         }
     });
 
-    writeln!(stdin, "{}", serde_json::to_string(&init_request).unwrap()).unwrap();
-    stdin.flush().unwrap();
+    send_request_builtin(&mut stdin, init_request).await;
 
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).unwrap();
+    let _response = timeout(Duration::from_secs(5), read_response_builtin(&mut reader))
+        .await
+        .expect("Timeout waiting for initialize response")
+        .expect("Failed to read initialize response");
 
     // Send initialized notification
     let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-    writeln!(stdin, "{}", serde_json::to_string(&initialized).unwrap()).unwrap();
-    stdin.flush().unwrap();
+    send_request_builtin(&mut stdin, initialized).await;
 
-    std::thread::sleep(Duration::from_millis(100));
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // List prompts
     let list_request = json!({
@@ -303,12 +355,12 @@ async fn test_mcp_server_builtin_prompts() {
         "method": "prompts/list"
     });
 
-    writeln!(stdin, "{}", serde_json::to_string(&list_request).unwrap()).unwrap();
-    stdin.flush().unwrap();
+    send_request_builtin(&mut stdin, list_request).await;
 
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).unwrap();
-    let response: Value = serde_json::from_str(&response_line).unwrap();
+    let response = timeout(Duration::from_secs(5), read_response_builtin(&mut reader))
+        .await
+        .expect("Timeout waiting for prompts/list response")
+        .expect("Failed to read prompts/list response");
 
     // Verify we have built-in prompts
     let prompts = response["result"]["prompts"].as_array().unwrap();
@@ -329,7 +381,8 @@ async fn test_mcp_server_builtin_prompts() {
         prompts.len()
     );
 
-    // Clean up (handled by ProcessGuard drop)
+    // Clean up
+    let _ = child.kill().await;
 
     println!("✅ MCP built-in prompts test passed!");
 }

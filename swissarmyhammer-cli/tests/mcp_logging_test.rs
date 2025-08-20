@@ -19,17 +19,11 @@ async fn test_mcp_logging_to_current_directory() {
     let temp_dir = TempDir::new().unwrap();
     let work_dir = temp_dir.path();
 
-    // Start MCP server in temp directory with stdin piped (to trigger MCP mode)
-    // Use the compiled binary instead of cargo run
-    let binary_path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("sah");
+    // Get path to the sah binary
+    let sah_path = assert_cmd::cargo::cargo_bin("sah");
 
-    let mut child = Command::new(&binary_path)
+    // Start MCP server in temp directory with stdin piped (to trigger MCP mode)
+    let mut child = Command::new(sah_path)
         .args(["serve"])
         .current_dir(work_dir) // Run in the temp directory
         .stdin(Stdio::piped())
@@ -50,11 +44,15 @@ async fn test_mcp_logging_to_current_directory() {
     let _child = ProcessGuard(child);
 
     // Give the server time to start and create logs
-    std::thread::sleep(Duration::from_millis(2000));
-
-    // Verify log file was created in current directory
     let expected_log_dir = work_dir.join(".swissarmyhammer");
     let expected_log_file = expected_log_dir.join("mcp.log");
+
+    // Wait for log file to be created, up to 5 seconds
+    let mut attempts = 0;
+    while !expected_log_file.exists() && attempts < 50 {
+        std::thread::sleep(Duration::from_millis(100));
+        attempts += 1;
+    }
 
     // Logs should be created in .swissarmyhammer directory in current working directory
     assert!(
@@ -62,11 +60,24 @@ async fn test_mcp_logging_to_current_directory() {
         "Log file should be created at {expected_log_file:?}"
     );
 
-    // Verify logs contain MCP server startup messages
-    let log_content = std::fs::read_to_string(&expected_log_file).unwrap();
+    // Wait for logs to contain MCP server startup messages, up to 5 seconds
+    let mut attempts = 0;
+    let mut log_content = String::new();
+    while attempts < 50 {
+        if expected_log_file.exists() {
+            log_content = std::fs::read_to_string(&expected_log_file).unwrap_or_default();
+            if log_content.contains("MCP server") {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        attempts += 1;
+    }
+
     assert!(
         log_content.contains("MCP server"),
-        "Log should contain MCP server messages"
+        "Log should contain MCP server messages, but got: {}",
+        log_content
     );
 
     // Verify no logs in home directory
@@ -90,16 +101,8 @@ async fn test_mcp_logging_env_var_override() {
     let custom_log_name = "custom-test.log";
 
     // Start MCP server with custom log file name
-    // Use the compiled binary instead of cargo run
-    let binary_path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("sah");
-
-    let child = Command::new(&binary_path)
+    let sah_path = assert_cmd::cargo::cargo_bin("sah");
+    let child = Command::new(sah_path)
         .args(["serve"])
         .current_dir(work_dir)
         .env("SWISSARMYHAMMER_LOG_FILE", custom_log_name)
@@ -111,12 +114,16 @@ async fn test_mcp_logging_env_var_override() {
 
     let _child = ProcessGuard(child);
 
-    // Give the server time to start
-    std::thread::sleep(Duration::from_millis(2000));
-
     // Verify custom log file was created
     let expected_log_dir = work_dir.join(".swissarmyhammer");
     let expected_log_file = expected_log_dir.join(custom_log_name);
+
+    // Wait for log file to be created, up to 5 seconds
+    let mut attempts = 0;
+    while !expected_log_file.exists() && attempts < 50 {
+        std::thread::sleep(Duration::from_millis(100));
+        attempts += 1;
+    }
 
     assert!(
         expected_log_file.exists(),
@@ -145,16 +152,8 @@ async fn test_mcp_logging_creates_directory() {
     );
 
     // Start MCP server
-    // Use the compiled binary instead of cargo run
-    let binary_path = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("sah");
-
-    let child = Command::new(&binary_path)
+    let sah_path = assert_cmd::cargo::cargo_bin("sah");
+    let child = Command::new(sah_path)
         .args(["serve"])
         .current_dir(work_dir)
         .stdin(Stdio::piped())
@@ -165,8 +164,12 @@ async fn test_mcp_logging_creates_directory() {
 
     let _child = ProcessGuard(child);
 
-    // Give the server time to start
-    std::thread::sleep(Duration::from_millis(2000));
+    // Wait for directory to be created, up to 5 seconds
+    let mut attempts = 0;
+    while !log_dir.exists() && attempts < 50 {
+        std::thread::sleep(Duration::from_millis(100));
+        attempts += 1;
+    }
 
     // Verify directory was created
     assert!(log_dir.exists(), "Log directory should be created");
@@ -174,5 +177,13 @@ async fn test_mcp_logging_creates_directory() {
 
     // Verify log file was created
     let log_file = log_dir.join("mcp.log");
+
+    // Wait for log file to be created
+    let mut attempts = 0;
+    while !log_file.exists() && attempts < 50 {
+        std::thread::sleep(Duration::from_millis(100));
+        attempts += 1;
+    }
+
     assert!(log_file.exists(), "Log file should be created");
 }

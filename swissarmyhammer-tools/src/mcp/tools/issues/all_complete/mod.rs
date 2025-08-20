@@ -40,6 +40,18 @@ impl McpTool for AllCompleteIssueTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("issue")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "all-complete"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Check if all issues are completed")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

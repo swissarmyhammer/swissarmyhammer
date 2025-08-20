@@ -155,6 +155,14 @@ impl McpTool for ListIssuesTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("issue")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "list"
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

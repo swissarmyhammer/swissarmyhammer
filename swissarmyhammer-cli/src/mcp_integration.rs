@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Integration layer for calling MCP tools from CLI commands
 //!
 //! This module provides utilities for CLI commands to call MCP tools directly,

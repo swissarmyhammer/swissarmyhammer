@@ -78,6 +78,14 @@ impl McpTool for SearchQueryTool {
             .expect("Failed to generate schema")
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("search")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "query"
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

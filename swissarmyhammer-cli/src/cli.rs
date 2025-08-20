@@ -236,139 +236,13 @@ Examples:
         format: ValidateFormat,
 
         /// \[DEPRECATED\] This parameter is ignored. Workflows are now only loaded from standard locations.
-        #[arg(long = "workflow-dir", value_name = "DIR", hide = true)]
+        #[arg(long = "workflow-dir", value_name = "DIR")]
         workflow_dirs: Vec<String>,
     },
-    /// Issue management commands
-    #[command(long_about = "
-Manage issues with comprehensive CLI commands for creating, updating, and tracking work items.
-Issues are stored as markdown files in the ./issues directory with automatic numbering.
-
-Basic usage:
-  swissarmyhammer issue create [name]           # Create new issue
-  swissarmyhammer issue list                    # List all issues
-  swissarmyhammer issue show <number>           # Show issue details
-  swissarmyhammer issue update <number>         # Update issue content
-  swissarmyhammer issue complete <number>       # Mark issue as complete
-  swissarmyhammer issue work <number>           # Start working on issue (creates git branch)
-  swissarmyhammer issue merge <number>          # Merge completed issue to source branch
-  swissarmyhammer issue current                 # Show current issue
-  swissarmyhammer issue next                    # Show next issue to work on
-  swissarmyhammer issue status                  # Show project status
-
-Examples:
-  swissarmyhammer issue create \"Bug fix\" --content \"Fix login issue\"
-  swissarmyhammer issue create --content \"Quick fix needed\"
-  swissarmyhammer issue list --format json --active
-  swissarmyhammer issue show 123 --raw
-  swissarmyhammer issue update 123 --content \"Updated description\" --append
-  swissarmyhammer issue work 123
-  swissarmyhammer issue merge 123 --keep-branch
-")]
-    Issue {
-        #[command(subcommand)]
-        subcommand: IssueCommands,
-    },
-    /// Memoranda (memo) management commands
-    #[command(long_about = "
-Manage memos with comprehensive CLI commands for creating, updating, and tracking structured text notes.
-Memos are stored as markdown files with filename-based identifiers and filesystem-based timestamping.
-
-Basic usage:
-  swissarmyhammer memo create <title>           # Create new memo
-  swissarmyhammer memo list                     # List all memos
-  swissarmyhammer memo get <id>                 # Get specific memo
-  swissarmyhammer memo update <id>              # Update memo content
-  swissarmyhammer memo delete <id>              # Delete memo
-  swissarmyhammer memo search <query>           # Search memos
-  swissarmyhammer memo context                  # Get all context for AI
-
-Content input:
-  --content \"text\"                            # Specify content directly
-  --content -                                   # Read content from stdin
-  (no --content)                               # Interactive prompt for content
-
-Examples:
-  swissarmyhammer memo create \"Meeting Notes\"
-  swissarmyhammer memo create \"Task List\" --content \"1. Review code\\n2. Write tests\"
-  swissarmyhammer memo list
-  swissarmyhammer memo search \"meeting\"
-  swissarmyhammer memo get 01GX5Q2D1NPRZ3KXFW2H8V3A1Y
-  swissarmyhammer memo update 01GX5Q2D1NPRZ3KXFW2H8V3A1Y --content \"Updated content\"
-  swissarmyhammer memo delete 01GX5Q2D1NPRZ3KXFW2H8V3A1Y
-  swissarmyhammer memo context
-")]
-    Memo {
-        #[command(subcommand)]
-        subcommand: MemoCommands,
-    },
-    /// File manipulation and search commands
-    #[command(long_about = "
-Comprehensive file manipulation and search tools for code analysis, editing, and discovery.
-Provides direct CLI access to powerful file operations including reading, writing, editing, and searching.
-
-Basic usage:
-  swissarmyhammer file read <PATH>                     # Read file contents
-  swissarmyhammer file write <PATH> <CONTENT>          # Write content to file
-  swissarmyhammer file edit <PATH> <OLD> <NEW>         # Edit file with string replacement
-  swissarmyhammer file glob <PATTERN>                  # Find files by pattern
-  swissarmyhammer file grep <PATTERN>                  # Search file contents
-
-File operations:
-  read                                         # Read file contents with optional offset/limit
-  write                                        # Create new files or overwrite existing ones
-  edit                                         # Precise string replacement with atomic operations
-  glob                                         # Fast file pattern matching with advanced filtering
-  grep                                         # Content-based search using ripgrep
-
-Advanced features:
-  --offset, --limit                           # Partial file reading for large files
-  --replace-all                               # Replace all occurrences in edit operations
-  --case-sensitive, --no-git-ignore           # Advanced pattern matching options
-  -i, -C, --glob, --type                      # Comprehensive search filtering
-
-Examples:
-  swissarmyhammer file read /path/to/config.json --offset 1 --limit 20
-  swissarmyhammer file write ./new-file.txt \"Hello World\"
-  swissarmyhammer file edit ./src/main.rs \"old_function\" \"new_function\"
-  swissarmyhammer file edit ./config.toml \"debug = false\" \"debug = true\" --replace-all
-  swissarmyhammer file glob \"**/*.rs\" --case-sensitive
-  swissarmyhammer file grep \"TODO\" --path ./src --glob \"*.rs\" -C 2
-  swissarmyhammer file grep \"error.*handling\" --type rust --case-insensitive
-")]
-    File {
-        #[command(subcommand)]
-        subcommand: FileCommands,
-    },
-    /// Semantic search commands
-    #[command(long_about = "
-Manage semantic search functionality for indexing and searching source code files using vector embeddings.
-Uses mistral.rs for embeddings, DuckDB for vector storage, and TreeSitter for parsing.
-
-Basic usage:
-  swissarmyhammer search index <patterns...>   # Index files for semantic search
-  swissarmyhammer search query <query>          # Query indexed files semantically
-
-Indexing:
-  <patterns...>                                 # Glob patterns or files to index (supports multiple)
-  --force                                       # Force re-indexing of all files
-
-Querying:
-  --limit 10                                    # Number of results to return
-  --format table                               # Output format (table, json, yaml)
-
-Examples:
-  swissarmyhammer search index \"**/*.rs\"       # Index all Rust files (quoted glob)
-  swissarmyhammer search index **/*.rs          # Index all Rust files (shell-expanded)
-  swissarmyhammer search index \"src/**/*.py\" --force  # Force re-index Python files
-  swissarmyhammer search index file1.rs file2.rs file3.rs  # Index specific files
-  swissarmyhammer search query \"error handling\"       # Search for error handling code
-  swissarmyhammer search query \"async function\" --limit 5 --format json
-")]
-    Search {
-        #[command(subcommand)]
-        subcommand: SearchCommands,
-    },
+    // Issue commands are now handled by dynamic MCP-based CLI generation
+    // Memo commands are now handled by dynamic MCP-based CLI generation
+    // File commands are now handled by dynamic MCP-based CLI generation
+    // Search commands are now handled by dynamic MCP-based CLI generation
     /// Plan a specific specification file
     #[command(long_about = "
 Execute planning workflow for a specific specification file.
@@ -490,51 +364,7 @@ If implementation fails:
 • Verify the implement workflow exists in builtin workflows
 ")]
     Implement,
-    /// Web search commands
-    #[command(long_about = "
-Perform web searches using SearXNG metasearch engines with privacy protection and optional content fetching.
-Uses the same backend as the MCP web_search tool for consistent functionality.
-
-Basic usage:
-  swissarmyhammer web-search search <query>           # Perform web search
-  swissarmyhammer web-search search <query> --results 20 --category it --format json
-
-Search options:
-  <query>                                              # Search query string (required)
-  --category <category>                                # Search category (general, images, videos, news, etc.)
-  --results <count>                                    # Number of results to return (1-50, default: 10)
-  --language <lang>                                    # Language code (e.g., 'en', 'fr', 'en-US', default: 'en')
-  --fetch-content true/false                           # Whether to fetch page content (default: true)
-  --safe-search <level>                                # Safe search level: 0=off, 1=moderate, 2=strict (default: 1)
-  --time-range <range>                                 # Time filter: day, week, month, year (default: all time)
-  --format <format>                                    # Output format: table, json, yaml (default: table)
-
-Categories:
-  general, images, videos, news, map, music, it, science, files
-
-Examples:
-  swissarmyhammer web-search search \"rust async programming\"
-  swissarmyhammer web-search search \"python web scraping\" --results 15 --fetch-content false
-  swissarmyhammer web-search search \"machine learning\" --category science --time-range month
-  swissarmyhammer web-search search \"docker tutorial\" --category it --language en --format json
-  swissarmyhammer web-search search \"latest news\" --category news --time-range day --safe-search 2
-
-Privacy features:
-  • Uses SearXNG instances that don't track users
-  • Rotates between multiple instances for load distribution
-  • No search history storage or logging
-  • Encrypted communication with all instances
-
-Performance:
-  • Search operations typically complete in 1-3 seconds
-  • Content fetching adds 2-5 seconds depending on target sites
-  • Automatic fallback to alternative instances
-  • Graceful degradation when content fetching fails
-")]
-    WebSearch {
-        #[command(subcommand)]
-        subcommand: WebSearchCommands,
-    },
+    // WebSearch commands are now handled by dynamic MCP-based CLI generation
     /// Configuration management commands
     #[command(long_about = "
 Manage sah.toml configuration files with comprehensive CLI commands for validation, inspection, and debugging.
@@ -564,64 +394,7 @@ Examples:
         #[command(subcommand)]
         subcommand: ConfigCommands,
     },
-    /// Execute shell commands with timeout and output capture
-    #[command(long_about = "
-Execute shell commands with comprehensive timeout controls and output capture.
-Provides direct command-line access to the shell execution capabilities while 
-following established CLI patterns and user experience guidelines.
-
-Basic usage:
-  swissarmyhammer shell \"echo 'Hello, World!'\"         # Simple command execution
-  swissarmyhammer shell \"ls -la\" -C /tmp               # Execute in specific directory
-  swissarmyhammer shell \"cargo build\" -t 600           # Set timeout and environment
-  swissarmyhammer shell \"uname -a\" --show-metadata     # Show execution metadata
-  swissarmyhammer shell \"git status\" -q --format json  # Quiet mode with JSON output
-
-Command execution:
-  <COMMAND>                                    # Shell command to execute (required)
-  -C, --directory <DIR>                        # Working directory for execution
-  -t, --timeout <SECONDS>                      # Timeout in seconds (default: 300, max: 1800)
-  -e, --env <KEY=VALUE>                        # Set environment variables
-  --format <FORMAT>                            # Output format: human, json, yaml (default: human)
-  --show-metadata                              # Include execution metadata
-  -q, --quiet                                  # Suppress command output, show only results
-
-Security:
-  Commands are validated for basic safety patterns. Dangerous commands
-  like 'rm -rf /' are blocked by default. Directory access may be restricted
-  based on configuration.
-  
-Timeouts:
-  Default timeout is 5 minutes (300 seconds). Maximum timeout is 30 minutes
-  (1800 seconds). Commands are terminated cleanly on timeout.
-
-Exit codes:
-  The shell command's exit code is returned when using human format.
-  For JSON/YAML formats, the tool exit code reflects execution success.
-
-Examples:
-  # Basic command execution
-  swissarmyhammer shell \"echo 'Hello, World!'\"
-  
-  # Execute in specific directory with timeout
-  swissarmyhammer shell \"cargo test\" -C /project -t 600
-  
-  # Set environment variables
-  swissarmyhammer shell \"echo \\$MY_VAR\" -e MY_VAR=value -e DEBUG=true
-  
-  # Show execution metadata
-  swissarmyhammer shell \"uname -a\" --show-metadata
-  
-  # Quiet mode with JSON output for automation
-  swissarmyhammer shell \"git status --porcelain\" -q --format json
-  
-  # Build with custom environment
-  swissarmyhammer shell \"./build.sh\" -e RUST_LOG=debug -e BUILD_ENV=production -t 900
-")]
-    Shell {
-        #[command(subcommand)]
-        subcommand: ShellCommands,
-    },
+    // Shell commands are now handled by dynamic MCP-based CLI generation
 }
 
 #[derive(Subcommand, Debug)]
@@ -795,6 +568,33 @@ Examples:
         /// Maximum number of results to show
         #[arg(short, long)]
         limit: Option<usize>,
+    },
+    /// Validate prompt files for syntax errors and best practices
+    #[command(long_about = "
+Validates prompt files from all sources (builtin, user, local) for:
+- YAML front matter syntax errors
+- Missing required fields
+- Invalid argument definitions
+- Template syntax errors
+- Best practice violations
+
+Output formats:
+  text  - Human-readable validation report (default)
+  json  - JSON output for scripting and CI/CD
+
+Examples:
+  swissarmyhammer prompt validate                    # Validate all prompts
+  swissarmyhammer prompt validate --quiet            # Only show errors
+  swissarmyhammer prompt validate --format json     # JSON output
+")]
+    Validate {
+        /// Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary.
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Output format
+        #[arg(long, value_enum, default_value = "text")]
+        format: ValidateFormat,
     },
 }
 
@@ -2117,390 +1917,10 @@ mod tests {
         assert!(!cli.quiet);
     }
 
-    #[test]
-    fn test_issue_create_with_name() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "issue",
-            "create",
-            "bug_fix",
-            "--content",
-            "Fix login bug",
-        ]);
-        assert!(result.is_ok());
+    // Issue commands are now handled by dynamic MCP-based CLI generation
 
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, Some("bug_fix".to_string()));
-                assert_eq!(content, Some("Fix login bug".to_string()));
-                assert_eq!(file, None);
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
-
-    #[test]
-    fn test_issue_create_without_name() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "issue",
-            "create",
-            "--content",
-            "Quick fix needed",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, None);
-                assert_eq!(content, Some("Quick fix needed".to_string()));
-                assert_eq!(file, None);
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
-
-    #[test]
-    fn test_issue_create_with_file() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "issue", "create", "--file", "issue.md"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, None);
-                assert_eq!(content, None);
-                assert_eq!(file, Some(std::path::PathBuf::from("issue.md")));
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
-
-    #[test]
-    fn test_issue_create_named_with_file() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "issue",
-            "create",
-            "feature_name",
-            "--file",
-            "feature.md",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, Some("feature_name".to_string()));
-                assert_eq!(content, None);
-                assert_eq!(file, Some(std::path::PathBuf::from("feature.md")));
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
-
-    #[test]
-    fn test_memo_create_basic() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "memo", "create", "Meeting Notes"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Create { title, content } = subcommand {
-                assert_eq!(title, "Meeting Notes");
-                assert_eq!(content, None);
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_create_with_content() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "create",
-            "Task List",
-            "--content",
-            "1. Review code\n2. Write tests",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Create { title, content } = subcommand {
-                assert_eq!(title, "Task List");
-                assert_eq!(content, Some("1. Review code\n2. Write tests".to_string()));
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_list() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "memo", "list"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::List = subcommand {
-                // Test passes
-            } else {
-                unreachable!("Expected List subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_get() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "get",
-            "01GX5Q2D1NPRZ3KXFW2H8V3A1Y",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Get { id } = subcommand {
-                assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
-            } else {
-                unreachable!("Expected Get subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_update() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "update",
-            "01GX5Q2D1NPRZ3KXFW2H8V3A1Y",
-            "--content",
-            "Updated content",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Update { id, content } = subcommand {
-                assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
-                assert_eq!(content, Some("Updated content".to_string()));
-            } else {
-                unreachable!("Expected Update subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_delete() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "delete",
-            "01GX5Q2D1NPRZ3KXFW2H8V3A1Y",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Delete { id } = subcommand {
-                assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
-            } else {
-                unreachable!("Expected Delete subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_search() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "memo", "search", "meeting notes"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Search { query } = subcommand {
-                assert_eq!(query, "meeting notes");
-            } else {
-                unreachable!("Expected Search subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_context() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "memo", "context"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Context = subcommand {
-                // Test passes
-            } else {
-                unreachable!("Expected Context subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_search_index_single_pattern() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "search", "index", "**/*.rs"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Index { patterns, force } = subcommand {
-                assert_eq!(patterns, vec!["**/*.rs".to_string()]);
-                assert!(!force);
-            } else {
-                unreachable!("Expected Index subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
-    #[test]
-    fn test_search_index_multiple_patterns() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "search",
-            "index",
-            "src/**/*.rs",
-            "tests/**/*.rs",
-            "benches/**/*.rs",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Index { patterns, force } = subcommand {
-                assert_eq!(
-                    patterns,
-                    vec![
-                        "src/**/*.rs".to_string(),
-                        "tests/**/*.rs".to_string(),
-                        "benches/**/*.rs".to_string()
-                    ]
-                );
-                assert!(!force);
-            } else {
-                unreachable!("Expected Index subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
-    #[test]
-    fn test_search_index_with_force_flag() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "search", "index", "**/*.rs", "--force"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Index { patterns, force } = subcommand {
-                assert_eq!(patterns, vec!["**/*.rs".to_string()]);
-                assert!(force);
-            } else {
-                unreachable!("Expected Index subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
-    #[test]
-    fn test_search_query_command() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "search",
-            "query",
-            "error handling",
-            "--limit",
-            "5",
-            "--format",
-            "json",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Query {
-                query,
-                limit,
-                format,
-            } = subcommand
-            {
-                assert_eq!(query, "error handling");
-                assert_eq!(limit, 5);
-                assert!(matches!(format, OutputFormat::Json));
-            } else {
-                unreachable!("Expected Query subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
+    // Obsolete test functions for Issue, Memo, Search commands removed
+    // These commands are now dynamically generated from MCP tools
     #[test]
     fn test_plan_command() {
         let result =

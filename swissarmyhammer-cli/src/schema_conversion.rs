@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{bail, Result};
 use clap::{Arg, ArgAction, ValueHint};
 use serde_json::Value;
@@ -12,6 +13,7 @@ pub struct ArgBuilder {
     action: Option<ArgAction>,
     value_parser: Option<String>, // simplified for this implementation
     value_hint: Option<ValueHint>,
+    positional: bool,
 }
 
 impl ArgBuilder {
@@ -24,6 +26,7 @@ impl ArgBuilder {
             action: None,
             value_parser: None,
             value_hint: None,
+            positional: false,
         }
     }
 
@@ -52,12 +55,23 @@ impl ArgBuilder {
         self
     }
 
+    pub fn positional(mut self, positional: bool) -> Self {
+        self.positional = positional;
+        self
+    }
+
     pub fn build(self) -> Arg {
         // Create owned strings that can be leaked to provide 'static references
         let name_static: &'static str = Box::leak(self.name.into_boxed_str());
         let long_name_static: &'static str = Box::leak(self.long_name.into_boxed_str());
 
-        let mut arg = Arg::new(name_static).long(long_name_static);
+        let mut arg = if self.positional {
+            // Positional argument - no long flag
+            Arg::new(name_static)
+        } else {
+            // Flag argument - has long name
+            Arg::new(name_static).long(long_name_static)
+        };
 
         if let Some(help) = self.help_text {
             let help_static: &'static str = Box::leak(help.into_boxed_str());
@@ -73,8 +87,10 @@ impl ArgBuilder {
         }
 
         if let Some(parser) = self.value_parser {
-            if parser.as_str() == "i64" {
-                arg = arg.value_parser(clap::value_parser!(i64));
+            match parser.as_str() {
+                "i64" => arg = arg.value_parser(clap::value_parser!(i64)),
+                "f64" => arg = arg.value_parser(clap::value_parser!(f64)),
+                _ => {}
             }
         }
 
@@ -104,8 +120,29 @@ impl SchemaConverter {
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
             .unwrap_or_default();
 
-        for (prop_name, prop_schema) in properties {
-            let arg = Self::json_schema_property_to_clap_arg(prop_name, prop_schema, &required)?;
+        // Sort properties to put required ones first, making the first required argument positional
+        let mut prop_vec: Vec<_> = properties.iter().collect();
+        prop_vec.sort_by_key(|(name, _)| {
+            let is_required = required.contains(&name.as_str());
+            (!is_required, name.as_str()) // Required items first, then alphabetical
+        });
+
+        let mut first_required_processed = false;
+
+        for (prop_name, prop_schema) in prop_vec {
+            let is_required = required.contains(&prop_name.as_str());
+            let make_positional = is_required && !first_required_processed;
+
+            if make_positional {
+                first_required_processed = true;
+            }
+
+            let arg = Self::json_schema_property_to_clap_arg(
+                prop_name,
+                prop_schema,
+                &required,
+                make_positional,
+            )?;
             args.push(arg);
         }
 
@@ -117,6 +154,7 @@ impl SchemaConverter {
         name: &str,
         schema: &Value,
         required: &[&str],
+        make_positional: bool,
     ) -> Result<Arg> {
         let mut builder = ArgBuilder::new(name.to_string());
 
@@ -127,13 +165,27 @@ impl SchemaConverter {
             .unwrap_or("")
             .to_string();
 
-        // Handle required fields
+        // Handle required fields and positional arguments
         if required.contains(&name) {
             builder = builder.required(true);
         }
 
+        // Set positional flag
+        builder = builder.positional(make_positional);
+
         // Map JSON schema types to clap actions
-        match schema.get("type").and_then(|t| t.as_str()) {
+        // Handle both single types (string) and union types (array like ["string", "null"])
+        let type_info = schema.get("type");
+        let primary_type = match type_info {
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(Value::Array(arr)) => {
+                // For union types, find the first non-null type
+                arr.iter().filter_map(|v| v.as_str()).find(|&s| s != "null")
+            }
+            _ => None,
+        };
+
+        match primary_type {
             Some("boolean") => {
                 builder = builder.action(ArgAction::SetTrue);
             }
@@ -144,17 +196,31 @@ impl SchemaConverter {
                     help_text = format!("{help_text} (min: {min})");
                 }
             }
+            Some("number") => {
+                builder = builder.value_parser("f64".to_string());
+                if let Some(min) = schema.get("minimum").and_then(|m| m.as_f64()) {
+                    // Add validation range hint
+                    help_text = format!("{help_text} (min: {min})");
+                }
+            }
             Some("array") => {
                 builder = builder.action(ArgAction::Append);
                 // Handle array item types if specified
                 if let Some(items) = schema.get("items") {
-                    if let Some("integer") = items.get("type").and_then(|t| t.as_str()) {
-                        builder = builder.value_parser("i64".to_string());
+                    match items.get("type").and_then(|t| t.as_str()) {
+                        Some("integer") => builder = builder.value_parser("i64".to_string()),
+                        Some("number") => builder = builder.value_parser("f64".to_string()),
+                        _ => {}
                     }
                 }
             }
+            Some("object") => {
+                // For object types, we'll accept JSON string representation
+                // The user will need to provide JSON format for complex objects
+                help_text = format!("{help_text} (provide as JSON string)");
+            }
             Some("string") | None => {
-                // Handle string enums - for now skip enum validation, just note in help
+                // Handle string enums with proper validation
                 if let Some(enum_values) = schema.get("enum").and_then(|e| e.as_array()) {
                     let values: Result<Vec<String>, _> = enum_values
                         .iter()
@@ -167,6 +233,31 @@ impl SchemaConverter {
                     if let Ok(valid_values) = values {
                         help_text =
                             format!("{} (valid values: {})", help_text, valid_values.join(", "));
+
+                        // Create a static string slice for the enum values
+                        let enum_values_static: Vec<&'static str> = valid_values
+                            .into_iter()
+                            .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+                            .collect();
+
+                        // Build arg with enum validation using clap's value_parser
+                        let name_static: &'static str =
+                            Box::leak(name.to_string().into_boxed_str());
+                        let long_name_static: &'static str =
+                            Box::leak(name.to_string().into_boxed_str());
+                        let help_static: &'static str =
+                            Box::leak(help_text.clone().into_boxed_str());
+
+                        let mut arg = Arg::new(name_static)
+                            .long(long_name_static)
+                            .help(help_static)
+                            .value_parser(enum_values_static);
+
+                        if required.contains(&name) {
+                            arg = arg.required(true);
+                        }
+
+                        return Ok(arg);
                     }
                 }
 
@@ -239,13 +330,81 @@ impl SchemaConverter {
                     return Ok(None);
                 }
             }
+            Some("number") => {
+                if let Some(val) = matches.get_one::<f64>(prop_name) {
+                    Value::Number(serde_json::Number::from_f64(*val).unwrap_or_else(|| 0.into()))
+                } else {
+                    return Ok(None);
+                }
+            }
             Some("array") => {
-                let values: Vec<String> = matches
-                    .get_many::<String>(prop_name)
-                    .unwrap_or_default()
-                    .cloned()
-                    .collect();
-                Value::Array(values.into_iter().map(Value::String).collect())
+                // Handle different array item types
+                if let Some(items) = prop_schema.get("items") {
+                    match items.get("type").and_then(|t| t.as_str()) {
+                        Some("integer") => {
+                            let values: Vec<i64> = matches
+                                .get_many::<i64>(prop_name)
+                                .unwrap_or_default()
+                                .cloned()
+                                .collect();
+                            Value::Array(
+                                values
+                                    .into_iter()
+                                    .map(|v| Value::Number(v.into()))
+                                    .collect(),
+                            )
+                        }
+                        Some("number") => {
+                            let values: Vec<f64> = matches
+                                .get_many::<f64>(prop_name)
+                                .unwrap_or_default()
+                                .cloned()
+                                .collect();
+                            Value::Array(
+                                values
+                                    .into_iter()
+                                    .map(|v| {
+                                        Value::Number(
+                                            serde_json::Number::from_f64(v)
+                                                .unwrap_or_else(|| 0.into()),
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        }
+                        _ => {
+                            // Default to string array
+                            let values: Vec<String> = matches
+                                .get_many::<String>(prop_name)
+                                .unwrap_or_default()
+                                .cloned()
+                                .collect();
+                            Value::Array(values.into_iter().map(Value::String).collect())
+                        }
+                    }
+                } else {
+                    // Default to string array if no items type specified
+                    let values: Vec<String> = matches
+                        .get_many::<String>(prop_name)
+                        .unwrap_or_default()
+                        .cloned()
+                        .collect();
+                    Value::Array(values.into_iter().map(Value::String).collect())
+                }
+            }
+            Some("object") => {
+                // Parse JSON string representation
+                if let Some(val) = matches.get_one::<String>(prop_name) {
+                    match serde_json::from_str(val) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            // If JSON parsing fails, treat as string
+                            Value::String(val.clone())
+                        }
+                    }
+                } else {
+                    return Ok(None);
+                }
             }
             _ => {
                 // String or unspecified type
@@ -344,6 +503,61 @@ mod tests {
     }
 
     #[test]
+    fn test_number_property_conversion() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "price": {
+                    "type": "number",
+                    "minimum": 0.01,
+                    "description": "Item price"
+                }
+            },
+            "required": ["price"]
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        assert_eq!(args.len(), 1);
+
+        let price_arg = &args[0];
+        assert_eq!(price_arg.get_id(), "price");
+        assert!(price_arg.is_required_set());
+
+        let help_text = price_arg
+            .get_help()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        assert!(help_text.contains("min: 0.01"));
+    }
+
+    #[test]
+    fn test_object_property_conversion() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "description": "Configuration object"
+                }
+            },
+            "required": ["config"]
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        assert_eq!(args.len(), 1);
+
+        let config_arg = &args[0];
+        assert_eq!(config_arg.get_id(), "config");
+        assert!(config_arg.is_required_set());
+
+        let help_text = config_arg
+            .get_help()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        assert!(help_text.contains("provide as JSON string"));
+    }
+
+    #[test]
     fn test_array_property() {
         let schema = json!({
             "type": "object",
@@ -426,8 +640,8 @@ mod tests {
             "type": "object",
             "properties": {
                 "data": {
-                    "type": "object",
-                    "description": "Complex object"
+                    "type": "null",
+                    "description": "Unsupported null type"
                 }
             }
         });
@@ -437,7 +651,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Unsupported JSON schema type: object"));
+            .contains("Unsupported JSON schema type: null"));
     }
 
     #[test]

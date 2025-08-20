@@ -81,16 +81,91 @@ impl CliBuilder {
                         Command::new("test")
                             .about("Test prompt rendering")
                             .arg(clap::Arg::new("name").required(true).help("Prompt name")),
+                    )
+                    .subcommand(
+                        Command::new("search")
+                            .about("Search prompts by name, title, description, content, and arguments")
+                            .arg(clap::Arg::new("query").required(true).help("Search query")),
+                    )
+                    .subcommand(
+                        Command::new("validate")
+                            .about("Validate prompt files for syntax errors and best practices")
+                            .arg(clap::Arg::new("quiet").short('q').long("quiet").action(clap::ArgAction::SetTrue).help("Suppress all output except errors"))
+                            .arg(clap::Arg::new("format").long("format").value_parser(["text", "json"]).default_value("text").help("Output format")),
                     ),
             )
             .subcommand(
-                Command::new("flow").subcommand_required(true).subcommand(
-                    Command::new("run").about("Execute workflow").arg(
-                        clap::Arg::new("workflow")
-                            .required(true)
-                            .help("Workflow name"),
-                    ),
-                ),
+                Command::new("flow")
+                    .subcommand_required(true)
+                    .about("Execute and manage workflows with support for starting new runs and resuming existing ones")
+                    .subcommand(
+                        Command::new("run")
+                            .about("Run a workflow")
+                            .arg(clap::Arg::new("workflow").required(true).help("Workflow name to run"))
+                            .arg(clap::Arg::new("vars").long("var").action(clap::ArgAction::Append).help("Initial variables as key=value pairs"))
+                            .arg(clap::Arg::new("interactive").short('i').long("interactive").action(clap::ArgAction::SetTrue).help("Interactive mode - prompt at each state"))
+                            .arg(clap::Arg::new("dry-run").long("dry-run").action(clap::ArgAction::SetTrue).help("Dry run - show execution plan without running"))
+                            .arg(clap::Arg::new("test").long("test").action(clap::ArgAction::SetTrue).help("Test mode - execute with mocked actions and generate coverage report"))
+                            .arg(clap::Arg::new("timeout").long("timeout").help("Execution timeout (e.g., 30s, 5m, 1h)"))
+                            .arg(clap::Arg::new("quiet").short('q').long("quiet").action(clap::ArgAction::SetTrue).help("Quiet mode - only show errors"))
+                    )
+                    .subcommand(
+                        Command::new("test")
+                            .about("Test a workflow without executing actions (simulates dry run)")
+                            .arg(clap::Arg::new("workflow").required(true).help("Workflow name to test"))
+                            .arg(clap::Arg::new("vars").long("var").action(clap::ArgAction::Append).help("Initial variables as key=value pairs"))
+                            .arg(clap::Arg::new("interactive").short('i').long("interactive").action(clap::ArgAction::SetTrue).help("Interactive mode - prompt at each state"))
+                            .arg(clap::Arg::new("timeout").long("timeout").help("Execution timeout (e.g., 30s, 5m, 1h)"))
+                            .arg(clap::Arg::new("quiet").short('q').long("quiet").action(clap::ArgAction::SetTrue).help("Quiet mode - only show errors"))
+                    )
+                    .subcommand(
+                        Command::new("resume")
+                            .about("Resume a paused workflow run")
+                            .arg(clap::Arg::new("run_id").required(true).help("Run ID to resume"))
+                            .arg(clap::Arg::new("interactive").short('i').long("interactive").action(clap::ArgAction::SetTrue).help("Interactive mode - prompt at each state"))
+                            .arg(clap::Arg::new("timeout").long("timeout").help("Execution timeout (e.g., 30s, 5m, 1h)"))
+                            .arg(clap::Arg::new("quiet").short('q').long("quiet").action(clap::ArgAction::SetTrue).help("Quiet mode - only show errors"))
+                    )
+                    .subcommand(
+                        Command::new("list")
+                            .about("List available workflows")
+                            .arg(clap::Arg::new("format").long("format").value_parser(["table", "json", "yaml"]).default_value("table").help("Output format"))
+                            .arg(clap::Arg::new("verbose").short('v').long("verbose").action(clap::ArgAction::SetTrue).help("Show verbose output including workflow details"))
+                            .arg(clap::Arg::new("source").long("source").value_parser(["builtin", "user", "local", "dynamic"]).help("Filter by source"))
+                    )
+                    .subcommand(
+                        Command::new("status")
+                            .about("Check status of a workflow run")
+                            .arg(clap::Arg::new("run_id").required(true).help("Run ID to check"))
+                            .arg(clap::Arg::new("format").long("format").value_parser(["table", "json", "yaml"]).default_value("table").help("Output format"))
+                            .arg(clap::Arg::new("watch").short('w').long("watch").action(clap::ArgAction::SetTrue).help("Watch for status changes"))
+                    )
+                    .subcommand(
+                        Command::new("logs")
+                            .about("View logs for a workflow run")
+                            .arg(clap::Arg::new("run_id").required(true).help("Run ID to view logs for"))
+                            .arg(clap::Arg::new("follow").short('f').long("follow").action(clap::ArgAction::SetTrue).help("Follow log output (like tail -f)"))
+                            .arg(clap::Arg::new("tail").short('n').long("tail").help("Number of log lines to show (from end)"))
+                            .arg(clap::Arg::new("level").long("level").help("Filter logs by level (info, warn, error)"))
+                    )
+                    .subcommand(
+                        Command::new("metrics")
+                            .about("View metrics for workflow runs")
+                            .arg(clap::Arg::new("run_id").help("Run ID to view metrics for (optional - shows all if not specified)"))
+                            .arg(clap::Arg::new("workflow").long("workflow").help("Workflow name to filter by"))
+                            .arg(clap::Arg::new("format").long("format").value_parser(["table", "json", "yaml"]).default_value("table").help("Output format"))
+                            .arg(clap::Arg::new("global").short('g').long("global").action(clap::ArgAction::SetTrue).help("Show global metrics summary"))
+                    )
+                    .subcommand(
+                        Command::new("visualize")
+                            .about("Generate execution visualization")
+                            .arg(clap::Arg::new("run_id").required(true).help("Run ID to visualize"))
+                            .arg(clap::Arg::new("format").long("format").value_parser(["mermaid", "html", "json", "dot"]).default_value("mermaid").help("Output format"))
+                            .arg(clap::Arg::new("output").short('o').long("output").help("Output file path (optional - prints to stdout if not specified)"))
+                            .arg(clap::Arg::new("timing").long("timing").action(clap::ArgAction::SetTrue).help("Include timing information"))
+                            .arg(clap::Arg::new("counts").long("counts").action(clap::ArgAction::SetTrue).help("Include execution counts"))
+                            .arg(clap::Arg::new("path_only").long("path-only").action(clap::ArgAction::SetTrue).help("Show only executed path"))
+                    )
             )
             .subcommand(
                 Command::new("completion")
@@ -101,7 +176,109 @@ impl CliBuilder {
                             .value_parser(clap::value_parser!(clap_complete::Shell)),
                     ),
             )
-            .subcommand(Command::new("validate").about("Validate prompt files and workflows"))
+            .subcommand(
+                Command::new("validate")
+                    .about("Validate prompt files and workflows")
+                    .long_about("Validates BOTH prompt files AND workflows for syntax errors and best practices.\n\nThis command comprehensively validates:\n- All prompt files from builtin, user, and local directories\n- All workflow files from standard locations (builtin, user, local)")
+                    .arg(
+                        clap::Arg::new("quiet")
+                            .short('q')
+                            .long("quiet")
+                            .help("Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary")
+                            .action(clap::ArgAction::SetTrue)
+                    )
+                    .arg(
+                        clap::Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["text", "json"])
+                            .default_value("text")
+                    )
+                    .arg(
+                        clap::Arg::new("workflow_dirs")
+                            .long("workflow-dir")
+                            .help("[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
+                            .action(clap::ArgAction::Append)
+                    )
+            )
+            .subcommand(
+                Command::new("config")
+                    .about("Configuration management")
+                    .subcommand_required(true)
+                    .subcommand(
+                        Command::new("show")
+                            .about("Display current configuration")
+                            .arg(
+                                clap::Arg::new("format")
+                                    .short('f')
+                                    .long("format")
+                                    .help("Output format")
+                                    .value_parser(["table", "json", "yaml"])
+                                    .default_value("table")
+                            )
+                    )
+                    .subcommand(
+                        Command::new("variables")
+                            .about("List all available variables")
+                            .arg(
+                                clap::Arg::new("format")
+                                    .short('f')
+                                    .long("format")
+                                    .help("Output format")
+                                    .value_parser(["table", "json", "yaml"])
+                                    .default_value("table")
+                            )
+                            .arg(
+                                clap::Arg::new("verbose")
+                                    .short('v')
+                                    .long("verbose")
+                                    .help("Show variable types and sources")
+                                    .action(clap::ArgAction::SetTrue)
+                            )
+                    )
+                    .subcommand(
+                        Command::new("test")
+                            .about("Test template rendering with configuration")
+                            .arg(
+                                clap::Arg::new("template")
+                                    .help("Template file to test (optional - uses stdin if not provided)")
+                                    .value_name("TEMPLATE")
+                            )
+                            .arg(
+                                clap::Arg::new("variables")
+                                    .long("var")
+                                    .help("Template variables as key=value pairs (overrides config)")
+                                    .value_name("KEY=VALUE")
+                                    .action(clap::ArgAction::Append)
+                            )
+                            .arg(
+                                clap::Arg::new("debug")
+                                    .short('d')
+                                    .long("debug")
+                                    .help("Show debug information")
+                                    .action(clap::ArgAction::SetTrue)
+                            )
+                    )
+                    .subcommand(
+                        Command::new("env")
+                            .about("Show environment variable usage")
+                            .arg(
+                                clap::Arg::new("missing")
+                                    .short('m')
+                                    .long("missing")
+                                    .help("Show only missing environment variables")
+                                    .action(clap::ArgAction::SetTrue)
+                            )
+                            .arg(
+                                clap::Arg::new("format")
+                                    .short('f')
+                                    .long("format")
+                                    .help("Output format")
+                                    .value_parser(["table", "json", "yaml"])
+                                    .default_value("table")
+                            )
+                    )
+            )
             .subcommand(
                 Command::new("plan")
                     .about("Plan a specific specification file")
@@ -273,6 +450,7 @@ impl CliBuilder {
     /// assert_eq!(info.tool_name, "create");
     /// assert_eq!(info.mcp_tool_name, "issue_create");
     /// ```
+    #[allow(dead_code)]
     pub fn extract_command_info(&self, matches: &clap::ArgMatches) -> Option<DynamicCommandInfo> {
         // Check each category for matches
         for category in self.tool_registry.get_cli_categories() {
@@ -326,6 +504,7 @@ impl CliBuilder {
     ///
     /// * `Some(&ArgMatches)` - ArgMatches containing tool arguments
     /// * `None` - Command structure doesn't match expected pattern
+    #[allow(dead_code)]
     pub fn get_tool_matches<'a>(
         &self,
         matches: &'a clap::ArgMatches,
