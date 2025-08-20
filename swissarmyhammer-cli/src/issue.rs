@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::cli::{IssueCommands, OutputFormat};
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;

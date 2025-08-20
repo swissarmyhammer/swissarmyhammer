@@ -596,6 +596,18 @@ impl McpTool for GrepFileTool {
 
         Ok(BaseToolImpl::create_success_response(response))
     }
+
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("file")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "grep"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Content-based search with ripgrep integration for fast text searching")
+    }
 }
 
 impl GrepFileTool {

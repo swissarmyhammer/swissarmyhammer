@@ -47,6 +47,18 @@ impl McpTool for UpdateMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "update"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Update a memo's content by its ID")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

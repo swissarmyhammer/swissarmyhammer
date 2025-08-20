@@ -54,6 +54,18 @@ impl McpTool for UpdateIssueTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("issue")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "update"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Update an issue's content")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

@@ -46,6 +46,18 @@ impl McpTool for SearchMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "search"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Search memos by query string")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -83,7 +95,7 @@ impl McpTool for SearchMemoTool {
                         .join("\n\n");
 
                     Ok(BaseToolImpl::create_success_response(format!(
-                        "Found {} memo{} matching '{}':\n\n{}",
+                        "🔍 Found {} memo{} matching '{}':\n\n{}",
                         memos.len(),
                         if memos.len() == 1 { "" } else { "s" },
                         request.query,

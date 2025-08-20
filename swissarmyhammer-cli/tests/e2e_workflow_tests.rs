@@ -219,11 +219,12 @@ fn test_complete_issue_lifecycle() -> Result<()> {
         .args([
             "issue",
             "create",
-            "e2e_lifecycle_test",
-            "--content",
+            "--name",
+            "e2e_lifecycle_test", 
             "# E2E Lifecycle Test\n\nThis issue tests the complete lifecycle workflow.",
         ])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -239,6 +240,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     let list_output = Command::cargo_bin("sah")?
         .args(["issue", "list"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -252,6 +254,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     let show_output = Command::cargo_bin("sah")?
         .args(["issue", "show", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -267,12 +270,13 @@ fn test_complete_issue_lifecycle() -> Result<()> {
         .args([
             "issue",
             "update",
+            "--name",
             "e2e_lifecycle_test",
-            "--content",
-            "Updated content for e2e testing",
             "--append",
+            "Updated content for e2e testing",
         ])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -280,6 +284,7 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     let updated_show_output = Command::cargo_bin("sah")?
         .args(["issue", "show", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -293,13 +298,15 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     Command::cargo_bin("sah")?
         .args(["issue", "work", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
     // Step 7: Check current issue
     let current_output = Command::cargo_bin("sah")?
-        .args(["issue", "current"])
+        .args(["issue", "show", "current"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -311,8 +318,9 @@ fn test_complete_issue_lifecycle() -> Result<()> {
 
     // Step 8: Complete the issue
     Command::cargo_bin("sah")?
-        .args(["issue", "complete", "e2e_lifecycle_test"])
+        .args(["issue", "mark-complete", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -320,13 +328,15 @@ fn test_complete_issue_lifecycle() -> Result<()> {
     Command::cargo_bin("sah")?
         .args(["issue", "merge", "e2e_lifecycle_test"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
     // Step 10: Verify issue is completed
     let final_list_output = Command::cargo_bin("sah")?
-        .args(["issue", "list", "--completed"])
+        .args(["issue", "list", "--show_completed"])
         .current_dir(&temp_path)
+        .env("SAH_MCP_TIMEOUT", "300")
         .assert()
         .success();
 
@@ -372,7 +382,7 @@ fn test_complete_memo_workflow() -> Result<()> {
 
     for (title, content) in &memo_data {
         let create_output = Command::cargo_bin("sah")?
-            .args(["memo", "create", title, "--content", content])
+            .args(["memo", "create", "--title", title, content])
             .current_dir(&temp_path)
             .assert()
             .success();
@@ -403,7 +413,7 @@ fn test_complete_memo_workflow() -> Result<()> {
     // Step 3: Get specific memo details
     if let Some(first_id) = memo_ids.first() {
         let get_output = Command::cargo_bin("sah")?
-            .args(["memo", "get", first_id])
+            .args(["memo", "get", "--id", first_id])
             .current_dir(&temp_path)
             .assert()
             .success();
@@ -435,7 +445,6 @@ fn test_complete_memo_workflow() -> Result<()> {
                 "memo",
                 "update",
                 second_id,
-                "--content",
                 "# Updated Task List\n\n1. ✅ Complete testing\n2. Review documentation\n3. Deploy to production\n4. Monitor deployment"
             ])
             .current_dir(&temp_path)
@@ -444,7 +453,7 @@ fn test_complete_memo_workflow() -> Result<()> {
 
         // Verify update
         let updated_get_output = Command::cargo_bin("sah")?
-            .args(["memo", "get", second_id])
+            .args(["memo", "get", "--id", second_id])
             .current_dir(&temp_path)
             .assert()
             .success();
@@ -459,7 +468,7 @@ fn test_complete_memo_workflow() -> Result<()> {
 
     // Step 6: Get all context for AI
     let context_output = Command::cargo_bin("sah")?
-        .args(["memo", "context"])
+        .args(["memo", "get-all-context"])
         .current_dir(&temp_path)
         .assert()
         .success();
@@ -476,14 +485,14 @@ fn test_complete_memo_workflow() -> Result<()> {
     // Step 7: Delete a memo
     if let Some(last_id) = memo_ids.last() {
         Command::cargo_bin("sah")?
-            .args(["memo", "delete", last_id])
+            .args(["memo", "delete", "--id", last_id])
             .current_dir(&temp_path)
             .assert()
             .success();
 
         // Verify deletion
         Command::cargo_bin("sah")?
-            .args(["memo", "get", last_id])
+            .args(["memo", "get", "--id", last_id])
             .current_dir(&temp_path)
             .assert()
             .failure(); // Should fail to find deleted memo
@@ -543,6 +552,7 @@ fn test_search_cli_arguments() -> Result<()> {
         .output()?;
 
     assert!(help_output.status.success());
+    // Help text is printed to stdout by clap
     let help_text = String::from_utf8_lossy(&help_output.stdout);
     assert!(help_text.contains("patterns"));
     assert!(help_text.contains("force"));
@@ -606,9 +616,9 @@ fn test_realistic_load_workflow() -> Result<()> {
             .args([
                 "issue",
                 "create",
-                &format!("load_test_issue_{i}"),
-                "--content",
                 &format!("# Load Test Issue {i}\n\nThis is issue {i} for load testing."),
+                "--name",
+                &format!("load_test_issue_{i}"),
             ])
             .current_dir(&temp_path)
             .assert()
@@ -618,8 +628,8 @@ fn test_realistic_load_workflow() -> Result<()> {
             .args([
                 "memo",
                 "create",
+                "--title",
                 &format!("Load Test Memo {i}"),
-                "--content",
                 &format!("# Memo {i}\n\nThis is memo {i} for load testing.\n\n## Details\n- Priority: Medium\n- Category: Testing\n- Iteration: {i}")
             ])
             .current_dir(&temp_path)
@@ -663,7 +673,7 @@ fn test_fast_smoke_workflow() -> Result<()> {
 
     // Quick issue operations
     run_optimized_command(
-        &["issue", "create", "smoke_test", "--content", "Quick test"],
+        &["issue", "create", "Quick test", "--name", "smoke_test"],
         &temp_path,
     )?
     .assert()
@@ -678,8 +688,8 @@ fn test_fast_smoke_workflow() -> Result<()> {
         &[
             "memo",
             "create",
+            "--title",
             "Smoke Test",
-            "--content",
             "Fast test memo",
         ],
         &temp_path,

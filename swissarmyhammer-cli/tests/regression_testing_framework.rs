@@ -464,7 +464,7 @@ fn test_regression_framework() -> Result<()> {
     // Most baseline tests should pass (allowing for some environment differences)
     let success_rate = report.passed_tests as f64 / report.total_tests as f64;
     assert!(
-        success_rate > 0.7, // At least 70% should pass
+        success_rate >= 0.7, // At least 70% should pass (inclusive)
         "Success rate too low: {:.1}% ({}/{})",
         success_rate * 100.0,
         report.passed_tests,

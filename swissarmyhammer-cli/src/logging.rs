@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /// A thread-safe writer wrapper that ensures immediate flushing and disk synchronization for MCP logging.
 ///
 /// This struct wraps a `File` in `Arc<Mutex<>>` to provide thread-safe access while ensuring
@@ -65,5 +66,14 @@ impl std::io::Write for FileWriterGuard {
         file.flush()?;
         file.sync_all()?; // Force sync to disk
         Ok(())
+    }
+}
+
+// Implement MakeWriter for tracing-subscriber compatibility
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for FileWriterGuard {
+    type Writer = FileWriterGuard;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        FileWriterGuard::new(self.file.clone())
     }
 }

@@ -68,7 +68,7 @@ impl McpTool for ListMemoTool {
                 tracing::info!("Retrieved {} memos", memos.len());
                 if memos.is_empty() {
                     Ok(BaseToolImpl::create_success_response(
-                        "No memos found".to_string(),
+                        "ℹ️ No memos found".to_string(),
                     ))
                 } else {
                     let memo_list = memos

@@ -235,7 +235,7 @@ async fn test_mcp_memo_create() {
     assert!(result["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("Successfully created memo"));
+        .contains("✅ Created memo"));
     assert!(result["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -273,7 +273,7 @@ async fn test_mcp_memo_create_empty_content() {
     assert!(result["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("Successfully created memo"));
+        .contains("✅ Created memo"));
 }
 
 /// Test memo creation with unicode content
@@ -305,7 +305,8 @@ async fn test_mcp_memo_create_unicode() {
     let result = &response["result"];
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("🚀 Unicode Test with 中文"));
-    assert!(text.contains("émojis 🎉"));
+    // Response only contains title, not content, so we check for creation success instead
+    assert!(text.contains("✅ Created memo"));
 }
 
 /// Test memo retrieval via MCP
@@ -821,7 +822,7 @@ async fn test_mcp_memo_large_content() {
     assert!(create_response["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("Successfully created memo"));
+        .contains("✅ Created memo"));
 
     // Extract ID and verify we can retrieve it
     let memo_id = extract_memo_id_from_response(
@@ -946,9 +947,9 @@ async fn test_mcp_memo_tool_list() {
 
 /// Helper function to extract memo ID from MCP response text
 fn extract_memo_id_from_response(response_text: &str) -> String {
-    // Look for pattern "with ID: <ULID>"
-    if let Some(start) = response_text.find("with ID: ") {
-        let id_start = start + "with ID: ".len();
+    // Look for pattern "🆔 ID: <ULID>"
+    if let Some(start) = response_text.find("🆔 ID: ") {
+        let id_start = start + "🆔 ID: ".len();
         if let Some(end) = response_text[id_start..].find('\n') {
             return response_text[id_start..id_start + end].trim().to_string();
         }

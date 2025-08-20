@@ -43,6 +43,18 @@ impl McpTool for DeleteMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "delete"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Delete a memo by its unique ID")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

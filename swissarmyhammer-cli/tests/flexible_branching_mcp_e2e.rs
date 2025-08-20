@@ -148,9 +148,9 @@ fn test_mcp_issue_work_from_feature_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "user-tests",
-        "--content",
         "# User Tests\n\nImplement tests for user management",
+        "--name",
+        "user-tests",
     ]);
 
     assert!(
@@ -194,9 +194,9 @@ fn test_mcp_issue_work_from_develop_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "dev-feature",
-        "--content",
         "# Development Feature\n\nNew feature for develop branch",
+        "--name",
+        "dev-feature",
     ]);
     assert!(output.status.success());
 
@@ -219,9 +219,9 @@ fn test_mcp_issue_merge_requires_issue_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "test-validation",
-        "--content",
         "# Test Validation\n\nTest branch validation for merge",
+        "--name",
+        "test-validation",
     ]);
     assert!(output.status.success());
 
@@ -243,7 +243,7 @@ fn test_mcp_issue_merge_requires_issue_branch() {
         .output()
         .unwrap();
 
-    let output = env.run_cli_command(&["issue", "complete", "test-validation"]);
+    let output = env.run_cli_command(&["issue", "mark-complete", "test-validation"]);
     assert!(output.status.success());
 
     // Switch to a non-issue branch (main)
@@ -283,9 +283,9 @@ fn test_mcp_issue_merge_to_source_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "user-validation",
-        "--content",
         "# User Validation\n\nAdd validation to user management",
+        "--name",
+        "user-validation",
     ]);
     assert!(output.status.success());
 
@@ -311,7 +311,7 @@ fn test_mcp_issue_merge_to_source_branch() {
         .unwrap();
 
     // Mark issue complete
-    let output = env.run_cli_command(&["issue", "complete", "user-validation"]);
+    let output = env.run_cli_command(&["issue", "mark-complete", "user-validation"]);
     assert!(output.status.success());
 
     // Ensure we're on the issue branch before merging (required by new validation)
@@ -347,9 +347,9 @@ fn test_mcp_issue_work_prevents_issue_from_issue_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "first-issue",
-        "--content",
         "# First Issue\n\nFirst issue from main",
+        "--name",
+        "first-issue",
     ]);
     assert!(output.status.success());
 
@@ -360,9 +360,9 @@ fn test_mcp_issue_work_prevents_issue_from_issue_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "second-issue",
-        "--content",
         "# Second Issue\n\nAttempt from issue branch",
+        "--name",
+        "second-issue",
     ]);
     assert!(output.status.success()); // Issue creation should succeed
 
@@ -396,9 +396,9 @@ fn test_mcp_backwards_compatibility_main_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "main-branch-issue",
-        "--content",
         "# Main Branch Issue\n\nTraditional main branch workflow",
+        "--name",
+        "main-branch-issue",
     ]);
     if !output.status.success() {
         eprintln!("STDOUT: {}", String::from_utf8_lossy(&output.stdout));
@@ -432,7 +432,7 @@ fn test_mcp_backwards_compatibility_main_branch() {
         .unwrap();
 
     // Mark complete and merge
-    let output = env.run_cli_command(&["issue", "complete", "main-branch-issue"]);
+    let output = env.run_cli_command(&["issue", "mark-complete", "main-branch-issue"]);
     assert!(output.status.success());
 
     let output = env.run_cli_command(&["issue", "merge", "main-branch-issue"]);
@@ -459,9 +459,9 @@ fn test_mcp_error_handling_invalid_source() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "invalid-source-test",
-        "--content",
         "# Invalid Source Test\n\nTesting error handling",
+        "--name",
+        "invalid-source-test",
     ]);
     assert!(output.status.success());
 
@@ -481,9 +481,9 @@ fn test_mcp_multiple_issues_same_source() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "develop-feature-a",
-        "--content",
         "# Develop Feature A\n\nFirst feature for develop branch",
+        "--name",
+        "develop-feature-a",
     ]);
     assert!(output.status.success());
 
@@ -491,9 +491,9 @@ fn test_mcp_multiple_issues_same_source() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "develop-feature-b",
-        "--content",
         "# Develop Feature B\n\nSecond feature for develop branch",
+        "--name",
+        "develop-feature-b",
     ]);
     assert!(output.status.success());
 
@@ -530,9 +530,9 @@ fn test_mcp_issue_list_shows_source_branches() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "main-issue",
-        "--content",
         "# Main Issue\n\nIssue from main",
+        "--name",
+        "main-issue",
     ]);
     assert!(output.status.success());
 
@@ -540,9 +540,9 @@ fn test_mcp_issue_list_shows_source_branches() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "feature-issue",
-        "--content",
         "# Feature Issue\n\nIssue from feature branch",
+        "--name",
+        "feature-issue",
     ]);
     assert!(output.status.success());
 
@@ -550,9 +550,9 @@ fn test_mcp_issue_list_shows_source_branches() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "develop-issue",
-        "--content",
         "# Develop Issue\n\nIssue from develop branch",
+        "--name",
+        "develop-issue",
     ]);
     assert!(output.status.success());
 
@@ -582,9 +582,9 @@ fn test_mcp_issue_show_displays_source_branch() {
     let output = env.run_cli_command(&[
         "issue",
         "create",
-        "feature-details",
-        "--content",
         "# Feature Details\n\nDetailed feature implementation",
+        "--name",
+        "feature-details",
     ]);
     assert!(output.status.success());
 

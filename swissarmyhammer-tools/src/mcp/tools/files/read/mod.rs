@@ -131,11 +131,11 @@ impl McpTool for ReadFileTool {
                     "description": "Full absolute path to the file to read"
                 },
                 "offset": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Starting line number for partial reading (optional)"
                 },
                 "limit": {
-                    "type": "number",
+                    "type": "integer",
                     "description": "Maximum number of lines to read (optional)"
                 }
             },

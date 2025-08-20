@@ -468,6 +468,18 @@ impl McpTool for EditFileTool {
 
         Ok(BaseToolImpl::create_success_response(success_message))
     }
+
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("file")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "edit"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Perform precise string replacements in existing files with atomic operations")
+    }
 }
 
 #[cfg(test)]

@@ -312,20 +312,34 @@ impl McpFormatter {
 
     /// Create a standardized summary for list operations
     pub fn format_list_summary(item_name: &str, count: usize, total: usize) -> String {
+        let emoji = match item_name {
+            "memo" => "📝",
+            "issue" => "📋",
+            _ => "",
+        };
+        
         if count == total {
             let plural_name = if count == 1 {
                 item_name.to_string()
             } else {
                 format!("{item_name}s")
             };
-            format!("Found {count} {plural_name}")
+            if emoji.is_empty() {
+                format!("Found {count} {plural_name}")
+            } else {
+                format!("{emoji} Found {count} {plural_name}")
+            }
         } else {
             let plural_name = if total == 1 {
                 item_name.to_string()
             } else {
                 format!("{item_name}s")
             };
-            format!("Showing {count} of {total} {plural_name}")
+            if emoji.is_empty() {
+                format!("Showing {count} of {total} {plural_name}")
+            } else {
+                format!("{emoji} Showing {count} of {total} {plural_name}")
+            }
         }
     }
 
@@ -338,7 +352,7 @@ impl McpFormatter {
         preview_length: usize,
     ) -> String {
         format!(
-            "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
+            "• {} (🆔 {})\n  📅 Created: {}\n  🔄 Updated: {}\n  📄 Preview: {}",
             memo.title,
             memo.id,
             Self::format_timestamp(memo.created_at),
@@ -406,6 +420,7 @@ mod tests {
 
     #[test]
     fn test_formatter_list_summary() {
+        // Test with generic item (no emoji)
         assert_eq!(
             McpFormatter::format_list_summary("item", 1, 1),
             "Found 1 item"
@@ -417,6 +432,20 @@ mod tests {
         assert_eq!(
             McpFormatter::format_list_summary("item", 3, 10),
             "Showing 3 of 10 items"
+        );
+        
+        // Test with memo (with emoji)
+        assert_eq!(
+            McpFormatter::format_list_summary("memo", 1, 1),
+            "📝 Found 1 memo"
+        );
+        assert_eq!(
+            McpFormatter::format_list_summary("memo", 3, 3),
+            "📝 Found 3 memos"
+        );
+        assert_eq!(
+            McpFormatter::format_list_summary("memo", 2, 5),
+            "📝 Showing 2 of 5 memos"
         );
     }
 

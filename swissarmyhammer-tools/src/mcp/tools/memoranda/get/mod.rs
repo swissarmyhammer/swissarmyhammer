@@ -43,6 +43,18 @@ impl McpTool for GetMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "get"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Retrieve a memo by its unique ID")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
@@ -67,7 +79,7 @@ impl McpTool for GetMemoTool {
             Ok(memo) => {
                 tracing::info!("Retrieved memo {}", memo.id);
                 Ok(BaseToolImpl::create_success_response(format!(
-                    "Memo found:\n\nID: {}\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
+                    "Memo found:\n\n🆔 ID: {}\nTitle: {}\n📅 Created: {}\n🔄 Updated: {}\n\nContent:\n{}",
                     memo.id,
                     memo.title,
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),

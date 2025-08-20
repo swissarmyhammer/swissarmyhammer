@@ -38,6 +38,18 @@ impl McpTool for GetAllContextMemoTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("memo")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "get-all-context"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Get all memo content formatted for AI context")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
