@@ -386,10 +386,10 @@ fn find_other_files(path: &Path) -> Result<Vec<PathBuf>> {
             if !standard_files.iter().any(|&f| name_str == f) {
                 other_files.push(entry.path());
             }
-        } else if entry.file_type().map_err(SwissArmyHammerError::Io)?.is_dir() {
-            if !standard_dirs.iter().any(|&d| name_str == d) {
-                other_files.push(entry.path());
-            }
+        } else if entry.file_type().map_err(SwissArmyHammerError::Io)?.is_dir()
+            && !standard_dirs.iter().any(|&d| name_str == d)
+        {
+            other_files.push(entry.path());
         }
     }
 
@@ -406,7 +406,7 @@ fn detect_content_conflicts(
 
     for dir in directories {
         // Check for permission issues
-        if let Err(_) = fs::read_dir(dir) {
+        if fs::read_dir(dir).is_err() {
             conflicts.push(ConflictInfo {
                 path: dir.clone(),
                 conflict_type: ConflictType::PermissionIssue,
