@@ -3540,7 +3540,8 @@ async fn test_directory_traversal_performance() {
 
     // Pattern-specific search should be reasonably fast (allow timing variation for pattern matching overhead)
     // Use 50% overhead tolerance instead of fixed 200ms for better system compatibility
-    let max_allowed = all_files_duration.as_millis() + (all_files_duration.as_millis() / 2).max(300);
+    let max_allowed =
+        all_files_duration.as_millis() + (all_files_duration.as_millis() / 2).max(300);
     assert!(
         rust_files_duration.as_millis() < max_allowed,
         "Pattern search should not be significantly slower than full traversal: {} vs {} (max allowed: {})",

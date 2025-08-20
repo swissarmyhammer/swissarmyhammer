@@ -202,7 +202,7 @@ This should have leading whitespace preserved.
 
         let result = parse_frontmatter(content).unwrap();
         assert!(result.metadata.is_some());
-        
+
         // Content should preserve ALL whitespace after frontmatter, including newlines and indentation
         assert!(result
             .content
