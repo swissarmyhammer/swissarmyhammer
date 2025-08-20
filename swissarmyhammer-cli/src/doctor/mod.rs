@@ -109,6 +109,26 @@ impl Doctor {
         println!("{}", "Running diagnostics...".dimmed());
         println!();
 
+        // First, ensure we're in a Git repository
+        use swissarmyhammer::directory_utils::find_git_repository_root;
+        
+        let git_root = match find_git_repository_root() {
+            Some(path) => {
+                println!("✅ Git repository detected at: {}", path.display());
+                path
+            }
+            None => {
+                println!("❌ SwissArmyHammer requires a Git repository");
+                println!();
+                println!("Please run this command from within a Git repository.");
+                println!("You can create a Git repository with: git init");
+                return Ok(ExitCode::Error.into());
+            }
+        };
+
+        // Check .swissarmyhammer directory
+        self.check_swissarmyhammer_directory(&git_root)?;
+
         // Run all checks
         self.run_system_checks()?;
         self.run_configuration_checks()?;
@@ -162,6 +182,92 @@ impl Doctor {
     fn run_migration_checks(&mut self) -> Result<()> {
         checks::check_migration_status(&mut self.checks)?;
         checks::check_migration_conflicts(&mut self.checks)?;
+        Ok(())
+    }
+
+    /// Check SwissArmyHammer directory in Git repository
+    fn check_swissarmyhammer_directory(&mut self, git_root: &std::path::Path) -> Result<()> {
+        let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+        
+        if !swissarmyhammer_dir.exists() {
+            println!("⚠️  .swissarmyhammer directory does not exist (will be created when needed)");
+            return Ok(());
+        }
+        
+        println!("✅ .swissarmyhammer directory found: {}", swissarmyhammer_dir.display());
+        
+        // Check directory permissions
+        match std::fs::metadata(&swissarmyhammer_dir) {
+            Ok(metadata) => {
+                if metadata.is_dir() {
+                    println!("  ✅ Directory is accessible");
+                    
+                    // Check if directory is writable by trying to create a test file
+                    let test_file = swissarmyhammer_dir.join(".doctor_test");
+                    match std::fs::write(&test_file, "test") {
+                        Ok(_) => {
+                            let _ = std::fs::remove_file(&test_file); // Clean up
+                            println!("  ✅ Directory is writable");
+                        }
+                        Err(_) => {
+                            println!("  ⚠️  Directory may not be writable");
+                        }
+                    }
+                } else {
+                    println!("  ❌ .swissarmyhammer exists but is not a directory");
+                }
+            }
+            Err(e) => {
+                println!("  ❌ Cannot access .swissarmyhammer directory: {}", e);
+            }
+        }
+        
+        // Check subdirectories
+        let subdirs = ["memos", "todo", "runs", "workflows", "prompts"];
+        for subdir in &subdirs {
+            let subdir_path = swissarmyhammer_dir.join(subdir);
+            if subdir_path.exists() {
+                if subdir_path.is_dir() {
+                    let file_count = match std::fs::read_dir(&subdir_path) {
+                        Ok(entries) => entries.count(),
+                        Err(_) => 0,
+                    };
+                    println!("  ✅ {}/ ({} items)", subdir, file_count);
+                } else {
+                    println!("  ⚠️  {} exists but is not a directory", subdir);
+                }
+            } else {
+                println!("  ⚠️  {}/ (will be created when needed)", subdir);
+            }
+        }
+        
+        // Check important files
+        let semantic_db = swissarmyhammer_dir.join("semantic.db");
+        if semantic_db.exists() {
+            match std::fs::metadata(&semantic_db) {
+                Ok(metadata) => {
+                    let size = metadata.len();
+                    if size > 0 {
+                        println!("  ✅ semantic.db ({} bytes)", size);
+                    } else {
+                        println!("  ⚠️  semantic.db (empty file)");
+                    }
+                }
+                Err(_) => {
+                    println!("  ⚠️  semantic.db (cannot read metadata)");
+                }
+            }
+        } else {
+            println!("  ⚠️  semantic.db (will be created when needed)");
+        }
+        
+        // Check for potential issues
+        let abort_file = swissarmyhammer_dir.join(".abort");
+        if abort_file.exists() {
+            println!("  ⚠️  .abort file exists (previous workflow may have been aborted)");
+        }
+        
+        println!();
         Ok(())
     }
 
