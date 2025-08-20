@@ -1100,7 +1100,6 @@ mod tests {
     #[serial_test::serial]
     fn test_workflow_resolver_user_workflows() {
         use crate::test_utils::IsolatedTestEnvironment;
-        use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
 
         let _env =
