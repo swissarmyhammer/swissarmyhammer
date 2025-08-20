@@ -170,6 +170,58 @@ pub fn find_repository_or_current_directory() -> Result<PathBuf, std::io::Error>
     Ok(current_dir)
 }
 
+/// Find the Git repository root starting from current directory
+///
+/// Walks up the directory tree looking for .git directory to identify
+/// a Git repository. This function respects MAX_DIRECTORY_DEPTH to prevent
+/// infinite traversal and returns None if no Git repository is found.
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+pub fn find_git_repository_root() -> Option<PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_git_repository_root_from(&current_dir)
+}
+
+/// Find the Git repository root starting from a specific directory
+///
+/// Walks up the directory tree looking for .git directory to identify
+/// a Git repository. This function respects MAX_DIRECTORY_DEPTH to prevent
+/// infinite traversal and returns None if no Git repository is found.
+///
+/// # Arguments
+///
+/// * `start_dir` - The directory to start searching from
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
+    let mut path = start_dir;
+    let mut depth = 0;
+
+    loop {
+        if depth >= MAX_DIRECTORY_DEPTH {
+            break;
+        }
+
+        if path.join(".git").exists() {
+            return Some(path.to_path_buf());
+        }
+
+        match path.parent() {
+            Some(parent) => {
+                path = parent;
+                depth += 1;
+            }
+            None => break,
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +274,193 @@ mod tests {
         assert!(files.iter().any(|p| p.ends_with("nested.md")));
         assert!(files.iter().any(|p| p.ends_with("nested.mermaid")));
         assert!(!files.iter().any(|p| p.ends_with("test.txt")));
+    }
+
+    #[test]
+    fn test_find_git_repository_root_found_at_current() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create .git directory at the base
+        fs::create_dir(base.join(".git")).unwrap();
+
+        // Change to this directory and test
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(base).unwrap();
+
+        let result = find_git_repository_root();
+        
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_found_parent() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create nested structure with .git at parent level
+        let level1 = base.join("level1");
+        let level2 = level1.join("level2");
+        fs::create_dir_all(&level2).unwrap();
+        fs::create_dir(base.join(".git")).unwrap();
+
+        // Test from level2 directory
+        let result = find_git_repository_root_from(&level2);
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create directory structure without .git
+        let level1 = base.join("level1");
+        fs::create_dir(&level1).unwrap();
+
+        // Change to this directory and test
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(&level1).unwrap();
+
+        let result = find_git_repository_root();
+        
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_depth_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create very deep directory structure
+        let mut current = base.to_path_buf();
+        for i in 0..=MAX_DIRECTORY_DEPTH + 1 {
+            current = current.join(format!("level{}", i));
+            fs::create_dir_all(&current).unwrap();
+        }
+
+        // Put .git at the base (beyond MAX_DIRECTORY_DEPTH from deepest)
+        fs::create_dir(base.join(".git")).unwrap();
+
+        // Test from deepest directory
+        let result = find_git_repository_root_from(&current);
+
+        // Should return None due to depth limit
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_within_depth_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create directory structure well within MAX_DIRECTORY_DEPTH (5 levels)
+        let mut current = base.to_path_buf();
+        for i in 0..5 {
+            current = current.join(format!("level{}", i));
+            fs::create_dir_all(&current).unwrap();
+        }
+
+        // Put .git at the base
+        fs::create_dir(base.join(".git")).unwrap();
+
+        // Test from 5 levels deep - should find .git at base
+        let result = find_git_repository_root_from(&current);
+
+        // Should find the .git directory well within depth limit
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_git_file_not_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create .git as a file instead of directory (as in git worktree)
+        fs::write(base.join(".git"), "gitdir: /some/other/path/.git/worktrees/test").unwrap();
+
+        // Change to this directory and test
+        let original_dir = env::current_dir().unwrap();
+        env::set_current_dir(base).unwrap();
+
+        let result = find_git_repository_root();
+        
+        // Restore original directory
+        env::set_current_dir(original_dir).unwrap();
+
+        // Should still find the repository root (git worktree or submodule case)
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().canonicalize().unwrap(), base.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_multiple_git_dirs() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create nested structure with .git at multiple levels
+        let level1 = base.join("level1");
+        let level2 = level1.join("level2");
+        fs::create_dir_all(&level2).unwrap();
+        
+        // Create .git directories at multiple levels
+        fs::create_dir(base.join(".git")).unwrap();
+        fs::create_dir(level1.join(".git")).unwrap();
+
+        // Test from level2 directory
+        let result = find_git_repository_root_from(&level2);
+
+        // Should find the nearest .git directory (level1, not base)
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().canonicalize().unwrap(), level1.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_at_filesystem_root() {
+        // This test is challenging to create reliably across platforms
+        // We'll test the edge case where we reach the filesystem root
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create a single level directory
+        let level1 = base.join("level1");
+        fs::create_dir(&level1).unwrap();
+
+        // Test from this directory (no .git anywhere)
+        let result = find_git_repository_root_from(&level1);
+
+        // Should return None when reaching filesystem root with no .git found
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_git_repository_root_depth_counting() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create simple structure to understand depth counting
+        let level1 = base.join("level1");
+        let level2 = level1.join("level2");
+        let level3 = level2.join("level3");
+        fs::create_dir_all(&level3).unwrap();
+
+        // Put .git at base
+        fs::create_dir(base.join(".git")).unwrap();
+
+        // Test from different levels
+        assert!(find_git_repository_root_from(base).is_some()); // depth 0
+        assert!(find_git_repository_root_from(&level1).is_some()); // depth 1  
+        assert!(find_git_repository_root_from(&level2).is_some()); // depth 2
+        assert!(find_git_repository_root_from(&level3).is_some()); // depth 3
     }
 }
