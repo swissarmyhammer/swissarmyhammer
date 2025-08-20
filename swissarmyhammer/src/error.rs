@@ -160,11 +160,11 @@ pub enum SwissArmyHammerError {
     /// SwissArmyHammer must be run from within a Git repository
     #[error("SwissArmyHammer must be run from within a Git repository")]
     NotInGitRepository,
-    
+
     /// Failed to create .swissarmyhammer directory
     #[error("Failed to create .swissarmyhammer directory: {0}")]
     DirectoryCreation(String),
-    
+
     /// Git repository found but .swissarmyhammer directory is not accessible
     #[error("Git repository found but .swissarmyhammer directory is not accessible: {0}")]
     DirectoryAccess(String),
