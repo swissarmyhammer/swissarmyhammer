@@ -157,6 +157,18 @@ pub enum SwissArmyHammerError {
         suggestion: String,
     },
 
+    /// SwissArmyHammer must be run from within a Git repository
+    #[error("SwissArmyHammer must be run from within a Git repository")]
+    NotInGitRepository,
+    
+    /// Failed to create .swissarmyhammer directory
+    #[error("Failed to create .swissarmyhammer directory: {0}")]
+    DirectoryCreation(String),
+    
+    /// Git repository found but .swissarmyhammer directory is not accessible
+    #[error("Git repository found but .swissarmyhammer directory is not accessible: {0}")]
+    DirectoryAccess(String),
+
     /// Other errors
     #[error("{0}")]
     Other(String),
@@ -934,6 +946,16 @@ impl SwissArmyHammerError {
             path: path.to_string(),
             suggestion: suggestion.to_string(),
         }
+    }
+
+    /// Create a directory creation error
+    pub fn directory_creation(error: std::io::Error) -> Self {
+        SwissArmyHammerError::DirectoryCreation(error.to_string())
+    }
+
+    /// Create a directory access error
+    pub fn directory_access(details: &str) -> Self {
+        SwissArmyHammerError::DirectoryAccess(details.to_string())
     }
 
     /// Create a memo not found error
