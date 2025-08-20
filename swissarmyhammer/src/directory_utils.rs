@@ -197,7 +197,7 @@ pub fn find_git_repository_root() -> Option<PathBuf> {
 /// # Returns
 ///
 /// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
-fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
+pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
     let mut path = start_dir;
     let mut depth = 0;
 

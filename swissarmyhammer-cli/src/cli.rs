@@ -123,9 +123,14 @@ Exit codes:
 
 Example:
   swissarmyhammer doctor
-  swissarmyhammer doctor --verbose  # Show detailed diagnostics
+  swissarmyhammer doctor --verbose    # Show detailed diagnostics
+  swissarmyhammer doctor --migration  # Check migration status and conflicts
 ")]
-    Doctor,
+    Doctor {
+        /// Check migration status and validate directory consolidation readiness
+        #[arg(long)]
+        migration: bool,
+    },
     /// Manage and test prompts
     #[command(long_about = "
 Manage prompts with support for listing, validating, testing, and searching.
