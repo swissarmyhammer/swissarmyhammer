@@ -1704,7 +1704,7 @@ mod tests {
     /// Create a full registry with all production tools for testing
     fn create_full_tool_registry() -> ToolRegistry {
         let mut registry = ToolRegistry::new();
-        
+
         // Register all tool categories
         register_issue_tools(&mut registry);
         register_memo_tools(&mut registry);
@@ -1717,7 +1717,7 @@ mod tests {
         register_notify_tools(&mut registry);
         register_abort_tools(&mut registry);
         register_web_fetch_tools(&mut registry);
-        
+
         registry
     }
 
@@ -1725,7 +1725,7 @@ mod tests {
     fn test_all_visible_tools_have_cli_categories() {
         let registry = create_full_tool_registry();
         let tools: Vec<&dyn McpTool> = registry.tools.values().map(|t| t.as_ref()).collect();
-        
+
         for tool in tools {
             if !tool.hidden_from_cli() {
                 assert!(
@@ -1740,19 +1740,20 @@ mod tests {
     #[test]
     fn test_hidden_tools_are_properly_marked() {
         let registry = create_full_tool_registry();
-        
+
         // Tools that should be hidden from CLI (internal/workflow tools)
         let hidden_tool_patterns = [
-            "todo_",      // All todo tools are for internal workflow use
-            "notify_",    // Notification tools are for internal use
-            "abort_",     // Abort tools are for internal workflow control
-            "web_fetch",  // Web fetch is internal, web_search is user-facing
+            "todo_",     // All todo tools are for internal workflow use
+            "notify_",   // Notification tools are for internal use
+            "abort_",    // Abort tools are for internal workflow control
+            "web_fetch", // Web fetch is internal, web_search is user-facing
         ];
-        
+
         for (name, tool) in &registry.tools {
-            let should_be_hidden = hidden_tool_patterns.iter()
+            let should_be_hidden = hidden_tool_patterns
+                .iter()
                 .any(|pattern| name.starts_with(pattern));
-                
+
             if should_be_hidden {
                 assert!(
                     tool.hidden_from_cli(),
@@ -1765,18 +1766,18 @@ mod tests {
     #[test]
     fn test_cli_naming_conventions() {
         let registry = create_full_tool_registry();
-        
+
         for tool in registry.tools.values() {
             if !tool.hidden_from_cli() {
                 let cli_name = tool.cli_name();
-                
+
                 // CLI names should not be empty
                 assert!(
                     !cli_name.is_empty(),
                     "Tool '{}' has empty CLI name",
                     tool.name()
                 );
-                
+
                 // CLI names should not contain underscores (use kebab-case)
                 assert!(
                     !cli_name.contains('_'),
@@ -1784,7 +1785,7 @@ mod tests {
                     tool.name(),
                     cli_name
                 );
-                
+
                 // CLI names should be reasonable length
                 assert!(
                     cli_name.len() <= 20,
@@ -1801,11 +1802,11 @@ mod tests {
     fn test_no_cli_naming_conflicts_within_categories() {
         let registry = create_full_tool_registry();
         let categories = registry.get_cli_categories();
-        
+
         for category in categories {
             let tools = registry.get_tools_for_category(&category);
             let mut cli_names = std::collections::HashSet::new();
-            
+
             for tool in tools {
                 let cli_name = tool.cli_name();
                 assert!(
@@ -1820,13 +1821,18 @@ mod tests {
     fn test_expected_tool_categories_exist() {
         let registry = create_full_tool_registry();
         let categories = registry.get_cli_categories();
-        
+
         // Expected categories based on our tool organization
         let expected_categories = [
-            "issue", "memo", "file", "search", 
-            "shell", "web-search", "outline"
+            "issue",
+            "memo",
+            "file",
+            "search",
+            "shell",
+            "web-search",
+            "outline",
         ];
-        
+
         for expected in &expected_categories {
             assert!(
                 categories.contains(&expected.to_string()),
@@ -1838,7 +1844,7 @@ mod tests {
     #[test]
     fn test_cli_about_text_quality() {
         let registry = create_full_tool_registry();
-        
+
         for tool in registry.tools.values() {
             if !tool.hidden_from_cli() {
                 if let Some(cli_about) = tool.cli_about() {
@@ -1848,7 +1854,7 @@ mod tests {
                         "Tool '{}' has empty CLI about text",
                         tool.name()
                     );
-                    
+
                     // Should be reasonably concise for CLI help
                     assert!(
                         cli_about.len() <= 100,
@@ -1857,7 +1863,7 @@ mod tests {
                         cli_about.len(),
                         cli_about
                     );
-                    
+
                     // Should be different from description to add value
                     let description = tool.description();
                     assert!(
@@ -1873,19 +1879,19 @@ mod tests {
     #[test]
     fn test_expected_tool_counts_per_category() {
         let registry = create_full_tool_registry();
-        
+
         // Verify we have the expected number of tools in each category
         // This helps catch missing tools or incorrectly categorized tools
         let category_expectations = [
-            ("issue", 8),    // create, list, show, update, work, merge, mark_complete, all_complete
-            ("memo", 7),     // create, list, get, update, delete, search, get_all_context  
-            ("file", 5),     // read, write, edit, glob, grep
-            ("search", 2),   // index, query
-            ("shell", 1),    // exec
+            ("issue", 8),  // create, list, show, update, work, merge, mark_complete, all_complete
+            ("memo", 7),   // create, list, get, update, delete, search, get_all_context
+            ("file", 5),   // read, write, edit, glob, grep
+            ("search", 2), // index, query
+            ("shell", 1),  // exec
             ("web-search", 1), // search
-            ("outline", 1),  // generate
+            ("outline", 1), // generate
         ];
-        
+
         for (category, expected_count) in &category_expectations {
             let tools = registry.get_tools_for_category(category);
             assert_eq!(

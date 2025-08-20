@@ -7,24 +7,19 @@ mod doctor;
 mod dynamic_execution;
 mod error;
 mod exit_codes;
-mod file;
 mod flow;
-mod issue;
 mod list;
 mod logging;
 mod mcp_integration;
-mod memo;
 mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
 mod prompt;
 mod response_formatting;
 mod schema_conversion;
 mod search;
-mod shell;
 mod signal_handler;
 mod test;
 mod validate;
-mod web_search;
 
 use clap::CommandFactory;
 use cli::Cli;
@@ -638,52 +633,6 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
     }
 }
 
-#[allow(dead_code)]
-async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
-    use issue;
-
-    match issue::handle_issue_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Issue error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-#[allow(dead_code)]
-async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
-    use memo;
-
-    match memo::handle_memo_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Memo error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-#[allow(dead_code)]
-async fn run_file(subcommand: cli::FileCommands) -> i32 {
-    use file;
-
-    match file::handle_file_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("File error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-#[allow(dead_code)]
-async fn run_search(subcommand: cli::SearchCommands) -> i32 {
-    use search;
-
-    search::run_search(subcommand).await
-}
-
 /// Runs the validate command to check prompt files and workflows for syntax and best practices.
 ///
 /// This function validates:
@@ -869,32 +818,6 @@ async fn run_implement() -> i32 {
                 return EXIT_ERROR;
             }
             tracing::error!("Implement workflow error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-#[allow(dead_code)]
-async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
-    use shell;
-
-    match shell::handle_shell_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Shell error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-#[allow(dead_code)]
-async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
-    use web_search;
-
-    match web_search::handle_web_search_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Web search error: {}", e);
             EXIT_WARNING
         }
     }

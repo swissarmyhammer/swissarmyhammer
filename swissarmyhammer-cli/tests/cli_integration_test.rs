@@ -1324,11 +1324,10 @@ fn test_issue_create_with_optional_names() -> Result<()> {
         .output()?;
 
     let help_text = String::from_utf8_lossy(&help_output.stdout);
-    println!("Help output: {}", help_text);
+    println!("Help output: {help_text}");
     assert!(
         help_text.contains("issue"),
-        "Issue subcommand should be available in help: {}",
-        help_text
+        "Issue subcommand should be available in help: {help_text}"
     );
 
     // Test creating a named issue with positional content argument

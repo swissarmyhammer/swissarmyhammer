@@ -64,20 +64,20 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             format,
             highlight,
             limit,
-        } => search::run_search_command(
+        } => search::run_search_command(search::SearchCommandParams {
             query,
-            r#in,
+            fields: r#in,
             regex,
             fuzzy,
             case_sensitive,
-            source,
+            source_filter: source,
             has_arg,
             no_args,
             full,
             format,
             highlight,
             limit,
-        )
+        })
         .map(|_| ())
         .map_err(|e| CliError::new(e.to_string(), 1)),
         PromptSubcommand::Validate { quiet, format } => {

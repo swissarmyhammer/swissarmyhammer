@@ -6,8 +6,7 @@ The current test setup uses a shared HOME environment variable modification thro
 ## Solution
 **Per-Test Isolation**: Each test should create its own temporary directory and use it as HOME, rather than modifying the global HOME environment variable.
 
-
-## **RECOMMENDED PATTERN: Use IsolatedTestHome RAII Guard**
+## **RECOMMENDED PATTERN: Use IsolatedTestEnvironment RAII Guard**
 
 **ALWAYS use `IsolatedTestEnvironment::new()` for workflow tests to isolate current working and home**
 
