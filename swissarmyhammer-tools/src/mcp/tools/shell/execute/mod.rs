@@ -1215,6 +1215,18 @@ impl McpTool for ShellExecuteTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("shell")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "exec"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Execute shell commands with timeout and output capture")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

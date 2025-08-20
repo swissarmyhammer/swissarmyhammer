@@ -133,6 +133,18 @@ impl McpTool for OutlineGenerateTool {
         })
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("outline")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "generate"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Generate structured code overviews using Tree-sitter parsing")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

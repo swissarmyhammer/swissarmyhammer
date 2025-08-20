@@ -45,6 +45,10 @@ impl McpTool for MarkCompleteTodoTool {
         })
     }
 
+    fn hidden_from_cli(&self) -> bool {
+        true
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

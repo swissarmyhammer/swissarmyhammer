@@ -238,6 +238,18 @@ impl McpTool for WebSearchTool {
             .expect("Failed to generate schema")
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("web-search")
+    }
+
+    fn cli_name(&self) -> &'static str {
+        "search"
+    }
+
+    fn cli_about(&self) -> Option<&'static str> {
+        Some("Perform web searches using DuckDuckGo with privacy protection")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
