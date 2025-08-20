@@ -19,7 +19,7 @@
 //! use swissarmyhammer_cli::doctor::Doctor;
 //!
 //! let mut doctor = Doctor::new();
-//! let exit_code = doctor.run_diagnostics()?;
+//! let exit_code = doctor.run_diagnostics_with_options(false)?;
 //! ```
 //!
 //! The doctor returns exit codes:
@@ -92,16 +92,6 @@ impl Doctor {
     /// - Prompt directory validation
     /// - Workflow system checks
     ///
-    /// # Returns
-    ///
-    /// Returns an exit code:
-    /// - 0: All checks passed
-    /// - 1: Warnings detected
-    /// - 2: Errors detected
-    pub fn run_diagnostics(&mut self) -> Result<i32> {
-        self.run_diagnostics_with_options(false)
-    }
-
     /// Run diagnostic checks with specific options
     ///
     /// # Arguments
@@ -447,7 +437,7 @@ mod tests {
     #[test]
     fn test_run_diagnostics() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics();
+        let result = doctor.run_diagnostics_with_options(false);
         assert!(result.is_ok());
 
         // Should have at least some checks
@@ -459,9 +449,9 @@ mod tests {
     }
 
     #[test]
-    fn test_workflow_diagnostics_in_run_diagnostics() {
+    fn test_workflow_diagnostics_in_run_diagnostics_with_options() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics();
+        let result = doctor.run_diagnostics_with_options(false);
         assert!(result.is_ok());
 
         // Should have workflow-related checks in the full diagnostics
@@ -472,7 +462,7 @@ mod tests {
             .collect();
         assert!(
             !workflow_checks.is_empty(),
-            "run_diagnostics should include workflow checks"
+            "run_diagnostics_with_options should include workflow checks"
         );
     }
 
