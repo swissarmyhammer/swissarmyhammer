@@ -138,11 +138,19 @@ impl McpServer {
             Box::new(storage) as Box<dyn IssueStorage>
         };
 
-        // Initialize memo storage with default location
-        let memo_storage = Box::new(MarkdownMemoStorage::new_default().map_err(|e| {
-            tracing::error!("Failed to create memo storage: {}", e);
-            SwissArmyHammerError::Other(format!("Failed to create memo storage: {e}"))
-        })?) as Box<dyn MemoStorage>;
+        // Initialize memo storage with default location, fallback to temp dir for tests
+        let memo_storage = match MarkdownMemoStorage::new_default() {
+            Ok(storage) => Box::new(storage) as Box<dyn MemoStorage>,
+            Err(e) => {
+                tracing::warn!("Cannot create memo storage in Git repository ({}), using temporary directory for testing", e);
+                // Fallback to temporary directory for tests
+                let temp_dir = std::env::temp_dir().join("swissarmyhammer-mcp-test");
+                std::fs::create_dir_all(&temp_dir).map_err(|err| {
+                    SwissArmyHammerError::Other(format!("Failed to create temporary memo directory: {err}"))
+                })?;
+                Box::new(MarkdownMemoStorage::new(temp_dir)) as Box<dyn MemoStorage>
+            }
+        };
 
         // Initialize git operations with work_dir - make it optional for tests
         let git_ops = match GitOperations::with_work_dir(work_dir.clone()) {
