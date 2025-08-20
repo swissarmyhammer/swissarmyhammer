@@ -45,6 +45,7 @@
 //! All storage implementations are thread-safe and support concurrent access
 //! through internal locking mechanisms and atomic file operations.
 
+use crate::directory_utils::get_or_create_swissarmyhammer_directory;
 use crate::error::{Result, SwissArmyHammerError};
 use crate::memoranda::{AdvancedMemoSearchEngine, Memo, MemoId, SearchOptions};
 use async_trait::async_trait;
@@ -531,9 +532,7 @@ impl FileSystemMemoStorage {
         let memos_dir = if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
             PathBuf::from(custom_path)
         } else {
-            std::env::current_dir()?
-                .join(".swissarmyhammer")
-                .join("memos")
+            get_or_create_swissarmyhammer_directory()?.join("memos")
         };
         Ok(Self::new(memos_dir))
     }
@@ -1008,9 +1007,7 @@ impl MarkdownMemoStorage {
         let memos_dir = if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
             PathBuf::from(custom_path)
         } else {
-            std::env::current_dir()?
-                .join(".swissarmyhammer")
-                .join("memos")
+            get_or_create_swissarmyhammer_directory()?.join("memos")
         };
         Ok(Self::new(memos_dir))
     }

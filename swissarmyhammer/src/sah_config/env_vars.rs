@@ -242,14 +242,17 @@ impl Default for EnvVarProcessor {
 mod tests {
     use super::*;
     use crate::test_utils::IsolatedTestEnvironment;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_new_processor() {
         let processor = EnvVarProcessor::new();
         assert!(processor.is_ok());
     }
 
     #[test]
+    #[serial]
     fn test_substitute_with_default() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -264,6 +267,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_substitute_with_env_var() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -280,6 +284,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_substitute_required_variable_found() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -296,6 +301,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_substitute_required_variable_missing() {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new().unwrap();
@@ -310,6 +316,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_multiple_substitutions() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -330,6 +337,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_no_substitution_needed() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -340,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_convert_to_boolean() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -375,6 +384,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_convert_to_integer() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -393,6 +403,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_convert_to_float() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -417,6 +428,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_validate_variable_name() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -448,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_empty_default_value() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -461,6 +474,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_special_characters_in_default() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -475,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_same_variable_multiple_times() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
@@ -492,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_default_trait() {
         let processor = EnvVarProcessor::default();
         // Just ensure it can be created without error

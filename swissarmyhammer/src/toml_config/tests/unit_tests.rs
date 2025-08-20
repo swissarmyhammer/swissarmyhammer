@@ -4,6 +4,7 @@
 //! including ConfigValue conversion, Configuration operations, and parser functionality.
 
 use crate::toml_config::{ConfigError, ConfigParser, ConfigValue, Configuration, ValidationLimits};
+use serial_test::serial;
 use std::collections::HashMap;
 use tempfile::TempDir;
 
@@ -14,6 +15,7 @@ mod config_value_tests {
     use serde_json::json;
 
     #[test]
+    #[serial]
     fn test_config_value_string_operations() {
         let value = ConfigValue::String("test_string".to_string());
 
@@ -33,6 +35,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_value_integer_operations() {
         let value = ConfigValue::Integer(42);
 
@@ -49,6 +52,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_value_float_operations() {
         let value = ConfigValue::Float(3.15);
 
@@ -66,6 +70,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_value_boolean_operations() {
         let value_true = ConfigValue::Boolean(true);
         let value_false = ConfigValue::Boolean(false);
@@ -87,6 +92,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_value_array_operations() {
         let array = vec![
             ConfigValue::String("item1".to_string()),
@@ -112,6 +118,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_value_table_operations() {
         let mut table = HashMap::new();
         table.insert(
@@ -143,6 +150,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_value_validation() {
         // Test string length validation
         let long_string = "a".repeat(ValidationLimits::default().max_string_length + 1);
@@ -168,6 +176,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_environment_variable_substitution() {
         // Set up test environment variables
         std::env::set_var("TEST_VAR", "test_value");
@@ -239,6 +248,7 @@ mod config_value_tests {
     }
 
     #[test]
+    #[serial]
     fn test_environment_variable_substitution_errors() {
         // Test missing required variable
         let mut value = ConfigValue::String("${REQUIRED_MISSING_VAR}".to_string());
@@ -252,6 +262,7 @@ mod config_value_tests {
 
     proptest! {
         #[test]
+    #[serial]
         fn test_config_value_roundtrip_serialization(
             s in "[a-zA-Z0-9_]{1,100}",
             i in any::<i64>(),
@@ -286,6 +297,7 @@ mod config_value_tests {
         }
 
         #[test]
+    #[serial]
         fn test_config_value_liquid_conversion_consistency(
             s in "[a-zA-Z0-9_\\s]{1,50}",
             i in -1000000i64..1000000i64,
@@ -314,6 +326,7 @@ mod config_value_tests {
         }
 
         #[test]
+    #[serial]
         fn test_environment_variable_pattern_matching(
             var_name in "[A-Z][A-Z0-9_]{0,30}",
             default_value in "[a-zA-Z0-9_]{0,20}"
@@ -343,6 +356,7 @@ mod config_value_tests {
         }
 
         #[test]
+    #[serial]
         fn test_configuration_key_validation(
             key in "[a-zA-Z_][a-zA-Z0-9_]{0,30}".prop_filter("Reserved names should be excluded", |k| {
                 // Exclude Liquid reserved words
@@ -368,6 +382,7 @@ mod config_value_tests {
         }
 
         #[test]
+    #[serial]
         fn test_dot_notation_consistency(
             section1 in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
             section2 in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
@@ -403,6 +418,7 @@ mod configuration_tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_configuration_creation() {
         let config = Configuration::new();
         assert!(config.is_empty());
@@ -411,6 +427,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_basic_operations() {
         let mut config = Configuration::new();
 
@@ -449,6 +466,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_dot_notation_get() {
         let mut config = Configuration::new();
 
@@ -502,6 +520,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_dot_notation_set() {
         let mut config = Configuration::new();
 
@@ -574,6 +593,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_remove() {
         let mut config = Configuration::new();
 
@@ -617,6 +637,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_keys() {
         let mut config = Configuration::new();
 
@@ -641,6 +662,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_merge() {
         let mut config1 = Configuration::new();
         config1.insert(
@@ -714,6 +736,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_liquid_conversion() {
         let mut config = Configuration::new();
 
@@ -785,6 +808,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_validation() {
         let mut config = Configuration::new();
 
@@ -812,6 +836,7 @@ mod configuration_tests {
     }
 
     #[test]
+    #[serial]
     fn test_configuration_environment_substitution() {
         // Set up test environment
         std::env::set_var("CONFIG_TEST_VAR", "substituted_value");
@@ -896,6 +921,7 @@ mod parser_tests {
     use std::fs;
 
     #[test]
+    #[serial]
     fn test_parser_valid_toml() {
         let parser = ConfigParser::new();
 
@@ -979,6 +1005,7 @@ mod parser_tests {
     }
 
     #[test]
+    #[serial]
     fn test_parser_invalid_toml() {
         let parser = ConfigParser::new();
 
@@ -1014,6 +1041,7 @@ mod parser_tests {
     }
 
     #[test]
+    #[serial]
     fn test_parser_file_operations() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("test.toml");
@@ -1054,6 +1082,7 @@ mod parser_tests {
     }
 
     #[test]
+    #[serial]
     fn test_parser_environment_variables() {
         // Set up test environment
         std::env::set_var("PARSER_TEST_VAR", "env_value");
@@ -1096,6 +1125,7 @@ mod parser_tests {
     }
 
     #[test]
+    #[serial]
     fn test_parser_load_from_repo_root() {
         use std::panic;
 
@@ -1144,6 +1174,7 @@ mod parser_tests {
     }
 
     #[test]
+    #[serial]
     fn test_parser_file_not_found() {
         let parser = ConfigParser::new();
         let result = parser.parse_file(std::path::Path::new("nonexistent.toml"));
