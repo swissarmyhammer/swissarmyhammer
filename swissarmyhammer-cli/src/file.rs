@@ -1,5 +1,5 @@
 use crate::cli::FileCommands;
-use crate::error::{CliError, format_component_specific_git_error};
+use crate::error::{format_component_specific_git_error, CliError};
 use crate::exit_codes::EXIT_ERROR;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;

@@ -1,5 +1,5 @@
 use crate::cli::{IssueCommands, OutputFormat};
-use crate::error::{CliError, format_component_specific_git_error};
+use crate::error::{format_component_specific_git_error, CliError};
 use crate::exit_codes::EXIT_ERROR;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;
@@ -10,7 +10,7 @@ pub async fn handle_issue_command(
     command: IssueCommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let context = CliToolContext::new().await?;
-    
+
     // Check for Git repository requirement for issue operations
     context.require_git_repository().await.map_err(|e| {
         match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {

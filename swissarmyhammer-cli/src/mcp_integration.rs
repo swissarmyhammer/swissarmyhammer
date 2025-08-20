@@ -28,7 +28,9 @@ impl CliToolContext {
     pub async fn require_git_repository(&self) -> Result<(), Box<dyn std::error::Error>> {
         let git_ops = self.tool_context.git_ops.lock().await;
         if git_ops.is_none() {
-            return Err(Box::new(swissarmyhammer::SwissArmyHammerError::NotInGitRepository));
+            return Err(Box::new(
+                swissarmyhammer::SwissArmyHammerError::NotInGitRepository,
+            ));
         }
         Ok(())
     }

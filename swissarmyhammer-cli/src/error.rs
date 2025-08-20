@@ -80,7 +80,6 @@ pub fn handle_cli_result<T>(result: CliResult<T>) -> i32 {
 }
 
 /// Centralized error message formatting functions for Git repository requirements
-
 /// Format a generic Git repository requirement error message
 fn format_git_repository_requirement_error() -> String {
     format!(
@@ -92,7 +91,7 @@ fn format_git_repository_requirement_error() -> String {
         • Initialize a Git repository: git init\n\
         • Clone an existing repository: git clone <url>\n\
         \n\
-        Current directory: {}", 
+        Current directory: {}",
         std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "<unable to determine>".to_string())
@@ -163,7 +162,7 @@ pub fn format_component_specific_git_error(component: &str, explanation: &str) -
         • Initialize a Git repository: git init\n\
         • Clone an existing repository: git clone <url>\n\
         \n\
-        Current directory: {}", 
+        Current directory: {}",
         std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "<unable to determine>".to_string())

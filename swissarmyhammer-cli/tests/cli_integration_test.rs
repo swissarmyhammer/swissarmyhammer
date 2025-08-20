@@ -1322,7 +1322,7 @@ fn test_issue_create_with_optional_names() -> Result<()> {
         .current_dir(temp_dir.path())
         .output()
         .expect("Failed to initialize git repository");
-    
+
     // Create .swissarmyhammer directory
     std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer"))
         .expect("Failed to create .swissarmyhammer directory");

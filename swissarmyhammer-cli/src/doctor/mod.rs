@@ -111,7 +111,7 @@ impl Doctor {
 
         // First, ensure we're in a Git repository
         use swissarmyhammer::directory_utils::find_git_repository_root;
-        
+
         let git_root = match find_git_repository_root() {
             Some(path) => {
                 println!("✅ Git repository detected at: {}", path.display());
@@ -188,20 +188,23 @@ impl Doctor {
     /// Check SwissArmyHammer directory in Git repository
     fn check_swissarmyhammer_directory(&mut self, git_root: &std::path::Path) -> Result<()> {
         let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
-        
+
         if !swissarmyhammer_dir.exists() {
             println!("⚠️  .swissarmyhammer directory does not exist (will be created when needed)");
             return Ok(());
         }
-        
-        println!("✅ .swissarmyhammer directory found: {}", swissarmyhammer_dir.display());
-        
+
+        println!(
+            "✅ .swissarmyhammer directory found: {}",
+            swissarmyhammer_dir.display()
+        );
+
         // Check directory permissions
         match std::fs::metadata(&swissarmyhammer_dir) {
             Ok(metadata) => {
                 if metadata.is_dir() {
                     println!("  ✅ Directory is accessible");
-                    
+
                     // Check if directory is writable by trying to create a test file
                     let test_file = swissarmyhammer_dir.join(".doctor_test");
                     match std::fs::write(&test_file, "test") {
@@ -221,7 +224,7 @@ impl Doctor {
                 println!("  ❌ Cannot access .swissarmyhammer directory: {}", e);
             }
         }
-        
+
         // Check subdirectories
         let subdirs = ["memos", "todo", "runs", "workflows", "prompts"];
         for subdir in &subdirs {
@@ -240,7 +243,7 @@ impl Doctor {
                 println!("  ⚠️  {}/ (will be created when needed)", subdir);
             }
         }
-        
+
         // Check important files
         let semantic_db = swissarmyhammer_dir.join("semantic.db");
         if semantic_db.exists() {
@@ -260,13 +263,13 @@ impl Doctor {
         } else {
             println!("  ⚠️  semantic.db (will be created when needed)");
         }
-        
+
         // Check for potential issues
         let abort_file = swissarmyhammer_dir.join(".abort");
         if abort_file.exists() {
             println!("  ⚠️  .abort file exists (previous workflow may have been aborted)");
         }
-        
+
         println!();
         Ok(())
     }
