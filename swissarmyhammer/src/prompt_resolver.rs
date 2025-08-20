@@ -114,17 +114,21 @@ mod tests {
     #[serial]
     fn test_prompt_resolver_loads_local_prompts() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // Create a .git directory to make it look like a Git repository
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir_all(&git_dir).unwrap();
-        
+
         let local_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&local_prompts_dir).unwrap();
 
         // Create a test prompt file with proper header
         let prompt_file = local_prompts_dir.join("local_prompt.md");
-        fs::write(&prompt_file, "# Local Test Prompt\n\nThis is a local prompt for testing").unwrap();
+        fs::write(
+            &prompt_file,
+            "# Local Test Prompt\n\nThis is a local prompt for testing",
+        )
+        .unwrap();
 
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();

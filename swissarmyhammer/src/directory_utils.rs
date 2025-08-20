@@ -7,7 +7,6 @@ use crate::security::MAX_DIRECTORY_DEPTH;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-
 /// Walk a directory recursively to find files with specific extensions
 ///
 /// This function uses WalkDir to recursively find all files with the given
@@ -57,7 +56,6 @@ pub fn walk_files_with_extensions<'a>(
         })
     })
 }
-
 
 /// Find the Git repository root starting from current directory
 ///
@@ -179,7 +177,6 @@ mod tests {
     use std::env;
     use std::fs;
     use tempfile::TempDir;
-
 
     #[test]
     fn test_walk_files_with_extensions() {

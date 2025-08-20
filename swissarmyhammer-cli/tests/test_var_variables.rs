@@ -9,7 +9,10 @@ mod test_utils;
 use test_utils::setup_git_repo;
 
 /// Helper to run CLI commands with standard optimizations
-fn run_optimized_command(args: &[&str], temp_path: &std::path::Path) -> Result<Command, Box<dyn std::error::Error>> {
+fn run_optimized_command(
+    args: &[&str],
+    temp_path: &std::path::Path,
+) -> Result<Command, Box<dyn std::error::Error>> {
     // Create unique test identifier to avoid any cross-test conflicts
     use std::time::{SystemTime, UNIX_EPOCH};
     let thread_id = std::thread::current().id();
@@ -79,10 +82,10 @@ stateDiagram-v2
 fn test_workflow_with_var_variables() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Setup proper git repository
     setup_git_repo(temp_path).unwrap();
-    
+
     // Create .swissarmyhammer/workflows directory in temp dir
     let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
@@ -101,15 +104,15 @@ fn test_workflow_with_var_variables() {
     run_optimized_command(
         &[
             "flow",
-            "run", 
+            "run",
             "test-template",
             "--var",
             "greeting=Bonjour",
-            "--var", 
+            "--var",
             "message=TestMessage",
             "--var",
             "count=5",
-            "--dry-run"
+            "--dry-run",
         ],
         temp_path,
     )
@@ -124,10 +127,10 @@ fn test_workflow_with_var_variables() {
 fn test_invalid_var_variable_format() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Setup proper git repository
     setup_git_repo(temp_path).unwrap();
-    
+
     // Create .swissarmyhammer/workflows directory in temp dir
     let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
@@ -156,13 +159,7 @@ stateDiagram-v2
     .unwrap();
 
     run_optimized_command(
-        &[
-            "flow",
-            "run",
-            "some-workflow",
-            "--var",
-            "invalid_format"
-        ],
+        &["flow", "run", "some-workflow", "--var", "invalid_format"],
         temp_path,
     )
     .unwrap()
@@ -176,10 +173,10 @@ stateDiagram-v2
 fn test_var_multiple_usage() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Setup proper git repository
     setup_git_repo(temp_path).unwrap();
-    
+
     // Create .swissarmyhammer/workflows directory in temp dir
     let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
@@ -217,7 +214,7 @@ stateDiagram-v2
             "context_var=value1",
             "--var",
             "template_var=value2",
-            "--dry-run"
+            "--dry-run",
         ],
         temp_path,
     )
@@ -233,7 +230,7 @@ stateDiagram-v2
 #[test]
 fn test_full_workflow_execution_with_liquid_templates() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -301,7 +298,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_missing_template_variables() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -416,7 +413,7 @@ stateDiagram-v2
             "task_type=Code Review",
             "--var",
             "project_name=SwissArmyHammer",
-            "--dry-run" // Use dry-run since we don't want to actually execute the prompt
+            "--dry-run", // Use dry-run since we don't want to actually execute the prompt
         ],
         temp_path,
     )
@@ -429,7 +426,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_malformed_liquid_templates() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -489,7 +486,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_liquid_injection_attempts() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -539,7 +536,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_empty_var_value() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -591,7 +588,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_special_chars_in_var_values() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -649,7 +646,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_duplicate_var_names() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -701,7 +698,7 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_equals_sign_in_var_value() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create .git directory to make it look like a Git repository
     let git_dir = temp_dir.path().join(".git");
     fs::create_dir_all(&git_dir).unwrap();
@@ -789,7 +786,7 @@ Version: {{ version | default: "1.0" }}
             "--var",
             "author=",
             "--var",
-            "version="
+            "version=",
         ],
         temp_path,
     )
@@ -839,7 +836,7 @@ Message: {{ message }}
             "--var",
             "message=Original message",
             "--var",
-            "message=Overridden message"
+            "message=Overridden message",
         ],
         temp_path,
     )

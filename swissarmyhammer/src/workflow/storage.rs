@@ -1151,11 +1151,11 @@ stateDiagram-v2
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        
+
         // Create a .git directory to make it look like a Git repository
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir_all(&git_dir).unwrap();
-        
+
         let local_workflows_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
