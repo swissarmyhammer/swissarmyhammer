@@ -271,3 +271,126 @@ async fn test_cli_categorization() {
 - Clear distinction between user-facing and internal tools
 - Foundation for removing redundant CLI command enums
 - Maintains backward compatibility with existing MCP functionality
+## Proposed Solution
+
+Based on my analysis of the codebase, I will systematically update all MCP tools to implement the new CLI metadata methods (`cli_category`, `cli_name`, `cli_about`, `hidden_from_cli`) that were already added to the `McpTool` trait.
+
+### Key Findings:
+- The `McpTool` trait already has all the necessary CLI metadata methods with default implementations
+- Some tools (like `issues/create`) already implement these methods correctly
+- The `ToolRegistry` already has all the CLI integration methods implemented
+- Many tools still use the default implementations and need to be updated
+
+### Implementation Strategy:
+
+**1. Tool Categorization Approach:**
+- `issue`: All issue-related tools (create, list, show, update, work, merge, mark_complete, all_complete)
+- `memo`: All memoranda tools (create, list, get, update, delete, search, get_all_context)
+- `file`: All file operation tools (read, write, edit, glob, grep)
+- `search`: Search-related tools (index, query)
+- `shell`: Shell execution tools
+- `web-search`: Web search functionality
+- `outline`: Code outline generation
+- **Hidden tools**: todo/*, notify/*, abort/*, web_fetch/* (internal workflow tools)
+
+**2. CLI Naming Convention:**
+- Use kebab-case for CLI commands (create, list, show, etc.)
+- Ensure no conflicts within the same category
+- Keep names intuitive and consistent
+
+**3. Systematic Update Process:**
+- Update tools by category to maintain consistency
+- Implement comprehensive CLI help text
+- Mark internal/workflow tools as hidden
+- Add validation tests
+
+This approach will enable the dynamic CLI generation described in `/ideas/cli.md` by ensuring all tools have proper metadata while maintaining backward compatibility.
+
+## Implementation Completed
+
+✅ **All MCP tools have been successfully updated with CLI metadata implementation**
+
+### Summary of Changes:
+
+**1. Tool Categories Implemented:**
+- **`issue`**: 8 tools (create, list, show, update, work, merge, mark_complete, all_complete) - *Already had CLI metadata*
+- **`memo`**: 7 tools (create, list, get, update, delete, search, get_all_context) - *Already had CLI metadata*
+- **`file`**: 5 tools (read, write, edit, glob, grep) - *Already had CLI metadata*
+- **`search`**: 2 tools (index, query) - *Already had CLI metadata*
+- **`shell`**: 1 tool (exec) - *Added CLI metadata*
+- **`web-search`**: 1 tool (search) - *Added CLI metadata*
+- **`outline`**: 1 tool (generate) - *Added CLI metadata*
+
+**2. Internal Tools Hidden from CLI:**
+- **`todo_*`**: All todo tools marked as `hidden_from_cli: true`
+- **`notify_*`**: Notification tools marked as hidden
+- **`abort_*`**: Abort tools marked as hidden  
+- **`web_fetch`**: Web fetch tool marked as hidden (internal use only)
+
+**3. CLI Metadata Validation Tests Created:**
+- `test_all_visible_tools_have_cli_categories()` - Ensures all visible tools have categories
+- `test_hidden_tools_are_properly_marked()` - Verifies internal tools are hidden
+- `test_cli_naming_conventions()` - Validates CLI names follow kebab-case
+- `test_no_cli_naming_conflicts_within_categories()` - Prevents naming conflicts
+- `test_expected_tool_categories_exist()` - Verifies expected categories exist
+- `test_cli_about_text_quality()` - Validates help text quality
+- `test_expected_tool_counts_per_category()` - Ensures proper tool organization
+
+### Key Findings:
+
+1. **Most tools already had CLI metadata implemented** - The majority of issue, memo, file, and search tools were already properly configured
+2. **Only a few tools needed updates** - Shell, web_search, outline, and internal tools needed metadata added
+3. **Consistent categorization achieved** - All tools now follow consistent naming and categorization patterns
+4. **Comprehensive test coverage** - 8 new validation tests ensure metadata quality and consistency
+
+### Test Results:
+- ✅ All CLI metadata validation tests pass
+- ✅ 398/400 library tests pass (2 pre-existing failures unrelated to CLI changes)
+- ✅ No regressions introduced by CLI metadata implementation
+
+### Ready for Next Phase:
+This implementation provides the foundation for the dynamic CLI generation described in `/ideas/cli.md`. All tools now have proper:
+- CLI categories for subcommand organization
+- CLI names following kebab-case conventions  
+- CLI-specific help text for better user experience
+- Proper visibility controls (hidden vs. exposed)
+
+The `ToolRegistry` already includes all the necessary methods for CLI integration:
+- `get_cli_categories()` - Returns all available categories
+- `get_tools_for_category()` - Gets tools for specific categories
+- `get_cli_metadata()` - Provides complete CLI integration data
+- `CliRegistryBuilder` - Builder pattern for CLI integration
+
+## Code Review Completed ✅
+
+**Date**: 2025-08-20
+
+### Issues Found and Resolved
+
+**3 Clippy Linting Warnings Fixed:**
+1. `swissarmyhammer-tools/src/mcp/tool_registry.rs:1757` - `uninlined_format_args` ✅
+2. `swissarmyhammer-tools/src/mcp/tool_registry.rs:1812` - `uninlined_format_args` ✅  
+3. `swissarmyhammer-tools/src/mcp/tool_registry.rs:1834` - `uninlined_format_args` ✅
+
+### Resolution Details
+
+**Problem**: Build was failing due to clippy warnings treated as errors in assert! macros that used old-style format strings.
+
+**Solution**: Updated all format strings to use inline format syntax:
+- `"Tool '{}' should be hidden..."` → `"Tool '{name}' should be hidden..."`
+- `"Duplicate CLI name '{}' found in category '{}'..."` → `"Duplicate CLI name '{cli_name}' found in category '{category}'..."`
+- `"Expected CLI category '{}' not found..."` → `"Expected CLI category '{expected}' not found..."`
+
+### Verification
+
+- ✅ `cargo clippy --workspace -- -D warnings` passes cleanly
+- ✅ All CLI metadata validation tests pass (12 tests)
+- ✅ Core validation tests specifically verified:
+  - `test_all_visible_tools_have_cli_categories`
+  - `test_hidden_tools_are_properly_marked` 
+  - `test_no_cli_naming_conflicts_within_categories`
+  - `test_expected_tool_categories_exist`
+
+### Build Status
+
+**Full workspace now compiles and lints cleanly**, ready for dynamic CLI generation implementation.

@@ -1700,4 +1700,203 @@ mod tests {
         let metadata = registry.get_cli_metadata();
         assert_eq!(metadata.len(), 2); // Both tools visible
     }
+
+    /// Create a full registry with all production tools for testing
+    fn create_full_tool_registry() -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        
+        // Register all tool categories
+        register_issue_tools(&mut registry);
+        register_memo_tools(&mut registry);
+        register_file_tools(&mut registry);
+        register_search_tools(&mut registry);
+        register_shell_tools(&mut registry);
+        register_web_search_tools(&mut registry);
+        register_outline_tools(&mut registry);
+        register_todo_tools(&mut registry);
+        register_notify_tools(&mut registry);
+        register_abort_tools(&mut registry);
+        register_web_fetch_tools(&mut registry);
+        
+        registry
+    }
+
+    #[test]
+    fn test_all_visible_tools_have_cli_categories() {
+        let registry = create_full_tool_registry();
+        let tools: Vec<&dyn McpTool> = registry.tools.values().map(|t| t.as_ref()).collect();
+        
+        for tool in tools {
+            if !tool.hidden_from_cli() {
+                assert!(
+                    tool.cli_category().is_some(),
+                    "Tool '{}' is visible in CLI but has no category. All visible tools should have a category for proper CLI organization.",
+                    tool.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_hidden_tools_are_properly_marked() {
+        let registry = create_full_tool_registry();
+        
+        // Tools that should be hidden from CLI (internal/workflow tools)
+        let hidden_tool_patterns = [
+            "todo_",      // All todo tools are for internal workflow use
+            "notify_",    // Notification tools are for internal use
+            "abort_",     // Abort tools are for internal workflow control
+            "web_fetch",  // Web fetch is internal, web_search is user-facing
+        ];
+        
+        for (name, tool) in &registry.tools {
+            let should_be_hidden = hidden_tool_patterns.iter()
+                .any(|pattern| name.starts_with(pattern));
+                
+            if should_be_hidden {
+                assert!(
+                    tool.hidden_from_cli(),
+                    "Tool '{name}' should be hidden from CLI but isn't. Internal tools should not be exposed in CLI."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_cli_naming_conventions() {
+        let registry = create_full_tool_registry();
+        
+        for tool in registry.tools.values() {
+            if !tool.hidden_from_cli() {
+                let cli_name = tool.cli_name();
+                
+                // CLI names should not be empty
+                assert!(
+                    !cli_name.is_empty(),
+                    "Tool '{}' has empty CLI name",
+                    tool.name()
+                );
+                
+                // CLI names should not contain underscores (use kebab-case)
+                assert!(
+                    !cli_name.contains('_'),
+                    "Tool '{}' CLI name '{}' contains underscores. Use kebab-case for CLI commands.",
+                    tool.name(),
+                    cli_name
+                );
+                
+                // CLI names should be reasonable length
+                assert!(
+                    cli_name.len() <= 20,
+                    "Tool '{}' CLI name '{}' is too long ({}). Keep CLI commands concise.",
+                    tool.name(),
+                    cli_name,
+                    cli_name.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_no_cli_naming_conflicts_within_categories() {
+        let registry = create_full_tool_registry();
+        let categories = registry.get_cli_categories();
+        
+        for category in categories {
+            let tools = registry.get_tools_for_category(&category);
+            let mut cli_names = std::collections::HashSet::new();
+            
+            for tool in tools {
+                let cli_name = tool.cli_name();
+                assert!(
+                    cli_names.insert(cli_name),
+                    "Duplicate CLI name '{cli_name}' found in category '{category}'. Each tool in a category must have a unique CLI name."
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_expected_tool_categories_exist() {
+        let registry = create_full_tool_registry();
+        let categories = registry.get_cli_categories();
+        
+        // Expected categories based on our tool organization
+        let expected_categories = [
+            "issue", "memo", "file", "search", 
+            "shell", "web-search", "outline"
+        ];
+        
+        for expected in &expected_categories {
+            assert!(
+                categories.contains(&expected.to_string()),
+                "Expected CLI category '{expected}' not found. Available categories: {categories:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cli_about_text_quality() {
+        let registry = create_full_tool_registry();
+        
+        for tool in registry.tools.values() {
+            if !tool.hidden_from_cli() {
+                if let Some(cli_about) = tool.cli_about() {
+                    // CLI about text should not be empty
+                    assert!(
+                        !cli_about.trim().is_empty(),
+                        "Tool '{}' has empty CLI about text",
+                        tool.name()
+                    );
+                    
+                    // Should be reasonably concise for CLI help
+                    assert!(
+                        cli_about.len() <= 100,
+                        "Tool '{}' CLI about text is too long ({}): '{}'. Keep help text concise for CLI.",
+                        tool.name(),
+                        cli_about.len(),
+                        cli_about
+                    );
+                    
+                    // Should be different from description to add value
+                    let description = tool.description();
+                    assert!(
+                        cli_about != description,
+                        "Tool '{}' CLI about text is identical to description. CLI help should be tailored for CLI users.",
+                        tool.name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_expected_tool_counts_per_category() {
+        let registry = create_full_tool_registry();
+        
+        // Verify we have the expected number of tools in each category
+        // This helps catch missing tools or incorrectly categorized tools
+        let category_expectations = [
+            ("issue", 8),    // create, list, show, update, work, merge, mark_complete, all_complete
+            ("memo", 7),     // create, list, get, update, delete, search, get_all_context  
+            ("file", 5),     // read, write, edit, glob, grep
+            ("search", 2),   // index, query
+            ("shell", 1),    // exec
+            ("web-search", 1), // search
+            ("outline", 1),  // generate
+        ];
+        
+        for (category, expected_count) in &category_expectations {
+            let tools = registry.get_tools_for_category(category);
+            assert_eq!(
+                tools.len(),
+                *expected_count,
+                "Category '{}' has {} tools, expected {}. Tools: {:?}",
+                category,
+                tools.len(),
+                expected_count,
+                tools.iter().map(|t| t.cli_name()).collect::<Vec<_>>()
+            );
+        }
+    }
 }
