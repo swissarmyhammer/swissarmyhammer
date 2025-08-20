@@ -114,7 +114,7 @@ impl Doctor {
         self.run_configuration_checks()?;
         self.run_prompt_checks()?;
         self.run_workflow_checks()?;
-        
+
         // Run migration checks if requested
         if migration {
             self.run_migration_checks()?;

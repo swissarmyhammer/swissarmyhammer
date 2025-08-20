@@ -232,7 +232,6 @@ impl CheckBuilder {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
