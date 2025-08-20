@@ -5,6 +5,29 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+mod test_utils;
+use test_utils::setup_git_repo;
+
+/// Helper to run CLI commands with standard optimizations
+fn run_optimized_command(args: &[&str], temp_path: &std::path::Path) -> Result<Command, Box<dyn std::error::Error>> {
+    // Create unique test identifier to avoid any cross-test conflicts
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let thread_id = std::thread::current().id();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let test_id = format!("{thread_id:?}_{timestamp}");
+
+    let mut cmd = Command::cargo_bin("sah")?;
+    cmd.args(args)
+        .current_dir(temp_path)
+        .env("SWISSARMYHAMMER_TEST_MODE", "1")
+        .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
+        .env("RUST_LOG", "warn");
+    Ok(cmd)
+}
+
 /// Helper to create a test prompt for the workflow
 fn create_test_prompt() -> String {
     r#"---
@@ -42,19 +65,26 @@ stateDiagram-v2
     start --> process: Always
     process --> end: Always
     end --> [*]
-    
-    start: Log "Starting with {{ greeting | default: 'Hello' }}"
-    process: Execute prompt "test-prompt" with message="{{ message }}" count="{{ count | default: '1' }}"
-    end: Log "Finished processing {{ count }} items for {{ message }}"
 ```
+
+## Actions
+
+- start: Log "Starting with {{ greeting | default: 'Hello' }}"
+- process: Execute prompt "test-prompt" with message="{{ message }}" count="{{ count | default: '1' }}"
+- end: Log "Finished processing {{ count }} items for {{ message }}"
 "#.to_string()
 }
 
 #[test]
 fn test_workflow_with_var_variables() {
     let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+    
+    // Setup proper git repository
+    setup_git_repo(temp_path).unwrap();
+    
     // Create .swissarmyhammer/workflows directory in temp dir
-    let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
+    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
     // Create test workflow
@@ -62,36 +92,44 @@ fn test_workflow_with_var_variables() {
     fs::write(&workflow_path, create_test_workflow_with_templates()).unwrap();
 
     // Create test prompt that the workflow uses
-    let prompt_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
     let prompt_path = prompt_dir.join("test-prompt.md");
     fs::write(&prompt_path, create_test_prompt()).unwrap();
 
-    // Run workflow with --var variables
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("test-template")
-        .arg("--var")
-        .arg("greeting=Bonjour")
-        .arg("--var")
-        .arg("message=TestMessage")
-        .arg("--var")
-        .arg("count=5")
-        .arg("--dry-run")
-        .current_dir(&temp_dir);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("test-template"));
+    // Run workflow with --var variables using optimized command
+    run_optimized_command(
+        &[
+            "flow",
+            "run", 
+            "test-template",
+            "--var",
+            "greeting=Bonjour",
+            "--var", 
+            "message=TestMessage",
+            "--var",
+            "count=5",
+            "--dry-run"
+        ],
+        temp_path,
+    )
+    .unwrap()
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Dry run mode"))
+    .stdout(predicate::str::contains("test-template"));
 }
 
 #[test]
 fn test_invalid_var_variable_format() {
     let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+    
+    // Setup proper git repository
+    setup_git_repo(temp_path).unwrap();
+    
     // Create .swissarmyhammer/workflows directory in temp dir
-    let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
+    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
     // Create a minimal workflow so we get past the "workflow not found" error
@@ -108,32 +146,42 @@ version: 1.0.0
 stateDiagram-v2
     [*] --> end
     end --> [*]
-    
-    end: Log "Done"
 ```
+
+## Actions
+
+- end: Log "Done"
 "#,
     )
     .unwrap();
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("some-workflow")
-        .arg("--var")
-        .arg("invalid_format")
-        .current_dir(&temp_dir);
-
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Invalid variable format"))
-        .stderr(predicate::str::contains("key=value"));
+    run_optimized_command(
+        &[
+            "flow",
+            "run",
+            "some-workflow",
+            "--var",
+            "invalid_format"
+        ],
+        temp_path,
+    )
+    .unwrap()
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("Invalid variable format"))
+    .stderr(predicate::str::contains("key=value"));
 }
 
 #[test]
 fn test_var_multiple_usage() {
     let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+    
+    // Setup proper git repository
+    setup_git_repo(temp_path).unwrap();
+    
     // Create .swissarmyhammer/workflows directory in temp dir
-    let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
+    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
     // Create simple workflow
@@ -150,36 +198,45 @@ version: 1.0.0
 stateDiagram-v2
     [*] --> end
     end --> [*]
-    
-    end: Log "Done"
 ```
+
+## Actions
+
+- end: Log "Done"
 "#,
     )
     .unwrap();
 
-    // Run workflow with multiple --var
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("simple")
-        .arg("--var")
-        .arg("context_var=value1")
-        .arg("--var")
-        .arg("template_var=value2")
-        .arg("--dry-run")
-        .current_dir(&temp_dir);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("context_var"))
-        .stdout(predicate::str::contains("template_var"))
-        .stdout(predicate::str::contains("value1"))
-        .stdout(predicate::str::contains("value2"));
+    // Run workflow with multiple --var using optimized command
+    run_optimized_command(
+        &[
+            "flow",
+            "run",
+            "simple",
+            "--var",
+            "context_var=value1",
+            "--var",
+            "template_var=value2",
+            "--dry-run"
+        ],
+        temp_path,
+    )
+    .unwrap()
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("context_var"))
+    .stdout(predicate::str::contains("template_var"))
+    .stdout(predicate::str::contains("value1"))
+    .stdout(predicate::str::contains("value2"));
 }
 
 #[test]
 fn test_full_workflow_execution_with_liquid_templates() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -244,6 +301,10 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_missing_template_variables() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -288,12 +349,16 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_complex_liquid_templates() {
     let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Setup proper git repository
+    setup_git_repo(temp_path).unwrap();
 
     // Create directories
-    let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
+    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
-    let prompt_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
 
     // Create a prompt that uses template variables
@@ -339,28 +404,35 @@ stateDiagram-v2
 - process: Execute prompt "template-prompt" with user="{{ user_name }}" task="{{ task_type }} for {{ project_name }}"
 "#).unwrap();
 
-    // Run workflow with complex template variables
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("complex-templates")
-        .arg("--var")
-        .arg("user_name=Alice")
-        .arg("--var")
-        .arg("task_type=Code Review")
-        .arg("--var")
-        .arg("project_name=SwissArmyHammer")
-        .arg("--dry-run") // Use dry-run since we don't want to actually execute the prompt
-        .current_dir(&temp_dir);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("complex-templates"));
+    // Run workflow with complex template variables using optimized command
+    run_optimized_command(
+        &[
+            "flow",
+            "run",
+            "complex-templates",
+            "--var",
+            "user_name=Alice",
+            "--var",
+            "task_type=Code Review",
+            "--var",
+            "project_name=SwissArmyHammer",
+            "--dry-run" // Use dry-run since we don't want to actually execute the prompt
+        ],
+        temp_path,
+    )
+    .unwrap()
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("complex-templates"));
 }
 
 #[test]
 fn test_workflow_with_malformed_liquid_templates() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -417,6 +489,10 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_liquid_injection_attempts() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -463,6 +539,10 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_empty_var_value() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -511,6 +591,10 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_special_chars_in_var_values() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -565,6 +649,10 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_duplicate_var_names() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -613,6 +701,10 @@ stateDiagram-v2
 #[test]
 fn test_workflow_with_equals_sign_in_var_value() {
     let temp_dir = TempDir::new().unwrap();
+    
+    // Create .git directory to make it look like a Git repository
+    let git_dir = temp_dir.path().join(".git");
+    fs::create_dir_all(&git_dir).unwrap();
 
     // Create .swissarmyhammer/workflows directory
     let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
@@ -658,9 +750,13 @@ stateDiagram-v2
 #[test]
 fn test_prompt_test_with_empty_var_value() {
     let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Setup proper git repository
+    setup_git_repo(temp_path).unwrap();
 
     // Create prompt directory
-    let prompt_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
 
     // Create test prompt
@@ -682,32 +778,39 @@ Version: {{ version | default: "1.0" }}
     )
     .unwrap();
 
-    // Test with empty var value
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("prompt")
-        .arg("test")
-        .arg("empty-test")
-        .arg("--var")
-        .arg("content=Main content")
-        .arg("--var")
-        .arg("author=")
-        .arg("--var")
-        .arg("version=")
-        .current_dir(&temp_dir);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Content: Main content"))
-        .stdout(predicate::str::contains("Author: "))
-        .stdout(predicate::str::contains("Version: "));
+    // Test with empty var value using optimized command
+    run_optimized_command(
+        &[
+            "prompt",
+            "test",
+            "empty-test",
+            "--var",
+            "content=Main content",
+            "--var",
+            "author=",
+            "--var",
+            "version="
+        ],
+        temp_path,
+    )
+    .unwrap()
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Content: Main content"))
+    .stdout(predicate::str::contains("Author: "))
+    .stdout(predicate::str::contains("Version: "));
 }
 
 #[test]
 fn test_prompt_test_with_var_overriding_arg() {
     let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Setup proper git repository
+    setup_git_repo(temp_path).unwrap();
 
     // Create prompt directory
-    let prompt_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
 
     // Create test prompt
@@ -727,18 +830,21 @@ Message: {{ message }}
     )
     .unwrap();
 
-    // Test with later --var overriding earlier --var
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("prompt")
-        .arg("test")
-        .arg("override-test")
-        .arg("--var")
-        .arg("message=Original message")
-        .arg("--var")
-        .arg("message=Overridden message")
-        .current_dir(&temp_dir);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Message: Overridden message"));
+    // Test with later --var overriding earlier --var using optimized command
+    run_optimized_command(
+        &[
+            "prompt",
+            "test",
+            "override-test",
+            "--var",
+            "message=Original message",
+            "--var",
+            "message=Overridden message"
+        ],
+        temp_path,
+    )
+    .unwrap()
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Message: Overridden message"));
 }

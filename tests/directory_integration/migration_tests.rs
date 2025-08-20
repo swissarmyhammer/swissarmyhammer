@@ -7,7 +7,6 @@
 use super::{GitRepositoryTestGuard, create_legacy_directory_structure};
 use swissarmyhammer::directory_utils::{
     find_swissarmyhammer_directory,
-    find_swissarmyhammer_dirs_upward,
     get_or_create_swissarmyhammer_directory
 };
 use std::fs;
@@ -56,13 +55,7 @@ fn test_migration_from_single_swissarmyhammer_directory() {
     let git_repo = git2::Repository::init(&project_root)
         .expect("Failed to initialize Git repository");
 
-    // Now test migration scenario
-    // Old behavior: directory already exists, should be found
-    let found_dirs = find_swissarmyhammer_dirs_upward(&project_root, false);
-    assert_eq!(found_dirs.len(), 1);
-    assert_eq!(found_dirs[0], old_swissarmyhammer);
-
-    // New behavior: should find the Git-centric directory
+    // Test migration scenario: Git-centric directory resolution should find the existing directory
     let git_swissarmyhammer = find_swissarmyhammer_directory();
     assert!(git_swissarmyhammer.is_some());
     assert_eq!(git_swissarmyhammer.unwrap(), old_swissarmyhammer);
@@ -100,11 +93,7 @@ fn test_migration_from_multiple_swissarmyhammer_directories() {
     let _git_repo = git2::Repository::init(&project_root)
         .expect("Failed to initialize Git repository");
 
-    // Test legacy behavior: multiple directories are found
-    let found_dirs = find_swissarmyhammer_dirs_upward(&deepest_path, false);
-    assert!(found_dirs.len() >= 2, "Should find multiple .swissarmyhammer directories");
-
-    // Test new behavior: should find Git repository .swissarmyhammer
+    // Test Git-centric behavior: should find Git repository .swissarmyhammer
     let git_swissarmyhammer = find_swissarmyhammer_directory();
     assert!(git_swissarmyhammer.is_some());
     assert_eq!(git_swissarmyhammer.unwrap(), project_root.join(".swissarmyhammer"));

@@ -4,80 +4,9 @@
 //! code duplication across the codebase.
 
 use crate::security::MAX_DIRECTORY_DEPTH;
-use std::env;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// Find all `.swissarmyhammer` directories by walking up from the current directory
-///
-/// This function walks up the directory tree from the given starting path,
-/// looking for `.swissarmyhammer` directories. It respects the MAX_DIRECTORY_DEPTH
-/// limit and optionally excludes the user's home directory.
-///
-/// # Arguments
-///
-/// * `start_path` - The path to start searching from
-/// * `exclude_home` - Whether to exclude the home ~/.swissarmyhammer directory
-///
-/// # Returns
-///
-/// A vector of paths to `.swissarmyhammer` directories, ordered from root to current
-pub fn find_swissarmyhammer_dirs_upward(start_path: &Path, exclude_home: bool) -> Vec<PathBuf> {
-    let mut directories = Vec::new();
-    let mut path = start_path;
-    let mut depth = 0;
-
-    // Get home directory for exclusion check
-    // Use HOME environment variable first (for test isolation), then fall back to dirs::home_dir()
-    let home_swissarmyhammer = std::env::var("HOME")
-        .map(|home_str| PathBuf::from(home_str).join(".swissarmyhammer"))
-        .or_else(|_| {
-            dirs::home_dir()
-                .map(|home| home.join(".swissarmyhammer"))
-                .ok_or(())
-        })
-        .ok();
-
-    loop {
-        if depth >= MAX_DIRECTORY_DEPTH {
-            break;
-        }
-
-        let swissarmyhammer_dir = path.join(".swissarmyhammer");
-        if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
-            // Check if we should exclude home directory
-            if exclude_home {
-                if let Some(ref home_dir) = home_swissarmyhammer {
-                    if &swissarmyhammer_dir == home_dir {
-                        // Skip home directory but continue searching
-                        match path.parent() {
-                            Some(parent) => {
-                                path = parent;
-                                depth += 1;
-                                continue;
-                            }
-                            None => break,
-                        }
-                    }
-                }
-            }
-
-            directories.push(swissarmyhammer_dir);
-        }
-
-        match path.parent() {
-            Some(parent) => {
-                path = parent;
-                depth += 1;
-            }
-            None => break,
-        }
-    }
-
-    // Reverse to get root-to-current order
-    directories.reverse();
-    directories
-}
 
 /// Walk a directory recursively to find files with specific extensions
 ///
@@ -129,46 +58,6 @@ pub fn walk_files_with_extensions<'a>(
     })
 }
 
-/// Find the repository root or return the current directory
-///
-/// This function walks up the directory tree looking for a `.git` directory
-/// to identify a Git repository. If found, returns the repository root.
-/// If no Git repository is found, returns the current directory.
-///
-/// # Returns
-///
-/// * `Result<PathBuf, std::io::Error>` - The repository root path or current directory
-///
-/// # Errors
-///
-/// Returns an error if the current directory cannot be determined.
-pub fn find_repository_or_current_directory() -> Result<PathBuf, std::io::Error> {
-    let current_dir = env::current_dir()?;
-    let mut path = current_dir.as_path();
-    let mut depth = 0;
-
-    // Walk up looking for .git directory
-    loop {
-        if depth >= MAX_DIRECTORY_DEPTH {
-            break;
-        }
-
-        if path.join(".git").exists() {
-            return Ok(path.to_path_buf());
-        }
-
-        match path.parent() {
-            Some(parent) => {
-                path = parent;
-                depth += 1;
-            }
-            None => break,
-        }
-    }
-
-    // No git repository found, return current directory
-    Ok(current_dir)
-}
 
 /// Find the Git repository root starting from current directory
 ///
@@ -287,32 +176,10 @@ pub fn get_or_create_swissarmyhammer_directory() -> crate::error::Result<PathBuf
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::env;
     use std::fs;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_find_swissarmyhammer_dirs_upward() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
-
-        // Create nested structure
-        let level1 = base.join("level1");
-        let level2 = level1.join("level2");
-        let level3 = level2.join("level3");
-
-        fs::create_dir_all(&level3).unwrap();
-
-        // Create .swissarmyhammer dirs at different levels
-        fs::create_dir(base.join(".swissarmyhammer")).unwrap();
-        fs::create_dir(level2.join(".swissarmyhammer")).unwrap();
-
-        // Search from level3
-        let dirs = find_swissarmyhammer_dirs_upward(&level3, false);
-
-        assert_eq!(dirs.len(), 2);
-        assert_eq!(dirs[0], base.join(".swissarmyhammer"));
-        assert_eq!(dirs[1], level2.join(".swissarmyhammer"));
-    }
 
     #[test]
     fn test_walk_files_with_extensions() {

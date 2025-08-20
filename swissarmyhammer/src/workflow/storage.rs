@@ -1151,6 +1151,11 @@ stateDiagram-v2
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
+        
+        // Create a .git directory to make it look like a Git repository
+        let git_dir = temp_dir.path().join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
+        
         let local_workflows_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
@@ -1218,6 +1223,9 @@ stateDiagram-v2
         // Use isolated test environment to safely manage both HOME and current working directory
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+
+        // Create a .git directory in current working directory to simulate a Git repository
+        fs::create_dir_all(".git").unwrap();
 
         // Get the isolated home directory (managed by IsolatedTestEnvironment)
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());

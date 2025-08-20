@@ -24,7 +24,7 @@
 //! All skipped files and errors are logged using the `tracing` framework at
 //! appropriate levels (warn for security issues, debug for missing directories).
 
-use crate::directory_utils::{find_swissarmyhammer_dirs_upward, walk_files_with_extensions};
+use crate::directory_utils::{find_swissarmyhammer_directory, walk_files_with_extensions};
 use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -329,16 +329,25 @@ impl VirtualFileSystem {
         Ok(())
     }
 
-    /// Load local files by walking up the directory tree
+    /// Load local files from the Git repository .swissarmyhammer directory
     fn load_local_files(&mut self) -> Result<()> {
-        let current_dir = std::env::current_dir()?;
+        // Primary approach: Find the Git repository .swissarmyhammer directory
+        if let Some(swissarmyhammer_dir) = find_swissarmyhammer_directory() {
+            self.load_directory(&swissarmyhammer_dir, FileSource::Local)?;
+            return Ok(());
+        }
 
-        // Find all .swissarmyhammer directories from current to root, excluding home
-        let directories = find_swissarmyhammer_dirs_upward(&current_dir, true);
-
-        // Load directories (already in root-to-current order)
-        for dir in directories {
-            self.load_directory(&dir, FileSource::Local)?;
+        // Fallback approach: If Git-centric approach fails (e.g., in tests),
+        // look for .swissarmyhammer in the current directory
+        if let Ok(current_dir) = std::env::current_dir() {
+            let current_swissarmyhammer = current_dir.join(".swissarmyhammer");
+            if current_swissarmyhammer.exists() && current_swissarmyhammer.is_dir() {
+                tracing::debug!(
+                    "Using fallback directory detection: {}",
+                    current_swissarmyhammer.display()
+                );
+                self.load_directory(&current_swissarmyhammer, FileSource::Local)?;
+            }
         }
 
         Ok(())
@@ -362,15 +371,20 @@ impl VirtualFileSystem {
             }
         }
 
-        // Local directories
-        let current_dir = std::env::current_dir()?;
-        let swissarmyhammer_dirs = find_swissarmyhammer_dirs_upward(&current_dir, true);
-
-        // Add subdirectories that exist
-        for dir in swissarmyhammer_dirs {
-            let subdir = dir.join(&self.subdirectory);
+        // Local Git repository directory
+        if let Some(swissarmyhammer_dir) = find_swissarmyhammer_directory() {
+            let subdir = swissarmyhammer_dir.join(&self.subdirectory);
             if subdir.exists() && subdir.is_dir() {
                 directories.push(subdir);
+            }
+        } else {
+            // Fallback: Look for .swissarmyhammer in current directory
+            if let Ok(current_dir) = std::env::current_dir() {
+                let current_swissarmyhammer = current_dir.join(".swissarmyhammer");
+                let subdir = current_swissarmyhammer.join(&self.subdirectory);
+                if subdir.exists() && subdir.is_dir() {
+                    directories.push(subdir);
+                }
             }
         }
 
