@@ -5090,8 +5090,6 @@ mod tests {
                     .canonicalize()
                     .unwrap_or_else(|_| storage.state.issues_dir.clone())
             );
-
-
         }
 
         #[test]
@@ -5140,8 +5138,6 @@ mod tests {
             let dir = FileSystemIssueStorage::default_directory().unwrap();
             assert!(dir.ends_with("issues"));
             assert!(dir.to_string_lossy().contains(".swissarmyhammer"));
-
-
         }
 
         #[test]
@@ -5172,8 +5168,6 @@ mod tests {
                 storage.state.completed_dir,
                 storage.state.issues_dir.join("complete")
             );
-
-
         }
     }
 
@@ -5195,8 +5189,6 @@ mod tests {
             std::fs::write(issues_dir.join("test.md"), "test content").unwrap();
 
             assert!(FileSystemIssueStorage::should_migrate().unwrap());
-
-
         }
 
         #[test]
@@ -5211,8 +5203,6 @@ mod tests {
             std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer/issues")).unwrap();
 
             assert!(!FileSystemIssueStorage::should_migrate().unwrap());
-
-
         }
 
         #[test]
@@ -5223,8 +5213,6 @@ mod tests {
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
             assert!(!FileSystemIssueStorage::should_migrate().unwrap());
-
-
         }
 
         #[test]
@@ -5250,8 +5238,6 @@ mod tests {
             assert_eq!(info.file_count, 3);
             assert!(info.total_size > 0);
             assert_eq!(info.total_size, 24); // "content1" + "content2" + "content3" = 8 + 8 + 8 = 24
-
-
         }
 
         #[test]
@@ -5274,8 +5260,6 @@ mod tests {
                 paths.backup,
                 canonical_temp_path.join(".swissarmyhammer/issues_backup")
             );
-
-
         }
 
         #[test]
@@ -5291,8 +5275,6 @@ mod tests {
 
             // Should still migrate empty directories
             assert!(FileSystemIssueStorage::should_migrate().unwrap());
-
-
         }
 
         #[test]
@@ -5322,8 +5304,6 @@ mod tests {
             assert!(info.should_migrate);
             assert_eq!(info.file_count, 3);
             assert_eq!(info.total_size, 20); // "root" + "complete" + "archived" = 4 + 8 + 8 = 20
-
-
         }
     }
 
@@ -5471,7 +5451,6 @@ mod tests {
             }
 
             // Always restore original directory
-    
         }
 
         #[test]
@@ -5512,8 +5491,6 @@ mod tests {
                 let result = FileSystemIssueStorage::migration_info();
                 assert!(result.is_ok());
             }
-
-
         }
 
         #[test]
@@ -5538,8 +5515,6 @@ mod tests {
             assert!(!info.destination_exists);
             assert_eq!(info.file_count, 0); // No files because source is not a directory
             assert_eq!(info.total_size, 0);
-
-
         }
 
         #[test]
@@ -5558,8 +5533,6 @@ mod tests {
             assert_eq!(paths_global.source, paths_in_dir.source);
             assert_eq!(paths_global.destination, paths_in_dir.destination);
             assert_eq!(paths_global.backup, paths_in_dir.backup);
-
-
         }
     }
 
@@ -5593,8 +5566,6 @@ mod tests {
                 .issues_dir
                 .to_string_lossy()
                 .contains(".swissarmyhammer"));
-
-
         }
 
         #[test]
@@ -5618,8 +5589,6 @@ mod tests {
             // Create new directory - migration no longer needed
             std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer/issues")).unwrap();
             assert!(!FileSystemIssueStorage::should_migrate().unwrap());
-
-
         }
 
         #[test]
@@ -5657,8 +5626,6 @@ mod tests {
             assert!(info3.destination_exists);
             assert_eq!(info3.file_count, 2); // Source still has files
             assert_eq!(info3.total_size, 30);
-
-
         }
 
         #[test]
@@ -5699,8 +5666,6 @@ mod tests {
                 .to_string_lossy()
                 .contains(".swissarmyhammer"));
             assert!(storage2.state.issues_dir.ends_with("issues"));
-
-
         }
     }
 
@@ -5730,8 +5695,6 @@ mod tests {
 
             assert!(should_migrate);
             assert!(duration < std::time::Duration::from_millis(100)); // Should be fast
-
-
         }
 
         #[test]
@@ -5795,8 +5758,6 @@ mod tests {
                     + large_content.len() as u64
             );
             assert!(duration < std::time::Duration::from_millis(50)); // Should be very fast
-
-
         }
     }
 
@@ -5835,8 +5796,6 @@ mod tests {
         let new_path = temp_dir.path().join(".swissarmyhammer").join("issues");
         assert!(new_path.exists());
         assert!(!issues_dir.exists());
-
-
     }
 
     #[tokio::test]
@@ -5884,8 +5843,6 @@ mod tests {
         assert!(new_path.join("active_issue.md").exists());
         assert!(new_complete.join("completed_issue.md").exists());
         assert!(!issues_dir.exists());
-
-
     }
 
     #[tokio::test]
@@ -5912,8 +5869,6 @@ mod tests {
         assert!(!info.source_exists);
         assert_eq!(info.file_count, 0);
         assert_eq!(info.total_size, 0);
-
-
     }
 
     #[test]
@@ -5982,8 +5937,6 @@ mod tests {
         assert!(issues_dir.exists());
         assert!(issues_dir.join("test_issue.md").exists());
         assert!(!destination.exists());
-
-
     }
 
     #[tokio::test]
@@ -6019,8 +5972,6 @@ mod tests {
         let issues = storage.list_issues().await.unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].name, "test");
-
-
     }
 
     #[test]
@@ -6083,8 +6034,6 @@ mod tests {
         // Verify: Storage works correctly after migration
         let issues = storage.list_issues().await.unwrap();
         assert_eq!(issues.len(), 2);
-
-
     }
 
     #[tokio::test]
@@ -6118,8 +6067,6 @@ mod tests {
         let issues = storage.list_issues().await.unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].name, "test");
-
-
     }
 
     #[test]
@@ -6157,8 +6104,6 @@ mod tests {
 
         let result = FileSystemIssueStorage::new_default_with_config(&config);
         assert!(result.is_ok());
-
-
     }
 
     #[test]
@@ -6188,8 +6133,6 @@ mod tests {
         // Verify: Old directory still exists
         assert!(issues_dir.exists());
         assert!(issues_dir.join("test.md").exists());
-
-
     }
 
     #[test]
@@ -6219,8 +6162,6 @@ mod tests {
         // Test: No migration needed after migration
         let status = FileSystemIssueStorage::migration_status().unwrap();
         assert!(status.contains("Using .swissarmyhammer/issues/"));
-
-
     }
 
     #[tokio::test]
@@ -6253,8 +6194,6 @@ mod tests {
         assert!(new_issues_dir.exists());
         assert!(new_issues_dir.join("test.md").exists());
         assert!(!issues_dir.exists());
-
-
     }
 
     #[tokio::test]
@@ -6288,8 +6227,6 @@ mod tests {
         let issues = storage.list_issues().await.unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].name, "new");
-
-
     }
 
     /// Comprehensive tests for migration validation functionality

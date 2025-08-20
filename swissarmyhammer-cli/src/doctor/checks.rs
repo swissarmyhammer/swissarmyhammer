@@ -849,6 +849,294 @@ fn check_circular_dependencies(checks: &mut Vec<Check>) {
     });
 }
 
+/// Check migration status and directory consolidation readiness
+///
+/// This function scans the current directory tree for existing .swissarmyhammer directories
+/// and analyzes their distribution across Git repositories. It identifies orphaned directories,
+/// potential migration conflicts, and provides recommendations for consolidation.
+pub fn check_migration_status(checks: &mut Vec<Check>) -> Result<()> {
+    use swissarmyhammer::migration::scan_existing_directories;
+
+    // Run the migration scan
+    let scan_result = match scan_existing_directories() {
+        Ok(result) => result,
+        Err(e) => {
+            checks.push(Check {
+                name: "Migration directory scan".to_string(),
+                status: CheckStatus::Error,
+                message: format!("Failed to scan directories: {}", e),
+                fix: Some(
+                    "Check file permissions and ensure current directory is accessible".to_string(),
+                ),
+            });
+            return Ok(());
+        }
+    };
+
+    // Check Git repositories with .swissarmyhammer directories
+    let repos_with_swissarmyhammer = scan_result
+        .git_repositories
+        .iter()
+        .filter(|r| r.has_swissarmyhammer)
+        .count();
+    let total_repos = scan_result.git_repositories.len();
+
+    if total_repos == 0 {
+        checks.push(Check {
+            name: "Git repository detection".to_string(),
+            status: CheckStatus::Error,
+            message: "No Git repositories found in current directory tree".to_string(),
+            fix: Some("SwissArmyHammer requires Git repository context. Initialize a Git repository or run from within one".to_string()),
+        });
+    } else if repos_with_swissarmyhammer == total_repos {
+        checks.push(Check {
+            name: "Migration directory placement".to_string(),
+            status: CheckStatus::Ok,
+            message: format!(
+                "All {} Git repositories have .swissarmyhammer directories at correct locations",
+                total_repos
+            ),
+            fix: None,
+        });
+    } else {
+        checks.push(Check {
+            name: "Migration directory placement".to_string(),
+            status: CheckStatus::Warning,
+            message: format!(
+                "{} of {} Git repositories have .swissarmyhammer directories",
+                repos_with_swissarmyhammer, total_repos
+            ),
+            fix: Some("Use 'sah doctor --migration' for detailed migration analysis".to_string()),
+        });
+    }
+
+    // Check for orphaned directories
+    match scan_result.orphaned_directories.len() {
+        0 => {
+            checks.push(Check {
+                name: "Migration orphaned directories".to_string(),
+                status: CheckStatus::Ok,
+                message: "No orphaned .swissarmyhammer directories found".to_string(),
+                fix: None,
+            });
+        }
+        1 => {
+            checks.push(Check {
+                name: "Migration orphaned directories".to_string(),
+                status: CheckStatus::Warning,
+                message: format!("Found 1 orphaned .swissarmyhammer directory: {}", 
+                    scan_result.orphaned_directories[0].display()),
+                fix: Some("Consider moving data to appropriate Git repository or removing if no longer needed".to_string()),
+            });
+        }
+        count => {
+            checks.push(Check {
+                name: "Migration orphaned directories".to_string(),
+                status: CheckStatus::Warning,
+                message: format!("Found {} orphaned .swissarmyhammer directories", count),
+                fix: Some("Run 'sah doctor --migration' for detailed analysis and consolidation recommendations".to_string()),
+            });
+        }
+    }
+
+    // Overall migration readiness assessment
+    let critical_conflicts = scan_result
+        .conflicts
+        .iter()
+        .filter(|c| c.severity == swissarmyhammer::migration::ConflictSeverity::Critical)
+        .count();
+    let high_conflicts = scan_result
+        .conflicts
+        .iter()
+        .filter(|c| c.severity == swissarmyhammer::migration::ConflictSeverity::High)
+        .count();
+
+    if critical_conflicts > 0 {
+        checks.push(Check {
+            name: "Migration readiness".to_string(),
+            status: CheckStatus::Error,
+            message: format!("Migration blocked: {} critical conflicts detected", critical_conflicts),
+            fix: Some("Resolve critical conflicts before attempting migration. Use 'sah doctor --migration' for details".to_string()),
+        });
+    } else if high_conflicts > 0 {
+        checks.push(Check {
+            name: "Migration readiness".to_string(),
+            status: CheckStatus::Warning,
+            message: format!(
+                "Migration requires attention: {} high-severity conflicts",
+                high_conflicts
+            ),
+            fix: Some(
+                "Review high-severity conflicts with 'sah doctor --migration' before proceeding"
+                    .to_string(),
+            ),
+        });
+    } else if scan_result.orphaned_directories.is_empty()
+        && repos_with_swissarmyhammer == total_repos
+    {
+        checks.push(Check {
+            name: "Migration readiness".to_string(),
+            status: CheckStatus::Ok,
+            message: "Directory structure is already compatible with new Git-centric approach"
+                .to_string(),
+            fix: None,
+        });
+    } else {
+        checks.push(Check {
+            name: "Migration readiness".to_string(),
+            status: CheckStatus::Ok,
+            message: "Migration can proceed with standard consolidation process".to_string(),
+            fix: Some("Use 'sah doctor --migration' for detailed migration plan".to_string()),
+        });
+    }
+
+    Ok(())
+}
+
+/// Check for migration conflicts in detail
+///
+/// This function performs detailed conflict analysis for migration scenarios,
+/// including permission issues, data conflicts, and path problems that could
+/// prevent successful directory consolidation.
+pub fn check_migration_conflicts(checks: &mut Vec<Check>) -> Result<()> {
+    use swissarmyhammer::migration::scan_existing_directories;
+
+    // Run the migration scan
+    let scan_result = match scan_existing_directories() {
+        Ok(result) => result,
+        Err(e) => {
+            checks.push(Check {
+                name: "Migration conflict analysis".to_string(),
+                status: CheckStatus::Error,
+                message: format!("Failed to analyze conflicts: {}", e),
+                fix: Some(
+                    "Check file permissions and ensure directories are accessible".to_string(),
+                ),
+            });
+            return Ok(());
+        }
+    };
+
+    if scan_result.conflicts.is_empty() {
+        checks.push(Check {
+            name: "Migration conflicts".to_string(),
+            status: CheckStatus::Ok,
+            message: "No migration conflicts detected".to_string(),
+            fix: None,
+        });
+        return Ok(());
+    }
+
+    // Categorize conflicts by type and severity
+    use std::collections::HashMap;
+    use swissarmyhammer::migration::{ConflictSeverity, ConflictType};
+
+    let mut conflict_summary = HashMap::new();
+    for conflict in &scan_result.conflicts {
+        let key = (&conflict.conflict_type, &conflict.severity);
+        *conflict_summary.entry(key).or_insert(0) += 1;
+    }
+
+    // Report conflicts by severity
+    for (severity, description) in &[
+        (
+            ConflictSeverity::Critical,
+            "Critical conflicts (data loss risk)",
+        ),
+        (
+            ConflictSeverity::High,
+            "High-severity conflicts (manual intervention required)",
+        ),
+        (
+            ConflictSeverity::Medium,
+            "Medium-severity conflicts (migration complexity)",
+        ),
+        (
+            ConflictSeverity::Low,
+            "Low-severity conflicts (informational)",
+        ),
+    ] {
+        let conflicts_at_severity: Vec<_> = scan_result
+            .conflicts
+            .iter()
+            .filter(|c| &c.severity == severity)
+            .collect();
+
+        if conflicts_at_severity.is_empty() {
+            continue;
+        }
+
+        let count = conflicts_at_severity.len();
+        let status = match severity {
+            ConflictSeverity::Critical => CheckStatus::Error,
+            ConflictSeverity::High => CheckStatus::Warning,
+            _ => CheckStatus::Warning,
+        };
+
+        // Group conflicts by type for detailed reporting
+        let mut type_counts = HashMap::new();
+        for conflict in &conflicts_at_severity {
+            *type_counts.entry(&conflict.conflict_type).or_insert(0) += 1;
+        }
+
+        let type_summary: Vec<String> = type_counts
+            .iter()
+            .map(|(conflict_type, count)| {
+                let type_description = match conflict_type {
+                    ConflictType::DuplicateData => "data conflicts",
+                    ConflictType::PermissionIssue => "permission issues",
+                    ConflictType::PathConflict => "path conflicts",
+                    ConflictType::DataLoss => "data loss risks",
+                    ConflictType::VersionMismatch => "version mismatches",
+                };
+                format!("{} {}", count, type_description)
+            })
+            .collect();
+
+        checks.push(Check {
+            name: format!("Migration conflicts ({})", description),
+            status,
+            message: if count == 1 {
+                format!("Found 1 {}: {}", description.to_lowercase(), type_summary.join(", "))
+            } else {
+                format!("Found {} {}: {}", count, description.to_lowercase(), type_summary.join(", "))
+            },
+            fix: Some("Use 'sah doctor --migration' to see detailed conflict information and resolution steps".to_string()),
+        });
+    }
+
+    // Summary check with highest severity
+    if let Some(highest_severity) = scan_result.conflicts.iter().map(|c| &c.severity).max() {
+        let total_conflicts = scan_result.conflicts.len();
+        let status = match highest_severity {
+            ConflictSeverity::Critical => CheckStatus::Error,
+            ConflictSeverity::High => CheckStatus::Warning,
+            _ => CheckStatus::Warning,
+        };
+
+        if total_conflicts == 1 {
+            checks.push(Check {
+                name: "Migration conflict summary".to_string(),
+                status,
+                message: format!("1 conflict detected ({})", highest_severity.description()),
+                fix: Some("Use 'sah doctor --migration' to see detailed conflict information and resolution steps".to_string()),
+            });
+        } else {
+            let count = total_conflicts;
+            checks.push(Check {
+                name: "Migration conflict summary".to_string(),
+                status,
+                message: format!(
+                    "{} conflicts detected (highest severity: {})",
+                    count, highest_severity.description()),
+                fix: Some("Use 'sah doctor --migration' to see detailed conflict information and resolution steps".to_string()),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -939,265 +1227,4 @@ mod tests {
             .message
             .contains("Claude Code command not found in PATH"));
     }
-}
-
-/// Check migration status and directory consolidation readiness
-///
-/// This function scans the current directory tree for existing .swissarmyhammer directories
-/// and analyzes their distribution across Git repositories. It identifies orphaned directories,
-/// potential migration conflicts, and provides recommendations for consolidation.
-pub fn check_migration_status(checks: &mut Vec<Check>) -> Result<()> {
-    use swissarmyhammer::migration::scan_existing_directories;
-
-    // Run the migration scan
-    let scan_result = match scan_existing_directories() {
-        Ok(result) => result,
-        Err(e) => {
-            checks.push(Check {
-                name: "Migration directory scan".to_string(),
-                status: CheckStatus::Error,
-                message: format!("Failed to scan directories: {}", e),
-                fix: Some("Check file permissions and ensure current directory is accessible".to_string()),
-            });
-            return Ok(());
-        }
-    };
-
-    // Check Git repositories with .swissarmyhammer directories
-    let repos_with_swissarmyhammer = scan_result.git_repositories.iter()
-        .filter(|r| r.has_swissarmyhammer)
-        .count();
-    let total_repos = scan_result.git_repositories.len();
-    
-    if total_repos == 0 {
-        checks.push(Check {
-            name: "Git repository detection".to_string(),
-            status: CheckStatus::Error,
-            message: "No Git repositories found in current directory tree".to_string(),
-            fix: Some("SwissArmyHammer requires Git repository context. Initialize a Git repository or run from within one".to_string()),
-        });
-    } else if repos_with_swissarmyhammer == total_repos {
-        checks.push(Check {
-            name: "Migration directory placement".to_string(),
-            status: CheckStatus::Ok,
-            message: format!("All {} Git repositories have .swissarmyhammer directories at correct locations", total_repos),
-            fix: None,
-        });
-    } else {
-        checks.push(Check {
-            name: "Migration directory placement".to_string(),
-            status: CheckStatus::Warning,
-            message: format!("{} of {} Git repositories have .swissarmyhammer directories", repos_with_swissarmyhammer, total_repos),
-            fix: Some("Use 'sah doctor --migration' for detailed migration analysis".to_string()),
-        });
-    }
-
-    // Check for orphaned directories
-    match scan_result.orphaned_directories.len() {
-        0 => {
-            checks.push(Check {
-                name: "Migration orphaned directories".to_string(),
-                status: CheckStatus::Ok,
-                message: "No orphaned .swissarmyhammer directories found".to_string(),
-                fix: None,
-            });
-        }
-        1 => {
-            checks.push(Check {
-                name: "Migration orphaned directories".to_string(),
-                status: CheckStatus::Warning,
-                message: format!("Found 1 orphaned .swissarmyhammer directory: {}", 
-                    scan_result.orphaned_directories[0].display()),
-                fix: Some("Consider moving data to appropriate Git repository or removing if no longer needed".to_string()),
-            });
-        }
-        count => {
-            checks.push(Check {
-                name: "Migration orphaned directories".to_string(),
-                status: CheckStatus::Warning,
-                message: format!("Found {} orphaned .swissarmyhammer directories", count),
-                fix: Some("Run 'sah doctor --migration' for detailed analysis and consolidation recommendations".to_string()),
-            });
-        }
-    }
-
-    // Overall migration readiness assessment
-    let critical_conflicts = scan_result.conflicts.iter()
-        .filter(|c| c.severity == swissarmyhammer::migration::ConflictSeverity::Critical)
-        .count();
-    let high_conflicts = scan_result.conflicts.iter()
-        .filter(|c| c.severity == swissarmyhammer::migration::ConflictSeverity::High)
-        .count();
-
-    if critical_conflicts > 0 {
-        checks.push(Check {
-            name: "Migration readiness".to_string(),
-            status: CheckStatus::Error,
-            message: format!("Migration blocked: {} critical conflicts detected", critical_conflicts),
-            fix: Some("Resolve critical conflicts before attempting migration. Use 'sah doctor --migration' for details".to_string()),
-        });
-    } else if high_conflicts > 0 {
-        checks.push(Check {
-            name: "Migration readiness".to_string(),
-            status: CheckStatus::Warning,
-            message: format!("Migration requires attention: {} high-severity conflicts", high_conflicts),
-            fix: Some("Review high-severity conflicts with 'sah doctor --migration' before proceeding".to_string()),
-        });
-    } else if scan_result.orphaned_directories.is_empty() && repos_with_swissarmyhammer == total_repos {
-        checks.push(Check {
-            name: "Migration readiness".to_string(),
-            status: CheckStatus::Ok,
-            message: "Directory structure is already compatible with new Git-centric approach".to_string(),
-            fix: None,
-        });
-    } else {
-        checks.push(Check {
-            name: "Migration readiness".to_string(),
-            status: CheckStatus::Ok,
-            message: "Migration can proceed with standard consolidation process".to_string(),
-            fix: Some("Use 'sah doctor --migration' for detailed migration plan".to_string()),
-        });
-    }
-
-    Ok(())
-}
-
-/// Check for migration conflicts in detail
-///
-/// This function performs detailed conflict analysis for migration scenarios,
-/// including permission issues, data conflicts, and path problems that could
-/// prevent successful directory consolidation.
-pub fn check_migration_conflicts(checks: &mut Vec<Check>) -> Result<()> {
-    use swissarmyhammer::migration::scan_existing_directories;
-
-    // Run the migration scan
-    let scan_result = match scan_existing_directories() {
-        Ok(result) => result,
-        Err(e) => {
-            checks.push(Check {
-                name: "Migration conflict analysis".to_string(),
-                status: CheckStatus::Error,
-                message: format!("Failed to analyze conflicts: {}", e),
-                fix: Some("Check file permissions and ensure directories are accessible".to_string()),
-            });
-            return Ok(());
-        }
-    };
-
-    if scan_result.conflicts.is_empty() {
-        checks.push(Check {
-            name: "Migration conflicts".to_string(),
-            status: CheckStatus::Ok,
-            message: "No migration conflicts detected".to_string(),
-            fix: None,
-        });
-        return Ok(());
-    }
-
-    // Categorize conflicts by type and severity
-    use swissarmyhammer::migration::{ConflictType, ConflictSeverity};
-    use std::collections::HashMap;
-
-    let mut conflict_summary = HashMap::new();
-    for conflict in &scan_result.conflicts {
-        let key = (&conflict.conflict_type, &conflict.severity);
-        *conflict_summary.entry(key).or_insert(0) += 1;
-    }
-
-    // Report conflicts by severity
-    for (severity, description) in &[
-        (ConflictSeverity::Critical, "Critical conflicts (data loss risk)"),
-        (ConflictSeverity::High, "High-severity conflicts (manual intervention required)"),
-        (ConflictSeverity::Medium, "Medium-severity conflicts (careful migration needed)"),
-        (ConflictSeverity::Low, "Low-severity conflicts (migration possible with warnings)"),
-    ] {
-        let severity_conflicts: Vec<_> = scan_result.conflicts.iter()
-            .filter(|c| &c.severity == severity)
-            .collect();
-
-        if !severity_conflicts.is_empty() {
-            let status = match severity {
-                ConflictSeverity::Critical => CheckStatus::Error,
-                ConflictSeverity::High => CheckStatus::Error,
-                ConflictSeverity::Medium => CheckStatus::Warning,
-                ConflictSeverity::Low => CheckStatus::Warning,
-            };
-
-            let example_conflicts: Vec<String> = severity_conflicts.iter()
-                .take(3)
-                .map(|c| format!("{}: {}", c.path.display(), c.description))
-                .collect();
-
-            let message = if severity_conflicts.len() <= 3 {
-                format!("{} ({}): {}", 
-                    description, 
-                    severity_conflicts.len(),
-                    example_conflicts.join("; ")
-                )
-            } else {
-                format!("{} ({}): {} ... and {} more", 
-                    description, 
-                    severity_conflicts.len(),
-                    example_conflicts.join("; "),
-                    severity_conflicts.len() - 3
-                )
-            };
-
-            let fix = match severity {
-                ConflictSeverity::Critical => Some("Resolve all critical conflicts before migration to prevent data loss".to_string()),
-                ConflictSeverity::High => Some("Address high-severity issues with manual intervention before proceeding".to_string()),
-                ConflictSeverity::Medium => Some("Plan migration carefully and create backups before consolidation".to_string()),
-                ConflictSeverity::Low => Some("Migration can proceed but monitor for issues during consolidation".to_string()),
-            };
-
-            checks.push(Check {
-                name: format!("Migration conflicts - {}", severity.description()),
-                status,
-                message,
-                fix,
-            });
-        }
-    }
-
-    // Detailed conflict type analysis
-    let mut conflict_types = HashMap::new();
-    for conflict in &scan_result.conflicts {
-        *conflict_types.entry(&conflict.conflict_type).or_insert(0) += 1;
-    }
-
-    for (conflict_type, description) in &[
-        (ConflictType::PermissionIssue, "Permission issues preventing access"),
-        (ConflictType::DuplicateData, "Duplicate data in multiple locations"),
-        (ConflictType::PathConflict, "Path conflicts preventing consolidation"),
-        (ConflictType::DataLoss, "Potential data loss scenarios"),
-        (ConflictType::VersionMismatch, "Version mismatches in data"),
-    ] {
-        if let Some(&count) = conflict_types.get(conflict_type) {
-            let type_conflicts: Vec<_> = scan_result.conflicts.iter()
-                .filter(|c| &c.conflict_type == conflict_type)
-                .collect();
-
-            let highest_severity = type_conflicts.iter()
-                .map(|c| &c.severity)
-                .max()
-                .unwrap_or(&ConflictSeverity::Low);
-
-            let status = match highest_severity {
-                ConflictSeverity::Critical => CheckStatus::Error,
-                ConflictSeverity::High => CheckStatus::Error,
-                ConflictSeverity::Medium => CheckStatus::Warning,
-                ConflictSeverity::Low => CheckStatus::Warning,
-            };
-
-            checks.push(Check {
-                name: format!("Migration conflict type - {}", description),
-                status,
-                message: format!("Found {} conflicts of this type (highest severity: {})", 
-                    count, highest_severity.description()),
-                fix: Some("Use 'sah doctor --migration' to see detailed conflict information and resolution steps".to_string()),
-            });
-        }
-    }
-
-    Ok(())
 }
