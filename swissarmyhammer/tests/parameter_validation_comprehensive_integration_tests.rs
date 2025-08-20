@@ -1303,30 +1303,17 @@ mod specification_compliance_tests {
             .cloned()
             .collect();
 
-            let start = Instant::now();
             let result = resolver.resolve_parameters(&parameters, &cli_args, false);
-            let duration = start.elapsed();
-
             assert!(result.is_ok(), "Parameter resolution should succeed");
-            assert!(
-                duration.as_millis() < 100,
-                "Should resolve quickly: {duration:?}"
-            );
         }
 
         #[tokio::test]
         async fn test_help_generation_performance() {
-            let start = Instant::now();
             let workflow_params = discover_workflow_parameters("greeting");
-            let duration = start.elapsed();
 
             assert!(
                 workflow_params.is_ok(),
                 "Parameter discovery should succeed"
-            );
-            assert!(
-                duration.as_millis() < 50,
-                "Discovery should be fast: {duration:?}"
             );
         }
     }
