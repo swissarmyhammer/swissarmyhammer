@@ -10,3 +10,4 @@ This is information to guide you.
 
 {% render "principals" %}
 {% render "coding_standards" %}
+{% render "tool_use" %}
