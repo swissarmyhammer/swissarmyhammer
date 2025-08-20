@@ -1756,8 +1756,7 @@ mod tests {
             if should_be_hidden {
                 assert!(
                     tool.hidden_from_cli(),
-                    "Tool '{}' should be hidden from CLI but isn't. Internal tools should not be exposed in CLI.",
-                    name
+                    "Tool '{name}' should be hidden from CLI but isn't. Internal tools should not be exposed in CLI."
                 );
             }
         }
@@ -1811,9 +1810,7 @@ mod tests {
                 let cli_name = tool.cli_name();
                 assert!(
                     cli_names.insert(cli_name),
-                    "Duplicate CLI name '{}' found in category '{}'. Each tool in a category must have a unique CLI name.",
-                    cli_name,
-                    category
+                    "Duplicate CLI name '{cli_name}' found in category '{category}'. Each tool in a category must have a unique CLI name."
                 );
             }
         }
@@ -1833,9 +1830,7 @@ mod tests {
         for expected in &expected_categories {
             assert!(
                 categories.contains(&expected.to_string()),
-                "Expected CLI category '{}' not found. Available categories: {:?}",
-                expected,
-                categories
+                "Expected CLI category '{expected}' not found. Available categories: {categories:?}"
             );
         }
     }
