@@ -1658,7 +1658,7 @@ mod tests {
         assert!(result.is_ok());
 
         let cli = result.unwrap();
-        assert!(matches!(cli.command, Some(Commands::Doctor)));
+        assert!(matches!(cli.command, Some(Commands::Doctor { migration: _ })));
     }
 
     #[test]
