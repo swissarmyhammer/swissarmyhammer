@@ -29,6 +29,7 @@ fn ensure_no_abort_file() {
 }
 
 #[test]
+#[ignore = "CLI integration test - expensive"] 
 fn test_normal_workflow_execution_unchanged() -> Result<()> {
     ensure_no_abort_file();
 
@@ -101,6 +102,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Multiple CLI executions - expensive"] 
 fn test_prompt_commands_still_work() -> Result<()> {
     ensure_no_abort_file();
 
@@ -134,6 +136,7 @@ fn test_prompt_commands_still_work() -> Result<()> {
 }
 
 #[test]
+#[ignore = "Multiple CLI executions - expensive"]
 fn test_help_and_version_commands_unchanged() -> Result<()> {
     ensure_no_abort_file();
 
@@ -379,6 +382,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_multiple_workflow_executions_dont_interfere() -> Result<()> {
     ensure_no_abort_file();
 

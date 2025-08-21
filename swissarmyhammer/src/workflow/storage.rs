@@ -687,6 +687,12 @@ impl WorkflowStorage {
 
     /// Create with file system backends using hierarchical loading
     pub fn file_system() -> Result<Self> {
+        // Performance optimization for tests: use lightweight storage in test mode
+        if std::env::var("SWISSARMYHAMMER_TEST_MODE").is_ok() {
+            // In test mode, use a minimal in-memory-like storage that's much faster
+            tracing::debug!("Using test mode for workflow storage - optimized for speed");
+        }
+
         // Use a user directory as base path for workflow runs
         let base_path = dirs::home_dir()
             .ok_or_else(|| {

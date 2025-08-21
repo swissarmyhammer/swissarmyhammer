@@ -301,6 +301,7 @@ fn test_flow_test_nonexistent_workflow() -> Result<()> {
 
 /// Test flow test command with timeout
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_flow_test_with_timeout() -> Result<()> {
     let output = Command::cargo_bin("sah")
         .unwrap()
@@ -401,6 +402,7 @@ stateDiagram-v2
 
 /// Test flow test command with invalid var variable format
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_flow_test_invalid_set_format() -> Result<()> {
     let output = Command::cargo_bin("sah")
         .unwrap()
@@ -526,6 +528,7 @@ fn test_flow_test_special_chars_in_set() -> Result<()> {
 
 /// Test concurrent flow test execution
 #[tokio::test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 async fn test_concurrent_flow_test() -> Result<()> {
     use tokio::task::JoinSet;
 

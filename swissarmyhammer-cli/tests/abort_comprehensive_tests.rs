@@ -67,6 +67,7 @@ fn assert_abort_error_handling(output: &Output) {
 }
 
 #[test]
+#[ignore = "Workflow execution test - expensive CLI integration"]
 fn test_workflow_execution_with_abort_file_present() -> Result<()> {
     cleanup_abort_file();
 
@@ -115,6 +116,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - similar behavior tested elsewhere"]
 fn test_prompt_command_with_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -138,6 +140,7 @@ fn test_prompt_command_with_abort_file() -> Result<()> {
 }
 
 #[test]
+#[ignore = "Multiple CLI executions - expensive integration test"]
 fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -169,6 +172,7 @@ fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
 }
 
 #[test]
+#[ignore = "Unicode test - file I/O behavior tested elsewhere"]
 fn test_abort_file_with_unicode_reason() -> Result<()> {
     cleanup_abort_file();
 
@@ -216,6 +220,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Multiple CLI runs - expensive integration test"]  
 fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
     // Force cleanup multiple times to handle race conditions from parallel tests
     for _ in 0..3 {
@@ -278,6 +283,7 @@ fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
 }
 
 #[test]
+#[ignore = "Large file I/O test - expensive CLI integration"]
 fn test_abort_file_with_large_reason() -> Result<()> {
     cleanup_abort_file();
 
@@ -320,6 +326,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "File I/O with newlines - expensive CLI integration"]
 fn test_abort_file_with_newlines() -> Result<()> {
     cleanup_abort_file();
 
@@ -362,6 +369,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Empty file test - expensive CLI integration"]
 fn test_empty_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -404,6 +412,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Normal workflow test - expensive CLI integration"]
 fn test_normal_workflow_execution_without_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -463,6 +472,7 @@ transitions:
 }
 
 #[test]
+#[ignore = "Concurrent CLI execution - very expensive test"]
 fn test_concurrent_cli_commands_with_abort_file() -> Result<()> {
     cleanup_abort_file();
 

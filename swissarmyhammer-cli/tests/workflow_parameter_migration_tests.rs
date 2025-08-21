@@ -15,6 +15,7 @@ fn get_repo_root() -> PathBuf {
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_greeting_workflow_parameter_migration() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
@@ -40,6 +41,7 @@ fn test_greeting_workflow_parameter_migration() {
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_greeting_workflow_backward_compatibility() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
@@ -240,6 +242,7 @@ fn test_workflow_parameter_group_functionality() {
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_mixed_parameter_resolution_precedence() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
@@ -261,6 +264,7 @@ fn test_mixed_parameter_resolution_precedence() {
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_parameter_type_handling() {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();

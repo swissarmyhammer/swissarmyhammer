@@ -11,6 +11,8 @@ The current test setup uses a shared HOME environment variable modification thro
 
 **ALWAYS use `IsolatedTestEnvironment::new()` for workflow tests to isolate current working and home**
 
+AVOID AT ALL COSTS #[serial] tests.
+
 ```rust
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 

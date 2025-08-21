@@ -78,6 +78,7 @@ impl WorkflowRun {
     /// Create a new workflow run
     pub fn new(workflow: Workflow) -> Self {
         // Clean up any existing abort file to ensure clean slate
+        // Abort detection happens at flow command level before WorkflowRun::new() is called
         match std::fs::remove_file(".swissarmyhammer/.abort") {
             Ok(()) => {
                 tracing::debug!("Cleaned up existing abort file");

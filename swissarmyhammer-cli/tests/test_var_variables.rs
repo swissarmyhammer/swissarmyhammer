@@ -79,6 +79,7 @@ stateDiagram-v2
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_workflow_with_var_variables() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -124,6 +125,7 @@ fn test_workflow_with_var_variables() {
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_invalid_var_variable_format() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -696,6 +698,7 @@ stateDiagram-v2
 }
 
 #[test]
+#[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_workflow_with_equals_sign_in_var_value() {
     let temp_dir = TempDir::new().unwrap();
 

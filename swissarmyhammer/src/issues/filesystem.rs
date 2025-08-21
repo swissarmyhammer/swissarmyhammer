@@ -2664,7 +2664,6 @@ pub fn get_issue_name_from_filename(filename: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_utils::IsolatedTestEnvironment;
-    use serial_test::serial;
     use tempfile::TempDir;
 
     /// Create a test issue storage with temporary directory
@@ -4961,7 +4960,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_migration_info_should_migrate() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
@@ -4988,7 +4986,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_migration_info_should_not_migrate() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
@@ -5028,7 +5025,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_migration_info_large_directory() {
         let temp_dir = TempDir::new().unwrap();
         let base_dir = temp_dir.path();
@@ -5188,7 +5184,6 @@ mod tests {
         use tempfile::TempDir;
 
         #[test]
-        #[serial]
         fn test_should_migrate_with_legacy_directory() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5211,7 +5206,6 @@ mod tests {
         }
 
         #[test]
-        #[serial]
         fn test_should_not_migrate_when_new_exists() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5226,7 +5220,6 @@ mod tests {
         }
 
         #[test]
-        #[serial]
         fn test_should_not_migrate_when_no_legacy() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5237,7 +5230,6 @@ mod tests {
         }
 
         #[test]
-        #[serial]
         fn test_migration_info_accuracy() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5270,7 +5262,6 @@ mod tests {
         }
 
         #[test]
-        #[serial]
         fn test_migration_paths() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5293,7 +5284,6 @@ mod tests {
         }
 
         #[test]
-        #[serial]
         fn test_should_migrate_with_empty_legacy_directory() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5316,7 +5306,6 @@ mod tests {
         }
 
         #[test]
-        #[serial]
         fn test_migration_info_with_nested_structure() {
             let temp_dir = TempDir::new().unwrap();
 
@@ -5810,7 +5799,6 @@ mod tests {
     // Migration Tests
 
     #[tokio::test]
-    #[serial]
     async fn test_migration_with_empty_directory() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -5845,7 +5833,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_migration_with_nested_structure() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -5892,7 +5879,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_migration_not_needed() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -5943,7 +5929,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_migration_rollback_on_validation_failure() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -5986,7 +5971,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_new_default_with_migration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -6052,7 +6036,6 @@ mod tests {
 
     // Integration Tests for Automatic Migration
     #[tokio::test]
-    #[serial]
     async fn test_automatic_migration_integration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -6083,7 +6066,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_new_default_with_migration_info_integration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -6211,7 +6193,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_concurrent_storage_creation_integration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -6243,7 +6224,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_migration_with_existing_destination_integration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 

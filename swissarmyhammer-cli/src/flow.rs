@@ -261,6 +261,15 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
 
     tracing::info!("🚀 Starting workflow: {}", workflow.name);
 
+    // Check for abort file before starting workflow
+    if let Some(abort_reason) = swissarmyhammer::common::read_abort_file(".")? {
+        // Clean up the abort file after detection
+        let _ = swissarmyhammer::common::remove_abort_file(".");
+        return Err(SwissArmyHammerError::ExecutorError(
+            swissarmyhammer::workflow::ExecutorError::Abort(abort_reason)
+        ));
+    }
+
     // Create executor
     let mut executor = WorkflowExecutor::new();
 
@@ -375,6 +384,9 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
             if let Err(storage_err) = run_storage.store_run(&run) {
                 tracing::warn!("Failed to store failed run: {}", storage_err);
             }
+            
+            // Return the error to allow proper exit code handling in main.rs
+            return Err(e);
         }
     }
 

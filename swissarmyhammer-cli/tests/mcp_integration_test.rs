@@ -13,7 +13,7 @@ use test_utils::ProcessGuard;
 async fn test_mcp_server_basic_functionality() {
     // Start the MCP server process
     let child = Command::new("cargo")
-        .args(["run", "--bin", "swissarmyhammer", "--", "serve"])
+        .args(["run", "--bin", "sah", "--", "serve"])
         .current_dir("..") // Run from project root
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -144,7 +144,7 @@ async fn test_mcp_server_prompt_loading() {
 
     // Start MCP server with HOME set to temp dir
     let child = Command::new("cargo")
-        .args(["run", "--bin", "swissarmyhammer", "--", "serve"])
+        .args(["run", "--bin", "sah", "--", "serve"])
         .current_dir("..")
         .env("HOME", temp_dir.path())
         .env("RUST_LOG", "debug")
@@ -255,7 +255,7 @@ async fn test_mcp_server_prompt_loading() {
 async fn test_mcp_server_builtin_prompts() {
     // Start MCP server
     let child = Command::new("cargo")
-        .args(["run", "--bin", "swissarmyhammer", "--", "serve"])
+        .args(["run", "--bin", "sah", "--", "serve"])
         .current_dir("..")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

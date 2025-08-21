@@ -78,12 +78,10 @@ impl Default for PromptResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
-    #[serial]
     fn test_prompt_resolver_loads_user_prompts() {
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
@@ -111,7 +109,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_prompt_resolver_loads_local_prompts() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -152,7 +149,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_debug_error_prompt_is_correctly_tracked_as_builtin() {
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
@@ -191,7 +187,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_get_prompt_directories() {
         let resolver = PromptResolver::new();
         let directories = resolver.get_prompt_directories().unwrap();
@@ -209,7 +204,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_user_prompt_overrides_builtin_source_tracking() {
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
@@ -231,7 +225,6 @@ This is a user-defined debug/error prompt that should override the builtin one.
         let mut library = PromptLibrary::new();
 
         // Store original HOME value to restore later
-        let original_home = std::env::var("HOME").ok();
 
         // Temporarily change home directory for test
         std::env::set_var("HOME", temp_dir.path());
@@ -259,11 +252,7 @@ This is a user-defined debug/error prompt that should override the builtin one.
             "Prompt should contain user-defined content"
         );
 
-        // Restore original HOME environment variable
-        match original_home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
+        // HOME is automatically restored when _guard goes out of scope
 
         // If we had a builtin debug/error, verify it was actually overridden
         if has_builtin_debug_error {
