@@ -1,7 +1,6 @@
-//! Optimized CLI integration tests using in-process testing
+//! CLI integration tests using in-process testing
 //!
-//! These tests replace slow process-spawning tests with fast in-process alternatives
-//! while maintaining the same test coverage.
+//! Fast in-process CLI testing for comprehensive test coverage.
 
 mod in_process_test_utils;
 
@@ -69,20 +68,16 @@ async fn run_test_workflow_in_process(workflow_name: &str, vars: Vec<String>) ->
     Ok(result.is_ok())
 }
 
-/// Optimized version of test_flow_test_simple_workflow
-/// Original: 6.404s, Target: <0.1s
 #[tokio::test]
-async fn test_flow_test_simple_workflow_optimized() -> Result<()> {
+async fn test_flow_test_simple_workflow() -> Result<()> {
     // Test with minimal workflow in controlled environment
     let success = run_test_workflow_in_process("minimal-test", vec![]).await?;
     assert!(success, "Simple workflow should execute successfully");
     Ok(())
 }
 
-/// Optimized version of test_flow_test_coverage_complete  
-/// Original: 6.404s, Target: <0.1s
 #[tokio::test]
-async fn test_flow_test_coverage_complete_optimized() -> Result<()> {
+async fn test_flow_test_coverage_complete() -> Result<()> {
     // Test coverage reporting with minimal test workflow
     let temp_dir = setup_test_workflow("coverage-test").await?;
     let temp_path = temp_dir.path();
@@ -108,10 +103,8 @@ async fn test_flow_test_coverage_complete_optimized() -> Result<()> {
     Ok(())
 }
 
-/// Optimized version of test_flow_test_with_set_variables
-/// Original: 6.404s, Target: <0.1s  
 #[tokio::test]
-async fn test_flow_test_with_set_variables_optimized() -> Result<()> {
+async fn test_flow_test_with_set_variables() -> Result<()> {
     // Test with template variables
     let success = run_test_workflow_in_process(
         "vars-test",
@@ -124,10 +117,8 @@ async fn test_flow_test_with_set_variables_optimized() -> Result<()> {
     Ok(())
 }
 
-/// Optimized version of test_concurrent_flow_test
-/// Original: 6.085s, Target: <0.5s
 #[tokio::test]
-async fn test_concurrent_flow_test_optimized() -> Result<()> {
+async fn test_concurrent_flow_test() -> Result<()> {
     use tokio::task::JoinSet;
 
     let mut tasks = JoinSet::new();
@@ -161,10 +152,8 @@ async fn test_concurrent_flow_test_optimized() -> Result<()> {
     Ok(())
 }
 
-/// Optimized version of test_flow_test_with_timeout
-/// Original: 6.404s, Target: <0.1s
 #[tokio::test]
-async fn test_flow_test_with_timeout_optimized() -> Result<()> {
+async fn test_flow_test_with_timeout() -> Result<()> {
     // Test with timeout parameter
     let temp_dir = setup_test_workflow("timeout-test").await?;
     let temp_path = temp_dir.path();
@@ -185,10 +174,8 @@ async fn test_flow_test_with_timeout_optimized() -> Result<()> {
     Ok(())
 }
 
-/// Optimized version of test_flow_test_quiet_mode
-/// Original: 6.404s, Target: <0.1s
 #[tokio::test]
-async fn test_flow_test_quiet_mode_optimized() -> Result<()> {
+async fn test_flow_test_quiet_mode() -> Result<()> {
     // Test quiet mode flag
     let temp_dir = setup_test_workflow("quiet-test").await?;
     let temp_path = temp_dir.path();
@@ -208,10 +195,8 @@ async fn test_flow_test_quiet_mode_optimized() -> Result<()> {
     Ok(())
 }
 
-/// Optimized version of test_flow_test_empty_set_value
-/// Original: 6.404s, Target: <0.1s
 #[tokio::test]
-async fn test_flow_test_empty_set_value_optimized() -> Result<()> {
+async fn test_flow_test_empty_set_value() -> Result<()> {
     // Test with empty set value
     let vars = vec!["empty_param=".to_string()];
     let captured = run_flow_test_in_process("test-workflow", vars, None, false).await?;
@@ -224,10 +209,8 @@ async fn test_flow_test_empty_set_value_optimized() -> Result<()> {
     Ok(())
 }
 
-/// Optimized version of test_flow_test_special_chars_in_set  
-/// Original: 6.404s, Target: <0.1s
 #[tokio::test]
-async fn test_flow_test_special_chars_in_set_optimized() -> Result<()> {
+async fn test_flow_test_special_chars_in_set() -> Result<()> {
     // Test with special characters in set values
     let vars = vec!["message=Hello, World! @#$%^&*()".to_string()];
     let captured = run_flow_test_in_process("test-workflow", vars, None, false).await?;
