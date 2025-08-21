@@ -105,8 +105,25 @@ impl ArgBuilder {
 pub struct SchemaConverter;
 
 impl SchemaConverter {
-    /// Convert JSON schema to clap arguments
+    /// Convert JSON schema to clap arguments with enhanced features
     pub fn schema_to_clap_args(schema: &Value) -> Result<Vec<Arg>> {
+        Self::enhanced_schema_to_clap_args(schema)
+    }
+
+    /// Handle more advanced JSON Schema features
+    pub fn enhanced_schema_to_clap_args(schema: &Value) -> Result<Vec<Arg>> {
+        let mut args = Self::basic_schema_to_clap_args(schema)?;
+        
+        // Post-process args for advanced features
+        for arg in &mut args {
+            Self::enhance_arg_with_schema_features(arg, schema)?;
+        }
+        
+        Ok(args)
+    }
+
+    /// Basic schema conversion (original implementation)
+    fn basic_schema_to_clap_args(schema: &Value) -> Result<Vec<Arg>> {
         let mut args = Vec::new();
 
         let properties = schema
@@ -149,6 +166,104 @@ impl SchemaConverter {
         Ok(args)
     }
 
+    /// Enhance arguments with advanced schema features
+    fn enhance_arg_with_schema_features(arg: &mut Arg, schema: &Value) -> Result<()> {
+        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+            if let Some(prop_schema) = properties.get(arg.get_id().as_str()) {
+                // Handle default values
+                if let Some(default) = prop_schema.get("default") {
+                    if let Some(default_str) = default.as_str() {
+                        let default_static: &'static str = Box::leak(default_str.to_string().into_boxed_str());
+                        *arg = arg.clone().default_value(default_static);
+                    } else if let Some(default_num) = default.as_i64() {
+                        let default_static: &'static str = Box::leak(default_num.to_string().into_boxed_str());
+                        *arg = arg.clone().default_value(default_static);
+                    } else if let Some(default_bool) = default.as_bool() {
+                        if default_bool {
+                            *arg = arg.clone().default_value("true");
+                        }
+                    }
+                }
+                
+                // Handle examples in help text
+                if let Some(examples) = prop_schema.get("examples").and_then(|e| e.as_array()) {
+                    if !examples.is_empty() {
+                        let example_text = examples.iter()
+                            .filter_map(|e| e.as_str())
+                            .take(2)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        
+                        if !example_text.is_empty() {
+                            let current_help = arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+                            let enhanced_help = if current_help.is_empty() {
+                                format!("Examples: {}", example_text)
+                            } else {
+                                format!("{}\n\nExamples: {}", current_help, example_text)
+                            };
+                            let help_static: &'static str = Box::leak(enhanced_help.into_boxed_str());
+                            *arg = arg.clone().help(help_static);
+                        }
+                    }
+                }
+                
+                // Handle oneOf/anyOf for enum-like behavior
+                if let Some(one_of) = prop_schema.get("oneOf").and_then(|o| o.as_array()) {
+                    if let Some(enum_values) = Self::extract_enum_from_one_of(one_of) {
+                        // Convert to static string slices
+                        let enum_values_static: Vec<&'static str> = enum_values
+                            .into_iter()
+                            .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+                            .collect();
+                        *arg = arg.clone().value_parser(enum_values_static);
+                    }
+                } else if let Some(any_of) = prop_schema.get("anyOf").and_then(|o| o.as_array()) {
+                    if let Some(enum_values) = Self::extract_enum_from_one_of(any_of) {
+                        // Convert to static string slices
+                        let enum_values_static: Vec<&'static str> = enum_values
+                            .into_iter()
+                            .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+                            .collect();
+                        *arg = arg.clone().value_parser(enum_values_static);
+                    }
+                }
+
+                // Handle title field for better help text
+                if let Some(title) = prop_schema.get("title").and_then(|t| t.as_str()) {
+                    let current_help = arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+                    let enhanced_help = if current_help.is_empty() {
+                        title.to_string()
+                    } else {
+                        format!("{}: {}", title, current_help)
+                    };
+                    let help_static: &'static str = Box::leak(enhanced_help.into_boxed_str());
+                    *arg = arg.clone().help(help_static);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Extract enum values from oneOf/anyOf schema structures
+    fn extract_enum_from_one_of(one_of: &[Value]) -> Option<Vec<String>> {
+        let mut values = Vec::new();
+        
+        for item in one_of {
+            if let Some(const_val) = item.get("const").and_then(|c| c.as_str()) {
+                values.push(const_val.to_string());
+            } else if let Some(enum_array) = item.get("enum").and_then(|e| e.as_array()) {
+                for enum_val in enum_array {
+                    if let Some(val_str) = enum_val.as_str() {
+                        values.push(val_str.to_string());
+                    }
+                }
+            }
+        }
+        
+        if values.is_empty() { None } else { Some(values) }
+    }
+
     /// Convert individual JSON schema property to clap Arg
     fn json_schema_property_to_clap_arg(
         name: &str,
@@ -165,15 +280,7 @@ impl SchemaConverter {
             .unwrap_or("")
             .to_string();
 
-        // Handle required fields and positional arguments
-        if required.contains(&name) {
-            builder = builder.required(true);
-        }
-
-        // Set positional flag
-        builder = builder.positional(make_positional);
-
-        // Map JSON schema types to clap actions
+        // Map JSON schema types to clap actions first to determine if this is a boolean
         // Handle both single types (string) and union types (array like ["string", "null"])
         let type_info = schema.get("type");
         let primary_type = match type_info {
@@ -184,6 +291,16 @@ impl SchemaConverter {
             }
             _ => None,
         };
+
+        // Handle required fields and positional arguments
+        // Boolean flags are NEVER required regardless of schema
+        let is_boolean = primary_type == Some("boolean");
+        if required.contains(&name) && !is_boolean {
+            builder = builder.required(true);
+        }
+
+        // Set positional flag (booleans are never positional)
+        builder = builder.positional(make_positional && !is_boolean);
 
         match primary_type {
             Some("boolean") => {
@@ -720,5 +837,257 @@ mod tests {
             .map(|s| s.to_string())
             .unwrap_or_default();
         assert!(help_text.contains("pattern: ^[A-Z]{3}-[0-9]{3}$"));
+    }
+
+    #[test]
+    fn test_boolean_never_required() {
+        // Test that boolean fields are never required, even when listed in required array
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "string_field": {"type": "string", "description": "A string"},
+                "bool_field": {"type": "boolean", "description": "A boolean"}
+            },
+            "required": ["string_field", "bool_field"]
+        });
+        
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        assert_eq!(args.len(), 2);
+        
+        let string_arg = args.iter().find(|arg| arg.get_id() == "string_field").unwrap();
+        let bool_arg = args.iter().find(|arg| arg.get_id() == "bool_field").unwrap();
+        
+        // String should be required
+        assert!(string_arg.is_required_set(), "String argument should be required");
+        
+        // Boolean should NEVER be required, even if in required array
+        assert!(!bool_arg.is_required_set(), "Boolean argument should never be required");
+        
+        // Verify boolean has correct action
+        assert!(matches!(bool_arg.get_action(), clap::ArgAction::SetTrue));
+    }
+
+    #[test]
+    fn test_boolean_never_required_specific_failure_case() {
+        // Test the exact failing case from property test
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "description": "String parameter"},
+                "aa": {"type": "integer", "description": "Integer parameter"},
+                "A": {"type": "boolean", "description": "Boolean parameter"}
+            },
+            "required": ["a", "aa", "A"]
+        });
+        
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        assert_eq!(args.len(), 3);
+        
+        let string_arg = args.iter().find(|arg| arg.get_id() == "a").unwrap();
+        let int_arg = args.iter().find(|arg| arg.get_id() == "aa").unwrap();
+        let bool_arg = args.iter().find(|arg| arg.get_id() == "A").unwrap();
+        
+        // String and int should be required
+        assert!(string_arg.is_required_set(), "String argument should be required");
+        assert!(int_arg.is_required_set(), "Int argument should be required");
+        
+        // Boolean should NEVER be required, even if in required array
+        assert!(!bool_arg.is_required_set(), "Boolean argument should never be required");
+        
+        // Verify boolean has correct action
+        assert!(matches!(bool_arg.get_action(), clap::ArgAction::SetTrue));
+    }
+
+    #[test]
+    fn test_default_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "default": "default_name",
+                    "description": "Name parameter"
+                },
+                "count": {
+                    "type": "integer", 
+                    "default": 10,
+                    "description": "Count parameter"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable flag"
+                }
+            }
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        assert_eq!(args.len(), 3);
+
+        let name_arg = args.iter().find(|arg| arg.get_id() == "name").unwrap();
+        let count_arg = args.iter().find(|arg| arg.get_id() == "count").unwrap();
+        let enabled_arg = args.iter().find(|arg| arg.get_id() == "enabled").unwrap();
+
+        // Check default values are set (clap internals)
+        assert_eq!(name_arg.get_default_values(), vec!["default_name"]);
+        assert_eq!(count_arg.get_default_values(), vec!["10"]);
+        assert_eq!(enabled_arg.get_default_values(), vec!["true"]);
+    }
+
+    #[test]
+    fn test_examples_in_help_text() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "description": "Output format",
+                    "examples": ["json", "yaml", "table"]
+                }
+            }
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        let format_arg = &args[0];
+
+        let help_text = format_arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+        assert!(help_text.contains("Examples: json, yaml"));
+    }
+
+    #[test]
+    fn test_one_of_enum_behavior() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string",
+                    "description": "Log level",
+                    "oneOf": [
+                        {"const": "debug"},
+                        {"const": "info"}, 
+                        {"const": "warn"},
+                        {"const": "error"}
+                    ]
+                }
+            }
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        let level_arg = &args[0];
+
+        // Check that oneOf creates value parser constraints (clap internals)
+        assert_eq!(level_arg.get_id(), "level");
+        let help_text = level_arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+        assert!(help_text.contains("Log level"));
+    }
+
+    #[test]
+    fn test_any_of_enum_behavior() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "output": {
+                    "type": "string",
+                    "description": "Output type",
+                    "anyOf": [
+                        {"enum": ["json", "yaml"]},
+                        {"const": "table"}
+                    ]
+                }
+            }
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        let output_arg = &args[0];
+
+        assert_eq!(output_arg.get_id(), "output");
+        let help_text = output_arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+        assert!(help_text.contains("Output type"));
+    }
+
+    #[test]
+    fn test_title_field_enhancement() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "verbose": {
+                    "type": "boolean",
+                    "title": "Verbose Mode",
+                    "description": "Enable verbose output"
+                }
+            }
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        let verbose_arg = &args[0];
+
+        let help_text = verbose_arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+        assert!(help_text.contains("Verbose Mode"));
+        assert!(help_text.contains("Enable verbose output"));
+    }
+
+    #[test]
+    fn test_extract_enum_from_one_of() {
+        let one_of = vec![
+            json!({"const": "value1"}),
+            json!({"const": "value2"}),
+            json!({"enum": ["value3", "value4"]})
+        ];
+
+        let result = SchemaConverter::extract_enum_from_one_of(&one_of);
+        assert!(result.is_some());
+        
+        let values = result.unwrap();
+        assert_eq!(values.len(), 4);
+        assert!(values.contains(&"value1".to_string()));
+        assert!(values.contains(&"value2".to_string()));
+        assert!(values.contains(&"value3".to_string()));
+        assert!(values.contains(&"value4".to_string()));
+    }
+
+    #[test]
+    fn test_complex_enhanced_schema() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "string",
+                    "title": "Configuration File",
+                    "description": "Path to configuration file",
+                    "default": "config.yaml",
+                    "examples": ["config.yaml", "settings.json"],
+                    "format": "path"
+                },
+                "level": {
+                    "type": "string",
+                    "description": "Logging level",
+                    "default": "info",
+                    "oneOf": [
+                        {"const": "debug"},
+                        {"const": "info"},
+                        {"const": "warn"}
+                    ]
+                }
+            },
+            "required": ["config"]
+        });
+
+        let args = SchemaConverter::schema_to_clap_args(&schema).unwrap();
+        assert_eq!(args.len(), 2);
+
+        let config_arg = args.iter().find(|arg| arg.get_id() == "config").unwrap();
+        let level_arg = args.iter().find(|arg| arg.get_id() == "level").unwrap();
+
+        // Check config arg has all enhancements
+        assert!(config_arg.is_required_set());
+        assert_eq!(config_arg.get_default_values(), vec!["config.yaml"]);
+        
+        let config_help = config_arg.get_help().map(|s| s.to_string()).unwrap_or_default();
+        assert!(config_help.contains("Configuration File"));
+        assert!(config_help.contains("Examples: config.yaml, settings.json"));
+
+        // Check level arg has default and oneOf
+        assert!(!level_arg.is_required_set());
+        assert_eq!(level_arg.get_default_values(), vec!["info"]);
     }
 }

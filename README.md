@@ -205,4 +205,50 @@ SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
 
 All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The abort tool provides robust workflow control, replacing legacy string-based detection with a reliable file-based approach.
 
+## 🏗️ Dynamic CLI Architecture
+
+SwissArmyHammer uses a dynamic command generation system that eliminates code duplication while providing a seamless user experience:
+
+### Single Source of Truth
+- **MCP tool schemas** define both MCP and CLI interfaces
+- **Automatic Updates** - New MCP tools automatically appear in CLI without code changes
+- **Consistent Experience** - Schema-driven argument parsing and help generation across all commands
+- **Backward Compatible** - All existing commands work identically to preserve user workflows
+
+### Command Structure
+
+- **Static Commands** - Core CLI functionality (serve, doctor, prompt, flow, validate, etc.)
+- **Dynamic Commands** - Generated from MCP tools (issue, memo, file, search, shell, etc.)
+
+The dynamic system generates 30+ commands and subcommands automatically from MCP tool definitions, eliminating ~425 lines of redundant CLI code while maintaining full functionality.
+
+### Architecture Benefits
+
+1. **Reduced Duplication** - Single definition creates both MCP and CLI interfaces
+2. **Automatic Discovery** - New tools appear in CLI without manual CLI updates  
+3. **Enhanced Help** - Rich help text generated from JSON schemas with examples and validation rules
+4. **Better Completions** - Shell completions include all dynamic commands and arguments
+5. **Performance Optimized** - CLI caching and fast-path execution for common operations
+
+### For Developers
+
+Adding a new CLI command requires only:
+
+1. **Create MCP Tool** - Implement the `McpTool` trait with JSON schema
+2. **Add CLI Metadata** - Simple methods for category, name, and help text
+3. **Register Tool** - Add to the tool registry
+
+The command automatically appears in CLI with proper help text, argument validation, and shell completion support.
+
+Example:
+```rust
+impl McpTool for MyTool {
+    fn cli_category(&self) -> Option<&'static str> { Some("mytools") }
+    fn cli_name(&self) -> &'static str { "command" }  
+    fn cli_about(&self) -> Option<&'static str> { Some("Description") }
+}
+```
+
+Creates: `sah mytools command` with full CLI integration.
+
 

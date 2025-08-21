@@ -47,6 +47,7 @@ impl CliBuilder {
         Self { tool_registry }
     }
 
+
     /// Build the complete CLI with static and dynamic commands
     pub fn build_cli(&self) -> Result<Command> {
         let mut cli = Command::new("swissarmyhammer")

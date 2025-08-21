@@ -1,8 +1,10 @@
 use std::process;
 mod cli;
 mod cli_builder;
+mod cli_optimization;
 mod completions;
 mod config;
+mod debug;
 mod doctor;
 mod dynamic_execution;
 mod error;
@@ -396,7 +398,7 @@ async fn handle_original_command(cli: Cli) -> i32 {
         None | Some(Commands::Serve) => run_server().await,
         Some(Commands::Doctor) => run_doctor(),
         Some(Commands::Prompt { subcommand }) => run_prompt(subcommand).await,
-        Some(Commands::Completion { shell }) => run_completions(shell),
+        Some(Commands::Completion { shell }) => run_completions(shell).await,
         Some(Commands::Flow { subcommand }) => run_flow(subcommand).await,
         Some(Commands::Validate {
             format,
@@ -601,10 +603,10 @@ async fn run_prompt(subcommand: cli::PromptSubcommand) -> i32 {
     handle_cli_result(prompt::run_prompt_command(subcommand).await)
 }
 
-fn run_completions(shell: clap_complete::Shell) -> i32 {
+async fn run_completions(shell: clap_complete::Shell) -> i32 {
     use completions;
 
-    match completions::print_completion(shell) {
+    match completions::print_completion(shell).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             tracing::error!("Completion error: {}", e);

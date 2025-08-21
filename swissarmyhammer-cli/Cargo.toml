@@ -95,6 +95,7 @@ predicates = { workspace = true }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 nix = { version = "0.27", features = ["signal"] }
+proptest = { workspace = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
