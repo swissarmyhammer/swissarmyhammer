@@ -311,7 +311,6 @@ mod tests {
         errors: Arc<Mutex<Vec<String>>>,
     }
 
-
     impl TestCallback {
         fn new() -> Self {
             Self {
@@ -480,7 +479,7 @@ mod tests {
 
         // Use isolated test environment for directory changes
         let _guard = IsolatedTestEnvironment::new().unwrap();
-        
+
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().unwrap();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");

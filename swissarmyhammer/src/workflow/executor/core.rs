@@ -232,7 +232,7 @@ impl WorkflowExecutor {
         remaining_transitions: usize,
     ) -> ExecutorResult<()> {
         // Abort file checking happens at the flow command level before execution begins
-        
+
         if remaining_transitions == 0 {
             return Err(ExecutorError::TransitionLimitExceeded {
                 limit: MAX_TRANSITIONS,
@@ -247,12 +247,12 @@ impl WorkflowExecutor {
             if abort_path.exists() {
                 let reason = std::fs::read_to_string(abort_path)
                     .unwrap_or_else(|_| "Unknown abort reason".to_string());
-                
+
                 // Clean up the abort file after detection
                 if let Err(e) = std::fs::remove_file(abort_path) {
                     tracing::warn!("Failed to clean up abort file after detection: {}", e);
                 }
-                
+
                 return Err(ExecutorError::Abort(reason));
             }
 

@@ -20,7 +20,7 @@ use tokio::signal;
 use tokio::time::timeout;
 
 /// Default timeout for workflow test mode execution in seconds
-const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 60;
+const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 5;
 
 /// Main entry point for flow command
 pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
@@ -108,18 +108,18 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
 }
 
 /// Configuration for running a workflow command
-struct WorkflowCommandConfig {
-    workflow_name: String,
-    vars: Vec<String>,
-    interactive: bool,
-    dry_run: bool,
-    test_mode: bool,
-    timeout_str: Option<String>,
-    quiet: bool,
+pub struct WorkflowCommandConfig {
+    pub workflow_name: String,
+    pub vars: Vec<String>,
+    pub interactive: bool,
+    pub dry_run: bool,
+    pub test_mode: bool,
+    pub timeout_str: Option<String>,
+    pub quiet: bool,
 }
 
 /// Execute a workflow
-async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
+pub async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     // Use proper WorkflowStorage with embedded builtins
     let workflow_storage = tokio::task::spawn_blocking(WorkflowStorage::file_system)
         .await
@@ -266,7 +266,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
         // Clean up the abort file after detection
         let _ = swissarmyhammer::common::remove_abort_file(".");
         return Err(SwissArmyHammerError::ExecutorError(
-            swissarmyhammer::workflow::ExecutorError::Abort(abort_reason)
+            swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
         ));
     }
 
@@ -384,7 +384,7 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
             if let Err(storage_err) = run_storage.store_run(&run) {
                 tracing::warn!("Failed to store failed run: {}", storage_err);
             }
-            
+
             // Return the error to allow proper exit code handling in main.rs
             return Err(e);
         }
@@ -1251,6 +1251,8 @@ async fn execute_workflow_test_mode(
     // Simple execution loop - try to visit all states
     let start_time = std::time::Instant::now();
     let timeout = timeout_duration.unwrap_or(Duration::from_secs(DEFAULT_TEST_MODE_TIMEOUT_SECS));
+    let mut steps_without_progress = 0;
+    const MAX_STEPS_WITHOUT_PROGRESS: usize = 3;
 
     while !workflow
         .states
@@ -1260,6 +1262,11 @@ async fn execute_workflow_test_mode(
     {
         if start_time.elapsed() > timeout {
             tracing::warn!("Test execution timed out after {:?}", timeout);
+            break;
+        }
+
+        if steps_without_progress >= MAX_STEPS_WITHOUT_PROGRESS {
+            tracing::debug!("No progress made for {} steps, terminating early", MAX_STEPS_WITHOUT_PROGRESS);
             break;
         }
 
@@ -1320,7 +1327,9 @@ async fn execute_workflow_test_mode(
         if !transition_taken {
             // All transitions have been visited or conditions not met
             tracing::debug!("All transitions from {} have been explored", current_state);
-            break;
+            steps_without_progress += 1;
+        } else {
+            steps_without_progress = 0; // Reset counter when progress is made
         }
     }
 

@@ -1071,13 +1071,16 @@ mod parser_tests {
         let parser = ConfigParser::new();
 
         let nonexistent_var_key = format!("NONEXISTENT_VAR_{}", std::process::id());
-        let toml_content = format!(r#"
+        let toml_content = format!(
+            r#"
             name = "EnvTest"
             database_url = "${{{}}}"
             port = "${{{}}}"
             fallback = "${{{}:-fallback_value}}"
             mixed = "prefix_${{{}}}_suffix"
-        "#, parser_var_key, parser_port_key, nonexistent_var_key, parser_var_key);
+        "#,
+            parser_var_key, parser_port_key, nonexistent_var_key, parser_var_key
+        );
 
         let config = parser.parse_string(&toml_content, None).unwrap();
 

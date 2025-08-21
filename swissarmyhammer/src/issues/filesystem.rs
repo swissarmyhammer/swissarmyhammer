@@ -5195,7 +5195,7 @@ mod tests {
             std::fs::create_dir_all(&issues_dir).unwrap();
             std::fs::write(issues_dir.join("test.md"), "test content").unwrap();
 
-            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment 
+            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment
             // so that migration detection works correctly
             let new_issues = temp_dir.path().join(".swissarmyhammer/issues");
             if new_issues.exists() {
@@ -5244,7 +5244,7 @@ mod tests {
             std::fs::create_dir_all(issues_dir.join("complete")).unwrap();
             std::fs::write(issues_dir.join("complete/file3.md"), "content3").unwrap();
 
-            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment 
+            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment
             // so that migration detection works correctly
             let new_issues = temp_dir.path().join(".swissarmyhammer/issues");
             if new_issues.exists() {
@@ -5294,7 +5294,7 @@ mod tests {
             let issues_dir = temp_dir.path().join("issues");
             std::fs::create_dir_all(&issues_dir).unwrap();
 
-            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment 
+            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment
             // so that migration detection works correctly
             let new_issues = temp_dir.path().join(".swissarmyhammer/issues");
             if new_issues.exists() {
@@ -5327,7 +5327,7 @@ mod tests {
             std::fs::write(complete_dir.join("complete.md"), "complete").unwrap();
             std::fs::write(sub_dir.join("archived.md"), "archived").unwrap();
 
-            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment 
+            // Remove the .swissarmyhammer/issues directory created by IsolatedTestEnvironment
             // so that migration detection works correctly
             let new_issues = temp_dir.path().join(".swissarmyhammer/issues");
             if new_issues.exists() {

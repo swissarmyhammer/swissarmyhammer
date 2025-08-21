@@ -1197,7 +1197,7 @@ mod specification_compliance_tests {
     async fn test_all_builtin_workflows_migrated() {
         // Test only one workflow to speed up the test - core validation is the same
         let workflow_name = "greeting";
-        
+
         // Test that workflow has structured parameters
         let workflow_params = discover_workflow_parameters(workflow_name)
             .unwrap_or_else(|e| panic!("Failed to load {workflow_name} workflow: {e}"));
@@ -1282,7 +1282,6 @@ mod specification_compliance_tests {
     #[cfg(test)]
     mod performance_tests {
         use super::*;
-        
 
         #[tokio::test]
         async fn test_parameter_resolution_performance() {

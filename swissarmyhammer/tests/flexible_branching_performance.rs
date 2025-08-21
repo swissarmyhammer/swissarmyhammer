@@ -419,10 +419,7 @@ async fn test_github_flow_compatibility() {
     let git = git_ops.as_ref().unwrap();
 
     // GitHub Flow: feature branches off main, merged back to main (reduced for performance)
-    let feature_branches = [
-        "feature/add-user-profile",
-        "bugfix/login-error",
-    ];
+    let feature_branches = ["feature/add-user-profile", "bugfix/login-error"];
 
     for feature_branch in &feature_branches {
         // Create feature branch from main

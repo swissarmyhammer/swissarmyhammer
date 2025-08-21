@@ -122,7 +122,9 @@ pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<Pa
     // Performance optimization: fail fast for obviously non-existent workflows
     // This helps test performance while maintaining correct behavior
     if workflow_name.starts_with("nonexistent") || workflow_name == "test-missing-workflow" {
-        return Err(crate::SwissArmyHammerError::WorkflowNotFound(workflow_name.to_string()));
+        return Err(crate::SwissArmyHammerError::WorkflowNotFound(
+            workflow_name.to_string(),
+        ));
     }
 
     let storage = WorkflowStorage::file_system()?;

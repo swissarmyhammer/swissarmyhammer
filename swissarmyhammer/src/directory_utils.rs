@@ -173,7 +173,7 @@ pub fn get_or_create_swissarmyhammer_directory() -> crate::error::Result<PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
-        use std::env;
+    use std::env;
     use std::fs;
     use tempfile::TempDir;
 

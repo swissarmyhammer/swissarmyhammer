@@ -39,23 +39,23 @@ impl TestEnvironment {
     fn new() -> Result<Self> {
         let temp_dir = TempDir::new()?;
         let temp_path = temp_dir.path().to_path_buf();
-        
+
         // Store original directory for restoration
         let original_cwd = std::env::current_dir()?;
-        
+
         // Change to the temp directory (like IsolatedTestEnvironment)
         std::env::set_current_dir(&temp_path)?;
-        
+
         // Create a Git repository context so workflow loading works
-        fs::create_dir_all(&temp_path.join(".git"))?;
-        
+        fs::create_dir_all(temp_path.join(".git"))?;
+
         Ok(Self {
             _temp_dir: temp_dir,
             temp_path: temp_path.clone(),
             _original_cwd: original_cwd,
         })
     }
-    
+
     fn temp_path(&self) -> &Path {
         &self.temp_path
     }
@@ -127,7 +127,6 @@ impl Drop for TestEnvironment {
         let _ = std::env::set_current_dir(&self._original_cwd);
     }
 }
-
 
 /// Test performance impact of abort checking system
 #[test]
@@ -224,7 +223,7 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
         let handle = thread::spawn(move || -> Result<Output> {
             // Add small stagger to reduce resource contention
             thread::sleep(Duration::from_millis(i as u64 * 50));
-            
+
             let output = Command::cargo_bin("sah")
                 .unwrap()
                 .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
@@ -260,12 +259,13 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
                 println!("Workflow {i} exit status: {:?}", output.status.code());
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                
+
                 // Should fail due to abort detection
                 if !output.status.success() {
                     // Check if it's an abort-related failure (expected)
-                    if stderr.to_lowercase().contains("abort") 
-                        || stdout.to_lowercase().contains("abort") {
+                    if stderr.to_lowercase().contains("abort")
+                        || stdout.to_lowercase().contains("abort")
+                    {
                         any_detected_abort = true;
                         println!("Workflow {i} correctly detected abort");
                     } else if stderr.contains("not found") || stderr.contains("No such file") {
@@ -288,7 +288,7 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // At least one workflow should have detected the abort, but we'll be lenient
     // in high-contention scenarios where timing is unpredictable
     println!("Abort detection test completed. Any abort detected: {any_detected_abort}");
-    
+
     Ok(())
 }
 
@@ -323,7 +323,10 @@ fn test_large_abort_reasons() -> Result<()> {
     let workflow_file = env.create_test_workflow(&format!("LargeReasonTest{test_id}"))?;
 
     // Create large abort reason (10KB) with unique content
-    let large_reason = format!("Large abort reason for test {test_id}: {}", "X".repeat(10200));
+    let large_reason = format!(
+        "Large abort reason for test {test_id}: {}",
+        "X".repeat(10200)
+    );
     env.create_abort_file(&large_reason)?;
 
     // Verify abort file was created correctly before testing
@@ -339,11 +342,14 @@ fn test_large_abort_reasons() -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     println!("Command exit status: {:?}", output.status.code());
     println!("Stderr length: {}", stderr.len());
     if !stderr.is_empty() {
-        println!("Stderr (first 500 chars): {}", &stderr[..stderr.len().min(500)]);
+        println!(
+            "Stderr (first 500 chars): {}",
+            &stderr[..stderr.len().min(500)]
+        );
     }
 
     // Should still handle large abort reason correctly
@@ -353,13 +359,11 @@ fn test_large_abort_reasons() -> Result<()> {
         println!("Warning: Workflow completed successfully despite abort file (timing issue)");
     } else {
         // Workflow failed - check if it's abort-related or another acceptable error
-        let has_abort_error = stderr.to_lowercase().contains("abort") 
-            || stdout.to_lowercase().contains("abort");
-        let has_not_found_error = stderr.contains("not found") 
-            || stderr.contains("No such file");
-        let has_timeout_error = stderr.contains("timeout") 
-            || stderr.contains("timed out");
-        
+        let has_abort_error =
+            stderr.to_lowercase().contains("abort") || stdout.to_lowercase().contains("abort");
+        let has_not_found_error = stderr.contains("not found") || stderr.contains("No such file");
+        let has_timeout_error = stderr.contains("timeout") || stderr.contains("timed out");
+
         if has_abort_error {
             println!("Successfully detected abort with large reason");
         } else if has_not_found_error {
@@ -367,8 +371,10 @@ fn test_large_abort_reasons() -> Result<()> {
         } else if has_timeout_error {
             println!("Failed due to timeout (acceptable under resource contention)");
         } else {
-            println!("Failed with other error (may be acceptable under resource contention): {}", 
-                     stderr.lines().take(3).collect::<Vec<_>>().join(" | "));
+            println!(
+                "Failed with other error (may be acceptable under resource contention): {}",
+                stderr.lines().take(3).collect::<Vec<_>>().join(" | ")
+            );
         }
     }
 
