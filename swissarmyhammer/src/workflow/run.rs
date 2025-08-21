@@ -424,6 +424,8 @@ mod tests {
 
         // Create abort file
         std::fs::write(abort_path_str, "concurrent test reason").unwrap();
+        
+        // Verify abort file exists before creating workflow runs
         assert!(Path::new(abort_path_str).exists());
 
         // Create multiple workflow runs concurrently
