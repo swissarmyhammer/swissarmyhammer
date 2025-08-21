@@ -21,6 +21,7 @@
 
 use anyhow::Result;
 use assert_cmd::Command;
+use serial_test::serial;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -193,6 +194,7 @@ fn test_abort_performance_with_checking_overhead() -> Result<()> {
 
 /// Test concurrent workflow execution with abort
 #[test]
+#[serial]
 fn test_concurrent_workflow_abort_handling() -> Result<()> {
     let env = TestEnvironment::new()?;
 
