@@ -184,7 +184,7 @@ async fn test_flow_test_with_set_variables() -> Result<()> {
         "test",
         "greeting",
         "--var",
-        "name=TestUser",
+        "person_name=TestUser",
         "--var",
         "language=Spanish",
     ]).await?;
@@ -194,7 +194,7 @@ async fn test_flow_test_with_set_variables() -> Result<()> {
         "flow test with --var variables should succeed"
     );
 
-    // Check that template variables are processed
+    // Check that template variables are processed  
     assert!(result.stdout.contains("Test mode"), "should be in test mode");
     assert!(
         result.stdout.contains("Test execution completed"),
@@ -364,7 +364,7 @@ async fn test_flow_test_special_chars_in_set() -> Result<()> {
         "test",
         "greeting",
         "--var",
-        "name=Test User 123",
+        "person_name=Test User 123",
         "--var",
         r#"language=English (US)"#,
     ]).await?;

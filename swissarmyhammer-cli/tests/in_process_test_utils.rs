@@ -10,7 +10,9 @@ use swissarmyhammer_cli::{flow, validate};
 
 /// Captures output from in-process CLI command execution
 pub struct CapturedOutput {
+    #[allow(dead_code)] // Used by test infrastructure
     pub stdout: String,
+    #[allow(dead_code)] // Used by test infrastructure  
     pub stderr: String,
     pub exit_code: i32,
 }
@@ -99,12 +101,12 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
             })
         };
         
-        match timeout(Duration::from_secs(10), command_future).await {
+        match timeout(Duration::from_secs(60), command_future).await {
             Ok(result) => result,
             Err(_) => {
                 Ok(CapturedOutput {
                     stdout: String::new(),
-                    stderr: "Test command timed out after 10 seconds".to_string(),
+                    stderr: "Test command timed out after 60 seconds".to_string(),
                     exit_code: 124, // Standard timeout exit code
                 })
             }

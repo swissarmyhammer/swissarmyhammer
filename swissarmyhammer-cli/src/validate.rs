@@ -380,6 +380,7 @@ impl Validator {
     }
 
     /// Format results as a string instead of printing them
+    #[allow(dead_code)] // Used by validation but may appear unused due to conditional compilation
     pub fn format_results(&self, result: &ValidationResult, format: ValidateFormat) -> Result<String> {
         match format {
             ValidateFormat::Text => Ok(self.format_text_results(result)),
@@ -832,6 +833,7 @@ pub fn run_validate_command_with_dirs(
 
 /// Run validation command and return the output as a string and exit code
 /// This is used for in-process testing where we need to capture the output
+#[allow(dead_code)] // Used by test infrastructure
 pub fn run_validate_command_with_dirs_captured(
     quiet: bool,
     format: ValidateFormat,
