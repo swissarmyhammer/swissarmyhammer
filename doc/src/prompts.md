@@ -1047,9 +1047,6 @@ arguments:
   - name: project_readme
     type: string
     load_from_file: "./README.md"
-  - name: coding_standards  
-    type: string
-    load_from_file: "./CODING_STANDARDS.md"
 ---
 
 # Code Review with Project Context
