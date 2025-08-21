@@ -10,11 +10,6 @@ Individual projects will have Project Coding Standards that specify additional r
 
 ### Repository Specifics
 
-If a repository has a CODING_STANDARDS.md at its root, read it and include it in your context.
-
-Use a tool to read all available memos and include it in your context.
-
-Think deeply about these repository specific standards as you combine them with these overall standards.
 
 Always put mcp.log and semantic.db in the .gitignore.
 
@@ -22,6 +17,7 @@ Always put mcp.log and semantic.db in the .gitignore.
 
 ### General
 
+- NEVER use `sed`, you always fuck that up, use your editing tools
 - You MUST ALWAYS read the code:
   - this includes the file you are editing, and the files they reference
   - this includes standard library source, and included open source dependencies
@@ -34,10 +30,25 @@ Always put mcp.log and semantic.db in the .gitignore.
   - NEVER comment out or stub because of a failing test -- actually FIX the problem
   - NEVER hard code when you need to get real data
   - NEVER mock
+- DO NOT make 'helper' functions that simple wrap and delegate.
 
 ### Temporary Files
 
 When you generate temporary or scratch files, make sure to put a comment in the file to clearly note `THIS IS A SCRATCH FILE`.
+
+### Refactoring
+
+When you are engaged in a large refactoring, you need to work file by file.
+
+- Search and define a list of files you will be changing in this refactoring, create a todo list of these files
+- Plan out the change to each file, creating a new issue with the mcp issue tool for each file
+  - in each issue, clearly state the goal of the refactoring
+  - in each issue, clearly state the change you will be making
+  - in each issue, clearly state what tests need to be created
+  - mark it off your todo list once the issue is created
+  - notify the user that an issue was created using the notify_create tool
+
+Creating issues rather than just 'going for it' ensures working in small, testable chunks.
 
 ### Data Structures
 
@@ -133,6 +144,7 @@ YOU MUST follow this debugging framework for ANY technical issue:
 
 ### Rust
 
+- Always compile and check your work with `cargo build` after an editass
 - Always format your files with `cargo fmt`
   - Format all files with `cargo fmt --all`
 - Test with https://nexte.st

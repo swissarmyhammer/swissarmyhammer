@@ -433,6 +433,11 @@ impl IsolatedTestEnvironment {
     pub fn complete_dir(&self) -> PathBuf {
         self.issues_dir().join("complete")
     }
+    
+    /// Get the path to the temporary working directory
+    pub fn temp_dir(&self) -> &std::path::Path {
+        self._temp_dir.path()
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]

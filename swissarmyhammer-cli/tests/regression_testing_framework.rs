@@ -4,12 +4,13 @@
 //! against known-good baseline outputs (golden master testing).
 
 use anyhow::Result;
-use assert_cmd::Command;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+mod in_process_test_utils;
 mod test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 use test_utils::setup_git_repo;
 
 /// Represents expected output for a CLI command
@@ -212,29 +213,45 @@ impl RegressionTestSuite {
     }
 
     /// Execute all test cases and return results
-    pub fn execute_all_tests(&self, working_dir: Option<&PathBuf>) -> Vec<RegressionTestResult> {
-        self.test_cases
-            .iter()
-            .map(|test_case| self.execute_single_test(test_case, working_dir))
-            .collect()
+    pub async fn execute_all_tests(&self, working_dir: Option<&PathBuf>) -> Vec<RegressionTestResult> {
+        let mut results = Vec::new();
+        for test_case in &self.test_cases {
+            results.push(self.execute_single_test(test_case, working_dir).await);
+        }
+        results
     }
 
     /// Execute a single test case
-    pub fn execute_single_test(
+    pub async fn execute_single_test(
         &self,
         test_case: &ExpectedOutput,
         working_dir: Option<&PathBuf>,
     ) -> RegressionTestResult {
-        let mut cmd = Command::cargo_bin("sah").expect("Failed to find swissarmyhammer binary");
-
-        cmd.args(&test_case.command);
-
+        // Save current directory
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        
+        // Change to working directory if specified
         if let Some(dir) = working_dir {
-            cmd.current_dir(dir);
+            if let Err(e) = std::env::set_current_dir(dir) {
+                return RegressionTestResult {
+                    test_case: test_case.clone(),
+                    passed: false,
+                    actual_exit_code: None,
+                    actual_stdout: String::new(),
+                    actual_stderr: String::new(),
+                    failure_reason: Some(format!("Failed to change directory: {e}")),
+                };
+            }
         }
 
-        let output = match cmd.output() {
-            Ok(output) => output,
+        let command_args: Vec<&str> = test_case.command.iter().map(|s| s.as_str()).collect();
+        let result = run_sah_command_in_process(&command_args).await;
+        
+        // Restore original directory
+        let _ = std::env::set_current_dir(original_dir);
+        
+        let (actual_exit_code, actual_stdout, actual_stderr) = match result {
+            Ok(output) => (output.exit_code, output.stdout, output.stderr),
             Err(e) => {
                 return RegressionTestResult {
                     test_case: test_case.clone(),
@@ -246,10 +263,6 @@ impl RegressionTestSuite {
                 };
             }
         };
-
-        let actual_exit_code = output.status.code().unwrap_or(-1);
-        let actual_stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let actual_stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         let mut failure_reasons = vec![];
 
@@ -449,13 +462,13 @@ fn setup_regression_test_environment() -> Result<(TempDir, PathBuf)> {
 }
 
 /// Test the regression testing framework itself
-#[test]
-fn test_regression_framework() -> Result<()> {
+#[tokio::test]
+async fn test_regression_framework() -> Result<()> {
     let (_temp_dir, temp_path) = setup_regression_test_environment()?;
 
     // Create and execute baseline test suite
     let suite = RegressionTestSuite::create_baseline_suite();
-    let results = suite.execute_all_tests(Some(&temp_path));
+    let results = suite.execute_all_tests(Some(&temp_path)).await;
     let report = RegressionTestReport::from_results(results);
 
     // The framework should work
@@ -502,8 +515,8 @@ fn test_suite_serialization() -> Result<()> {
 }
 
 /// Test creating custom regression test suite
-#[test]
-fn test_custom_regression_suite() -> Result<()> {
+#[tokio::test]
+async fn test_custom_regression_suite() -> Result<()> {
     let (_temp_dir, temp_path) = setup_regression_test_environment()?;
 
     // Create custom test suite focused on specific behaviors
@@ -539,7 +552,7 @@ fn test_custom_regression_suite() -> Result<()> {
         ],
     };
 
-    let results = custom_suite.execute_all_tests(Some(&temp_path));
+    let results = custom_suite.execute_all_tests(Some(&temp_path)).await;
     let report = RegressionTestReport::from_results(results);
 
     assert_eq!(report.total_tests, 2);

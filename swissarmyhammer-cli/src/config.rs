@@ -439,8 +439,24 @@ fn format_config_value(value: &swissarmyhammer::sah_config::ConfigValue) -> Stri
         ConfigValue::Integer(i) => i.to_string(),
         ConfigValue::Float(f) => f.to_string(),
         ConfigValue::Boolean(b) => b.to_string(),
-        ConfigValue::Array(arr) => format!("[{} items]", arr.len()),
-        ConfigValue::Table(table) => format!("{{{} keys}}", table.len()),
+        ConfigValue::Array(arr) => {
+            if arr.is_empty() {
+                "[]".to_string()
+            } else {
+                let items: Vec<String> = arr.iter().map(|v| format_config_value(v)).collect();
+                format!("[{}]", items.join(", "))
+            }
+        }
+        ConfigValue::Table(table) => {
+            if table.is_empty() {
+                "{}".to_string()
+            } else {
+                let pairs: Vec<String> = table.iter()
+                    .map(|(k, v)| format!("{}: {}", k, format_config_value(v)))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            }
+        }
     }
 }
 

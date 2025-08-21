@@ -30,11 +30,3 @@ Create an abort file with a detailed message:
 ## Returns
 
 Returns confirmation message with the abort reason that was written to the file.
-
-## Integration
-
-This tool replaces the brittle string-based "ABORT ERROR" detection system with a robust file-based approach. The abort file is checked by:
-
-- Workflow execution loops in `execute_state_with_limit`
-- CLI error handling for proper exit codes
-- Process cleanup routines for graceful termination

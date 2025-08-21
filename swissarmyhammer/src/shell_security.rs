@@ -146,6 +146,8 @@ impl Default for ShellSecurityPolicy {
                 // Sensitive file access
                 r"/etc/passwd".to_string(),
                 r"/etc/shadow".to_string(),
+                // sed ends in pain, use the editing tools
+                r"sed\s+.*".to_string(), // Force more use of edit tools
             ],
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,

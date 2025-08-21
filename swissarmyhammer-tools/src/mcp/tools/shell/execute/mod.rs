@@ -3050,6 +3050,8 @@ mod tests {
             // Sensitive file access
             "cat /etc/passwd",
             "less /etc/shadow",
+            // sed -- force more use of edit tools
+            "sed -i 's/foo/bar/g' file.txt",
         ];
 
         for pattern in &blocked_patterns {

@@ -61,26 +61,3 @@ Success response confirming completion:
   "id": "01K1KQM85501ECE8XJGNZKNJQW"
 }
 ```
-
-## Usage Patterns
-
-1. **Sequential Workflow**: Mark items complete as you finish them
-2. **Progress Tracking**: Items remain visible until all are complete
-3. **Clean Workspace**: Completed lists are automatically removed
-4. **Audit Trail**: All items preserved until list completion
-
-## Error Cases
-
-- Todo list doesn't exist: Error with list name
-- Todo item ID not found: Error with item and list details
-- Invalid ULID format: Validation error
-- File system permission issues: I/O error
-- Malformed YAML file: Parse error
-
-## Integration
-
-Works with the sequential processing pattern:
-1. Use `todo_show` with `"item": "next"` to get current work
-2. Complete the task
-3. Use `todo_mark_complete` to update status
-4. Repeat until all items complete and file is deleted

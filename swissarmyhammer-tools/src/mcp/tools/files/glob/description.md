@@ -7,34 +7,6 @@ Fast file pattern matching with advanced filtering, sorting, and comprehensive .
 - `case_sensitive` (optional): Case-sensitive matching (default: false)
 - `respect_git_ignore` (optional): Honor .gitignore patterns and git repository settings (default: true)
 
-## Enhanced Functionality
-
-### Advanced Pattern Support
-- **Standard Glob Patterns**: `*`, `**`, `?`, `[...]` with full wildcard support
-- **Recursive Matching**: `**/*.rs` for recursive file type searches
-- **Filename Patterns**: `*.txt` for simple filename matching
-- **Directory Patterns**: `src/**/*.py` for directory-specific searches
-- **Pattern Validation**: Comprehensive validation with helpful error messages
-
-### Git Integration
-- **Full .gitignore Support**: Uses the `ignore` crate for proper .gitignore parsing
-- **Git Repository Awareness**: Automatically detects and respects git repository boundaries
-- **Nested Gitignore**: Handles nested .gitignore files and directory-specific rules
-- **Negation Patterns**: Supports `!important.log` style negation patterns
-- **Global Git Config**: Respects global git ignore settings
-
-### Performance Optimizations
-- **Result Limiting**: Caps results at 10,000 files to prevent memory exhaustion
-- **Early Termination**: Stops processing when result limit is reached
-- **Efficient Matching**: Optimized pattern matching for different pattern types
-- **Smart File Filtering**: Only processes files, skips directories in results
-
-### Security & Validation
-- **Workspace Boundaries**: All file paths validated to be within workspace
-- **Pattern Validation**: Validates pattern syntax before execution
-- **Path Security**: Uses `FilePathValidator` for comprehensive security checks
-- **Length Limits**: Protects against extremely long patterns (max 1000 characters)
-
 ## Use Cases
 
 - **Code Discovery**: Finding files by type or name patterns across large codebases
@@ -107,17 +79,3 @@ Found 42 files matching pattern '**/*.rs'
 /project/src/utils/helper.rs
 ...
 ```
-
-## Performance Notes
-
-- **Large Codebases**: Optimized for repositories with thousands of files
-- **Memory Efficient**: Result limiting prevents memory exhaustion
-- **Fast Execution**: Typically completes in under 1 second for most patterns
-- **Git Integration**: Minimal overhead from .gitignore processing
-
-## Error Handling
-
-- **Pattern Validation**: Clear error messages for invalid glob patterns
-- **Path Validation**: Security validation for all file paths
-- **Permission Handling**: Graceful handling of permission denied scenarios
-- **Limit Warnings**: Informative messages when result limits are reached

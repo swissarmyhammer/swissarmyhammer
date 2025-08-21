@@ -215,12 +215,10 @@ pub fn load_repo_config() -> Result<Option<Configuration>, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
-    #[serial]
     fn test_parse_valid_toml_string() {
         let toml_content = r#"
             name = "TestProject"
@@ -262,7 +260,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_parse_invalid_toml_string() {
         let invalid_toml = r#"
             name = "TestProject
@@ -277,7 +274,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_parse_config_file() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("test_config.toml");
@@ -306,7 +302,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_file_size_validation() {
         let parser = ConfigParser::with_limits(100, 10); // 100 byte limit
         let temp_dir = TempDir::new().unwrap();
@@ -325,7 +320,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_nesting_depth_validation() {
         // Test the validation directly since TOML structure doesn't create deep nesting
         let deep_config_value = create_deep_nested_value(12); // 12 > 10 ValidationLimit::MAX_NESTING_DEPTH
@@ -349,7 +343,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_validate_file() {
         let parser = ConfigParser::new();
         let temp_dir = TempDir::new().unwrap();
@@ -372,7 +365,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_load_from_repo_root() {
         use std::panic;
 
@@ -413,7 +405,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_env_var_substitution_in_parsing() {
         std::env::set_var("PARSER_TEST_CONFIG_VAR", "substituted_value");
         std::env::set_var("PARSER_TEST_PORT", "8080");
@@ -444,7 +435,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_parser_with_custom_limits() {
         let parser = ConfigParser::with_limits(500, 5);
         assert_eq!(parser.max_file_size(), 500);
@@ -452,7 +442,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_utf8_validation() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("invalid_utf8.toml");
@@ -467,7 +456,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_empty_toml_file() {
         let config = parse_config_string("").unwrap();
         assert!(config.is_empty());
@@ -475,7 +463,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_toml_array_parsing() {
         let toml_content = r#"
             simple_array = ["item1", "item2", "item3"]

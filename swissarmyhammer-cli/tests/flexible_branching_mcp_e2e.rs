@@ -2,7 +2,6 @@
 //!
 //! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
 
-use assert_cmd::Command;
 use std::process::Command as StdCommand;
 use tempfile::TempDir;
 
@@ -108,8 +107,7 @@ impl McpTestEnvironment {
     }
 
     fn run_cli_command(&self, args: &[&str]) -> std::process::Output {
-        Command::cargo_bin("sah")
-            .expect("Failed to find sah binary")
+        std::process::Command::new(env!("CARGO_BIN_EXE_sah"))
             .current_dir(self.temp_dir.path())
             .args(args)
             .output()
