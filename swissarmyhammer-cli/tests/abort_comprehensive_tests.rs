@@ -132,7 +132,10 @@ async fn test_prompt_command_with_abort_file() -> Result<()> {
     // detect the abort file if the system is properly integrated
     // For now, just verify the command can run with abort file present
     // This may succeed or fail depending on internal workflow usage
-    println!("Prompt test output: exit_code={}, stderr={}", result.exit_code, result.stderr);
+    println!(
+        "Prompt test output: exit_code={}, stderr={}",
+        result.exit_code, result.stderr
+    );
     Ok(())
 }
 
@@ -213,7 +216,7 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "Multiple CLI runs - expensive integration test"]  
+#[ignore = "Multiple CLI runs - expensive integration test"]
 async fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
     // Force cleanup multiple times to handle race conditions from parallel tests
     for _ in 0..3 {
@@ -440,14 +443,8 @@ transitions:
 
     // Should succeed normally
     if result.exit_code != 0 {
-        println!(
-            "Normal workflow stderr: {}",
-            result.stderr
-        );
-        println!(
-            "Normal workflow stdout: {}",
-            result.stdout
-        );
+        println!("Normal workflow stderr: {}", result.stderr);
+        println!("Normal workflow stdout: {}", result.stdout);
     }
 
     // Verify still no abort file exists after successful run
@@ -488,7 +485,7 @@ transitions:
 
     // Run multiple commands concurrently using tokio tasks
     let mut tasks = tokio::task::JoinSet::new();
-    
+
     for i in 0..3 {
         tasks.spawn(async move {
             std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");

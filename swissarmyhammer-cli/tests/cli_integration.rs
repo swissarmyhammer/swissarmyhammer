@@ -32,7 +32,7 @@ stateDiagram-v2
 /// Helper to set up a temporary test environment with a workflow
 async fn setup_test_workflow(workflow_name: &str) -> Result<IsolatedTestEnvironment> {
     let env = IsolatedTestEnvironment::new().unwrap();
-    
+
     // Create minimal workflow in the isolated environment
     let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     std::fs::create_dir_all(&workflow_dir)?;

@@ -139,7 +139,7 @@ async fn test_abort_performance_impact_baseline() -> Result<()> {
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     // Baseline measurement without abort file
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
@@ -178,7 +178,7 @@ async fn test_abort_performance_with_checking_overhead() -> Result<()> {
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     // Create workflow that will be aborted mid-execution
     env.create_abort_file("Performance test abort")?;
 
@@ -209,7 +209,7 @@ async fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // Use unique identifier to avoid conflicts between test runs
     let test_id = std::process::id();
     let env = TestEnvironment::new()?;
-    
+
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
@@ -238,14 +238,14 @@ async fn test_concurrent_workflow_abort_handling() -> Result<()> {
             // Change to test directory
             let original_dir = std::env::current_dir().unwrap();
             std::env::set_current_dir(&test_dir).unwrap();
-            
+
             std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
             let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await;
             std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
-            
+
             // Restore original directory
             std::env::set_current_dir(original_dir).unwrap();
-            
+
             result
         });
 
@@ -344,11 +344,11 @@ async fn test_large_abort_reasons() -> Result<()> {
     // Use unique identifier to avoid conflicts between test runs
     let test_id = std::process::id();
     let env = TestEnvironment::new()?;
-    
+
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     let workflow_file = env.create_test_workflow(&format!("LargeReasonTest{test_id}"))?;
 
     // Create large abort reason (10KB) with unique content
@@ -413,11 +413,11 @@ async fn test_large_abort_reasons() -> Result<()> {
 #[tokio::test]
 async fn test_unicode_abort_reasons() -> Result<()> {
     let env = TestEnvironment::new()?;
-    
+
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     let workflow_file = env.create_test_workflow("Unicode Test")?;
 
     let unicode_reason = "Abort with émojis 🚫 and ñoñ-ASCII characters 中文测试";
@@ -467,11 +467,11 @@ async fn test_filesystem_edge_cases() -> Result<()> {
 #[ignore = "Complex workflow test - requires full workflow system setup"]
 async fn test_abort_error_messages_user_experience() -> Result<()> {
     let env = TestEnvironment::new()?;
-    
+
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     let workflow_file = env.create_test_workflow("UX Test")?;
 
     let abort_reason = "User initiated cancellation for testing UX";
@@ -483,8 +483,7 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
 
     // Should exit with proper exit code
     assert_eq!(
-        result.exit_code,
-        2,
+        result.exit_code, 2,
         "Should exit with code 2 for abort. Exit code: {}",
         result.exit_code
     );
@@ -507,11 +506,11 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
 #[ignore = "Multiple CLI executions - expensive integration test"]
 async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     let env = TestEnvironment::new()?;
-    
+
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     let workflow_file = env.create_test_workflow("Cleanup Test")?;
 
     // First run with abort file
@@ -520,10 +519,7 @@ async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let result1 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
 
-    assert!(
-        result1.exit_code != 0,
-        "First run should fail due to abort"
-    );
+    assert!(result1.exit_code != 0, "First run should fail due to abort");
 
     // Second run without abort file - should clean up and succeed
     let result2 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
@@ -587,11 +583,11 @@ async fn test_abort_with_different_cli_commands() -> Result<()> {
 #[ignore = "Complex workflow test - requires full workflow system setup"]
 async fn test_regression_normal_workflow_execution() -> Result<()> {
     let env = TestEnvironment::new()?;
-    
+
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
-    
+
     let workflow_file = env.create_test_workflow("Regression Test")?;
 
     // Ensure no abort file exists

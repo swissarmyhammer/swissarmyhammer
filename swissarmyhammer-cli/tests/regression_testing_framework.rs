@@ -213,7 +213,10 @@ impl RegressionTestSuite {
     }
 
     /// Execute all test cases and return results
-    pub async fn execute_all_tests(&self, working_dir: Option<&PathBuf>) -> Vec<RegressionTestResult> {
+    pub async fn execute_all_tests(
+        &self,
+        working_dir: Option<&PathBuf>,
+    ) -> Vec<RegressionTestResult> {
         let mut results = Vec::new();
         for test_case in &self.test_cases {
             results.push(self.execute_single_test(test_case, working_dir).await);
@@ -229,7 +232,7 @@ impl RegressionTestSuite {
     ) -> RegressionTestResult {
         // Save current directory
         let original_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        
+
         // Change to working directory if specified
         if let Some(dir) = working_dir {
             if let Err(e) = std::env::set_current_dir(dir) {
@@ -246,10 +249,10 @@ impl RegressionTestSuite {
 
         let command_args: Vec<&str> = test_case.command.iter().map(|s| s.as_str()).collect();
         let result = run_sah_command_in_process(&command_args).await;
-        
+
         // Restore original directory
         let _ = std::env::set_current_dir(original_dir);
-        
+
         let (actual_exit_code, actual_stdout, actual_stderr) = match result {
             Ok(output) => (output.exit_code, output.stdout, output.stderr),
             Err(e) => {

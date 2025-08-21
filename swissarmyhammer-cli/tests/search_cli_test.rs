@@ -21,7 +21,8 @@ async fn test_search_index_old_glob_flag_rejected() -> Result<()> {
     // The error should indicate that --glob is not a valid argument
     assert!(
         result.stderr.contains("unexpected argument") || result.stderr.contains("found argument"),
-        "should show error about unexpected --glob argument: {}", result.stderr
+        "should show error about unexpected --glob argument: {}",
+        result.stderr
     );
 
     Ok(())
@@ -55,20 +56,27 @@ async fn test_search_index_with_force() -> Result<()> {
     let _guard = create_semantic_test_guard();
 
     // Use a pattern that won't match many files to avoid heavy indexing
-    let result = run_sah_command_in_process(&["search", "index", "nonexistent/**/*.xyz", "--force"]).await?;
+    let result =
+        run_sah_command_in_process(&["search", "index", "nonexistent/**/*.xyz", "--force"]).await?;
 
     // Should show that it's starting indexing with the correct glob pattern and force flag
     assert!(
-        result.stdout.contains("Indexing files matching: nonexistent/**/*.xyz")
+        result
+            .stdout
+            .contains("Indexing files matching: nonexistent/**/*.xyz")
             || result.stderr.contains("Indexing files matching:")
             || result.stdout.contains("Starting semantic search indexing")
             || result.stderr.contains("Starting semantic search indexing"),
-        "should show glob pattern or indexing start in output: stdout={}, stderr={}", result.stdout, result.stderr
+        "should show glob pattern or indexing start in output: stdout={}, stderr={}",
+        result.stdout,
+        result.stderr
     );
     assert!(
         result.stdout.contains("Force re-indexing: enabled")
             || result.stderr.contains("Force re-indexing: enabled"),
-        "should show force flag is enabled: stdout={}, stderr={}", result.stdout, result.stderr
+        "should show force flag is enabled: stdout={}, stderr={}",
+        result.stdout,
+        result.stderr
     );
 
     Ok(())
@@ -83,8 +91,11 @@ async fn test_search_query() -> Result<()> {
 
     // Should show that it's starting search with the correct query
     assert!(
-        result.stdout.contains("Searching for: error handling") || result.stderr.contains("Searching for:"),
-        "should show search query in output: stdout={}, stderr={}", result.stdout, result.stderr
+        result.stdout.contains("Searching for: error handling")
+            || result.stderr.contains("Searching for:"),
+        "should show search query in output: stdout={}, stderr={}",
+        result.stdout,
+        result.stderr
     );
 
     Ok(())
@@ -118,8 +129,11 @@ async fn test_search_index_help() -> Result<()> {
 
     // After our changes, this should show positional patterns argument syntax
     assert!(
-        result.stdout.contains("PATTERNS") || result.stdout.contains("patterns") || result.stdout.contains("glob"),
-        "help should show patterns parameter: {}", result.stdout
+        result.stdout.contains("PATTERNS")
+            || result.stdout.contains("patterns")
+            || result.stdout.contains("glob"),
+        "help should show patterns parameter: {}",
+        result.stdout
     );
 
     Ok(())

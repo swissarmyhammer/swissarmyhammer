@@ -381,7 +381,11 @@ impl Validator {
 
     /// Format results as a string instead of printing them
     #[allow(dead_code)] // Used by validation but may appear unused due to conditional compilation
-    pub fn format_results(&self, result: &ValidationResult, format: ValidateFormat) -> Result<String> {
+    pub fn format_results(
+        &self,
+        result: &ValidationResult,
+        format: ValidateFormat,
+    ) -> Result<String> {
         match format {
             ValidateFormat::Text => Ok(self.format_text_results(result)),
             ValidateFormat::Json => self.format_json_results(result),
@@ -401,8 +405,13 @@ impl Validator {
 
         if result.issues.is_empty() {
             if !self.quiet {
-                writeln!(output, "{} All {} files validated successfully!", 
-                    "✓".green(), result.files_checked).unwrap();
+                writeln!(
+                    output,
+                    "{} All {} files validated successfully!",
+                    "✓".green(),
+                    result.files_checked
+                )
+                .unwrap();
             }
             return output;
         }
@@ -477,13 +486,23 @@ impl Validator {
                 writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
             }
             if result.warnings > 0 {
-                writeln!(output, "  Warnings: {}", result.warnings.to_string().yellow()).unwrap();
+                writeln!(
+                    output,
+                    "  Warnings: {}",
+                    result.warnings.to_string().yellow()
+                )
+                .unwrap();
             }
 
             if result.has_errors() {
                 writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
             } else if result.has_warnings() {
-                writeln!(output, "\n{} Validation completed with warnings.", "⚠".yellow()).unwrap();
+                writeln!(
+                    output,
+                    "\n{} Validation completed with warnings.",
+                    "⚠".yellow()
+                )
+                .unwrap();
             } else {
                 writeln!(output, "\n{} Validation passed!", "✓".green()).unwrap();
             }
