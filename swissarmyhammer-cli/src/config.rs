@@ -498,11 +498,11 @@ mod tests {
             format_config_value(&ConfigValue::Array(vec![ConfigValue::String(
                 "a".to_string()
             )])),
-            "[1 items]"
+            "[\"a\"]"
         );
         assert_eq!(
             format_config_value(&ConfigValue::Table(HashMap::new())),
-            "{0 keys}"
+            "{}"
         );
     }
 

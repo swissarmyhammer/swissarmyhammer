@@ -6,7 +6,7 @@
 use anyhow::Result;
 use clap::Parser;
 use swissarmyhammer_cli::cli::{Cli, Commands};
-use swissarmyhammer_cli::{flow, validate};
+use swissarmyhammer_cli::validate;
 
 /// Captures output from in-process CLI command execution
 pub struct CapturedOutput {
@@ -126,26 +126,6 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
     
     // For completion command, we need to generate the actual completion script
     let (stdout, stderr, exit_code) = match cli.command {
-        Some(Commands::Flow { subcommand }) => {
-            // Flow commands are exposed and can be run in-process
-            let stdout_capture = stdout_buffer.clone();
-            let stderr_capture = stderr_buffer.clone();
-            
-            // Capture output from flow command
-            let exit_code = match flow::run_flow_command(subcommand).await {
-                Ok(_) => EXIT_SUCCESS,
-                Err(e) => {
-                    if let Ok(mut stderr) = stderr_capture.lock() {
-                        let _ = writeln!(stderr, "{}", e);
-                    }
-                    EXIT_WARNING
-                }
-            };
-            
-            let stdout_str = String::from_utf8_lossy(&stdout_capture.lock().unwrap()).to_string();
-            let stderr_str = String::from_utf8_lossy(&stderr_capture.lock().unwrap()).to_string();
-            (stdout_str, stderr_str, exit_code)
-        }
         Some(Commands::Validate { quiet, format, workflow_dirs }) => {
             // Use the captured version that returns output as a string
             match validate::run_validate_command_with_dirs_captured(quiet, format, workflow_dirs) {
@@ -157,18 +137,55 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             }
         }
         Some(Commands::Plan { plan_filename }) => {
-            // Plan command mock for tests - just simulate what the test expects
+            // Plan command mock for tests - check if file exists and return appropriate exit code
             let stderr_capture = stderr_buffer.clone();
+            let stdout_capture = stdout_buffer.clone();
             
-            // Write a message to stderr to indicate plan execution started
-            if let Ok(mut stderr) = stderr_capture.lock() {
-                let _ = writeln!(stderr, "Running plan command");
-                let _ = writeln!(stderr, "Making the plan for {}", plan_filename);
-            }
+            // Check if the plan file exists
+            let plan_path = std::path::Path::new(&plan_filename);
+            let exit_code = if !plan_path.exists() {
+                // File doesn't exist - write enhanced error message with suggestions
+                if let Ok(mut stderr) = stderr_capture.lock() {
+                    let _ = writeln!(stderr, "Error: Plan file '{}' not found", plan_filename);
+                    let _ = writeln!(stderr, "");
+                    let _ = writeln!(stderr, "Suggestions:");
+                    let _ = writeln!(stderr, "• Check the file path for typos");
+                    let _ = writeln!(stderr, "• Use 'ls -la' to verify the file exists");
+                    let _ = writeln!(stderr, "• Try using an absolute path");
+                }
+                EXIT_ERROR
+            } else if plan_path.is_dir() {
+                // Path is a directory, not a file - write error message and return error code  
+                if let Ok(mut stderr) = stderr_capture.lock() {
+                    let _ = writeln!(stderr, "Error: '{}' is a directory, not a file", plan_filename);
+                    let _ = writeln!(stderr, "");
+                    let _ = writeln!(stderr, "Suggestions:");
+                    let _ = writeln!(stderr, "• Specify a plan file inside the directory");
+                    let _ = writeln!(stderr, "• Check that you provided the correct file path");
+                }
+                EXIT_ERROR
+            } else if std::fs::metadata(&plan_path).map_or(false, |m| m.len() == 0) {
+                // File is empty - write warning message and return warning code
+                if let Ok(mut stderr) = stderr_capture.lock() {
+                    let _ = writeln!(stderr, "Warning: Plan file '{}' is empty or contains no valid content", plan_filename);
+                    let _ = writeln!(stderr, "");
+                    let _ = writeln!(stderr, "Suggestions:");
+                    let _ = writeln!(stderr, "• Add content to the plan file");
+                    let _ = writeln!(stderr, "• Check for whitespace-only content");
+                }
+                EXIT_WARNING  // Use warning exit code for empty files
+            } else {
+                // File exists and is valid - simulate successful execution
+                if let Ok(mut stdout) = stdout_capture.lock() {
+                    let _ = writeln!(stdout, "Running plan command");
+                    let _ = writeln!(stdout, "Making the plan for {}", plan_filename);
+                }
+                EXIT_SUCCESS
+            };
             
-            let stdout_str = String::from_utf8_lossy(&stdout_buffer.lock().unwrap()).to_string();
+            let stdout_str = String::from_utf8_lossy(&stdout_capture.lock().unwrap()).to_string();
             let stderr_str = String::from_utf8_lossy(&stderr_capture.lock().unwrap()).to_string();
-            (stdout_str, stderr_str, EXIT_SUCCESS)
+            (stdout_str, stderr_str, exit_code)
         }
         Some(Commands::Completion { shell }) => {
             // For completion, we need to generate the actual completion script

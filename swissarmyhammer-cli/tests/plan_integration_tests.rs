@@ -734,8 +734,8 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
             .await
             .expect("Failed to run plan workflow test");
 
-            // Restore original directory
-            std::env::set_current_dir(original_dir).unwrap();
+            // Restore original directory (ignore errors since other concurrent tasks may have changed it)
+            let _ = std::env::set_current_dir(original_dir);
 
             (i, result.exit_code == 0)
         });
