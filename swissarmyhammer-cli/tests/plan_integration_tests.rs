@@ -304,7 +304,7 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
     // Test that the plan command starts execution (it should begin processing before timing out)
     let result = run_sah_command_in_process(&["plan", plan_file.to_str().unwrap()]).await?;
 
-    // The command should start executing (showing log output) 
+    // The command should start executing (showing log output)
     // We're not testing full execution here due to AI service calls, so we accept either success or timeout
     assert!(
         result.stderr.contains("Running plan command")
@@ -312,8 +312,10 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
             || result.stderr.contains("Making the plan for")
             || result.stderr.contains("Test command timed out")  // Accept timeout
             || result.exit_code == 0        // Command may succeed in test environment
-            || result.exit_code == 124,     // Standard timeout exit code
-        "Should show plan execution started, succeed, or timeout. stdout: '{}', stderr: '{}'", result.stdout, result.stderr
+            || result.exit_code == 124, // Standard timeout exit code
+        "Should show plan execution started, succeed, or timeout. stdout: '{}', stderr: '{}'",
+        result.stdout,
+        result.stderr
     );
 
     // Restore original directory
@@ -342,7 +344,8 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ]).await?;
+    ])
+    .await?;
 
     assert!(
         result.exit_code == 0,
@@ -398,7 +401,8 @@ async fn test_plan_command_relative_path() -> Result<()> {
         "plan",
         "--var",
         "plan_filename=./specification/relative-test.md",
-    ]).await?;
+    ])
+    .await?;
 
     assert!(
         result.exit_code == 0,
@@ -438,7 +442,8 @@ async fn test_plan_command_absolute_path() -> Result<()> {
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ]).await?;
+    ])
+    .await?;
 
     assert!(
         result.exit_code == 0,
@@ -478,7 +483,8 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ]).await?;
+    ])
+    .await?;
 
     assert!(
         result.exit_code == 0,
@@ -626,7 +632,8 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ]).await?;
+    ])
+    .await?;
 
     assert!(
         result.exit_code == 0,
@@ -680,7 +687,8 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ]).await?;
+    ])
+    .await?;
 
     assert!(
         result.exit_code == 0,

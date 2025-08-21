@@ -1266,7 +1266,10 @@ async fn execute_workflow_test_mode(
         }
 
         if steps_without_progress >= MAX_STEPS_WITHOUT_PROGRESS {
-            tracing::debug!("No progress made for {} steps, terminating early", MAX_STEPS_WITHOUT_PROGRESS);
+            tracing::debug!(
+                "No progress made for {} steps, terminating early",
+                MAX_STEPS_WITHOUT_PROGRESS
+            );
             break;
         }
 

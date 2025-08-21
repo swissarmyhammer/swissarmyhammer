@@ -451,7 +451,8 @@ fn format_config_value(value: &swissarmyhammer::sah_config::ConfigValue) -> Stri
             if table.is_empty() {
                 "{}".to_string()
             } else {
-                let pairs: Vec<String> = table.iter()
+                let pairs: Vec<String> = table
+                    .iter()
                     .map(|(k, v)| format!("{}: {}", k, format_config_value(v)))
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
