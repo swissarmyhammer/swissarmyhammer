@@ -1,0 +1,1 @@
+Remove all performance tests.
