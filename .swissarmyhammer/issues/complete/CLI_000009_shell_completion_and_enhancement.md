@@ -409,3 +409,55 @@ The dynamic system generates over 30 commands and subcommands automatically from
 - Provides comprehensive documentation for developers
 - Maintains full backward compatibility while enabling future extensibility
 - Creates foundation for automatic CLI updates when MCP tools change
+
+## Proposed Solution
+
+After analyzing the existing completions.rs file and the dynamic CLI system, I will implement a comprehensive shell completion and enhancement system:
+
+### Implementation Strategy:
+
+#### 1. **Update Shell Completion Generation**
+- Modify `completions.rs` to use the dynamic CLI builder instead of the static `Cli::command()`  
+- Add async support for shell completion generation since dynamic CLI requires MCP tool registry initialization
+- Create comprehensive tests to verify completions include all dynamic commands (issue, memo, file, search)
+- Ensure completions work for all shell types (Bash, Zsh, Fish, PowerShell)
+
+#### 2. **Add CLI Performance Optimization**
+- Create `cli_optimization.rs` with CLI caching using `OnceLock` to avoid rebuilding CLI on every invocation
+- Implement fast-path detection for help and version commands that don't need full MCP initialization  
+- Add tool metadata caching to improve repeated CLI operations
+- Optimize CLI startup time for common operations
+
+#### 3. **Enhance Schema Conversion Features**
+- Extend `schema_conversion.rs` with advanced JSON Schema features:
+  - Default value support for CLI arguments
+  - Example text integration in help messages
+  - `oneOf`/`anyOf` enum-like behavior for argument validation
+  - Better help text formatting and content
+
+#### 4. **Add CLI Debug Mode**
+- Create `debug.rs` with comprehensive debugging capabilities
+- Environment variable-controlled debug output (`SAH_CLI_DEBUG`)
+- Trace command parsing, dynamic command detection, schema conversion, and MCP tool execution
+- Support both development and production debugging scenarios
+
+#### 5. **Create Migration Documentation**
+- Write comprehensive `MIGRATION.md` guide explaining the dynamic CLI changes
+- Document backward compatibility guarantees for users
+- Provide developer guide for adding new CLI commands via MCP tools
+- Include troubleshooting section for common issues
+
+#### 6. **Update Core Architecture Documentation**
+- Update `lib.rs` to properly export new modules
+- Enhance README.md with dynamic CLI architecture explanation
+- Document the elimination of redundant CLI code (~425 lines removed)
+- Explain the single-source-of-truth approach using MCP tool schemas
+
+### Technical Approach:
+- **Async Shell Completions**: Since dynamic CLI requires async initialization, I'll need to handle this properly in completion generation
+- **Backward Compatibility**: All existing completion functionality must be preserved
+- **Performance First**: Optimize for common CLI operations with caching and fast paths
+- **Comprehensive Testing**: Each enhancement will include thorough testing to ensure reliability
+- **Documentation Focus**: Clear migration guide and architecture documentation for developers
+
+This solution completes the CLI architecture transformation while adding significant performance and usability improvements.

@@ -145,7 +145,7 @@ impl Doctor {
     }
 
     /// Group checks into categories
-    fn group_checks_by_category(&self) -> CheckGroups {
+    fn group_checks_by_category(&self) -> CheckGroups<'_> {
         CheckGroups {
             system_checks: self
                 .checks

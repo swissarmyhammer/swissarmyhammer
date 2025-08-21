@@ -202,6 +202,19 @@ pub mod response_formatting {
     }
 }
 
+/// Public utility function to create a populated tool registry for testing
+pub async fn create_test_tool_registry() -> Result<ToolRegistry, Box<dyn std::error::Error>> {
+    let mut tool_registry = ToolRegistry::new();
+    register_file_tools(&mut tool_registry);
+    register_issue_tools(&mut tool_registry);
+    register_memo_tools(&mut tool_registry);
+    register_search_tools(&mut tool_registry);
+    register_shell_tools(&mut tool_registry);
+    register_web_fetch_tools(&mut tool_registry);
+    register_web_search_tools(&mut tool_registry);
+    Ok(tool_registry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
