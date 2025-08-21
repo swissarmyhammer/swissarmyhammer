@@ -36,6 +36,20 @@ Always put mcp.log and semantic.db in the .gitignore.
 
 When you generate temporary or scratch files, make sure to put a comment in the file to clearly note `THIS IS A SCRATCH FILE`.
 
+### Refactoring
+
+When you are engaged in a large refactoring, you need to work file by file.
+
+- Search and define a list of files you will be changing in this refactoring, create a todo list of these files
+- Plan out the change to each file, creating a new issue with the mcp issue tool for each file
+  - in each issue, clearly state the goal of the refactoring
+  - in each issue, clearly state the change you will be making
+  - in each issue, clearly state what tests need to be created
+  - mark it off your todo list once the issue is created
+  - notify the user that an issue was created using the notify_create tool
+
+Creating issues rather than just 'going for it' ensures working in small, testable chunks.
+
 ### Data Structures
 
 You have a type system. Use it.

@@ -48,21 +48,6 @@ Create a todo for current session:
 }
 ```
 
-## File Format
-
-Todo lists are stored as YAML files with this structure:
-```yaml
-todo:
-  - id: 01K1KQM85501ECE8XJGNZKNJQW
-    task: "Implement file read tool"
-    context: "Use existing patterns for inspiration"
-    done: false
-  - id: 01K1KQM85501ECE8XJGNZKNJQX
-    task: "Add comprehensive tests"
-    context: null
-    done: false
-```
-
 ## Returns
 
 Success response with created todo item details:

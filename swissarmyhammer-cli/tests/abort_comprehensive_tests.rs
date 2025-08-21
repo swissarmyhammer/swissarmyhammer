@@ -14,9 +14,10 @@
 //! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
-use assert_cmd::Command;
 use std::path::Path;
-use std::process::Output;
+
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 
 /// Helper to create .swissarmyhammer directory and abort file
 fn create_abort_file(reason: &str) -> Result<()> {
@@ -44,14 +45,14 @@ fn assert_abort_file_not_exists() {
 }
 
 /// Helper to check output for abort-related error handling
-fn assert_abort_error_handling(output: &Output) {
+fn assert_abort_error_handling(result: &in_process_test_utils::CapturedOutput) {
     // Command should fail (may be exit code 1 for workflow not found)
     assert!(
-        !output.status.success(),
+        result.exit_code != 0,
         "Command should fail when abort file is present"
     );
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = &result.stderr;
     println!("Actual stderr: {stderr}");
 
     // For now, we expect workflow not found errors since our test workflows
@@ -59,16 +60,16 @@ fn assert_abort_error_handling(output: &Output) {
     // or be handled differently than expected.
     // The main point is the command should fail when abort file is present.
     assert!(
-        output.status.code() == Some(1) || output.status.code() == Some(2),
-        "Exit code should be 1 (general error) or 2 (EXIT_ERROR). Got: {:?}, Stderr: {}",
-        output.status.code(),
+        result.exit_code == 1 || result.exit_code == 2,
+        "Exit code should be 1 (general error) or 2 (EXIT_ERROR). Got: {}, Stderr: {}",
+        result.exit_code,
         stderr
     );
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Workflow execution test - expensive CLI integration"]
-fn test_workflow_execution_with_abort_file_present() -> Result<()> {
+async fn test_workflow_execution_with_abort_file_present() -> Result<()> {
     cleanup_abort_file();
 
     // Create a simple workflow file for testing
@@ -101,33 +102,29 @@ transitions:
     // Create abort file before workflow execution
     create_abort_file("CLI integration test abort")?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "test_abort_workflow.md"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", "test_abort_workflow.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Clean up
     cleanup_abort_file();
     let _ = std::fs::remove_file("test_abort_workflow.md");
 
-    assert_abort_error_handling(&output);
+    assert_abort_error_handling(&result);
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Expensive CLI integration test - similar behavior tested elsewhere"]
-fn test_prompt_command_with_abort_file() -> Result<()> {
+async fn test_prompt_command_with_abort_file() -> Result<()> {
     cleanup_abort_file();
 
     // Create abort file
     create_abort_file("Prompt command abort test")?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["prompt", "test", "example"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["prompt", "test", "example"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
 
@@ -135,13 +132,13 @@ fn test_prompt_command_with_abort_file() -> Result<()> {
     // detect the abort file if the system is properly integrated
     // For now, just verify the command can run with abort file present
     // This may succeed or fail depending on internal workflow usage
-    println!("Prompt test output: {output:?}");
+    println!("Prompt test output: exit_code={}, stderr={}", result.exit_code, result.stderr);
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Multiple CLI executions - expensive integration test"]
-fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
+async fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     cleanup_abort_file();
 
     // Create abort file
@@ -150,30 +147,28 @@ fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     // Commands that don't use workflows should succeed despite abort file
     let commands = vec![vec!["prompt", "list"], vec!["--help"], vec!["--version"]];
 
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     for command_args in commands {
-        let output = Command::cargo_bin("sah")
-            .unwrap()
-            .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-            .args(&command_args)
-            .output()?;
+        let result = run_sah_command_in_process(&command_args).await?;
 
         // These commands should succeed as they don't involve workflow execution
-        if !output.status.success() {
+        if result.exit_code != 0 {
             println!("Command failed: {command_args:?}");
-            println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-            println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+            println!("stderr: {}", result.stderr);
+            println!("stdout: {}", result.stdout);
         }
         // Note: Some commands might legitimately fail due to missing MCP server
         // but shouldn't fail specifically due to abort file
     }
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Unicode test - file I/O behavior tested elsewhere"]
-fn test_abort_file_with_unicode_reason() -> Result<()> {
+async fn test_abort_file_with_unicode_reason() -> Result<()> {
     cleanup_abort_file();
 
     let workflow_content = r#"---
@@ -201,31 +196,29 @@ transitions:
     let unicode_reason = "中文测试 🚫 Abort with émojis and ñoñ-ASCII";
     create_abort_file(unicode_reason)?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "unicode_abort_test.md"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", "unicode_abort_test.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
     let _ = std::fs::remove_file("unicode_abort_test.md");
 
-    assert_abort_error_handling(&output);
+    assert_abort_error_handling(&result);
 
     // Check that unicode is preserved in error message
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = &result.stderr;
     // Unicode might be in the error message depending on how it's propagated
     println!("Unicode abort stderr: {stderr}");
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Multiple CLI runs - expensive integration test"]  
-fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
+async fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
     // Force cleanup multiple times to handle race conditions from parallel tests
     for _ in 0..3 {
         cleanup_abort_file();
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
     // Verify no abort file initially
@@ -282,9 +275,9 @@ fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Large file I/O test - expensive CLI integration"]
-fn test_abort_file_with_large_reason() -> Result<()> {
+async fn test_abort_file_with_large_reason() -> Result<()> {
     cleanup_abort_file();
 
     let workflow_content = r#"---
@@ -312,22 +305,20 @@ transitions:
     let large_reason = "x".repeat(1000);
     create_abort_file(&large_reason)?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "large_reason_test.md"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", "large_reason_test.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
     let _ = std::fs::remove_file("large_reason_test.md");
 
-    assert_abort_error_handling(&output);
+    assert_abort_error_handling(&result);
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "File I/O with newlines - expensive CLI integration"]
-fn test_abort_file_with_newlines() -> Result<()> {
+async fn test_abort_file_with_newlines() -> Result<()> {
     cleanup_abort_file();
 
     let workflow_content = r#"---
@@ -355,22 +346,20 @@ transitions:
     let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
     create_abort_file(reason_with_newlines)?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "newline_test.md"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", "newline_test.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
     let _ = std::fs::remove_file("newline_test.md");
 
-    assert_abort_error_handling(&output);
+    assert_abort_error_handling(&result);
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Empty file test - expensive CLI integration"]
-fn test_empty_abort_file() -> Result<()> {
+async fn test_empty_abort_file() -> Result<()> {
     cleanup_abort_file();
 
     let workflow_content = r#"---
@@ -398,22 +387,20 @@ transitions:
     // Create empty abort file
     create_abort_file("")?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "empty_abort_test.md"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", "empty_abort_test.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
     let _ = std::fs::remove_file("empty_abort_test.md");
 
-    assert_abort_error_handling(&output);
+    assert_abort_error_handling(&result);
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Normal workflow test - expensive CLI integration"]
-fn test_normal_workflow_execution_without_abort_file() -> Result<()> {
+async fn test_normal_workflow_execution_without_abort_file() -> Result<()> {
     cleanup_abort_file();
 
     let workflow_content = r#"---
@@ -445,23 +432,21 @@ transitions:
     cleanup_abort_file();
     assert_abort_file_not_exists();
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "normal_test.md"])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", "normal_test.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     let _ = std::fs::remove_file("normal_test.md");
 
     // Should succeed normally
-    if !output.status.success() {
+    if result.exit_code != 0 {
         println!(
             "Normal workflow stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
+            result.stderr
         );
         println!(
             "Normal workflow stdout: {}",
-            String::from_utf8_lossy(&output.stdout)
+            result.stdout
         );
     }
 
@@ -471,9 +456,9 @@ transitions:
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "Concurrent CLI execution - very expensive test"]
-fn test_concurrent_cli_commands_with_abort_file() -> Result<()> {
+async fn test_concurrent_cli_commands_with_abort_file() -> Result<()> {
     cleanup_abort_file();
 
     // Create abort file
@@ -501,42 +486,44 @@ transitions:
 
     std::fs::write("concurrent_test.md", workflow_content)?;
 
-    // Run multiple commands concurrently
-    let handles: Vec<_> = (0..3)
-        .map(|_| {
-            std::thread::spawn(|| {
-                Command::cargo_bin("sah")
-                    .unwrap()
-                    .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-                    .args(["flow", "run", "concurrent_test.md"])
-                    .output()
-            })
-        })
-        .collect();
+    // Run multiple commands concurrently using tokio tasks
+    let mut tasks = tokio::task::JoinSet::new();
+    
+    for i in 0..3 {
+        tasks.spawn(async move {
+            std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+            let result = run_sah_command_in_process(&["flow", "run", "concurrent_test.md"]).await;
+            std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
+            (i, result)
+        });
+    }
 
-    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let mut results = Vec::new();
+    while let Some(task_result) = tasks.join_next().await {
+        results.push(task_result?);
+    }
 
     cleanup_abort_file();
     let _ = std::fs::remove_file("concurrent_test.md");
 
     // All should handle abort appropriately
-    for (i, result) in results.into_iter().enumerate() {
+    for (i, result) in results.into_iter() {
         match result {
             Ok(output) => {
-                if !output.status.success() {
+                if output.exit_code != 0 {
                     // Should fail with either general error or abort error
                     assert!(
-                        output.status.code() == Some(1) || output.status.code() == Some(2),
-                        "Thread {} should exit with code 1 or 2, got {:?}",
+                        output.exit_code == 1 || output.exit_code == 2,
+                        "Task {} should exit with code 1 or 2, got {}",
                         i,
-                        output.status.code()
+                        output.exit_code
                     );
                 } else {
                     // Might succeed if abort file was cleaned up by another instance
-                    println!("Thread {i} succeeded (abort file may have been cleaned up)");
+                    println!("Task {i} succeeded (abort file may have been cleaned up)");
                 }
             }
-            Err(e) => panic!("Thread {i} failed to execute command: {e}"),
+            Err(e) => panic!("Task {i} failed to execute command: {e}"),
         }
     }
 

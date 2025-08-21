@@ -20,13 +20,14 @@
 //! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
-use assert_cmd::Command;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
-use std::thread;
+// use std::thread; // Not needed for async version
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 
 /// Test environment setup helper using TempDir (like successful tests)
 struct TestEnvironment {
@@ -129,28 +130,28 @@ impl Drop for TestEnvironment {
 }
 
 /// Test performance impact of abort checking system
-#[test]
+#[tokio::test]
 #[ignore = "Complex workflow test - requires full workflow system setup"]
-fn test_abort_performance_impact_baseline() -> Result<()> {
+async fn test_abort_performance_impact_baseline() -> Result<()> {
     let env = TestEnvironment::new()?;
     let workflow_file = env.create_test_workflow("Performance Baseline")?;
 
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     // Baseline measurement without abort file
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .timeout(Duration::from_secs(30))
-        .output()?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     let baseline_duration = start_time.elapsed();
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should complete successfully
     assert!(
-        output.status.success(),
+        result.exit_code == 0,
         "Baseline workflow should complete successfully. Stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        result.stderr
     );
 
     println!("Baseline execution time: {baseline_duration:?}");
@@ -161,47 +162,57 @@ fn test_abort_performance_impact_baseline() -> Result<()> {
         "Baseline performance should be under 5 seconds, got: {baseline_duration:?}"
     );
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test performance with abort file checking overhead
-#[test]
+#[tokio::test]
 #[ignore = "Performance test - inherently slow by design"]
-fn test_abort_performance_with_checking_overhead() -> Result<()> {
+async fn test_abort_performance_with_checking_overhead() -> Result<()> {
     let env = TestEnvironment::new()?;
     let workflow_file = env.create_test_workflow("Performance With Checking")?;
 
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     // Create workflow that will be aborted mid-execution
     env.create_abort_file("Performance test abort")?;
 
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .timeout(Duration::from_secs(30))
-        .output()?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     let abort_duration = start_time.elapsed();
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should fail due to abort
     assert!(
-        !output.status.success(),
+        result.exit_code != 0,
         "Workflow should fail when abort file present"
     );
 
     println!("Abort detection time: {abort_duration:?}");
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test concurrent workflow execution with abort
-#[test]
+#[tokio::test]
 #[ignore = "Concurrent test with multiple CLI executions - very slow"]
-fn test_concurrent_workflow_abort_handling() -> Result<()> {
+async fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // Use unique identifier to avoid conflicts between test runs
     let test_id = std::process::id();
     let env = TestEnvironment::new()?;
+    
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
 
     // Create fewer workflows to reduce resource contention
     let num_workflows = 1; // Reduced to 1 for performance
@@ -220,19 +231,22 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
         let workflow_file = workflow_file.clone();
         let test_dir = test_dir.clone();
 
-        let handle = thread::spawn(move || -> Result<Output> {
+        let handle = tokio::spawn(async move {
             // Add small stagger to reduce resource contention
-            thread::sleep(Duration::from_millis(i as u64 * 50));
+            tokio::time::sleep(Duration::from_millis(i as u64 * 50)).await;
 
-            let output = Command::cargo_bin("sah")
-                .unwrap()
-                .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-                .current_dir(&test_dir)
-                .args(["flow", "run", &workflow_file])
-                .timeout(Duration::from_secs(45)) // Increased timeout for resource contention
-                .output()?;
-
-            Ok(output)
+            // Change to test directory
+            let original_dir = std::env::current_dir().unwrap();
+            std::env::set_current_dir(&test_dir).unwrap();
+            
+            std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+            let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await;
+            std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
+            
+            // Restore original directory
+            std::env::set_current_dir(original_dir).unwrap();
+            
+            result
         });
 
         handles.push((i, handle));
@@ -241,11 +255,11 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // Collect results with better error handling
     let mut results = Vec::new();
     for (i, handle) in handles.into_iter() {
-        match handle.join() {
+        match handle.await {
             Ok(output_result) => results.push((i, output_result)),
-            Err(_) => {
-                // Thread panicked - this indicates a serious issue but we'll handle it gracefully
-                println!("Warning: Thread {i} panicked, skipping its result");
+            Err(e) => {
+                // Task failed - this indicates a serious issue but we'll handle it gracefully
+                println!("Warning: Task {i} failed: {e}, skipping its result");
                 continue;
             }
         }
@@ -256,12 +270,12 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
     for (i, result) in results {
         match result {
             Ok(output) => {
-                println!("Workflow {i} exit status: {:?}", output.status.code());
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
+                println!("Workflow {i} exit status: {}", output.exit_code);
+                let stderr = &output.stderr;
+                let stdout = &output.stdout;
 
                 // Should fail due to abort detection
-                if !output.status.success() {
+                if output.exit_code != 0 {
                     // Check if it's an abort-related failure (expected)
                     if stderr.to_lowercase().contains("abort")
                         || stdout.to_lowercase().contains("abort")
@@ -289,13 +303,20 @@ fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // in high-contention scenarios where timing is unpredictable
     println!("Abort detection test completed. Any abort detected: {any_detected_abort}");
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test rapid abort tool invocations (stress test)
-#[test]
-fn test_rapid_abort_invocations() -> Result<()> {
+#[tokio::test]
+async fn test_rapid_abort_invocations() -> Result<()> {
     let env = TestEnvironment::new()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
 
     // Test rapid creation and deletion of abort files
     for i in 0..10 {
@@ -308,18 +329,26 @@ fn test_rapid_abort_invocations() -> Result<()> {
         env.verify_no_abort_file();
 
         // Small delay to simulate real usage
-        thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test abort system with large abort reasons
-#[test]
-fn test_large_abort_reasons() -> Result<()> {
+#[tokio::test]
+async fn test_large_abort_reasons() -> Result<()> {
     // Use unique identifier to avoid conflicts between test runs
     let test_id = std::process::id();
     let env = TestEnvironment::new()?;
+    
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     let workflow_file = env.create_test_workflow(&format!("LargeReasonTest{test_id}"))?;
 
     // Create large abort reason (10KB) with unique content
@@ -332,18 +361,14 @@ fn test_large_abort_reasons() -> Result<()> {
     // Verify abort file was created correctly before testing
     env.verify_abort_file(&large_reason)?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .timeout(Duration::from_secs(45)) // Increased timeout for resource contention
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = &result.stderr;
+    let stdout = &result.stdout;
 
-    println!("Command exit status: {:?}", output.status.code());
+    println!("Command exit status: {}", result.exit_code);
     println!("Stderr length: {}", stderr.len());
     if !stderr.is_empty() {
         println!(
@@ -354,7 +379,7 @@ fn test_large_abort_reasons() -> Result<()> {
 
     // Should still handle large abort reason correctly
     // In high-contention scenarios, we'll be more lenient about the exact failure mode
-    if output.status.success() {
+    if result.exit_code == 0 {
         // If workflow succeeded, it might have completed before abort detection
         println!("Warning: Workflow completed successfully despite abort file (timing issue)");
     } else {
@@ -378,200 +403,225 @@ fn test_large_abort_reasons() -> Result<()> {
         }
     }
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test abort system with unicode and special characters
-#[test]
-fn test_unicode_abort_reasons() -> Result<()> {
+#[tokio::test]
+async fn test_unicode_abort_reasons() -> Result<()> {
     let env = TestEnvironment::new()?;
+    
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     let workflow_file = env.create_test_workflow("Unicode Test")?;
 
     let unicode_reason = "Abort with émojis 🚫 and ñoñ-ASCII characters 中文测试";
     env.create_abort_file(unicode_reason)?;
     env.verify_abort_file(unicode_reason)?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .timeout(Duration::from_secs(30))
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     assert!(
-        !output.status.success(),
+        result.exit_code != 0,
         "Workflow should fail with unicode abort reason"
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test abort system behavior with filesystem edge cases
-#[test]
+#[tokio::test]
 #[ignore = "Simplified for performance - filesystem behavior is tested elsewhere"]
-fn test_filesystem_edge_cases() -> Result<()> {
+async fn test_filesystem_edge_cases() -> Result<()> {
     // This test is now marked as ignored to improve test performance
     // The core filesystem behavior is tested in other test files
     let env = TestEnvironment::new()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
 
     // Test with empty abort file (simplified)
     fs::create_dir_all(".swissarmyhammer")?;
     fs::write(".swissarmyhammer/.abort", "")?;
     env.verify_abort_file("")?;
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test abort system error messages and user experience
-#[test]
+#[tokio::test]
 #[ignore = "Complex workflow test - requires full workflow system setup"]
-fn test_abort_error_messages_user_experience() -> Result<()> {
+async fn test_abort_error_messages_user_experience() -> Result<()> {
     let env = TestEnvironment::new()?;
+    
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     let workflow_file = env.create_test_workflow("UX Test")?;
 
     let abort_reason = "User initiated cancellation for testing UX";
     env.create_abort_file(abort_reason)?;
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should exit with proper exit code
     assert_eq!(
-        output.status.code(),
-        Some(2),
-        "Should exit with code 2 for abort. Output: {output:?}"
+        result.exit_code,
+        2,
+        "Should exit with code 2 for abort. Exit code: {}",
+        result.exit_code
     );
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = &result.stderr;
     println!("Error message: {stderr}");
 
     // Error message should be clear and user-friendly
     // Note: The exact error depends on whether abort is detected before or after workflow loading
     assert!(!stderr.is_empty(), "Should have meaningful error message");
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test abort file cleanup between workflow runs
-#[test]
+#[tokio::test]
 #[ignore = "Multiple CLI executions - expensive integration test"]
-fn test_abort_file_cleanup_between_runs() -> Result<()> {
+async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     let env = TestEnvironment::new()?;
+    
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     let workflow_file = env.create_test_workflow("Cleanup Test")?;
 
     // First run with abort file
     env.create_abort_file("First run abort")?;
 
-    let output1 = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result1 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
 
     assert!(
-        !output1.status.success(),
+        result1.exit_code != 0,
         "First run should fail due to abort"
     );
 
     // Second run without abort file - should clean up and succeed
-    let output2 = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .output()?;
+    let result2 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Second run should succeed (abort file should be cleaned up)
-    if !output2.status.success() {
+    if result2.exit_code != 0 {
         // If it fails, it should be due to workflow not found, not abort
-        let stderr = String::from_utf8_lossy(&output2.stderr);
+        let stderr = &result2.stderr;
         assert!(
             !stderr.to_lowercase().contains("abort"),
             "Second run should not fail due to abort. Stderr: {stderr}"
         );
     }
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test abort system with various CLI commands
-#[test]
-fn test_abort_with_different_cli_commands() -> Result<()> {
+#[tokio::test]
+async fn test_abort_with_different_cli_commands() -> Result<()> {
     let env = TestEnvironment::new()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
 
     // Test with prompt command (if abort detection works there)
     env.create_abort_file("CLI command test abort")?;
 
     // Test prompt list command - should not be affected by abort file
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["prompt", "list"])
-        .timeout(Duration::from_secs(10))
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["prompt", "list"]).await?;
 
     // Prompt list should work regardless of abort file
     println!(
-        "Prompt list with abort file - exit code: {:?}",
-        output.status.code()
+        "Prompt list with abort file - exit code: {}",
+        result.exit_code
     );
 
     // Test flow command with non-existent workflow
-    let output2 = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", "nonexistent.md"])
-        .timeout(Duration::from_secs(10))
-        .output()?;
+    let result2 = run_sah_command_in_process(&["flow", "run", "nonexistent.md"]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     assert!(
-        !output2.status.success(),
+        result2.exit_code != 0,
         "Should fail for non-existent workflow"
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Regression test to ensure existing functionality works
-#[test]
+#[tokio::test]
 #[ignore = "Complex workflow test - requires full workflow system setup"]
-fn test_regression_normal_workflow_execution() -> Result<()> {
+async fn test_regression_normal_workflow_execution() -> Result<()> {
     let env = TestEnvironment::new()?;
+    
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
+    
     let workflow_file = env.create_test_workflow("Regression Test")?;
 
     // Ensure no abort file exists
     env.verify_no_abort_file();
 
-    let output = Command::cargo_bin("sah")
-        .unwrap()
-        .current_dir(env.temp_path())
-        .env("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1")
-        .args(["flow", "run", &workflow_file])
-        .timeout(Duration::from_secs(30))
-        .output()?;
+    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should complete successfully without abort
     assert!(
-        output.status.success(),
+        result.exit_code == 0,
         "Normal workflow should complete successfully. Stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        result.stderr
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test cross-platform path handling for abort file
-#[test]
-fn test_cross_platform_abort_file_paths() -> Result<()> {
-    let _env = TestEnvironment::new()?;
+#[tokio::test]
+async fn test_cross_platform_abort_file_paths() -> Result<()> {
+    let env = TestEnvironment::new()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(env.temp_path())?;
 
     // Test that abort file path works on current platform
     let abort_dir = Path::new(".swissarmyhammer");
@@ -592,6 +642,9 @@ fn test_cross_platform_abort_file_paths() -> Result<()> {
     // Cleanup
     fs::remove_file(&abort_file)?;
     fs::remove_dir(abort_dir)?;
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }

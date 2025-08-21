@@ -3,20 +3,21 @@
 //! Tests that CLI commands provide clear, actionable error messages when run outside
 //! Git repositories, with component-specific guidance for resolution.
 
-use assert_cmd::Command;
-use predicates::prelude::*;
+use anyhow::Result;
 use std::fs;
 use tempfile::TempDir;
+use assert_cmd::Command;
+use predicates::prelude::*;
+
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 
 /// Test that memo commands require Git repository
 #[test]
 fn test_memo_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["memo", "list"])
         .assert()
@@ -35,10 +36,7 @@ fn test_memo_commands_require_git_repository() {
 fn test_issue_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["issue", "list"])
         .assert()
@@ -57,10 +55,7 @@ fn test_issue_commands_require_git_repository() {
 fn test_search_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["search", "index", "**/*.rs"])
         .assert()
@@ -78,10 +73,7 @@ fn test_search_commands_require_git_repository() {
 fn test_search_query_requires_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["search", "query", "test"])
         .assert()
@@ -100,10 +92,7 @@ fn test_error_message_format_consistency() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Test memo command error format
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     let output = cmd
         .current_dir(temp_dir.path())
         .args(["memo", "create", "test"])
@@ -145,10 +134,7 @@ fn test_commands_work_in_git_repository() {
         .expect("Failed to create directory");
 
     // Test that memo list command now works (or at least doesn't fail with Git repository error)
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     let result = cmd
         .current_dir(temp_dir.path())
         .args(["memo", "list"])
@@ -163,10 +149,7 @@ fn test_commands_work_in_git_repository() {
 fn test_git_repository_error_exit_codes() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["memo", "list"])
         .assert()
@@ -182,10 +165,7 @@ fn test_file_commands_work_without_git() {
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "Hello, world!").expect("Failed to create test file");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["file", "read", test_file.to_str().unwrap()])
         .assert()
@@ -198,10 +178,7 @@ fn test_file_commands_work_without_git() {
 fn test_shell_commands_work_without_git() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     cmd.current_dir(temp_dir.path())
         .args(["shell", "execute", "echo test"])
         .assert()
@@ -216,10 +193,7 @@ fn test_web_search_works_without_git() {
 
     // Note: This test might fail if web search is not available or has issues,
     // but it should not fail due to Git repository requirements
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     let result = cmd
         .current_dir(temp_dir.path())
         .args(["web-search", "search", "test"])
@@ -234,10 +208,7 @@ fn test_web_search_works_without_git() {
 fn test_error_messages_are_actionable() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     let output = cmd
         .current_dir(temp_dir.path())
         .args(["issue", "create", "test"])
@@ -273,10 +244,7 @@ fn test_error_messages_are_actionable() {
 fn test_error_context_preservation() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap_or_else(|_| {
-        // Fallback: try to find the binary by path
-        Command::new(env!("CARGO_BIN_EXE_sah"))
-    });
+    let mut cmd = Command::cargo_bin("sah").unwrap();
     let output = cmd
         .current_dir(temp_dir.path())
         .args(["memo", "get", "invalid_id"])
