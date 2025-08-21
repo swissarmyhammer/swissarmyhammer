@@ -1,9 +1,7 @@
 //! Integration tests for CLI command structure and backward compatibility
 
 use anyhow::Result;
-use assert_cmd::Command;
-use std::fs;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 
 mod test_utils;
 use test_utils::create_test_environment;
@@ -12,41 +10,6 @@ mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
 
 /// Helper function to run CLI command and capture output to temp files
-/// Returns (stdout_file, stderr_file, exit_code)
-fn run_command_with_temp_output(
-    cmd: &mut Command,
-) -> Result<(NamedTempFile, NamedTempFile, Option<i32>)> {
-    let stdout_file = NamedTempFile::new()?;
-    let stderr_file = NamedTempFile::new()?;
-
-    let output = cmd.output()?;
-
-    // Write output to temp files
-    fs::write(stdout_file.path(), &output.stdout)?;
-    fs::write(stderr_file.path(), &output.stderr)?;
-
-    Ok((stdout_file, stderr_file, output.status.code()))
-}
-
-/// Helper function to read content from temp file
-fn read_temp_file(file: &NamedTempFile) -> Result<String> {
-    Ok(fs::read_to_string(file.path())?)
-}
-
-/// Helper for tests that need to check stdout content
-fn run_command_check_stdout_contains(cmd: &mut Command, expected_content: &[&str]) -> Result<()> {
-    let (stdout_file, _stderr_file, exit_code) = run_command_with_temp_output(cmd)?;
-    assert!(exit_code == Some(0), "Command should succeed");
-
-    let stdout_content = read_temp_file(&stdout_file)?;
-    for content in expected_content {
-        assert!(
-            stdout_content.contains(content),
-            "Output should contain '{content}': {stdout_content}",
-        );
-    }
-    Ok(())
-}
 
 /// Test that the new prompt subcommand structure works correctly
 #[tokio::test]

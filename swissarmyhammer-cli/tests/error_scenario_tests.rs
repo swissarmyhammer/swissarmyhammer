@@ -4,7 +4,6 @@
 //! proper error handling, user-friendly messages, and correct exit codes.
 
 use anyhow::Result;
-use assert_cmd::Command;
 use swissarmyhammer::test_utils::IsolatedTestHome;
 use tempfile::TempDir;
 

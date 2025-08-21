@@ -295,7 +295,7 @@ async fn test_config_invalid_template_syntax() -> Result<()> {
     let temp_dir = setup_test_with_config(config_content);
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let result = run_sah_command_in_process(&["config", "test"]).await?;
+    let _result = run_sah_command_in_process(&["config", "test"]).await?;
 
     // This test requires stdin input, may need different verification
     // For now, just ensure it doesn't crash

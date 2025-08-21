@@ -203,11 +203,6 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
     Ok((stdout, stderr, exit_code))
 }
 
-/// Execute a parsed CLI command (internal helper) - deprecated, use execute_cli_command_with_capture
-async fn execute_cli_command(cli: Cli) -> Result<i32> {
-    let (_stdout, _stderr, exit_code) = execute_cli_command_with_capture(cli).await?;
-    Ok(exit_code)
-}
 
 /// Test wrapper for in-process flow command execution
 pub async fn run_flow_test_in_process(
@@ -259,74 +254,8 @@ pub async fn workflow_test_with_vars(
     Ok(result.exit_code == 0)
 }
 
-/// Helper to run "flow run" command with variables in-process
-pub async fn run_flow_run_in_process(
-    workflow_name: &str,
-    vars: Vec<String>,
-    dry_run: bool,
-) -> Result<CapturedOutput> {
-    let mut args = vec!["flow", "run", workflow_name];
-    
-    // Add vars
-    for var in &vars {
-        args.push("--var");
-        args.push(var);
-    }
-    
-    // Add dry-run if requested
-    if dry_run {
-        args.push("--dry-run");
-    }
-    
-    // Use fast timeout for tests
-    args.push("--timeout");
-    args.push("2s");
-    
-    // Always quiet for tests
-    args.push("--quiet");
-    
-    run_sah_command_in_process(&args).await
-}
 
-/// Helper to run "prompt test" command in-process
-pub async fn run_prompt_test_in_process(
-    prompt_name: &str,
-    vars: Vec<String>,
-) -> Result<CapturedOutput> {
-    let mut args = vec!["prompt", "test", prompt_name];
-    
-    // Add vars
-    for var in &vars {
-        args.push("--var");
-        args.push(var);
-    }
-    
-    run_sah_command_in_process(&args).await
-}
 
-/// Helper for simple success/failure checks
-pub async fn assert_sah_command_succeeds(args: &[&str]) -> Result<()> {
-    let result = run_sah_command_in_process(args).await?;
-    if result.exit_code != 0 {
-        anyhow::bail!(
-            "Command failed with exit code {}: {}",
-            result.exit_code,
-            result.stderr
-        );
-    }
-    Ok(())
-}
-
-/// Helper for expected failure checks
-pub async fn assert_sah_command_fails(args: &[&str]) -> Result<CapturedOutput> {
-    let result = run_sah_command_in_process(args).await?;
-    if result.exit_code == 0 {
-        anyhow::bail!(
-            "Command unexpectedly succeeded when it should have failed"
-        );
-    }
-    Ok(result)
-}
 
 #[cfg(test)]
 mod tests {
@@ -359,26 +288,3 @@ mod tests {
 // Direct In-Process Testing Functions
 // ============================================================================
 
-/// Simple helper for tests that just need to assert success/failure
-pub async fn assert_command_success(args: &[&str]) -> Result<()> {
-    let result = run_sah_command_in_process(args).await?;
-    if result.exit_code != 0 {
-        anyhow::bail!(
-            "Command failed with exit code {}: {}",
-            result.exit_code,
-            result.stderr
-        );
-    }
-    Ok(())
-}
-
-/// Simple helper for tests that expect failure
-pub async fn assert_command_failure(args: &[&str]) -> Result<CapturedOutput> {
-    let result = run_sah_command_in_process(args).await?;
-    if result.exit_code == 0 {
-        anyhow::bail!(
-            "Command unexpectedly succeeded when it should have failed"
-        );
-    }
-    Ok(result)
-}
