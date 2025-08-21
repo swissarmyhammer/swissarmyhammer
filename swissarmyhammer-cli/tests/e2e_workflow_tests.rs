@@ -4,12 +4,15 @@
 //! that entire workflows function correctly with the CLI-MCP integration.
 
 use anyhow::Result;
-use assert_cmd::Command;
 use std::time::Duration;
 use tempfile::TempDir;
+use assert_cmd::Command;
 
 mod test_utils;
 use test_utils::setup_git_repo;
+
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -205,8 +208,8 @@ fn setup_search_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
 }
 
 /// Test complete issue lifecycle workflow (optimized)
-#[test]
-fn test_complete_issue_lifecycle() -> Result<()> {
+#[tokio::test]
+async fn test_complete_issue_lifecycle() -> Result<()> {
     if should_run_fast() {
         // In fast mode, skip expensive operations
         return Ok(());
@@ -214,143 +217,113 @@ fn test_complete_issue_lifecycle() -> Result<()> {
 
     let (_temp_dir, temp_path) = setup_e2e_test_environment()?;
 
-    // Step 1: Create a new issue
-    let create_output = Command::cargo_bin("sah")?
-        .args([
-            "issue",
-            "create",
-            "e2e_lifecycle_test",
-            "--content",
-            "# E2E Lifecycle Test\n\nThis issue tests the complete lifecycle workflow.",
-        ])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
-    let create_stdout = String::from_utf8_lossy(&create_output.get_output().stdout);
+    // Step 1: Create a new issue
+    let create_result = run_sah_command_in_process(&[
+        "issue",
+        "create",
+        "e2e_lifecycle_test",
+        "--content",
+        "# E2E Lifecycle Test\n\nThis issue tests the complete lifecycle workflow.",
+    ]).await?;
+
+    assert_eq!(create_result.exit_code, 0, "Issue creation should succeed");
     assert!(
-        create_stdout.contains("Created issue: e2e_lifecycle_test")
-            || create_stdout.contains("created issue: e2e_lifecycle_test")
-            || create_stdout.contains("e2e_lifecycle_test"),
-        "Issue creation should show success message with issue name: {create_stdout}"
+        create_result.stdout.contains("Created issue: e2e_lifecycle_test")
+            || create_result.stdout.contains("created issue: e2e_lifecycle_test")
+            || create_result.stdout.contains("e2e_lifecycle_test"),
+        "Issue creation should show success message with issue name: {}", create_result.stdout
     );
 
     // Step 2: List issues to verify creation
-    let list_output = Command::cargo_bin("sah")?
-        .args(["issue", "list"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let list_stdout = String::from_utf8_lossy(&list_output.get_output().stdout);
+    let list_result = run_sah_command_in_process(&["issue", "list"]).await?;
+    assert_eq!(list_result.exit_code, 0, "Issue list should succeed");
     assert!(
-        list_stdout.contains("e2e_lifecycle_test"),
-        "Issue should appear in list: {list_stdout}"
+        list_result.stdout.contains("e2e_lifecycle_test"),
+        "Issue should appear in list: {}", list_result.stdout
     );
 
     // Step 3: Show the issue details
-    let show_output = Command::cargo_bin("sah")?
-        .args(["issue", "show", "e2e_lifecycle_test"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let show_stdout = String::from_utf8_lossy(&show_output.get_output().stdout);
+    let show_result = run_sah_command_in_process(&["issue", "show", "e2e_lifecycle_test"]).await?;
+    assert_eq!(show_result.exit_code, 0, "Issue show should succeed");
     assert!(
-        show_stdout.contains("E2E Lifecycle Test")
-            && show_stdout.contains("complete lifecycle workflow"),
-        "Issue details should contain both title and description: {show_stdout}"
+        show_result.stdout.contains("E2E Lifecycle Test")
+            && show_result.stdout.contains("complete lifecycle workflow"),
+        "Issue details should contain both title and description: {}", show_result.stdout
     );
 
     // Step 4: Update the issue
-    Command::cargo_bin("sah")?
-        .args([
-            "issue",
-            "update",
-            "e2e_lifecycle_test",
-            "--content",
-            "Updated content for e2e testing",
-            "--append",
-        ])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    let update_result = run_sah_command_in_process(&[
+        "issue",
+        "update",
+        "e2e_lifecycle_test",
+        "--content",
+        "Updated content for e2e testing",
+        "--append",
+    ]).await?;
+    assert_eq!(update_result.exit_code, 0, "Issue update should succeed");
 
     // Step 5: Verify the update
-    let updated_show_output = Command::cargo_bin("sah")?
-        .args(["issue", "show", "e2e_lifecycle_test"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let updated_stdout = String::from_utf8_lossy(&updated_show_output.get_output().stdout);
+    let updated_show_result = run_sah_command_in_process(&["issue", "show", "e2e_lifecycle_test"]).await?;
+    assert_eq!(updated_show_result.exit_code, 0, "Updated issue show should succeed");
     assert!(
-        updated_stdout.contains("Updated content"),
-        "Issue should contain updated content: {updated_stdout}"
+        updated_show_result.stdout.contains("Updated content"),
+        "Issue should contain updated content: {}", updated_show_result.stdout
     );
 
     // Step 6: Work on the issue (creates git branch)
-    Command::cargo_bin("sah")?
-        .args(["issue", "work", "e2e_lifecycle_test"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    let work_result = run_sah_command_in_process(&["issue", "work", "e2e_lifecycle_test"]).await?;
+    assert_eq!(work_result.exit_code, 0, "Issue work should succeed");
 
     // Step 7: Check current issue
-    let current_output = Command::cargo_bin("sah")?
-        .args(["issue", "current"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let current_stdout = String::from_utf8_lossy(&current_output.get_output().stdout);
+    let current_result = run_sah_command_in_process(&["issue", "current"]).await?;
+    assert_eq!(current_result.exit_code, 0, "Issue current should succeed");
     assert!(
-        current_stdout.contains("e2e_lifecycle_test"),
-        "Current issue should show our issue: {current_stdout}"
+        current_result.stdout.contains("e2e_lifecycle_test"),
+        "Current issue should show our issue: {}", current_result.stdout
     );
 
     // Step 8: Complete the issue
-    Command::cargo_bin("sah")?
-        .args(["issue", "complete", "e2e_lifecycle_test"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    let complete_result = run_sah_command_in_process(&["issue", "complete", "e2e_lifecycle_test"]).await?;
+    assert_eq!(complete_result.exit_code, 0, "Issue complete should succeed");
 
     // Step 9: Merge the issue
-    Command::cargo_bin("sah")?
-        .args(["issue", "merge", "e2e_lifecycle_test"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    let merge_result = run_sah_command_in_process(&["issue", "merge", "e2e_lifecycle_test"]).await?;
+    assert_eq!(merge_result.exit_code, 0, "Issue merge should succeed");
 
     // Step 10: Verify issue is completed
-    let final_list_output = Command::cargo_bin("sah")?
-        .args(["issue", "list", "--completed"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let final_stdout = String::from_utf8_lossy(&final_list_output.get_output().stdout);
+    let final_list_result = run_sah_command_in_process(&["issue", "list", "--completed"]).await?;
+    assert_eq!(final_list_result.exit_code, 0, "Issue list --completed should succeed");
     assert!(
-        final_stdout.contains("e2e_lifecycle_test")
-            && (final_stdout.contains("completed")
-                || final_stdout.contains("✓")
-                || final_stdout.contains("✅")),
-        "Completed issue should appear with completion status indicator: {final_stdout}"
+        final_list_result.stdout.contains("e2e_lifecycle_test")
+            && (final_list_result.stdout.contains("completed")
+                || final_list_result.stdout.contains("✓")
+                || final_list_result.stdout.contains("✅")),
+        "Completed issue should appear with completion status indicator: {}", final_list_result.stdout
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test complete memo management workflow
-#[test]
-fn test_complete_memo_workflow() -> Result<()> {
+#[tokio::test]
+async fn test_complete_memo_workflow() -> Result<()> {
     if should_run_fast() {
         // In fast mode, skip expensive operations
         return Ok(());
     }
 
     let (_temp_dir, temp_path) = setup_e2e_test_environment()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Step 1: Create multiple memos
     let memo_data = vec![
@@ -371,123 +344,87 @@ fn test_complete_memo_workflow() -> Result<()> {
     let mut memo_ids = vec![];
 
     for (title, content) in &memo_data {
-        let create_output = Command::cargo_bin("sah")?
-            .args(["memo", "create", title, "--content", content])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
-
-        let create_stdout = String::from_utf8_lossy(&create_output.get_output().stdout);
+        let create_result = run_sah_command_in_process(&["memo", "create", title, "--content", content]).await?;
+        assert_eq!(create_result.exit_code, 0, "Memo creation should succeed");
 
         // Extract memo ID from output (ULID pattern)
-        if let Some(id) = extract_ulid_from_text(&create_stdout) {
+        if let Some(id) = extract_ulid_from_text(&create_result.stdout) {
             memo_ids.push(id);
         }
     }
 
     // Step 2: List all memos
-    let list_output = Command::cargo_bin("sah")?
-        .args(["memo", "list"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let list_stdout = String::from_utf8_lossy(&list_output.get_output().stdout);
+    let list_result = run_sah_command_in_process(&["memo", "list"]).await?;
+    assert_eq!(list_result.exit_code, 0, "Memo list should succeed");
     assert!(
-        list_stdout.contains("Meeting Notes")
-            && list_stdout.contains("Task List")
-            && (list_stdout.matches('\n').count() >= 2 || list_stdout.len() > 50),
-        "All memos should appear in list with proper formatting: {list_stdout}"
+        list_result.stdout.contains("Meeting Notes")
+            && list_result.stdout.contains("Task List")
+            && (list_result.stdout.matches('\n').count() >= 2 || list_result.stdout.len() > 50),
+        "All memos should appear in list with proper formatting: {}", list_result.stdout
     );
 
     // Step 3: Get specific memo details
     if let Some(first_id) = memo_ids.first() {
-        let get_output = Command::cargo_bin("sah")?
-            .args(["memo", "get", first_id])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
-
-        let get_stdout = String::from_utf8_lossy(&get_output.get_output().stdout);
+        let get_result = run_sah_command_in_process(&["memo", "get", first_id]).await?;
+        assert_eq!(get_result.exit_code, 0, "Memo get should succeed");
         assert!(
-            get_stdout.contains("Meeting Notes") || get_stdout.contains("project timeline"),
-            "Memo details should contain expected content: {get_stdout}"
+            get_result.stdout.contains("Meeting Notes") || get_result.stdout.contains("project timeline"),
+            "Memo details should contain expected content: {}", get_result.stdout
         );
     }
 
     // Step 4: Search memos
-    let search_output = Command::cargo_bin("sah")?
-        .args(["memo", "search", "testing"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let search_stdout = String::from_utf8_lossy(&search_output.get_output().stdout);
+    let search_result = run_sah_command_in_process(&["memo", "search", "testing"]).await?;
+    assert_eq!(search_result.exit_code, 0, "Memo search should succeed");
     assert!(
-        search_stdout.contains("Task List") || search_stdout.contains("Complete testing"),
-        "Search should find relevant memos: {search_stdout}"
+        search_result.stdout.contains("Task List") || search_result.stdout.contains("Complete testing"),
+        "Search should find relevant memos: {}", search_result.stdout
     );
 
     // Step 5: Update a memo
     if let Some(second_id) = memo_ids.get(1) {
-        Command::cargo_bin("sah")?
-            .args([
-                "memo",
-                "update",
-                second_id,
-                "--content",
-                "# Updated Task List\n\n1. ✅ Complete testing\n2. Review documentation\n3. Deploy to production\n4. Monitor deployment"
-            ])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
+        let update_result = run_sah_command_in_process(&[
+            "memo",
+            "update",
+            second_id,
+            "--content",
+            "# Updated Task List\n\n1. ✅ Complete testing\n2. Review documentation\n3. Deploy to production\n4. Monitor deployment"
+        ]).await?;
+        assert_eq!(update_result.exit_code, 0, "Memo update should succeed");
 
         // Verify update
-        let updated_get_output = Command::cargo_bin("sah")?
-            .args(["memo", "get", second_id])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
-
-        let updated_stdout = String::from_utf8_lossy(&updated_get_output.get_output().stdout);
+        let updated_get_result = run_sah_command_in_process(&["memo", "get", second_id]).await?;
+        assert_eq!(updated_get_result.exit_code, 0, "Updated memo get should succeed");
         assert!(
-            updated_stdout.contains("Updated Task List")
-                && updated_stdout.contains("Monitor deployment"),
-            "Updated memo should contain new content: {updated_stdout}"
+            updated_get_result.stdout.contains("Updated Task List")
+                && updated_get_result.stdout.contains("Monitor deployment"),
+            "Updated memo should contain new content: {}", updated_get_result.stdout
         );
     }
 
     // Step 6: Get all context for AI
-    let context_output = Command::cargo_bin("sah")?
-        .args(["memo", "context"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
-
-    let context_stdout = String::from_utf8_lossy(&context_output.get_output().stdout);
+    let context_result = run_sah_command_in_process(&["memo", "context"]).await?;
+    assert_eq!(context_result.exit_code, 0, "Memo context should succeed");
     assert!(
-        context_stdout.len() > 100
-            && context_stdout.contains("Meeting Notes")
-            && context_stdout.contains("Task List"),
+        context_result.stdout.len() > 100
+            && context_result.stdout.contains("Meeting Notes")
+            && context_result.stdout.contains("Task List"),
         "Context should contain substantial content from all memos: length={}",
-        context_stdout.len()
+        context_result.stdout.len()
     );
 
     // Step 7: Delete a memo
     if let Some(last_id) = memo_ids.last() {
-        Command::cargo_bin("sah")?
-            .args(["memo", "delete", last_id])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
+        let delete_result = run_sah_command_in_process(&["memo", "delete", last_id]).await?;
+        assert_eq!(delete_result.exit_code, 0, "Memo delete should succeed");
 
         // Verify deletion
-        Command::cargo_bin("sah")?
-            .args(["memo", "get", last_id])
-            .current_dir(&temp_path)
-            .assert()
-            .failure(); // Should fail to find deleted memo
+        let get_deleted_result = run_sah_command_in_process(&["memo", "get", last_id]).await?;
+        assert_ne!(get_deleted_result.exit_code, 0, "Getting deleted memo should fail");
     }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
@@ -532,20 +469,22 @@ fn test_search_query_help() -> Result<()> {
 }
 
 /// Test search cli argument parsing (fast)
-#[test]
-fn test_search_cli_arguments() -> Result<()> {
+#[tokio::test]
+async fn test_search_cli_arguments() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
-    // Test various argument combinations without actually executing search
-    let help_output = Command::cargo_bin("sah")?
-        .args(["search", "index", "--help"])
-        .current_dir(&temp_path)
-        .output()?;
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
-    assert!(help_output.status.success());
-    let help_text = String::from_utf8_lossy(&help_output.stdout);
-    assert!(help_text.contains("patterns"));
-    assert!(help_text.contains("force"));
+    // Test various argument combinations without actually executing search
+    let help_result = run_sah_command_in_process(&["search", "index", "--help"]).await?;
+    assert_eq!(help_result.exit_code, 0, "Search index help should succeed");
+    assert!(help_result.stdout.contains("patterns"));
+    assert!(help_result.stdout.contains("force"));
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
@@ -595,52 +534,44 @@ fn test_error_recovery_workflow() -> Result<()> {
 }
 
 /// Test performance under realistic workflow load
-#[test]
+#[tokio::test]
 #[ignore = "Slow load test - run with --ignored"]
-fn test_realistic_load_workflow() -> Result<()> {
+async fn test_realistic_load_workflow() -> Result<()> {
     let (_temp_dir, temp_path) = setup_e2e_test_environment()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Create multiple issues and memos to simulate realistic usage
     for i in 1..=5 {
-        Command::cargo_bin("sah")?
-            .args([
-                "issue",
-                "create",
-                &format!("load_test_issue_{i}"),
-                "--content",
-                &format!("# Load Test Issue {i}\n\nThis is issue {i} for load testing."),
-            ])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
+        let issue_result = run_sah_command_in_process(&[
+            "issue",
+            "create",
+            &format!("load_test_issue_{i}"),
+            "--content",
+            &format!("# Load Test Issue {i}\n\nThis is issue {i} for load testing."),
+        ]).await?;
+        assert_eq!(issue_result.exit_code, 0, "Issue creation should succeed");
 
-        Command::cargo_bin("sah")?
-            .args([
-                "memo",
-                "create",
-                &format!("Load Test Memo {i}"),
-                "--content",
-                &format!("# Memo {i}\n\nThis is memo {i} for load testing.\n\n## Details\n- Priority: Medium\n- Category: Testing\n- Iteration: {i}")
-            ])
-            .current_dir(&temp_path)
-            .assert()
-            .success();
+        let memo_result = run_sah_command_in_process(&[
+            "memo",
+            "create",
+            &format!("Load Test Memo {i}"),
+            "--content",
+            &format!("# Memo {i}\n\nThis is memo {i} for load testing.\n\n## Details\n- Priority: Medium\n- Category: Testing\n- Iteration: {i}")
+        ]).await?;
+        assert_eq!(memo_result.exit_code, 0, "Memo creation should succeed");
     }
 
     // Perform various operations to test performance
     let start_time = std::time::Instant::now();
 
-    Command::cargo_bin("sah")?
-        .args(["issue", "list"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    let issue_list_result = run_sah_command_in_process(&["issue", "list"]).await?;
+    assert_eq!(issue_list_result.exit_code, 0, "Issue list should succeed");
 
-    Command::cargo_bin("sah")?
-        .args(["memo", "list"])
-        .current_dir(&temp_path)
-        .assert()
-        .success();
+    let memo_list_result = run_sah_command_in_process(&["memo", "list"]).await?;
+    assert_eq!(memo_list_result.exit_code, 0, "Memo list should succeed");
 
     let _indexed = try_search_index(&temp_path, &["src/**/*.rs"], false)?;
     // Continue timing test regardless of indexing result
@@ -652,6 +583,9 @@ fn test_realistic_load_workflow() -> Result<()> {
         elapsed < Duration::from_secs(60),
         "Workflow should complete in reasonable time: {elapsed:?}"
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }

@@ -1,8 +1,6 @@
 //! Tests for builtin workflow migration to parameter format
 
 use anyhow::Result;
-use assert_cmd::Command;
-use predicates::prelude::*;
 use std::path::PathBuf;
 
 use swissarmyhammer_cli::{
@@ -10,6 +8,9 @@ use swissarmyhammer_cli::{
     flow::run_flow_command,
 };
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 
 /// Get the repository root directory (parent of the CLI test directory)
 fn get_repo_root() -> PathBuf {
@@ -180,48 +181,39 @@ async fn test_workflow_edge_cases() -> Result<()> {
 }
 
 // Keep a few slow CLI integration tests for end-to-end verification
-#[test]
-#[ignore = "Expensive CLI integration test - run with --ignored to include"]
-fn test_cli_integration_greeting_workflow() {
+#[tokio::test]
+async fn test_cli_integration_greeting_workflow() -> Result<()> {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
+    std::env::set_current_dir(&repo_root).unwrap();
 
-    // Test end-to-end CLI integration
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--var")
-        .arg("person_name=Integration Test")
-        .arg("--var")
-        .arg("language=English")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let result = run_sah_command_in_process(&[
+        "flow", "run", "greeting",
+        "--var", "person_name=Integration Test",
+        "--var", "language=English",
+        "--dry-run"
+    ]).await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("greeting"));
+    assert_eq!(result.exit_code, 0);
+    assert!(result.stdout.contains("🔍 Dry run mode"));
+    assert!(result.stdout.contains("greeting"));
+    Ok(())
 }
 
-#[test]
-#[ignore = "Expensive CLI integration test - run with --ignored to include"] 
-fn test_cli_integration_plan_workflow() {
+#[tokio::test]
+async fn test_cli_integration_plan_workflow() -> Result<()> {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
+    std::env::set_current_dir(&repo_root).unwrap();
 
-    // Test end-to-end CLI integration
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--var")
-        .arg("plan_filename=./test.md")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let result = run_sah_command_in_process(&[
+        "flow", "run", "plan",
+        "--var", "plan_filename=./test.md",
+        "--dry-run"
+    ]).await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("plan"));
+    assert_eq!(result.exit_code, 0);
+    assert!(result.stdout.contains("🔍 Dry run mode"));
+    assert!(result.stdout.contains("plan"));
+    Ok(())
 }

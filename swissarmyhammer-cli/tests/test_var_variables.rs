@@ -1,7 +1,6 @@
 //! Tests for --var variable functionality in workflows
 
 use anyhow::Result;
-use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use swissarmyhammer_cli::{
@@ -11,6 +10,9 @@ use swissarmyhammer_cli::{
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 mod test_utils;
+mod in_process_test_utils;
+
+use in_process_test_utils::run_sah_command_in_process;
 
 /// Run flow command with variables in-process
 async fn run_workflow_with_vars_in_process(
@@ -33,27 +35,46 @@ async fn run_workflow_with_vars_in_process(
     Ok(result.is_ok())
 }
 
-/// Helper to run CLI commands with standard optimizations
-fn run_optimized_command(
-    args: &[&str],
-    env: &IsolatedTestEnvironment,
-) -> Result<Command, Box<dyn std::error::Error>> {
-    // Create unique test identifier to avoid any cross-test conflicts
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let thread_id = std::thread::current().id();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let test_id = format!("{thread_id:?}_{timestamp}");
 
-    let mut cmd = Command::cargo_bin("sah")?;
-    cmd.args(args)
-        .current_dir(env.home_path())
-        .env("SWISSARMYHAMMER_TEST_MODE", "1")
-        .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
-        .env("RUST_LOG", "warn");
-    Ok(cmd)
+/// Sync wrapper for CLI commands that returns an assert_cmd::Command-compatible interface
+/// This allows existing .assert() patterns to work with in-process execution
+fn run_sah_sync_assert(args: &[&str]) -> TestCommandResult {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(run_sah_command_in_process(args)).unwrap();
+    TestCommandResult {
+        exit_code: result.exit_code,
+        stdout: result.stdout,
+        stderr: result.stderr,
+    }
+}
+
+/// Simple result wrapper that provides assert methods like assert_cmd::Assert
+struct TestCommandResult {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+impl TestCommandResult {
+    fn success(&self) -> &Self {
+        assert_eq!(self.exit_code, 0, "Command failed with stderr: {}", self.stderr);
+        self
+    }
+    
+    fn failure(&self) -> &Self {
+        assert_ne!(self.exit_code, 0, "Command unexpectedly succeeded");
+        self
+    }
+    
+    fn stdout(&self, predicate: predicates::str::ContainsPredicate) -> &Self {
+        assert!(predicate.eval(&self.stdout), "stdout assertion failed");
+        self
+    }
+    
+    fn stderr(&self, predicate: predicates::str::ContainsPredicate) -> &Self {
+        assert!(predicate.eval(&self.stderr), "stderr assertion failed");
+        self
+    }
 }
 
 /// Helper to create a test prompt for the workflow
@@ -122,24 +143,19 @@ fn test_workflow_with_var_variables() {
     let prompt_path = prompt_dir.join("test-prompt.md");
     fs::write(&prompt_path, create_test_prompt()).unwrap();
 
-    // Run workflow with --var variables using optimized command
-    run_optimized_command(
-        &[
-            "flow",
-            "run",
-            "test-template",
-            "--var",
-            "greeting=Bonjour",
-            "--var",
-            "message=TestMessage",
-            "--var",
-            "count=5",
-            "--dry-run",
-        ],
-        &env,
-    )
-    .unwrap()
-    .assert()
+    // Run workflow with --var variables using in-process execution
+    run_sah_sync_assert(&[
+        "flow",
+        "run",
+        "test-template",
+        "--var",
+        "greeting=Bonjour",
+        "--var",
+        "message=TestMessage",
+        "--var",
+        "count=5",
+        "--dry-run",
+    ])
     .success()
     .stdout(predicate::str::contains("Dry run mode"))
     .stdout(predicate::str::contains("test-template"));
@@ -176,12 +192,7 @@ stateDiagram-v2
     )
     .unwrap();
 
-    run_optimized_command(
-        &["flow", "run", "some-workflow", "--var", "invalid_format"],
-        &env,
-    )
-    .unwrap()
-    .assert()
+    run_sah_sync_assert(&["flow", "run", "some-workflow", "--var", "invalid_format"])
     .failure()
     .stderr(predicate::str::contains("Invalid variable format"))
     .stderr(predicate::str::contains("key=value"));
@@ -270,17 +281,15 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with equals sign in value
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("equals-test")
-        .arg("--var")
-        .arg("formula=x=y+z")
-        .current_dir(env.home_path());
-
-    cmd.assert()
-        .success()
-        .stderr(predicate::str::contains("Formula: x=y+z"));
+    run_sah_sync_assert(&[
+        "flow",
+        "run", 
+        "equals-test",
+        "--var",
+        "formula=x=y+z"
+    ])
+    .success()
+    .stderr(predicate::str::contains("Formula: x=y+z"));
 }
 
 #[test]
@@ -310,23 +319,18 @@ Version: {{ version | default: "1.0" }}
     )
     .unwrap();
 
-    // Test with empty var value using optimized command
-    run_optimized_command(
-        &[
-            "prompt",
-            "test",
-            "empty-test",
-            "--var",
-            "content=Main content",
-            "--var",
-            "author=",
-            "--var",
-            "version=",
-        ],
-        &env,
-    )
-    .unwrap()
-    .assert()
+    // Test with empty var value using in-process execution
+    run_sah_sync_assert(&[
+        "prompt",
+        "test",
+        "empty-test",
+        "--var",
+        "content=Main content",
+        "--var",
+        "author=",
+        "--var",
+        "version=",
+    ])
     .success()
     .stdout(predicate::str::contains("Content: Main content"))
     .stdout(predicate::str::contains("Author: "))
@@ -359,20 +363,15 @@ Message: {{ message }}
     .unwrap();
 
     // Test with later --var overriding earlier --var using optimized command
-    run_optimized_command(
-        &[
-            "prompt",
-            "test",
-            "override-test",
-            "--var",
-            "message=Original message",
-            "--var",
-            "message=Overridden message",
-        ],
-        &env,
-    )
-    .unwrap()
-    .assert()
+    run_sah_sync_assert(&[
+        "prompt",
+        "test",
+        "override-test",
+        "--var",
+        "message=Original message",
+        "--var",
+        "message=Overridden message",
+    ])
     .success()
     .stdout(predicate::str::contains("Message: Overridden message"));
 }
