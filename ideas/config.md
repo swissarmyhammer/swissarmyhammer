@@ -18,7 +18,9 @@ Move the config file to the new search locations. Use figment rather than custom
 
 The custom env var parsing, types, validation, types, loader should all be eliminated. Strive to use `figment` directly and avoid duplicating or making a lot of code that can be had just by using figment.
 
-### 1. Configuration Precedence Order
+Note that this config is not about configuring any of the MCP tools or MCP itself at this time -- it is just a way to provide variables to the rendering subsystem.
+
+### Configuration Precedence Order
 
 Configuration sources should be merged in the following order (later sources override earlier ones):
 
@@ -28,7 +30,7 @@ Configuration sources should be merged in the following order (later sources ove
 4. **Environment variables** (with `SAH_` or `SWISSARMYHAMMER_` prefix)
 5. **Command line arguments** (highest priority)
 
-### 2. Configuration File Discovery
+### Configuration File Discovery
 
 #### File Names
 Support both short and long form names:
@@ -59,3 +61,6 @@ Support both short and long form names:
    ~/.swissarmyhammer/swissarmyhammer.yml
    ~/.swissarmyhammer/swissarmyhammer.json
    ```
+
+
+### Remove the `sah config test` sub command
