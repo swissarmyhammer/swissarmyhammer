@@ -17,7 +17,7 @@ Process the specific plan file: {{ plan_filename }}
 Process all specifications in the ./specification directory.
 {% endif %}
 
-Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order.
+Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order. Use the issue_create tool to make each issue.
 
 {% render "principals" %}
 {% render "coding_standards" %}
