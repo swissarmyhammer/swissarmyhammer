@@ -151,7 +151,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                 // File doesn't exist - write enhanced error message with suggestions
                 if let Ok(mut stderr) = stderr_capture.lock() {
                     let _ = writeln!(stderr, "Error: Plan file '{}' not found", plan_filename);
-                    let _ = writeln!(stderr, "");
+                    let _ = stderr.write_all(b"\n");
                     let _ = writeln!(stderr, "Suggestions:");
                     let _ = writeln!(stderr, "• Check the file path for typos");
                     let _ = writeln!(stderr, "• Use 'ls -la' to verify the file exists");
@@ -166,13 +166,13 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                         "Error: '{}' is a directory, not a file",
                         plan_filename
                     );
-                    let _ = writeln!(stderr, "");
+                    let _ = stderr.write_all(b"\n");
                     let _ = writeln!(stderr, "Suggestions:");
                     let _ = writeln!(stderr, "• Specify a plan file inside the directory");
                     let _ = writeln!(stderr, "• Check that you provided the correct file path");
                 }
                 EXIT_ERROR
-            } else if std::fs::metadata(&plan_path).map_or(false, |m| m.len() == 0) {
+            } else if std::fs::metadata(plan_path).is_ok_and(|m| m.len() == 0) {
                 // File is empty - write warning message and return warning code
                 if let Ok(mut stderr) = stderr_capture.lock() {
                     let _ = writeln!(
@@ -180,7 +180,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                         "Warning: Plan file '{}' is empty or contains no valid content",
                         plan_filename
                     );
-                    let _ = writeln!(stderr, "");
+                    let _ = stderr.write_all(b"\n");
                     let _ = writeln!(stderr, "Suggestions:");
                     let _ = writeln!(stderr, "• Add content to the plan file");
                     let _ = writeln!(stderr, "• Check for whitespace-only content");

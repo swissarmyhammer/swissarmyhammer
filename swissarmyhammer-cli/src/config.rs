@@ -443,7 +443,7 @@ fn format_config_value(value: &swissarmyhammer::sah_config::ConfigValue) -> Stri
             if arr.is_empty() {
                 "[]".to_string()
             } else {
-                let items: Vec<String> = arr.iter().map(|v| format_config_value(v)).collect();
+                let items: Vec<String> = arr.iter().map(format_config_value).collect();
                 format!("[{}]", items.join(", "))
             }
         }

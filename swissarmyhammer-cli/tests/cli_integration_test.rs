@@ -11,7 +11,6 @@ mod in_process_test_utils;
 use in_process_test_utils::{run_flow_test_in_process, run_sah_command_in_process};
 
 /// Helper function to run CLI command and capture output to temp files
-
 /// Test that the new prompt subcommand structure works correctly
 #[tokio::test]
 async fn test_prompt_subcommand_list() -> Result<()> {

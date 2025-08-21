@@ -93,19 +93,19 @@ async fn try_search_index(
                 || (stdout.contains("Found") && stdout.contains("files"))
             {
                 eprintln!("✅ Search indexing completed successfully");
-                return Ok(true);
+                Ok(true)
             } else {
                 eprintln!("⚠️ Search indexing output unclear: {stdout}");
-                return Ok(false);
+                Ok(false)
             }
         }
         Ok(Err(e)) => {
             eprintln!("⚠️ Search indexing failed: {e}");
-            return Ok(false);
+            Ok(false)
         }
         Err(_timeout) => {
             eprintln!("⚠️ Search indexing timed out after 30 seconds");
-            return Ok(false);
+            Ok(false)
         }
     }
 }
