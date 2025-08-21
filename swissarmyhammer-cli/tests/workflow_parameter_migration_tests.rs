@@ -9,6 +9,7 @@ use swissarmyhammer_cli::{
     cli::FlowSubcommand,
     flow::run_flow_command,
 };
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 /// Get the repository root directory (parent of the CLI test directory)
 fn get_repo_root() -> PathBuf {
@@ -26,27 +27,22 @@ async fn run_builtin_workflow_in_process(
     dry_run: bool,
 ) -> Result<bool> {
     let repo_root = get_repo_root();
+    let _env = IsolatedTestEnvironment::new().unwrap();
     
     // Change to repo root directory where builtin workflows are located
-    let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&repo_root)?;
     
-    let result = {
-        let subcommand = FlowSubcommand::Run {
-            workflow: workflow_name.to_string(),
-            vars,
-            interactive: false,
-            dry_run,
-            test: false,
-            timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
-            quiet: true,
-        };
-        
-        run_flow_command(subcommand).await
+    let subcommand = FlowSubcommand::Run {
+        workflow: workflow_name.to_string(),
+        vars,
+        interactive: false,
+        dry_run,
+        test: false,
+        timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
+        quiet: true,
     };
     
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+    let result = run_flow_command(subcommand).await;
     
     Ok(result.is_ok())
 }

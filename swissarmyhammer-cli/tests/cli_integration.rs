@@ -6,8 +6,7 @@ mod in_process_test_utils;
 
 use anyhow::Result;
 use in_process_test_utils::run_flow_test_in_process;
-use std::fs;
-use tempfile::TempDir;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 /// Create a minimal test workflow for performance testing
 fn create_minimal_workflow() -> String {
@@ -31,39 +30,24 @@ stateDiagram-v2
 }
 
 /// Helper to set up a temporary test environment with a workflow
-async fn setup_test_workflow(workflow_name: &str) -> Result<TempDir> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Create .git directory to make it look like a Git repository
-    let git_dir = temp_path.join(".git");
-    fs::create_dir_all(&git_dir)?;
-
-    // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
-    fs::create_dir_all(&workflow_dir)?;
-
-    // Create minimal workflow
+async fn setup_test_workflow(workflow_name: &str) -> Result<IsolatedTestEnvironment> {
+    let env = IsolatedTestEnvironment::new().unwrap();
+    
+    // Create minimal workflow in the isolated environment
+    let workflow_dir = env.swissarmyhammer_dir().join("workflows");
+    std::fs::create_dir_all(&workflow_dir)?;
     let workflow_path = workflow_dir.join(format!("{}.md", workflow_name));
-    fs::write(&workflow_path, create_minimal_workflow())?;
+    std::fs::write(&workflow_path, create_minimal_workflow())?;
 
-    Ok(temp_dir)
+    Ok(env)
 }
 
 /// Run workflow in controlled test environment
 async fn run_test_workflow_in_process(workflow_name: &str, vars: Vec<String>) -> Result<bool> {
-    let temp_dir = setup_test_workflow(workflow_name).await?;
-    let temp_path = temp_dir.path();
-
-    // Change to temp directory
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_path)?;
+    let _env = setup_test_workflow(workflow_name).await?;
 
     // Use very fast timeout for performance tests
     let result = run_flow_test_in_process(workflow_name, vars, Some("1s".to_string()), false).await;
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
 
     Ok(result.is_ok())
 }
@@ -79,14 +63,9 @@ async fn test_flow_test_simple_workflow() -> Result<()> {
 #[tokio::test]
 async fn test_flow_test_coverage_complete() -> Result<()> {
     // Test coverage reporting with minimal test workflow
-    let temp_dir = setup_test_workflow("coverage-test").await?;
-    let temp_path = temp_dir.path();
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_path)?;
+    let _env = setup_test_workflow("coverage-test").await?;
 
     let captured = run_flow_test_in_process("coverage-test", vec![], None, false).await?;
-
-    std::env::set_current_dir(original_dir)?;
 
     // Whether it succeeds or fails, we're testing the coverage logic path
     // The exit code indicates whether the workflow ran successfully
@@ -155,15 +134,10 @@ async fn test_concurrent_flow_test() -> Result<()> {
 #[tokio::test]
 async fn test_flow_test_with_timeout() -> Result<()> {
     // Test with timeout parameter
-    let temp_dir = setup_test_workflow("timeout-test").await?;
-    let temp_path = temp_dir.path();
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_path)?;
+    let _env = setup_test_workflow("timeout-test").await?;
 
     let captured =
         run_flow_test_in_process("timeout-test", vec![], Some("10s".to_string()), false).await?;
-
-    std::env::set_current_dir(original_dir)?;
 
     // Should complete (success or failure) within timeout
     assert!(
@@ -177,14 +151,9 @@ async fn test_flow_test_with_timeout() -> Result<()> {
 #[tokio::test]
 async fn test_flow_test_quiet_mode() -> Result<()> {
     // Test quiet mode flag
-    let temp_dir = setup_test_workflow("quiet-test").await?;
-    let temp_path = temp_dir.path();
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_path)?;
+    let _env = setup_test_workflow("quiet-test").await?;
 
     let captured = run_flow_test_in_process("quiet-test", vec![], None, true).await?;
-
-    std::env::set_current_dir(original_dir)?;
 
     // Should complete regardless of quiet mode
     assert!(

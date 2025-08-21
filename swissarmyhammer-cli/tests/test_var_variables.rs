@@ -4,42 +4,31 @@ use anyhow::Result;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-use tempfile::TempDir;
 use swissarmyhammer_cli::{
     cli::FlowSubcommand,
     flow::run_flow_command,
 };
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 mod test_utils;
-use test_utils::setup_git_repo;
 
 /// Run flow command with variables in-process
 async fn run_workflow_with_vars_in_process(
-    temp_dir: &std::path::Path,
     workflow_name: &str, 
     vars: Vec<String>,
     dry_run: bool
 ) -> Result<bool> {
-    // Change to temp directory
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(temp_dir)?;
-    
-    let result = {
-        let subcommand = FlowSubcommand::Run {
-            workflow: workflow_name.to_string(),
-            vars,
-            interactive: false,
-            dry_run,
-            test: false,
-            timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
-            quiet: true,
-        };
-        
-        run_flow_command(subcommand).await
+    let subcommand = FlowSubcommand::Run {
+        workflow: workflow_name.to_string(),
+        vars,
+        interactive: false,
+        dry_run,
+        test: false,
+        timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
+        quiet: true,
     };
     
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+    let result = run_flow_command(subcommand).await;
     
     Ok(result.is_ok())
 }
@@ -47,7 +36,7 @@ async fn run_workflow_with_vars_in_process(
 /// Helper to run CLI commands with standard optimizations
 fn run_optimized_command(
     args: &[&str],
-    temp_path: &std::path::Path,
+    env: &IsolatedTestEnvironment,
 ) -> Result<Command, Box<dyn std::error::Error>> {
     // Create unique test identifier to avoid any cross-test conflicts
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -60,7 +49,7 @@ fn run_optimized_command(
 
     let mut cmd = Command::cargo_bin("sah")?;
     cmd.args(args)
-        .current_dir(temp_path)
+        .current_dir(env.home_path())
         .env("SWISSARMYHAMMER_TEST_MODE", "1")
         .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
         .env("RUST_LOG", "warn");
@@ -117,14 +106,10 @@ stateDiagram-v2
 #[test]
 #[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_workflow_with_var_variables() {
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
+    let env = IsolatedTestEnvironment::new().unwrap();
 
-    // Setup proper git repository
-    setup_git_repo(temp_path).unwrap();
-
-    // Create .swissarmyhammer/workflows directory in temp dir
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    // Create .swissarmyhammer/workflows directory
+    let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
     // Create test workflow
@@ -132,7 +117,7 @@ fn test_workflow_with_var_variables() {
     fs::write(&workflow_path, create_test_workflow_with_templates()).unwrap();
 
     // Create test prompt that the workflow uses
-    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
+    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
     let prompt_path = prompt_dir.join("test-prompt.md");
     fs::write(&prompt_path, create_test_prompt()).unwrap();
@@ -151,7 +136,7 @@ fn test_workflow_with_var_variables() {
             "count=5",
             "--dry-run",
         ],
-        temp_path,
+        &env,
     )
     .unwrap()
     .assert()
@@ -162,14 +147,10 @@ fn test_workflow_with_var_variables() {
 
 #[test]
 fn test_invalid_var_variable_format() {
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
+    let env = IsolatedTestEnvironment::new().unwrap();
 
-    // Setup proper git repository
-    setup_git_repo(temp_path).unwrap();
-
-    // Create .swissarmyhammer/workflows directory in temp dir
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    // Create .swissarmyhammer/workflows directory
+    let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
     // Create a minimal workflow so we get past the "workflow not found" error
@@ -197,7 +178,7 @@ stateDiagram-v2
 
     run_optimized_command(
         &["flow", "run", "some-workflow", "--var", "invalid_format"],
-        temp_path,
+        &env,
     )
     .unwrap()
     .assert()
@@ -208,14 +189,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_special_chars_in_var_values() -> anyhow::Result<()> {
-    let temp_dir = tempfile::TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create workflow that uses template variables
@@ -242,7 +219,6 @@ stateDiagram-v2
 
     // Test with special characters
     let success1 = run_workflow_with_vars_in_process(
-        temp_path,
         "special-chars-test",
         vec!["message=Hello World! @#$%^&*()".to_string()],
         false,
@@ -252,7 +228,6 @@ stateDiagram-v2
 
     // Test with spaces and quotes
     let success2 = run_workflow_with_vars_in_process(
-        temp_path,
         "special-chars-test",
         vec!["message=Test with 'single' and \"double\" quotes".to_string()],
         false,
@@ -265,14 +240,10 @@ stateDiagram-v2
 #[test]
 #[ignore = "Expensive CLI integration test - run with --ignored to include"]
 fn test_workflow_with_equals_sign_in_var_value() {
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create .git directory to make it look like a Git repository
-    let git_dir = temp_dir.path().join(".git");
-    fs::create_dir_all(&git_dir).unwrap();
+    let env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
+    let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir).unwrap();
 
     // Create workflow
@@ -305,7 +276,7 @@ stateDiagram-v2
         .arg("equals-test")
         .arg("--var")
         .arg("formula=x=y+z")
-        .current_dir(&temp_dir);
+        .current_dir(env.home_path());
 
     cmd.assert()
         .success()
@@ -314,14 +285,10 @@ stateDiagram-v2
 
 #[test]
 fn test_prompt_test_with_empty_var_value() {
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path).unwrap();
+    let env = IsolatedTestEnvironment::new().unwrap();
 
     // Create prompt directory
-    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
+    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
 
     // Create test prompt
@@ -356,7 +323,7 @@ Version: {{ version | default: "1.0" }}
             "--var",
             "version=",
         ],
-        temp_path,
+        &env,
     )
     .unwrap()
     .assert()
@@ -368,14 +335,10 @@ Version: {{ version | default: "1.0" }}
 
 #[test]
 fn test_prompt_test_with_var_overriding_arg() {
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path).unwrap();
+    let env = IsolatedTestEnvironment::new().unwrap();
 
     // Create prompt directory
-    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
+    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
     fs::create_dir_all(&prompt_dir).unwrap();
 
     // Create test prompt
@@ -406,7 +369,7 @@ Message: {{ message }}
             "--var",
             "message=Overridden message",
         ],
-        temp_path,
+        &env,
     )
     .unwrap()
     .assert()
@@ -416,14 +379,10 @@ Message: {{ message }}
 
 #[tokio::test]
 async fn test_var_multiple_usage() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
-
-    // Create .swissarmyhammer/workflows directory in temp dir
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    // Create .swissarmyhammer/workflows directory
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create simple workflow
@@ -450,7 +409,6 @@ stateDiagram-v2
 
     // Run workflow with multiple --var using in-process execution
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "simple",
         vec![
             "context_var=value1".to_string(),
@@ -465,14 +423,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_full_workflow_execution_with_liquid_templates() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create test workflow with liquid templates
@@ -507,7 +461,6 @@ stateDiagram-v2
 
     // Run workflow with template variables
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "template-workflow",
         vec![
             "user_name=John Doe".to_string(),
@@ -523,14 +476,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_missing_template_variables() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create workflow that uses variables not provided
@@ -557,7 +506,6 @@ stateDiagram-v2
 
     // Run workflow without providing required variables
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "missing-vars",
         vec![], // no variables provided
         false,
@@ -570,17 +518,13 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_complex_liquid_templates() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let env = IsolatedTestEnvironment::new().unwrap();
 
     // Create directories
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
-    let prompt_dir = temp_path.join(".swissarmyhammer").join("prompts");
+    let prompt_dir = env.swissarmyhammer_dir().join("prompts");
     fs::create_dir_all(&prompt_dir)?;
 
     // Create a prompt that uses template variables
@@ -627,7 +571,6 @@ stateDiagram-v2
 
     // Run workflow with complex template variables using dry-run
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "complex-templates",
         vec![
             "user_name=Alice".to_string(),
@@ -643,14 +586,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_malformed_liquid_templates() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create workflow with various malformed liquid templates
@@ -681,7 +620,6 @@ stateDiagram-v2
 
     // Run workflow with template variables
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "malformed-templates",
         vec![
             "name=Test".to_string(),
@@ -697,14 +635,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_liquid_injection_attempts() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create workflow that tests injection attempts
@@ -731,7 +665,6 @@ stateDiagram-v2
 
     // Run workflow with potentially malicious input
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "injection-test",
         vec!["user_input={{ '{% raw %}' }}{{ system }}{{ '{% endraw %}' }}".to_string()],
         false,
@@ -744,14 +677,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_empty_var_value() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create workflow that uses template variables
@@ -778,7 +707,6 @@ stateDiagram-v2
 
     // Run workflow with empty var value
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "empty-value-test",
         vec![
             "name=".to_string(),
@@ -794,14 +722,10 @@ stateDiagram-v2
 
 #[tokio::test]
 async fn test_workflow_with_duplicate_var_names() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path();
-
-    // Setup proper git repository
-    setup_git_repo(temp_path)?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
     // Create .swissarmyhammer/workflows directory
-    let workflow_dir = temp_path.join(".swissarmyhammer").join("workflows");
+    let workflow_dir = _env.swissarmyhammer_dir().join("workflows");
     fs::create_dir_all(&workflow_dir)?;
 
     // Create workflow that uses both context and template variables
@@ -828,7 +752,6 @@ stateDiagram-v2
 
     // Run workflow with conflicting names (later values should take precedence)
     let success = run_workflow_with_vars_in_process(
-        temp_path,
         "conflict-test",
         vec![
             "value=from_var".to_string(),
