@@ -71,7 +71,7 @@ pub enum Commands {
     Plan { plan_filename: String },
     Implement,
     
-    // Dynamic MCP pass-through
+    // Dynamic MCP pass-through to be called with `sah mcp ...`
     Mcp {
         tool_name: String,
         #[command(flatten)]
@@ -237,7 +237,7 @@ fn matches_to_json_args(matches: &ArgMatches, schema: &serde_json::Value) -> Res
 4. Verify functionality and help text generation
 
 ### Phase 3: Full Migration
-1. Migrate remaining categories (`issue`, `file`, `search`, etc.)
+1. Migrate remaining categories (`issue`, `file`, `search`, etc.) -- one category at a time per issue
 2. Remove all redundant command enums
 3. Update integration tests
 
