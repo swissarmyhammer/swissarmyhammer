@@ -6,7 +6,6 @@
 use anyhow::Result;
 use std::time::Duration;
 use tempfile::TempDir;
-use assert_cmd::Command;
 
 mod test_utils;
 use test_utils::setup_git_repo;
@@ -46,7 +45,7 @@ static MODEL_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
 });
 
 /// Helper function to perform search indexing with timeout and graceful failure
-fn try_search_index(temp_path: &std::path::Path, patterns: &[&str], force: bool) -> Result<bool> {
+async fn try_search_index(temp_path: &std::path::Path, patterns: &[&str], force: bool) -> Result<bool> {
     // Skip search indexing in CI or when SKIP_SEARCH_TESTS is set
     if std::env::var("CI").is_ok() || std::env::var("SKIP_SEARCH_TESTS").is_ok() {
         eprintln!("⚠️  Skipping search indexing (CI environment or SKIP_SEARCH_TESTS set)");
@@ -59,76 +58,80 @@ fn try_search_index(temp_path: &std::path::Path, patterns: &[&str], force: bool)
         cmd_args.push("--force");
     }
 
-    // Create unique test identifier to avoid any cross-test conflicts
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let thread_id = std::thread::current().id();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let test_id = format!("{thread_id:?}_{timestamp}");
-
-    let mut cmd = Command::cargo_bin("sah")?;
-    cmd.args(&cmd_args)
-        .current_dir(temp_path)
-        .env("SWISSARMYHAMMER_TEST_MODE", "1")
-        .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
-        .env("RUST_LOG", "warn"); // Reduce logging noise
+    // Save current directory and change to temp_path
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(temp_path)?;
 
     // Set global model cache to avoid repeated downloads
     if let Some(cache_dir) = MODEL_CACHE_DIR.as_ref() {
         std::fs::create_dir_all(cache_dir).ok();
-        cmd.env("SWISSARMYHAMMER_MODEL_CACHE", cache_dir);
+        std::env::set_var("SWISSARMYHAMMER_MODEL_CACHE", cache_dir);
     }
 
-    let index_result = cmd.timeout(std::time::Duration::from_secs(30)).ok();
+    // Set test environment variables
+    std::env::set_var("SWISSARMYHAMMER_TEST_MODE", "1");
+    std::env::set_var("RUST_LOG", "warn");
+    
+    let index_result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        run_sah_command_in_process(&cmd_args)
+    ).await;
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     match index_result {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(Ok(output)) => {
+            let stdout = &output.stdout;
             if (stdout.contains("indexed") && stdout.chars().any(char::is_numeric))
-                || (stdout.contains("files") && stdout.chars().any(char::is_numeric))
+                || (stdout.contains("files") && stdout.contains("chunks"))
+                || (stdout.contains("Found") && stdout.contains("files"))
             {
-                Ok(true) // Successfully indexed
+                eprintln!("✅ Search indexing completed successfully");
+                return Ok(true);
             } else {
-                Ok(false) // Failed to index properly - skip silently for speed
+                eprintln!("⚠️ Search indexing output unclear: {stdout}");
+                return Ok(false);
             }
         }
-        Err(_) => {
-            Ok(false) // Failed to run - skip silently for speed
+        Ok(Err(e)) => {
+            eprintln!("⚠️ Search indexing failed: {e}");
+            return Ok(false);
+        }
+        Err(_timeout) => {
+            eprintln!("⚠️ Search indexing timed out after 30 seconds");
+            return Ok(false);
         }
     }
 }
 
 /// Fast mock search operation that skips actual indexing
-fn mock_search_workflow(temp_path: &std::path::Path) -> Result<()> {
+async fn mock_search_workflow(temp_path: &std::path::Path) -> Result<()> {
     // In mock mode, don't run any search commands that could hang
     // Just test basic CLI functionality that doesn't require search indexing
 
-    // Create unique test identifier to avoid any cross-test conflicts
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let thread_id = std::thread::current().id();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let test_id = format!("{thread_id:?}_{timestamp}");
+    // Save current directory and change to temp_path
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(temp_path)?;
+
+    // Set test environment variables
+    std::env::set_var("SWISSARMYHAMMER_TEST_MODE", "1");
+    std::env::set_var("RUST_LOG", "error");
+    std::env::set_var("SKIP_SEARCH_TESTS", "1");
 
     // Just verify the command structure works without actual indexing
     // Should complete quickly and skip model downloads with SKIP_SEARCH_TESTS=1
-    let output = Command::cargo_bin("sah")?
-        .args(["--help"])
-        .current_dir(temp_path)
-        .env("SWISSARMYHAMMER_TEST_MODE", "1")
-        .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
-        .env("RUST_LOG", "error") // Reduce log noise
-        .env("SKIP_SEARCH_TESTS", "1") // Skip search tests to avoid model download
-        .timeout(std::time::Duration::from_secs(10)) // Reduced timeout since we're skipping heavy operations
-        .output()?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        run_sah_command_in_process(&["--help"])
+    ).await??;
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     // Should succeed with empty results when SKIP_SEARCH_TESTS=1
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.exit_code != 0 {
+        let stderr = &output.stderr;
         // Ensure it's a graceful search failure, not a model download error
         assert!(
             !stderr.contains("Failed to retrieve onnx/model.onnx")
@@ -140,23 +143,21 @@ fn mock_search_workflow(temp_path: &std::path::Path) -> Result<()> {
 }
 
 /// Helper to run CLI commands with standard optimizations
-fn run_optimized_command(args: &[&str], temp_path: &std::path::Path) -> Result<Command> {
-    // Create unique test identifier to avoid any cross-test conflicts
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let thread_id = std::thread::current().id();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let test_id = format!("{thread_id:?}_{timestamp}");
+async fn run_optimized_command(args: &[&str], temp_path: &std::path::Path) -> Result<in_process_test_utils::CapturedOutput> {
+    // Save current directory and change to temp_path
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(temp_path)?;
 
-    let mut cmd = Command::cargo_bin("sah")?;
-    cmd.args(args)
-        .current_dir(temp_path)
-        .env("SWISSARMYHAMMER_TEST_MODE", "1")
-        .env("SWISSARMYHAMMER_TEST_ID", &test_id) // Unique test identifier
-        .env("RUST_LOG", "warn");
-    Ok(cmd)
+    // Set test environment variables
+    std::env::set_var("SWISSARMYHAMMER_TEST_MODE", "1");
+    std::env::set_var("RUST_LOG", "warn");
+    
+    let result = run_sah_command_in_process(args).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+    
+    result
 }
 
 /// Setup function for end-to-end workflow testing with optimized parallel execution
@@ -430,40 +431,37 @@ async fn test_complete_memo_workflow() -> Result<()> {
 }
 
 /// Test search command structure without ML models (fast)
-#[test]
-fn test_search_cli_help() -> Result<()> {
+#[tokio::test]
+async fn test_search_cli_help() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
     // Test help works for search commands
-    run_optimized_command(&["search", "--help"], &temp_path)?
-        .assert()
-        .success();
+    let result = run_optimized_command(&["search", "--help"], &temp_path).await?;
+    assert_eq!(result.exit_code, 0, "Search help should succeed. stderr: {}", result.stderr);
 
     Ok(())
 }
 
 /// Test search index help command (fast)
-#[test]
-fn test_search_index_help() -> Result<()> {
+#[tokio::test]
+async fn test_search_index_help() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
     // Test index help works
-    run_optimized_command(&["search", "index", "--help"], &temp_path)?
-        .assert()
-        .success();
+    let result = run_optimized_command(&["search", "index", "--help"], &temp_path).await?;
+    assert_eq!(result.exit_code, 0, "Search index help should succeed. stderr: {}", result.stderr);
 
     Ok(())
 }
 
 /// Test search query help command (fast)
-#[test]
-fn test_search_query_help() -> Result<()> {
+#[tokio::test]
+async fn test_search_query_help() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
     // Test query help works
-    run_optimized_command(&["search", "query", "--help"], &temp_path)?
-        .assert()
-        .success();
+    let result = run_optimized_command(&["search", "query", "--help"], &temp_path).await?;
+    assert_eq!(result.exit_code, 0, "Search query help should succeed. stderr: {}", result.stderr);
 
     Ok(())
 }
@@ -490,14 +488,13 @@ async fn test_search_cli_arguments() -> Result<()> {
 }
 
 /// Test basic file operations for search (fast)
-#[test]
-fn test_search_file_operations() -> Result<()> {
+#[tokio::test]
+async fn test_search_file_operations() -> Result<()> {
     let (_temp_dir, temp_path) = setup_search_test_environment()?;
 
     // Test only help commands to avoid triggering ML model downloads
-    run_optimized_command(&["search", "index", "--help"], &temp_path)?
-        .assert()
-        .success();
+    let result = run_optimized_command(&["search", "index", "--help"], &temp_path).await?;
+    assert_eq!(result.exit_code, 0, "Search index help should succeed. stderr: {}", result.stderr);
 
     // Test that files exist in the test environment
     assert!(temp_path.join("src").exists());
@@ -573,7 +570,7 @@ async fn test_realistic_load_workflow() -> Result<()> {
     let memo_list_result = run_sah_command_in_process(&["memo", "list"]).await?;
     assert_eq!(memo_list_result.exit_code, 0, "Memo list should succeed");
 
-    let _indexed = try_search_index(&temp_path, &["src/**/*.rs"], false)?;
+    let _indexed = try_search_index(&temp_path, &["src/**/*.rs"], false).await?;
     // Continue timing test regardless of indexing result
 
     let elapsed = start_time.elapsed();
@@ -591,24 +588,22 @@ async fn test_realistic_load_workflow() -> Result<()> {
 }
 
 /// Fast smoke test that covers basic functionality without expensive operations
-#[test]
-fn test_fast_smoke_workflow() -> Result<()> {
+#[tokio::test]
+async fn test_fast_smoke_workflow() -> Result<()> {
     let (_temp_dir, temp_path) = setup_e2e_test_environment()?;
 
     // Quick issue operations
-    run_optimized_command(
+    let result1 = run_optimized_command(
         &["issue", "create", "smoke_test", "--content", "Quick test"],
         &temp_path,
-    )?
-    .assert()
-    .success();
+    ).await?;
+    assert_eq!(result1.exit_code, 0, "Issue create should succeed. stderr: {}", result1.stderr);
 
-    run_optimized_command(&["issue", "list"], &temp_path)?
-        .assert()
-        .success();
+    let result2 = run_optimized_command(&["issue", "list"], &temp_path).await?;
+    assert_eq!(result2.exit_code, 0, "Issue list should succeed. stderr: {}", result2.stderr);
 
     // Quick memo operations
-    run_optimized_command(
+    let result3 = run_optimized_command(
         &[
             "memo",
             "create",
@@ -617,16 +612,14 @@ fn test_fast_smoke_workflow() -> Result<()> {
             "Fast test memo",
         ],
         &temp_path,
-    )?
-    .assert()
-    .success();
+    ).await?;
+    assert_eq!(result3.exit_code, 0, "Memo create should succeed. stderr: {}", result3.stderr);
 
-    run_optimized_command(&["memo", "list"], &temp_path)?
-        .assert()
-        .success();
+    let result4 = run_optimized_command(&["memo", "list"], &temp_path).await?;
+    assert_eq!(result4.exit_code, 0, "Memo list should succeed. stderr: {}", result4.stderr);
 
     // Mock search (no indexing)
-    mock_search_workflow(&temp_path)?;
+    mock_search_workflow(&temp_path).await?;
 
     Ok(())
 }

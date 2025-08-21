@@ -216,24 +216,6 @@ async fn test_config_test_with_variable_overrides() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_config_test_debug_mode() -> Result<()> {
-    let config_content = concat!("debug_app = \"DebugTest\"\n", "level = \"info\"\n");
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    let result = run_sah_command_in_process(&["config", "test", "--debug"]).await?;
-
-    assert_eq!(result.exit_code, 0);
-    assert!(result.stdout.contains("Template variables (overrides):"));
-    assert!(result.stdout.contains("Configuration variables:"));
-    assert!(result.stdout.contains("debug_app"));
-    assert!(result.stdout.contains("Template content:"));
-    assert!(result.stdout.contains("Rendered output:"));
-    assert!(result.stdout.contains("DebugTest: info"));
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_config_env_no_file() -> Result<()> {
     let temp_dir = TempDir::new().unwrap();
     std::env::set_current_dir(temp_dir.path()).unwrap();

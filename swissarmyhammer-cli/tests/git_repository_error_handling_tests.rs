@@ -3,106 +3,127 @@
 //! Tests that CLI commands provide clear, actionable error messages when run outside
 //! Git repositories, with component-specific guidance for resolution.
 
-use anyhow::Result;
 use std::fs;
 use tempfile::TempDir;
-use assert_cmd::Command;
-use predicates::prelude::*;
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
 
 /// Test that memo commands require Git repository
-#[test]
-fn test_memo_commands_require_git_repository() {
+#[tokio::test]
+async fn test_memo_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["memo", "list"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Memo operations require a Git repository",
-        ))
-        .stderr(predicate::str::contains(
-            "Memos are stored in .swissarmyhammer/memos/",
-        ))
-        .stderr(predicate::str::contains("git init"));
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["memo", "list"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+    
+    assert!(output.stderr.contains("Memo operations require a Git repository"), 
+            "Should contain Git repo error: {}", output.stderr);
+    assert!(output.stderr.contains("Memos are stored in .swissarmyhammer/memos/"), 
+            "Should mention memos directory: {}", output.stderr);
+    assert!(output.stderr.contains("git init"), 
+            "Should suggest git init: {}", output.stderr);
 }
 
 /// Test that issue commands require Git repository
-#[test]
-fn test_issue_commands_require_git_repository() {
+#[tokio::test]
+async fn test_issue_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["issue", "list"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Issue operations require a Git repository",
-        ))
-        .stderr(predicate::str::contains(
-            "Issues are stored in .swissarmyhammer/issues/",
-        ))
-        .stderr(predicate::str::contains("branch management"));
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["issue", "list"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+    
+    assert!(output.stderr.contains("Issue operations require a Git repository"), 
+            "Should contain Git repo error: {}", output.stderr);
+    assert!(output.stderr.contains("Issues are stored in .swissarmyhammer/issues/"), 
+            "Should mention issues directory: {}", output.stderr);
+    assert!(output.stderr.contains("branch management"), 
+            "Should mention branch management: {}", output.stderr);
 }
 
 /// Test that search commands require Git repository
-#[test]
-fn test_search_commands_require_git_repository() {
+#[tokio::test]
+async fn test_search_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["search", "index", "**/*.rs"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Search indexing require a Git repository",
-        ))
-        .stderr(predicate::str::contains(
-            "Search index is stored in .swissarmyhammer/semantic.db",
-        ));
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["search", "index", "**/*.rs"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+    
+    assert!(output.stderr.contains("Search indexing require a Git repository"), 
+            "Should contain Git repo error: {}", output.stderr);
+    assert!(output.stderr.contains("Search index is stored in .swissarmyhammer/semantic.db"), 
+            "Should mention search index location: {}", output.stderr);
 }
 
 /// Test that search query commands require Git repository
-#[test]
-fn test_search_query_requires_git_repository() {
+#[tokio::test]
+async fn test_search_query_requires_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["search", "query", "test"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Search operations require a Git repository",
-        ))
-        .stderr(predicate::str::contains(
-            "Search index is stored in .swissarmyhammer/semantic.db",
-        ));
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["search", "query", "test"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+    
+    assert!(output.stderr.contains("Search operations require a Git repository"), 
+            "Should contain Git repo error: {}", output.stderr);
+    assert!(output.stderr.contains("Search index is stored in .swissarmyhammer/semantic.db"), 
+            "Should mention search index location: {}", output.stderr);
 }
 
 /// Test error message format consistency
-#[test]
-fn test_error_message_format_consistency() {
+#[tokio::test]
+async fn test_error_message_format_consistency() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Test memo command error format
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    let output = cmd
-        .current_dir(temp_dir.path())
-        .args(["memo", "create", "test"])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let stderr = String::from_utf8_lossy(&output);
+    // Test memo command error format
+    let result = run_sah_command_in_process(&["memo", "create", "test"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+
+    let stderr = &output.stderr;
 
     // Check for consistent error format elements
     assert!(stderr.contains("❌"), "Error should start with ❌ icon");
@@ -118,8 +139,8 @@ fn test_error_message_format_consistency() {
 }
 
 /// Test that commands work correctly within Git repository
-#[test]
-fn test_commands_work_in_git_repository() {
+#[tokio::test]
+async fn test_commands_work_in_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Initialize git repository
@@ -133,92 +154,125 @@ fn test_commands_work_in_git_repository() {
     fs::create_dir_all(temp_dir.path().join(".swissarmyhammer"))
         .expect("Failed to create directory");
 
-    // Test that memo list command now works (or at least doesn't fail with Git repository error)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    let result = cmd
-        .current_dir(temp_dir.path())
-        .args(["memo", "list"])
-        .assert();
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
 
+    // Test that memo list command now works (or at least doesn't fail with Git repository error)
+    let result = run_sah_command_in_process(&["memo", "list"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
     // Should not contain Git repository requirement error
-    result.stderr(predicate::str::contains("require a Git repository").not());
+    assert!(!output.stderr.contains("require a Git repository"), 
+            "Should not have Git repo error: {}", output.stderr);
 }
 
 /// Test exit codes for Git repository errors
-#[test]
-fn test_git_repository_error_exit_codes() {
+#[tokio::test]
+async fn test_git_repository_error_exit_codes() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["memo", "list"])
-        .assert()
-        .code(2); // EXIT_ERROR
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["memo", "list"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_eq!(output.exit_code, 2, "Should exit with code 2 (EXIT_ERROR)");
 }
 
 /// Test that file commands don't require Git repository (should work)
-#[test]
-fn test_file_commands_work_without_git() {
+#[tokio::test]
+async fn test_file_commands_work_without_git() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Create a test file
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "Hello, world!").expect("Failed to create test file");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["file", "read", test_file.to_str().unwrap()])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Hello, world!"));
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap()]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_eq!(output.exit_code, 0, "Command should succeed. stderr: {}", output.stderr);
+    assert!(output.stdout.contains("Hello, world!"), 
+            "Should contain file content: {}", output.stdout);
 }
 
 /// Test that shell commands don't require Git repository
-#[test]
-fn test_shell_commands_work_without_git() {
+#[tokio::test]
+async fn test_shell_commands_work_without_git() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.current_dir(temp_dir.path())
-        .args(["shell", "execute", "echo test"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("test"));
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let result = run_sah_command_in_process(&["shell", "execute", "echo test"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_eq!(output.exit_code, 0, "Command should succeed. stderr: {}", output.stderr);
+    assert!(output.stdout.contains("test"), 
+            "Should contain echo output: {}", output.stdout);
 }
 
 /// Test that web search commands don't require Git repository
-#[test]
-fn test_web_search_works_without_git() {
+#[tokio::test]
+async fn test_web_search_works_without_git() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Note: This test might fail if web search is not available or has issues,
     // but it should not fail due to Git repository requirements
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    let result = cmd
-        .current_dir(temp_dir.path())
-        .args(["web-search", "search", "test"])
-        .assert();
+    
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
 
+    let result = run_sah_command_in_process(&["web-search", "search", "test"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
     // Should not contain Git repository requirement error
-    result.stderr(predicate::str::contains("require a Git repository").not());
+    assert!(!output.stderr.contains("require a Git repository"), 
+            "Should not have Git repo error: {}", output.stderr);
 }
 
 /// Test error message actionability
-#[test]
-fn test_error_messages_are_actionable() {
+#[tokio::test]
+async fn test_error_messages_are_actionable() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    let output = cmd
-        .current_dir(temp_dir.path())
-        .args(["issue", "create", "test"])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let stderr = String::from_utf8_lossy(&output);
+    let result = run_sah_command_in_process(&["issue", "create", "test"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+
+    let stderr = &output.stderr;
 
     // Check that error messages provide actionable solutions
     assert!(
@@ -240,21 +294,23 @@ fn test_error_messages_are_actionable() {
 }
 
 /// Test error context preservation
-#[test]
-fn test_error_context_preservation() {
+#[tokio::test]
+async fn test_error_context_preservation() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    let output = cmd
-        .current_dir(temp_dir.path())
-        .args(["memo", "get", "invalid_id"])
-        .assert()
-        .failure()
-        .get_output()
-        .stderr
-        .clone();
+    // Save current directory and change to temp directory
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let stderr = String::from_utf8_lossy(&output);
+    let result = run_sah_command_in_process(&["memo", "get", "invalid_id"]).await;
+    
+    // Restore original directory
+    std::env::set_current_dir(original_dir).unwrap();
+    
+    let output = result.unwrap();
+    assert_ne!(output.exit_code, 0, "Command should fail");
+
+    let stderr = &output.stderr;
 
     // Should contain Git repository error, not invalid ID error, since Git check happens first
     assert!(
