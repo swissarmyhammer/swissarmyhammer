@@ -126,9 +126,10 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_config_new() {
-        // Clean up any environment variables from other tests
+        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+
+        // Clean up any environment variables that could affect this test
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH");
         std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY");
@@ -161,17 +162,18 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_config_with_env_vars() {
-        // Save original env vars if they exist
-        let orig_prefix = std::env::var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX").ok();
-        let orig_width = std::env::var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH").ok();
-        let orig_max_pending = std::env::var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY").ok();
-        let orig_max_number = std::env::var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER").ok();
-        let orig_digits = std::env::var("SWISSARMYHAMMER_ISSUE_NUMBER_DIGITS").ok();
-        let orig_virtual_base = std::env::var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_BASE").ok();
-        let orig_virtual_range = std::env::var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_RANGE").ok();
-        let orig_default_content = std::env::var("SWISSARMYHAMMER_DEFAULT_ISSUE_CONTENT").ok();
+        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+
+        // Clean up any environment variables first
+        std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
+        std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH");
+        std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY");
+        std::env::remove_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER");
+        std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_DIGITS");
+        std::env::remove_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_BASE");
+        std::env::remove_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_RANGE");
+        std::env::remove_var("SWISSARMYHAMMER_DEFAULT_ISSUE_CONTENT");
 
         // Set test values
         std::env::set_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX", "feature/");
@@ -200,38 +202,14 @@ mod tests {
             "# Test Issue\n\nTest content here."
         );
 
-        // Restore original env vars or remove if they didn't exist
-        match orig_prefix {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX"),
-        }
-        match orig_width {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH"),
-        }
-        match orig_max_pending {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY"),
-        }
-        match orig_max_number {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER"),
-        }
-        match orig_digits {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_ISSUE_NUMBER_DIGITS", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_DIGITS"),
-        }
-        match orig_virtual_base {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_BASE", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_BASE"),
-        }
-        match orig_virtual_range {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_RANGE", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_RANGE"),
-        }
-        match orig_default_content {
-            Some(val) => std::env::set_var("SWISSARMYHAMMER_DEFAULT_ISSUE_CONTENT", val),
-            None => std::env::remove_var("SWISSARMYHAMMER_DEFAULT_ISSUE_CONTENT"),
-        }
+        // Clean up the environment variables we set
+        std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
+        std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_WIDTH");
+        std::env::remove_var("SWISSARMYHAMMER_MAX_PENDING_ISSUES_IN_SUMMARY");
+        std::env::remove_var("SWISSARMYHAMMER_MAX_ISSUE_NUMBER");
+        std::env::remove_var("SWISSARMYHAMMER_ISSUE_NUMBER_DIGITS");
+        std::env::remove_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_BASE");
+        std::env::remove_var("SWISSARMYHAMMER_VIRTUAL_ISSUE_NUMBER_RANGE");
+        std::env::remove_var("SWISSARMYHAMMER_DEFAULT_ISSUE_CONTENT");
     }
 }

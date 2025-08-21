@@ -897,6 +897,7 @@ for = "invalid_reserved_name"
 
     #[test]
     fn test_load_shell_config_defaults() -> Result<(), Box<dyn std::error::Error>> {
+        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         let loader = ConfigurationLoader::new()?.with_validation(false);
         let config = loader.load_shell_config()?;
 
@@ -1118,11 +1119,16 @@ truncation_strategy = "invalid_strategy"
 
     #[test]
     fn test_invalid_env_values() -> Result<(), Box<dyn std::error::Error>> {
-        use crate::test_utils::IsolatedTestHome;
+        use crate::test_utils::IsolatedTestEnvironment;
         use std::env;
 
-        // Use isolated test home to avoid interfering with other tests
-        let _guard = IsolatedTestHome::new();
+        // Use isolated test environment to avoid interfering with other tests
+        let _guard = IsolatedTestEnvironment::new().unwrap();
+
+        // Clean up any existing environment variables first
+        env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
+        env::remove_var("SAH_SHELL_AUDIT_LOG_LEVEL");
+        env::remove_var("SAH_SHELL_OUTPUT_MAX_OUTPUT_SIZE");
 
         // Test invalid boolean value
         env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", "maybe");
@@ -1130,12 +1136,14 @@ truncation_strategy = "invalid_strategy"
         let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
         assert!(result.is_err());
 
-        // Test invalid log level
+        // Clean up and test invalid log level
+        env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
         env::set_var("SAH_SHELL_AUDIT_LOG_LEVEL", "invalid_level");
         let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
         assert!(result.is_err());
 
-        // Test invalid size format
+        // Clean up and test invalid size format
+        env::remove_var("SAH_SHELL_AUDIT_LOG_LEVEL");
         env::set_var("SAH_SHELL_OUTPUT_MAX_SIZE", "invalid_size");
         let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
         assert!(result.is_err());
