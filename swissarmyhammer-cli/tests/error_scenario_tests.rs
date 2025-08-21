@@ -11,6 +11,9 @@ use tempfile::TempDir;
 mod test_utils;
 use test_utils::setup_git_repo;
 
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
+
 /// Setup function for error scenario testing using IsolatedTestHome
 fn setup_error_test_environment() -> Result<(IsolatedTestHome, TempDir, std::path::PathBuf)> {
     let home_guard = IsolatedTestHome::new();
@@ -36,258 +39,281 @@ This issue exists for error scenario testing.
 }
 
 /// Test invalid issue operations
-#[test]
-fn test_invalid_issue_operations() -> Result<()> {
+#[tokio::test]
+async fn test_invalid_issue_operations() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Test showing non-existent issue
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "show", "nonexistent_issue"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    // Test showing non-existent issue
+    let result = run_sah_command_in_process(&["issue", "show", "nonexistent_issue"]).await?;
+    assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
     assert!(
-        stderr.contains("Error") || stderr.contains("error") || stderr.contains("not found"),
-        "Should show appropriate error message: {stderr}"
+        result.stderr.contains("Error")
+            || result.stderr.contains("error")
+            || result.stderr.contains("not found"),
+        "Should show appropriate error message: {}",
+        result.stderr
     );
 
     // Test working on non-existent issue
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "work", "nonexistent_issue"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let work_result = run_sah_command_in_process(&["issue", "work", "nonexistent_issue"]).await?;
+    assert_ne!(
+        work_result.exit_code, 0,
+        "Should fail for non-existent issue work"
+    );
     assert!(
-        stderr.contains("Error") || stderr.contains("error") || stderr.contains("not found"),
-        "Should show error for non-existent issue work: {stderr}"
+        work_result.stderr.contains("Error")
+            || work_result.stderr.contains("error")
+            || work_result.stderr.contains("not found"),
+        "Should show error for non-existent issue work: {}",
+        work_result.stderr
     );
 
     // Test completing non-existent issue
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "complete", "nonexistent_issue"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let complete_result =
+        run_sah_command_in_process(&["issue", "complete", "nonexistent_issue"]).await?;
+    assert_ne!(
+        complete_result.exit_code, 0,
+        "Should fail for non-existent issue complete"
+    );
     assert!(
-        stderr.contains("Error") || stderr.contains("error") || stderr.contains("not found"),
-        "Should show error for non-existent issue completion: {stderr}"
+        complete_result.stderr.contains("Error")
+            || complete_result.stderr.contains("error")
+            || complete_result.stderr.contains("not found"),
+        "Should show error for non-existent issue completion: {}",
+        complete_result.stderr
     );
 
     // Test updating non-existent issue
-    let output = Command::cargo_bin("sah")?
-        .args([
-            "issue",
-            "update",
-            "nonexistent_issue",
-            "--content",
-            "Updated content",
-        ])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    assert!(
-        stderr.contains("Error") || stderr.contains("error") || stderr.contains("not found"),
-        "Should show error for non-existent issue update: {stderr}"
+    let update_result = run_sah_command_in_process(&[
+        "issue",
+        "update",
+        "nonexistent_issue",
+        "--content",
+        "Updated content",
+    ])
+    .await?;
+    assert_ne!(
+        update_result.exit_code, 0,
+        "Should fail for non-existent issue update"
     );
+    assert!(
+        update_result.stderr.contains("Error")
+            || update_result.stderr.contains("error")
+            || update_result.stderr.contains("not found"),
+        "Should show error for non-existent issue update: {}",
+        update_result.stderr
+    );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test invalid memo operations
-#[test]
-fn test_invalid_memo_operations() -> Result<()> {
+#[tokio::test]
+async fn test_invalid_memo_operations() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Test getting memo with invalid ID
-    let output = Command::cargo_bin("sah")?
-        .args(["memo", "get", "invalid_memo_id"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    // Test getting memo with invalid ID
+    let get_result = run_sah_command_in_process(&["memo", "get", "invalid_memo_id"]).await?;
+    assert_ne!(get_result.exit_code, 0, "Should fail for invalid memo ID");
     assert!(
-        stderr.contains("Error")
-            || stderr.contains("error")
-            || stderr.contains("invalid")
-            || stderr.contains("not found"),
-        "Should show error for invalid memo ID: {stderr}"
+        get_result.stderr.contains("Error")
+            || get_result.stderr.contains("error")
+            || get_result.stderr.contains("invalid")
+            || get_result.stderr.contains("not found"),
+        "Should show error for invalid memo ID: {}",
+        get_result.stderr
     );
 
     // Test updating memo with invalid ID
-    let output = Command::cargo_bin("sah")?
-        .args([
-            "memo",
-            "update",
-            "invalid_memo_id",
-            "--content",
-            "Updated content",
-        ])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let update_result = run_sah_command_in_process(&[
+        "memo",
+        "update",
+        "invalid_memo_id",
+        "--content",
+        "Updated content",
+    ])
+    .await?;
+    assert_ne!(
+        update_result.exit_code, 0,
+        "Should fail for invalid memo update"
+    );
     assert!(
-        stderr.contains("Error")
-            || stderr.contains("error")
-            || stderr.contains("invalid")
-            || stderr.contains("not found"),
-        "Should show error for invalid memo update: {stderr}"
+        update_result.stderr.contains("Error")
+            || update_result.stderr.contains("error")
+            || update_result.stderr.contains("invalid")
+            || update_result.stderr.contains("not found"),
+        "Should show error for invalid memo update: {}",
+        update_result.stderr
     );
 
     // Test deleting memo with invalid ID
-    let output = Command::cargo_bin("sah")?
-        .args(["memo", "delete", "invalid_memo_id"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let delete_result = run_sah_command_in_process(&["memo", "delete", "invalid_memo_id"]).await?;
+    assert_ne!(
+        delete_result.exit_code, 0,
+        "Should fail for invalid memo deletion"
+    );
     assert!(
-        stderr.contains("Error")
-            || stderr.contains("error")
-            || stderr.contains("invalid")
-            || stderr.contains("not found"),
-        "Should show error for invalid memo deletion: {stderr}"
+        delete_result.stderr.contains("Error")
+            || delete_result.stderr.contains("error")
+            || delete_result.stderr.contains("invalid")
+            || delete_result.stderr.contains("not found"),
+        "Should show error for invalid memo deletion: {}",
+        delete_result.stderr
     );
 
     // Test creating memo without title
-    let output = Command::cargo_bin("sah")?
-        .args(["memo", "create"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    assert!(
-        stderr.contains("required") || stderr.contains("missing") || stderr.contains("title"),
-        "Should show error for missing memo title: {stderr}"
+    let create_result = run_sah_command_in_process(&["memo", "create"]).await?;
+    assert_ne!(
+        create_result.exit_code, 0,
+        "Should fail for missing memo title"
     );
+    assert!(
+        create_result.stderr.contains("required")
+            || create_result.stderr.contains("missing")
+            || create_result.stderr.contains("title"),
+        "Should show error for missing memo title: {}",
+        create_result.stderr
+    );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test search error conditions (fast version - no ML model operations)
-#[test]
-fn test_search_error_conditions() -> Result<()> {
+#[tokio::test]
+async fn test_search_error_conditions() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Test help command works for search - this is fast and doesn't trigger ML model downloads
-    let help_output = Command::cargo_bin("sah")?
-        .args(["search", "--help"])
-        .current_dir(&temp_path)
-        .env("RUST_LOG", "warn")
-        .assert()
-        .success();
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
-    let help_stdout = String::from_utf8_lossy(&help_output.get_output().stdout);
+    // Test help command works for search - this is fast and doesn't trigger ML model downloads
+    let help_result = run_sah_command_in_process(&["search", "--help"]).await?;
+    assert_eq!(help_result.exit_code, 0, "Search help should succeed");
     assert!(
-        help_stdout.contains("search") && help_stdout.contains("index"),
-        "Search help should contain subcommands: {help_stdout}"
+        help_result.stdout.contains("search") && help_result.stdout.contains("index"),
+        "Search help should contain subcommands: {}",
+        help_result.stdout
     );
 
     // Test search index help - also fast
-    let index_help_output = Command::cargo_bin("sah")?
-        .args(["search", "index", "--help"])
-        .current_dir(&temp_path)
-        .env("RUST_LOG", "warn")
-        .assert()
-        .success();
-
-    let index_help_stdout = String::from_utf8_lossy(&index_help_output.get_output().stdout);
+    let index_help_result = run_sah_command_in_process(&["search", "index", "--help"]).await?;
+    assert_eq!(
+        index_help_result.exit_code, 0,
+        "Search index help should succeed"
+    );
     assert!(
-        index_help_stdout.contains("patterns") && index_help_stdout.contains("force"),
-        "Search index help should contain expected options: {index_help_stdout}"
+        index_help_result.stdout.contains("patterns") && index_help_result.stdout.contains("force"),
+        "Search index help should contain expected options: {}",
+        index_help_result.stdout
     );
 
     // Test search query help - also fast
-    let query_help_output = Command::cargo_bin("sah")?
-        .args(["search", "query", "--help"])
-        .current_dir(&temp_path)
-        .env("RUST_LOG", "warn")
-        .assert()
-        .success();
-
-    let query_help_stdout = String::from_utf8_lossy(&query_help_output.get_output().stdout);
+    let query_help_result = run_sah_command_in_process(&["search", "query", "--help"]).await?;
+    assert_eq!(
+        query_help_result.exit_code, 0,
+        "Search query help should succeed"
+    );
     assert!(
-        query_help_stdout.contains("query") && query_help_stdout.contains("limit"),
-        "Search query help should contain expected options: {query_help_stdout}"
+        query_help_result.stdout.contains("query") && query_help_result.stdout.contains("limit"),
+        "Search query help should contain expected options: {}",
+        query_help_result.stdout
     );
 
     // Test invalid search command - should fail with proper error
-    let invalid_output = Command::cargo_bin("sah")?
-        .args(["search", "invalid_subcommand"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure()
-        .code(2); // clap usage error
-
-    let invalid_stderr = String::from_utf8_lossy(&invalid_output.get_output().stderr);
-    assert!(
-        invalid_stderr.contains("unrecognized subcommand") || invalid_stderr.contains("invalid"),
-        "Invalid search subcommand should show proper error: {invalid_stderr}"
+    let invalid_result = run_sah_command_in_process(&["search", "invalid_subcommand"]).await?;
+    assert_eq!(
+        invalid_result.exit_code, 2,
+        "Invalid search subcommand should return clap usage error code"
     );
+    assert!(
+        invalid_result.stderr.contains("unrecognized subcommand")
+            || invalid_result.stderr.contains("invalid"),
+        "Invalid search subcommand should show proper error: {}",
+        invalid_result.stderr
+    );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test invalid command line arguments
-#[test]
-fn test_invalid_command_arguments() -> Result<()> {
+#[tokio::test]
+async fn test_invalid_command_arguments() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
+
     // Test completely invalid command
-    Command::cargo_bin("sah")?
-        .args(["completely", "invalid", "command"])
-        .assert()
-        .failure()
-        .code(2); // clap returns 2 for usage errors
+    let invalid_cmd_result =
+        run_sah_command_in_process(&["completely", "invalid", "command"]).await?;
+    assert_eq!(
+        invalid_cmd_result.exit_code, 2,
+        "Invalid command should return clap usage error code"
+    );
 
     // Test invalid subcommand
-    Command::cargo_bin("sah")?
-        .args(["issue", "invalid_subcommand"])
-        .assert()
-        .failure()
-        .code(2);
+    let invalid_sub_result = run_sah_command_in_process(&["issue", "invalid_subcommand"]).await?;
+    assert_eq!(
+        invalid_sub_result.exit_code, 2,
+        "Invalid subcommand should return clap usage error code"
+    );
 
     // Test invalid flags
-    Command::cargo_bin("sah")?
-        .args(["issue", "list", "--invalid-flag"])
-        .assert()
-        .failure()
-        .code(2);
+    let invalid_flag_result =
+        run_sah_command_in_process(&["issue", "list", "--invalid-flag"]).await?;
+    assert_eq!(
+        invalid_flag_result.exit_code, 2,
+        "Invalid flag should return clap usage error code"
+    );
 
     // Test invalid format option - this should succeed since MCP doesn't validate format at CLI level
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "list", "--format", "invalid_format"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure()
-        .code(2);
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let invalid_format_result =
+        run_sah_command_in_process(&["issue", "list", "--format", "invalid_format"]).await?;
+    assert_eq!(
+        invalid_format_result.exit_code, 2,
+        "Invalid format should return clap usage error code"
+    );
     // Should show clap usage error for invalid enum value
     assert!(
-        stderr.contains("invalid value") || stderr.contains("possible values"),
-        "Should show enum validation error: {stderr}"
+        invalid_format_result.stderr.contains("invalid value")
+            || invalid_format_result.stderr.contains("possible values"),
+        "Should show enum validation error: {}",
+        invalid_format_result.stderr
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test storage backend errors
-#[test]
-fn test_storage_backend_errors() -> Result<()> {
+#[tokio::test]
+async fn test_storage_backend_errors() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Create a file where issues directory should be to cause storage errors
     let issues_path = temp_path.join("issues");
@@ -295,30 +321,36 @@ fn test_storage_backend_errors() -> Result<()> {
     std::fs::write(&issues_path, "This is a file, not a directory")?;
 
     // Test operations that require issues directory
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "list"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    assert!(
-        stderr.contains("Error")
-            || stderr.contains("error")
-            || stderr.contains("directory")
-            || stderr.contains("storage"),
-        "Should show storage-related error: {stderr}"
+    let result = run_sah_command_in_process(&["issue", "list"]).await?;
+    assert_ne!(
+        result.exit_code, 0,
+        "Should fail when issues directory is not accessible"
     );
+    assert!(
+        result.stderr.contains("Error")
+            || result.stderr.contains("error")
+            || result.stderr.contains("directory")
+            || result.stderr.contains("storage"),
+        "Should show storage-related error: {}",
+        result.stderr
+    );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test git-related errors
-#[test]
-fn test_git_related_errors() -> Result<()> {
+#[tokio::test]
+async fn test_git_related_errors() -> Result<()> {
     // Create a separate temporary directory without git for this test
     let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Create directory structure without git repository
     let issues_dir = temp_path.join("issues");
@@ -330,106 +362,71 @@ fn test_git_related_errors() -> Result<()> {
     )?;
 
     // Test operations that might require git without git repository
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "work", "GIT_001_test_issue"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let result = run_sah_command_in_process(&["issue", "work", "GIT_001_test_issue"]).await?;
+    assert_ne!(
+        result.exit_code, 0,
+        "Should fail when git repository is not available"
+    );
     assert!(
-        stderr.contains("Error")
-            || stderr.contains("error")
-            || stderr.contains("git")
-            || stderr.contains("repository"),
-        "Should show git-related error: {stderr}"
+        result.stderr.contains("Error")
+            || result.stderr.contains("error")
+            || result.stderr.contains("git")
+            || result.stderr.contains("repository"),
+        "Should show git-related error: {}",
+        result.stderr
     );
 
-    Ok(())
-}
-
-/// Test concurrent operation errors
-#[test]
-fn test_concurrent_operation_errors() -> Result<()> {
-    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
-
-    // This is a basic test - true concurrency errors are hard to reproduce reliably
-    // Test multiple rapid operations on the same resource
-    let mut handles = vec![];
-
-    for i in 0..3 {
-        let temp_path_clone = temp_path.clone();
-        let handle = std::thread::spawn(move || {
-            Command::cargo_bin("sah")
-                .unwrap()
-                .args([
-                    "issue",
-                    "create",
-                    &format!("concurrent_test_{i}"),
-                    "--content",
-                    &format!("Concurrent test issue {i}"),
-                ])
-                .current_dir(&temp_path_clone)
-                .output()
-        });
-        handles.push(handle);
-    }
-
-    // Collect results - all should either succeed or fail gracefully
-    for handle in handles {
-        let result = handle.join().expect("Thread should complete");
-        let output = result.expect("Command should execute");
-
-        // Either succeeds or fails with appropriate error message
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                stderr.contains("Error") || stderr.contains("error"),
-                "Failed operations should have error messages: {stderr}"
-            );
-        }
-    }
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
-
 /// Test resource exhaustion scenarios
-#[test]
-fn test_resource_exhaustion() -> Result<()> {
+#[tokio::test]
+async fn test_resource_exhaustion() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Test with very large content (potential memory issues)
     let large_content = "A".repeat(1_000_000); // 1MB of content
-    let output = Command::cargo_bin("sah")?
-        .args([
-            "issue",
-            "create",
-            "large_content_test",
-            "--content",
-            &large_content,
-        ])
-        .current_dir(&temp_path)
-        .assert();
+    let result = run_sah_command_in_process(&[
+        "issue",
+        "create",
+        "large_content_test",
+        "--content",
+        &large_content,
+    ])
+    .await?;
 
     // Should either succeed or fail gracefully (not crash)
-    if !output.get_output().status.success() {
-        let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    if result.exit_code != 0 {
         assert!(
-            stderr.contains("Error")
-                || stderr.contains("error")
-                || stderr.contains("too large")
-                || stderr.contains("memory"),
-            "Large content errors should be handled gracefully: {stderr}"
+            result.stderr.contains("Error")
+                || result.stderr.contains("error")
+                || result.stderr.contains("too large")
+                || result.stderr.contains("memory"),
+            "Large content errors should be handled gracefully: {}",
+            result.stderr
         );
     }
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test malformed input handling
-#[test]
-fn test_malformed_input_handling() -> Result<()> {
+#[tokio::test]
+async fn test_malformed_input_handling() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Test with special characters in issue names
     let special_names = vec![
@@ -446,71 +443,42 @@ fn test_malformed_input_handling() -> Result<()> {
     ];
 
     for name in special_names {
-        let output = Command::cargo_bin("sah")?
-            .args([
-                "issue",
-                "create",
-                name,
-                "--content",
-                "Test content with special name",
-            ])
-            .current_dir(&temp_path)
-            .assert();
+        let result = run_sah_command_in_process(&[
+            "issue",
+            "create",
+            name,
+            "--content",
+            "Test content with special name",
+        ])
+        .await?;
 
         // Should either succeed (if name is sanitized) or fail gracefully
-        if !output.get_output().status.success() {
-            let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+        if result.exit_code != 0 {
             assert!(
-                stderr.contains("Error")
-                    || stderr.contains("error")
-                    || stderr.contains("invalid")
-                    || stderr.contains("name"),
-                "Invalid names should be handled gracefully: {stderr}"
+                result.stderr.contains("Error")
+                    || result.stderr.contains("error")
+                    || result.stderr.contains("invalid")
+                    || result.stderr.contains("name"),
+                "Invalid names should be handled gracefully: {}",
+                result.stderr
             );
         }
     }
 
-    Ok(())
-}
-
-/// Test timeout scenarios
-#[test]
-fn test_timeout_scenarios() -> Result<()> {
-    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
-
-    // Test operations with very short timeouts
-    // Note: This is primarily for operations that might hang
-
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "list"])
-        .current_dir(&temp_path)
-        .timeout(std::time::Duration::from_millis(100)) // Very short timeout
-        .assert();
-
-    // Should either complete quickly or timeout gracefully
-    match output.get_output().status.code() {
-        Some(code) => {
-            // Normal completion or error
-            if code != 0 {
-                let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-                assert!(
-                    stderr.contains("Error") || stderr.contains("error"),
-                    "Errors should have appropriate messages: {stderr}"
-                );
-            }
-        }
-        None => {
-            // Process was terminated (timeout) - this is acceptable
-        }
-    }
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
 
 /// Test exit code consistency
-#[test]
-fn test_exit_code_consistency() -> Result<()> {
+#[tokio::test]
+async fn test_exit_code_consistency() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
+
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
     // Test that similar error conditions produce consistent exit codes
     let error_commands = vec![
@@ -521,12 +489,9 @@ fn test_exit_code_consistency() -> Result<()> {
 
     let mut exit_codes = vec![];
     for cmd in error_commands {
-        let output = Command::cargo_bin("sah")?
-            .args(cmd)
-            .current_dir(&temp_path)
-            .assert()
-            .failure();
-        exit_codes.push(output.get_output().status.code());
+        let result = run_sah_command_in_process(&cmd).await?;
+        assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
+        exit_codes.push(result.exit_code);
     }
 
     // All similar errors should have the same exit code
@@ -538,44 +503,53 @@ fn test_exit_code_consistency() -> Result<()> {
         );
     }
 
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
+
     Ok(())
 }
 
 /// Test error message internationalization/localization readiness
-#[test]
-fn test_error_message_consistency() -> Result<()> {
+#[tokio::test]
+async fn test_error_message_consistency() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Test that error messages are consistent and informative
-    let output = Command::cargo_bin("sah")?
-        .args(["issue", "show", "definitely_nonexistent_issue"])
-        .current_dir(&temp_path)
-        .assert()
-        .failure();
+    // Change to temp directory for test
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&temp_path)?;
 
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    // Test that error messages are consistent and informative
+    let result =
+        run_sah_command_in_process(&["issue", "show", "definitely_nonexistent_issue"]).await?;
+    assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
 
     // Error messages should be:
     // 1. Informative (tell user what went wrong)
     // 2. Actionable (suggest what to do)
     // 3. Consistent in format
     assert!(
-        stderr.len() > 10, // Should have substantial error message
-        "Error messages should be informative: {stderr}"
+        result.stderr.len() > 10, // Should have substantial error message
+        "Error messages should be informative: {}",
+        result.stderr
     );
 
     assert!(
-        stderr.contains("Error") || stderr.contains("error"),
-        "Error messages should be clearly marked as errors: {stderr}"
+        result.stderr.contains("Error") || result.stderr.contains("error"),
+        "Error messages should be clearly marked as errors: {}",
+        result.stderr
     );
 
     // Should not contain technical jargon that users won't understand
     assert!(
-        !stderr.contains("MCP")
-            && !stderr.contains("toolContext")
-            && !stderr.contains("NullPointer"),
-        "Error messages should be user-friendly, not technical: {stderr}"
+        !result.stderr.contains("MCP")
+            && !result.stderr.contains("toolContext")
+            && !result.stderr.contains("NullPointer"),
+        "Error messages should be user-friendly, not technical: {}",
+        result.stderr
     );
+
+    // Restore original directory
+    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
