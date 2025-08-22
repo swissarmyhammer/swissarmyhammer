@@ -143,6 +143,7 @@ impl Default for ConfigProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -198,6 +199,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_discovered_config_files_nonexistent() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -219,6 +221,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_discovered_config_files_with_toml() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
@@ -256,6 +259,7 @@ number_key = 42
     }
 
     #[test]
+    #[serial]
     fn test_load_discovered_config_files_with_yaml() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
@@ -293,6 +297,7 @@ number_key: 42
     }
 
     #[test]
+    #[serial]
     fn test_load_discovered_config_files_with_json() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
@@ -332,6 +337,7 @@ number_key: 42
     }
 
     #[test]
+    #[serial]
     fn test_precedence_order() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");

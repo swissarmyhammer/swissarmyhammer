@@ -1,10 +1,12 @@
 //! Tests for configuration precedence order
 
 use crate::ConfigProvider;
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
 #[test]
+#[serial]
 fn test_environment_overrides_files() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -61,6 +63,7 @@ database_host = "file-db.example.com"
 }
 
 #[test]
+#[serial]
 fn test_project_overrides_global() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -111,6 +114,7 @@ shared_setting = "project_value"
 }
 
 #[test]
+#[serial]
 fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -156,6 +160,7 @@ fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
 }
 
 #[test]
+#[serial]
 fn test_file_format_precedence_within_same_source() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -210,6 +215,7 @@ yaml_only: from_yaml
 }
 
 #[test]
+#[serial]
 fn test_full_precedence_chain() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();

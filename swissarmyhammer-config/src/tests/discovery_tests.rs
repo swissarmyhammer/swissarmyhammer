@@ -1,10 +1,12 @@
 //! Comprehensive tests for the configuration file discovery system
 
 use crate::discovery::{ConfigFormat, ConfigScope, FileDiscovery};
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
 #[test]
+#[serial]
 fn test_file_discovery_integration() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -258,6 +260,7 @@ fn test_edge_cases() {
 }
 
 #[test]
+#[serial]
 fn test_real_directory_detection() {
     // This tests the actual directory resolution methods
     let original_dir = std::env::current_dir().unwrap();
