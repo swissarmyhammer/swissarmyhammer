@@ -3,7 +3,6 @@ mod cli;
 mod completions;
 pub mod config;
 mod doctor;
-mod dynamic_cli;
 mod error;
 mod exit_codes;
 mod file;
@@ -17,7 +16,6 @@ mod migrate;
 mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
 mod prompt;
-mod schema_conversion;
 mod search;
 mod shell;
 mod signal_handler;

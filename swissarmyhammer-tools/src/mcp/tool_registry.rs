@@ -517,7 +517,7 @@ impl ToolRegistry {
             .values()
             .filter(|tool| {
                 !tool.hidden_from_cli()
-                    && tool.cli_category().map_or(false, |cat| cat == category)
+                    && (tool.cli_category() == Some(category))
             })
             .map(|tool| tool.as_ref())
             .collect()
