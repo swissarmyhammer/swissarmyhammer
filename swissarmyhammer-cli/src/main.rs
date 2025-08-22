@@ -22,9 +22,6 @@ mod list;
 mod logging;
 mod mcp_integration;
 #[cfg(not(feature = "dynamic-cli"))]
-
-
-#[cfg(not(feature = "dynamic-cli"))]
 mod migrate;
 #[cfg(not(feature = "dynamic-cli"))]
 mod parameter_cli;
