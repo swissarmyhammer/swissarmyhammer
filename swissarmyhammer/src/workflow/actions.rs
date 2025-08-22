@@ -3,7 +3,6 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
-use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
 };
@@ -14,6 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use swissarmyhammer_config::compat;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -1777,7 +1777,7 @@ pub fn parse_action_from_description_with_context(
 
     // Load and merge sah.toml configuration variables into the context
     // This uses the existing template integration infrastructure
-    if let Err(e) = sah_config::load_and_merge_repo_config(&mut enhanced_context) {
+    if let Err(e) = compat::load_and_merge_repo_config(&mut enhanced_context) {
         tracing::debug!(
             "Failed to load sah.toml configuration: {}. Continuing without config variables.",
             e
@@ -2518,10 +2518,10 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_with_working_directory() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a unique temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let temp_path = temp_dir.path();
 
         let action = ShellAction::new("pwd".to_string())

@@ -483,9 +483,9 @@ mod tests {
     #[test]
     fn test_virtual_file_system_load_directory() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let prompts_dir = temp_dir.path().join("prompts");
         fs::create_dir_all(&prompts_dir).unwrap();
 

@@ -6,7 +6,6 @@
 use crate::toml_config::*;
 use std::fs;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 
 /// Test performance characteristics of configuration operations
 mod perf_tests {
@@ -35,7 +34,7 @@ mod perf_tests {
 
     #[test]
     fn test_large_file_performance() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("large_config.toml");
 
         // Create a large but valid configuration file

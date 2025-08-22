@@ -340,10 +340,10 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_start_stop() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
 
@@ -401,10 +401,10 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_custom_config() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
 
@@ -442,10 +442,10 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_drop() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.md"), "test").unwrap();
@@ -475,13 +475,13 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_restart() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Use isolated test environment for directory changes
         let _guard = IsolatedTestEnvironment::new().unwrap();
 
         // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.yml"), "name: test").unwrap();
@@ -580,10 +580,10 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_simple_start() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.md"), "test prompt").unwrap();
@@ -605,10 +605,10 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_error_callback() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a temporary directory for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.yaml"), "name: test").unwrap();

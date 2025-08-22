@@ -767,7 +767,7 @@ impl ConflictSeverity {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_content_summary_empty() {
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_create_content_signature_empty() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir(&swissarmyhammer_dir).unwrap();
 
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_analyze_swissarmyhammer_content_empty() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir(&swissarmyhammer_dir).unwrap();
 
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn test_analyze_swissarmyhammer_content_with_files() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir(&swissarmyhammer_dir).unwrap();
 
@@ -863,7 +863,7 @@ mod tests {
 
     #[test]
     fn test_scan_existing_directories_no_git_repos() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Create orphaned .swissarmyhammer directory
         let orphaned_dir = temp_dir.path().join("project").join(".swissarmyhammer");
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_scan_existing_directories_with_git_repo() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).unwrap();
 
@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_scan_detects_nested_swissarmyhammer_conflict() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).unwrap();
 
@@ -935,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_validate_migration_safety_no_git_repo() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let non_repo_path = temp_dir.path().join("not-a-repo");
         fs::create_dir(&non_repo_path).unwrap();
 
@@ -949,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_validate_migration_safety_clean_repo() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).unwrap();
 
@@ -972,7 +972,7 @@ mod tests {
 
     #[test]
     fn test_validate_migration_safety_with_existing_target() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).unwrap();
 
@@ -994,7 +994,7 @@ mod tests {
 
     #[test]
     fn test_validate_migration_safety_with_sources() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).unwrap();
 
@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn test_migration_plan_duration_estimation() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path().join("repo");
         fs::create_dir(&repo_path).unwrap();
 

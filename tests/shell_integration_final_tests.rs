@@ -8,11 +8,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_config::compat::{
+    loader::ConfigurationLoader,
+    types::{ShellToolConfig, ShellSecurityConfig, ShellExecutionConfig, ShellOutputConfig, ShellAuditConfig, TruncationStrategy},
+};
 use swissarmyhammer::{
-    sah_config::{
-        loader::ConfigurationLoader,
-        types::{ShellToolConfig, ShellSecurityConfig, ShellExecutionConfig, ShellOutputConfig, ShellAuditConfig, TruncationStrategy},
-    },
     shell_security::{CommandValidator, SecurityPolicy},
     workflow::{
         context::WorkflowContext,

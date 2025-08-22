@@ -444,9 +444,51 @@ impl IsolatedTestEnvironment {
 /// Create a temporary directory for testing
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
-/// better error handling and consistent behavior across tests.
+/// better error handling and consistent behavior across tests. Includes retry
+/// logic to handle parallel test execution scenarios.
 pub fn create_temp_dir() -> TempDir {
-    TempDir::new().expect("Failed to create temporary directory for test")
+    create_temp_dir_with_retry()
+}
+
+/// Create a temporary directory with retry logic for parallel test execution
+///
+/// This function attempts to create a temporary directory up to 3 times with
+/// exponential backoff to handle filesystem contention during parallel test execution.
+/// This is the robust replacement for TempDir::new().unwrap() throughout the codebase.
+pub fn create_temp_dir_with_retry() -> TempDir {
+    // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
+    for attempt in 1..=3 {
+        match TempDir::new() {
+            Ok(dir) => return dir,
+            Err(_) if attempt < 3 => {
+                // Add small delay before retry to reduce contention
+                std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                continue;
+            }
+            Err(e) => panic!(
+                "Failed to create temporary directory for test after 3 attempts: {}",
+                e
+            ),
+        }
+    }
+    unreachable!()
+}
+
+/// Macro to create a temporary directory with retry logic
+///
+/// This replaces `TempDir::new().unwrap()` calls throughout the codebase
+/// with a robust version that handles parallel test execution.
+///
+/// # Example
+/// ```no_run
+/// # use swissarmyhammer::test_utils::temp_dir_with_retry;
+/// let temp_dir = temp_dir_with_retry!();
+/// ```
+#[macro_export]
+macro_rules! temp_dir_with_retry {
+    () => {
+        $crate::test_utils::create_temp_dir_with_retry()
+    };
 }
 
 /// Create a set of standard test prompts for testing

@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::{Duration, Instant};
+use swissarmyhammer_config::compat;
 
 /// Tool for performing web searches using DuckDuckGo web scraping
 #[derive(Default)]
@@ -42,7 +43,7 @@ impl WebSearchTool {
     where
         F: FnOnce(&mut T, &swissarmyhammer::Configuration),
     {
-        if let Ok(Some(repo_config)) = swissarmyhammer::sah_config::load_repo_config_for_cli() {
+        if let Ok(Some(repo_config)) = compat::load_repo_config_for_cli() {
             configure_fn(&mut config, &repo_config);
         }
         config

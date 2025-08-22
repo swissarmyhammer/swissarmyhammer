@@ -186,11 +186,11 @@ pub fn parse_toml_string(contents: &str) -> Result<Configuration, ConfigError> {
 mod module_tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_load_config() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("test_config.toml");
 
         let toml_content = r#"
@@ -232,7 +232,7 @@ mod module_tests {
 
     #[test]
     fn test_validate_config_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("valid_config.toml");
 
         let valid_toml = r#"
@@ -263,7 +263,7 @@ mod module_tests {
         use std::panic;
 
         // This test creates a temporary directory structure and tests repo config loading
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
 
@@ -274,14 +274,14 @@ mod module_tests {
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&sub_dir).unwrap();
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
+        std::env::set_current_dir(&sub_dir).expect("Failed to change to sub directory");
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
         let result = panic::catch_unwind(load_repo_config_wrapper);
 
         // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        std::env::set_current_dir(original_dir).expect("Failed to restore original directory");
 
         let config_result = result.unwrap();
         assert!(config_result.is_ok());

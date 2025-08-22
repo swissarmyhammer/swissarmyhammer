@@ -8,7 +8,7 @@ use colored::*;
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::{self, Read};
-use swissarmyhammer::sah_config::{load_repo_config_for_cli, ConfigValue, Configuration};
+use swissarmyhammer_config::compat::{load_repo_config_for_cli, ConfigValue, Configuration};
 
 use crate::cli::{ConfigCommands, OutputFormat};
 
@@ -231,12 +231,12 @@ fn display_configuration(config: &Configuration, format: OutputFormat) -> Result
             println!("{}", "Configuration Variables:".bold());
             for (key, value) in config.values() {
                 let type_str = match value {
-                    swissarmyhammer::sah_config::ConfigValue::String(_) => "string",
-                    swissarmyhammer::sah_config::ConfigValue::Integer(_) => "integer",
-                    swissarmyhammer::sah_config::ConfigValue::Float(_) => "float",
-                    swissarmyhammer::sah_config::ConfigValue::Boolean(_) => "boolean",
-                    swissarmyhammer::sah_config::ConfigValue::Array(_) => "array",
-                    swissarmyhammer::sah_config::ConfigValue::Table(_) => "table",
+                    ConfigValue::String(_) => "string",
+                    ConfigValue::Integer(_) => "integer",
+                    ConfigValue::Float(_) => "float",
+                    ConfigValue::Boolean(_) => "boolean",
+                    ConfigValue::Array(_) => "array",
+                    ConfigValue::Table(_) => "table",
                 };
                 println!(
                     "  {} {} {}",
@@ -383,10 +383,10 @@ fn extract_env_vars(config: &Configuration) -> Vec<(String, Option<String>, Opti
 
 /// Recursively extract environment variables from a config value
 fn extract_env_vars_from_value(
-    value: &swissarmyhammer::sah_config::ConfigValue,
+    value: &ConfigValue,
     env_vars: &mut Vec<(String, Option<String>, Option<String>)>,
 ) {
-    use swissarmyhammer::sah_config::ConfigValue;
+    use swissarmyhammer_config::compat::ConfigValue;
 
     match value {
         ConfigValue::String(s) => {
@@ -418,8 +418,8 @@ fn extract_env_vars_from_value(
 }
 
 /// Get the type name of a config value
-fn config_value_type_name(value: &swissarmyhammer::sah_config::ConfigValue) -> &'static str {
-    use swissarmyhammer::sah_config::ConfigValue;
+fn config_value_type_name(value: &ConfigValue) -> &'static str {
+    use swissarmyhammer_config::compat::ConfigValue;
     match value {
         ConfigValue::String(_) => "string",
         ConfigValue::Integer(_) => "integer",
@@ -431,8 +431,8 @@ fn config_value_type_name(value: &swissarmyhammer::sah_config::ConfigValue) -> &
 }
 
 /// Format a config value for display
-fn format_config_value(value: &swissarmyhammer::sah_config::ConfigValue) -> String {
-    use swissarmyhammer::sah_config::ConfigValue;
+fn format_config_value(value: &ConfigValue) -> String {
+    use swissarmyhammer_config::compat::ConfigValue;
 
     match value {
         ConfigValue::String(s) => format!("\"{s}\""),
@@ -636,7 +636,7 @@ fn display_variables_captured(
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use swissarmyhammer::sah_config::ConfigValue;
+    use swissarmyhammer_config::compat::ConfigValue;
 
     #[test]
     fn test_config_value_type_name() {

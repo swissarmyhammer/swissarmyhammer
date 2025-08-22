@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_config::compat;
 
 /// Represents a single prompt with metadata and template content.
 ///
@@ -743,7 +744,7 @@ impl Prompt {
 
         // Also include variables from sah.toml configuration
         let mut defined_config_vars = std::collections::HashSet::new();
-        if let Ok(Some(config)) = crate::sah_config::load_repo_config_for_cli() {
+        if let Ok(Some(config)) = compat::load_repo_config_for_cli() {
             for key in config.values().keys() {
                 defined_config_vars.insert(key.clone());
             }
@@ -1639,11 +1640,11 @@ mod tests {
     #[test]
     fn test_prompt_loader_loads_only_valid_prompts() {
         use std::fs;
-        use tempfile::TempDir;
+
 
         // This test verifies that PromptLoader only successfully loads files
         // that are valid prompts (with proper YAML front matter)
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Create some directories with invalid markdown files
         let test_dirs = ["issues", "doc", "examples"];
@@ -1766,9 +1767,9 @@ This is another prompt.
     #[test]
     fn test_partial_template_without_description() {
         use std::fs;
-        use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Create a partial template without front matter (common for partials)
         let partial_path = temp_dir.path().join("_header.liquid.md");

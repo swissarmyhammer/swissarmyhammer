@@ -926,13 +926,13 @@ mod tests {
     #[test]
     fn test_semantic_config_home_fallback() {
         use std::panic;
-        use tempfile::TempDir;
+        
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Change to a directory without .git repository
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
@@ -960,16 +960,16 @@ mod tests {
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
         use std::panic;
-        use tempfile::TempDir;
+        
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Create Git repository without .swissarmyhammer directory
         fs::create_dir(temp_dir.path().join(".git")).unwrap();
         // Note: intentionally NOT creating .swissarmyhammer
 
         // Change to the temp directory to simulate being in a Git repository
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
@@ -995,9 +995,9 @@ mod tests {
 
     #[test]
     fn test_semantic_config_environment_variable_override() {
-        use tempfile::TempDir;
+        
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_db_path = temp_dir.path().join("test_semantic.db");
 
         // Set environment variable override

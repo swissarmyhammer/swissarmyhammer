@@ -6,7 +6,6 @@
 use crate::toml_config::*;
 use std::collections::HashMap;
 use std::fs;
-use tempfile::TempDir;
 
 /// Test comprehensive error scenarios for ConfigError
 mod config_error_tests {
@@ -25,7 +24,7 @@ mod config_error_tests {
 
     #[test]
     fn test_invalid_utf8_error() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("invalid_utf8.toml");
 
         // Write invalid UTF-8 bytes
@@ -43,7 +42,7 @@ mod config_error_tests {
 
     #[test]
     fn test_file_too_large_error() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("large_file.toml");
 
         // Create content larger than limit
@@ -318,7 +317,7 @@ mod config_error_tests {
         use std::thread;
 
         // Test that errors can be safely shared across threads
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("concurrent_test.toml");
         fs::write(&config_path, "name = \"ConcurrentTest\"").unwrap();
 

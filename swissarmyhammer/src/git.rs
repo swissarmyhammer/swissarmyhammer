@@ -771,9 +771,16 @@ mod tests {
 
     #[test]
     fn test_git_operations_new_in_git_repo() {
-        let _test_env = IsolatedTestEnvironment::new().unwrap();
-        let temp_dir = create_test_git_repo().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let _test_env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
+        let original_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(_) => {
+                // Current directory is invalid, skip this test
+                return;
+            }
+        };
 
         // Ensure we restore directory on panic or normal exit
         struct DirGuard {
@@ -798,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_git_operations_with_work_dir() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         // Test creating GitOperations with explicit work directory
         let result = GitOperations::with_work_dir(temp_dir.path().to_path_buf());
@@ -807,9 +814,10 @@ mod tests {
 
     #[test]
     fn test_git_operations_new_not_in_git_repo() {
-        let _test_env = IsolatedTestEnvironment::new().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let _test_env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
 
         // Ensure we restore directory on panic or normal exit
         struct DirGuard {
@@ -825,7 +833,7 @@ mod tests {
         let _guard = DirGuard { original_dir };
 
         // Change to non-git directory
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(temp_dir.path()).expect("Failed to change to temp directory");
 
         // Test creating GitOperations should fail
         let result = GitOperations::new();
@@ -834,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_git_operations_with_work_dir_not_git_repo() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Test creating GitOperations with non-git directory should fail
         let result = GitOperations::with_work_dir(temp_dir.path().to_path_buf());
@@ -843,7 +851,7 @@ mod tests {
 
     #[test]
     fn test_current_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
         let current_branch = git_ops.current_branch().unwrap();
@@ -854,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_main_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
         let main_branch = git_ops.main_branch().unwrap();
@@ -865,7 +873,7 @@ mod tests {
 
     #[test]
     fn test_branch_exists() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -879,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -897,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_checkout_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -922,7 +930,7 @@ mod tests {
 
     #[test]
     fn test_merge_issue_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -956,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_merge_non_existent_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -967,7 +975,7 @@ mod tests {
 
     #[test]
     fn test_has_uncommitted_changes() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -998,7 +1006,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_from_issue_branch_should_abort() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create and switch to first issue branch
@@ -1017,7 +1025,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_from_main_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Verify we're on main branch
@@ -1033,7 +1041,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_resume_on_correct_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create work branch
@@ -1053,7 +1061,7 @@ mod tests {
 
     #[test]
     fn test_switch_to_existing_issue_branch_from_issue_branch_should_abort() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create first issue branch from main
@@ -1087,7 +1095,7 @@ mod tests {
         use std::process::Command;
 
         // Create a temporary directory and initialize a git repo
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempfile::tempdir().expect("Failed to create temporary directory");
 
         // Initialize git repo
         Command::new("git")
@@ -1151,7 +1159,7 @@ mod tests {
 
     #[test]
     fn test_branch_operation_failure_leaves_consistent_state() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Get initial state
@@ -1185,7 +1193,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_from_feature_branch_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create and switch to a feature branch
@@ -1210,7 +1218,7 @@ mod tests {
 
     #[test]
     fn test_complete_feature_branch_workflow() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Start on main branch
@@ -1267,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_multiple_issues_from_same_source_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a release branch
@@ -1295,7 +1303,7 @@ mod tests {
 
     #[test]
     fn test_merge_issue_to_correct_source_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create develop branch from main
@@ -1353,7 +1361,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_with_explicit_source() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create multiple branches
@@ -1384,7 +1392,7 @@ mod tests {
 
     #[test]
     fn test_validation_prevents_issue_from_issue_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create first issue branch
@@ -1405,7 +1413,7 @@ mod tests {
 
     #[test]
     fn test_validation_with_non_existent_source_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Try to create issue from non-existent source branch
@@ -1418,7 +1426,7 @@ mod tests {
 
     #[test]
     fn test_backwards_compatibility_with_simple_methods() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test that simple methods still work (backwards compatibility)
@@ -1456,7 +1464,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_explicit_source_compatibility() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a feature branch from main
@@ -1499,7 +1507,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_uses_current_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create and switch to a development branch
@@ -1526,7 +1534,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_from_issue_branch_fails() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create and switch to first issue branch
@@ -1541,7 +1549,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_resume_scenario() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a feature branch
@@ -1568,7 +1576,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_switch_to_existing() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create issue branch from main
@@ -1590,7 +1598,7 @@ mod tests {
 
     #[test]
     fn test_auto_merge_with_deleted_source_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
@@ -1625,7 +1633,7 @@ mod tests {
 
     #[test]
     fn test_enhanced_source_branch_validation() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test validation with nonexistent source branch
@@ -1647,7 +1655,7 @@ mod tests {
 
     #[test]
     fn test_circular_dependency_prevention() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create first issue branch
@@ -1663,7 +1671,7 @@ mod tests {
 
     #[test]
     fn test_enhanced_merge_conflict_handling() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a feature branch and make changes
@@ -1723,7 +1731,8 @@ mod tests {
             // Check if abort file was created for merge conflicts
             let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
             if abort_file.exists() {
-                let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+                let abort_content =
+                    std::fs::read_to_string(&abort_file).expect("Failed to read abort file");
                 assert!(abort_content.contains("conflict_issue"));
                 assert!(abort_content.contains("Manual"));
             }
@@ -1732,7 +1741,7 @@ mod tests {
 
     #[test]
     fn test_source_branch_state_validation() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a valid branch
@@ -1752,7 +1761,7 @@ mod tests {
 
     #[test]
     fn test_enhanced_error_messages_with_source_context() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test nonexistent source branch error includes issue context
@@ -1766,24 +1775,30 @@ mod tests {
 
     #[test]
     fn test_abort_file_contains_detailed_context() {
-        let _test_env = IsolatedTestEnvironment::new().unwrap();
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
         // Save original directory and restore it safely at the end
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
 
         // Use a closure to ensure directory is restored even if test panics
         let test_result = std::panic::catch_unwind(|| {
-            std::env::set_current_dir(temp_dir.path()).unwrap();
+            std::env::set_current_dir(temp_dir.path()).expect("Failed to change to temp directory");
 
-            let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+            let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf())
+                .expect("Failed to create git operations");
 
             // Create issue branch
-            git_ops.create_work_branch("detailed_issue").unwrap();
+            git_ops
+                .create_work_branch("detailed_issue")
+                .expect("Failed to create work branch");
 
             // Switch back and try to merge to nonexistent branch
-            let main_branch = git_ops.main_branch().unwrap();
-            git_ops.checkout_branch(&main_branch).unwrap();
+            let main_branch = git_ops.main_branch().expect("Failed to get main branch");
+            git_ops
+                .checkout_branch(&main_branch)
+                .expect("Failed to checkout main branch");
             let result = git_ops.merge_issue_branch("detailed_issue", "deleted_branch");
             assert!(result.is_err());
 
@@ -1808,7 +1823,7 @@ mod tests {
 
     #[test]
     fn test_backward_compatibility_methods() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test create_work_branch_simple
@@ -1839,7 +1854,7 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_backwards_compatibility() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a feature branch and switch to it
@@ -1868,7 +1883,7 @@ mod tests {
 
     #[test]
     fn test_delete_branch_nonexistent_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Try to delete a branch that doesn't exist - should succeed
@@ -1884,7 +1899,7 @@ mod tests {
 
     #[test]
     fn test_delete_branch_existing_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a test branch
@@ -1906,7 +1921,7 @@ mod tests {
 
     #[test]
     fn test_delete_branch_nonexistent_then_existing() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Try to delete a branch that doesn't exist - should succeed

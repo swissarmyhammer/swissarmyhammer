@@ -212,7 +212,7 @@ pub fn get_or_create_swissarmyhammer_directory_from(
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     // Test helper to create directories safely, ignoring AlreadyExists errors
     fn create_dir_safe<P: AsRef<std::path::Path>>(path: P) {
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_walk_files_with_extensions() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create some test files
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_found_parent() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create nested structure with .git at parent level
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_depth_limit() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create very deep directory structure
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_within_depth_limit() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create directory structure well within MAX_DIRECTORY_DEPTH (5 levels)
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_multiple_git_dirs() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create nested structure with .git at multiple levels
@@ -402,7 +402,7 @@ mod tests {
     fn test_find_git_repository_root_at_filesystem_root() {
         // This test is challenging to create reliably across platforms
         // We'll test the edge case where we reach the filesystem root
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create a single level directory
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_depth_counting() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let base = temp_dir.path();
 
         // Create simple structure to understand depth counting

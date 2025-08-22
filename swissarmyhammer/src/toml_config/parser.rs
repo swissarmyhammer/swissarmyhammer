@@ -239,7 +239,7 @@ pub fn load_repo_config() -> Result<Option<Configuration>, ConfigError> {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_parse_valid_toml_string() {
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_parse_config_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("test_config.toml");
 
         let toml_content = r#"
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn test_file_size_validation() {
         let parser = ConfigParser::with_limits(100, 10); // 100 byte limit
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("large_config.toml");
 
         // Create a file larger than the limit
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn test_validate_file() {
         let parser = ConfigParser::new();
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("valid_config.toml");
 
         // Test non-existent file
@@ -391,7 +391,7 @@ mod tests {
     fn test_load_from_repo_root() {
         use std::panic;
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
 
@@ -403,8 +403,8 @@ mod tests {
         fs::create_dir(&sub_dir).unwrap();
 
         // Temporarily change directory for test with proper RAII cleanup
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&sub_dir).unwrap();
+        let original_dir = std::env::current_dir().expect("Failed to get current directory");
+        std::env::set_current_dir(&sub_dir).expect("Failed to change to sub directory");
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
         let result = panic::catch_unwind(|| {
@@ -413,7 +413,7 @@ mod tests {
         });
 
         // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        std::env::set_current_dir(original_dir).expect("Failed to restore original directory");
 
         let config_result = result.unwrap();
 
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_utf8_validation() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let config_path = temp_dir.path().join("invalid_utf8.toml");
 
         // Write invalid UTF-8 bytes

@@ -4,11 +4,11 @@
 mod tests {
     use super::super::{FileDiscovery, FileDiscoveryConfig};
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_end_to_end_file_discovery() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Create a realistic project structure
         let src_dir = temp_dir.path().join("src");
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_respect() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Initialize as git repo
         fs::create_dir_all(temp_dir.path().join(".git"))?;
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_large_file_filtering() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
         // Create normal file
         fs::write(temp_dir.path().join("small.rs"), "fn main() {}")?;
