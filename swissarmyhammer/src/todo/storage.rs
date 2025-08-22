@@ -233,7 +233,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);
@@ -258,7 +258,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);
@@ -291,7 +291,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);
@@ -318,7 +318,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);
@@ -359,7 +359,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);
@@ -384,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_todo_lists() {
         // Use a completely isolated temp directory
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let storage = TodoStorage::new(temp_dir.path().to_path_buf());
 
         let list1 = format!("test_list1_{}", ulid::Ulid::new());
@@ -411,7 +411,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);
@@ -438,7 +438,7 @@ mod tests {
         let _guard = IsolatedTestHome::new();
 
         // Create a temporary directory for todo storage instead of using default
-        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let todo_dir = temp_dir.path().join("todo");
         fs::create_dir_all(&todo_dir).unwrap();
         let storage = TodoStorage::new(todo_dir);

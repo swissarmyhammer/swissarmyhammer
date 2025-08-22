@@ -3,7 +3,6 @@
 //! This module provides comprehensive security controls for shell command execution,
 //! including blocked command prevention, directory access controls, and audit logging.
 
-use crate::sah_config::{load_config, ConfigValue};
 use crate::{Result, SwissArmyHammerError};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -11,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use swissarmyhammer_config::compat::{load_config, ConfigValue};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
@@ -653,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_directory_access_validation() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let allowed_path = temp_dir.path();
         let forbidden_path = std::env::temp_dir();
 
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_audit_event_creation() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let env_vars = HashMap::new();
 
         let event = ShellAuditEvent::new("echo test".to_string(), Some(temp_dir.path()), &env_vars);

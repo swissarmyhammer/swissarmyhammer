@@ -70,9 +70,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::{
-    plugins::PluginRegistry, sah_config, security, PromptLibrary, Result, SwissArmyHammerError,
-};
+use crate::{plugins::PluginRegistry, security, PromptLibrary, Result, SwissArmyHammerError};
 use liquid::{Object, Parser};
 use liquid_core::{Language, ParseTag, Renderable, Runtime, TagReflection, TagTokenIter};
 use std::borrow::Cow;
@@ -80,6 +78,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+use swissarmyhammer_config::compat;
 
 /// Custom partial tag that acts as a no-op marker for liquid partial files
 #[derive(Clone, Debug, Default)]
@@ -643,7 +642,7 @@ impl Template {
 
         // Load and merge sah.toml configuration variables (second lowest priority)
         let mut config_vars = std::collections::HashSet::new();
-        if let Ok(Some(config)) = sah_config::load_repo_config_for_cli() {
+        if let Ok(Some(config)) = compat::load_repo_config_for_cli() {
             let config_object = config.to_liquid_object();
             for (key, value) in config_object.iter() {
                 config_vars.insert(key.clone());

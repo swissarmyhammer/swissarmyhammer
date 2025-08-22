@@ -1158,7 +1158,7 @@ stateDiagram-v2
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
 
         // Create a .git directory to make it look like a Git repository
-        fs::create_dir_all(".git").unwrap();
+        fs::create_dir_all(".git").expect("Failed to create .git directory");
 
         let local_workflows_dir = PathBuf::from(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
@@ -1211,7 +1211,7 @@ stateDiagram-v2
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
 
         // Create a .git directory in current working directory to simulate a Git repository
-        fs::create_dir_all(".git").unwrap();
+        fs::create_dir_all(".git").expect("Failed to create .git directory");
 
         // Get the isolated home directory (managed by IsolatedTestEnvironment)
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());

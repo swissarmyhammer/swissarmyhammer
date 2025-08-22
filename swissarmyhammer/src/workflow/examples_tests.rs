@@ -439,7 +439,7 @@ mod integration_tests {
     /// Test workflow file loading and validation
     #[test]
     fn test_workflow_file_validation() {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let workflow_path = temp_dir.path().join("test-workflow.md");
 
         // Create a minimal valid workflow

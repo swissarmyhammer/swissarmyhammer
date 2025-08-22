@@ -11,7 +11,7 @@ use tempfile::TempDir;
 /// Test file size limits (1MB maximum)
 #[test]
 fn test_file_size_limits() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = crate::test_utils::create_temp_dir_with_retry();
     let parser = ConfigParser::new();
 
     // Test file within size limit
@@ -133,7 +133,7 @@ fn test_nesting_depth_limits() {
 /// Test path traversal prevention
 #[test]
 fn test_path_traversal_prevention() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = crate::test_utils::create_temp_dir_with_retry();
     let parser = ConfigParser::new();
 
     // Create a file outside the temp directory
@@ -441,7 +441,7 @@ fn test_array_length_validation() {
 /// Test UTF-8 encoding validation
 #[test]
 fn test_utf8_encoding_validation() {
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = crate::test_utils::create_temp_dir_with_retry();
     let parser = ConfigParser::new();
 
     // Test valid UTF-8 file

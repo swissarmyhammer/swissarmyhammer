@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_read_content_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let file_path = temp_dir.path().join("test.txt");
         fs::write(&file_path, "file content\n").unwrap();
 
@@ -323,7 +323,7 @@ mod tests {
         assert_eq!(result, "");
 
         // Test file (would need actual file for full test)
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let file_path = temp_dir.path().join("test.txt");
         fs::write(&file_path, "file content\n").unwrap();
 
@@ -338,7 +338,7 @@ mod tests {
         use tempfile::TempDir;
 
         // Create a temporary git repository for testing
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let repo_path = temp_dir.path();
 
         // Initialize git repo

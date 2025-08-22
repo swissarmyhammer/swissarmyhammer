@@ -919,7 +919,8 @@ for = "invalid_reserved_name"
 
     #[test]
     fn test_load_shell_config_defaults() -> Result<(), Box<dyn std::error::Error>> {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let _guard = crate::test_utils::IsolatedTestEnvironment::new()
+            .expect("Failed to create isolated test environment");
         let loader = ConfigurationLoader::new()?.with_validation(false);
         let config = loader.load_shell_config()?;
 
@@ -1181,7 +1182,8 @@ truncation_strategy = "invalid_strategy"
         use std::env;
 
         // Use isolated test environment to avoid interfering with other tests
-        let _guard = IsolatedTestEnvironment::new().unwrap();
+        let _guard =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
 
         // Save original env var values
         let original_validation = env::var("SAH_SHELL_SECURITY_ENABLE_VALIDATION").ok();

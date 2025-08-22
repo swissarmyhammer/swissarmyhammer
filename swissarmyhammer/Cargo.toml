@@ -28,6 +28,9 @@ tracing = { workspace = true }
 thiserror = "1.0"
 async-trait = "0.1"
 
+# Configuration
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
 # Template engine
 liquid = { workspace = true }
 liquid-core = { version = "0.26" }

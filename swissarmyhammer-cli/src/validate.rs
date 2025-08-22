@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use colored::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use swissarmyhammer::sah_config::validate_config_file;
 use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
     ValidationResult,
@@ -10,6 +9,7 @@ use swissarmyhammer::validation::{
 use swissarmyhammer::workflow::{
     MemoryWorkflowStorage, MermaidParser, Workflow, WorkflowResolver, WorkflowStorageBackend,
 };
+use swissarmyhammer_config::compat::validate_config_file;
 
 use crate::cli::ValidateFormat;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
@@ -730,7 +730,7 @@ impl Validator {
     /// Validate sah.toml configuration file if it exists
     fn validate_sah_config(&self, result: &mut ValidationResult) -> Result<()> {
         use std::path::Path;
-        use swissarmyhammer::sah_config::ValidationError as ConfigValidationError;
+        use swissarmyhammer_config::compat::ValidationError as ConfigValidationError;
 
         // Check for sah.toml in the current directory
         let config_path = Path::new("sah.toml");
@@ -760,50 +760,50 @@ impl Validator {
             Err(e) => {
                 // Convert configuration validation error to validation issue
                 let (level, message, suggestion) = match &e {
-                    ConfigValidationError::InvalidVariableName { name, reason } => (
+                    ConfigValidationError::ValidationError { message } => (
                         ValidationLevel::Error,
-                        format!("Invalid variable name '{name}': {reason}"),
-                        Some("Variable names must be valid Liquid identifiers (letters, numbers, underscores, starting with letter/underscore)".to_string()),
+                        format!("Configuration validation failed: {message}"),
+                        Some("Check the configuration syntax and values".to_string()),
                     ),
-                    ConfigValidationError::ReservedVariableName { name } => (
+                    ConfigValidationError::ParseError { path, source } => (
                         ValidationLevel::Error,
-                        format!("Variable name '{name}' is reserved and cannot be used"),
-                        Some("Choose a different variable name that doesn't conflict with Liquid template keywords or SwissArmyHammer internals".to_string()),
+                        format!(
+                            "Configuration parsing failed{}: {source}",
+                            path.as_ref()
+                                .map(|p| format!(" in {}", p.display()))
+                                .unwrap_or_default()
+                        ),
+                        Some("Check TOML syntax and file format".to_string()),
                     ),
-                    ConfigValidationError::StringTooLong { length, max_length } => (
-                        ValidationLevel::Error,
-                        format!("String value too long: {length} characters (max: {max_length})"),
-                        Some("Consider breaking long strings into smaller parts or storing them in external files".to_string()),
-                    ),
-                    ConfigValidationError::ArrayTooLarge { length, max_elements } => (
-                        ValidationLevel::Error,
-                        format!("Array too large: {length} elements (max: {max_elements})"),
-                        Some("Consider reducing the number of array elements or using nested structures".to_string()),
-                    ),
-                    ConfigValidationError::NestingTooDeep { depth, max_depth } => (
-                        ValidationLevel::Error,
-                        format!("Configuration nesting too deep: {depth} levels (max: {max_depth})"),
-                        Some("Flatten the configuration structure to reduce nesting levels".to_string()),
-                    ),
-                    ConfigValidationError::TooManyVariables { count, max_count } => (
-                        ValidationLevel::Error,
-                        format!("Too many configuration variables: {count} (max: {max_count})"),
-                        Some("Consider grouping related variables into tables or reducing the number of variables".to_string()),
-                    ),
-                    ConfigValidationError::RuleFailed { rule, message } => (
-                        ValidationLevel::Error,
-                        format!("Validation rule '{rule}' failed: {message}"),
-                        None,
-                    ),
-                    ConfigValidationError::InsufficientPermissions { path, reason } => (
+                    ConfigValidationError::FileNotFound { path } => (
                         ValidationLevel::Warning,
-                        format!("File permission issue for '{path}': {reason}"),
-                        Some("Check file permissions and ownership".to_string()),
+                        format!("Configuration file not found: {}", path.display()),
+                        Some(
+                            "Create a sah.toml file or ensure the file path is correct".to_string(),
+                        ),
                     ),
-                    ConfigValidationError::LoadError(msg) => (
+                    ConfigValidationError::FileReadError { path, source } => (
                         ValidationLevel::Error,
-                        format!("Configuration loading error: {msg}"),
-                        Some("Check TOML syntax and file accessibility".to_string()),
+                        format!(
+                            "Failed to read configuration file {}: {source}",
+                            path.display()
+                        ),
+                        Some("Check file permissions and accessibility".to_string()),
+                    ),
+                    ConfigValidationError::DirectoryError { source } => (
+                        ValidationLevel::Error,
+                        format!("Directory access error: {source}"),
+                        Some("Check directory permissions and accessibility".to_string()),
+                    ),
+                    ConfigValidationError::EnvironmentError { message } => (
+                        ValidationLevel::Warning,
+                        format!("Environment variable error: {message}"),
+                        Some("Check environment variable configuration".to_string()),
+                    ),
+                    ConfigValidationError::TemplateError { message } => (
+                        ValidationLevel::Error,
+                        format!("Template processing error: {message}"),
+                        Some("Check template syntax and variable references".to_string()),
                     ),
                 };
 
