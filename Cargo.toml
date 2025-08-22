@@ -85,7 +85,7 @@ assert_cmd = "2.0"
 predicates = "3.0"
 proptest = "1.0"
 criterion = "0.5"
-serial_test = "3.0"
+
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
