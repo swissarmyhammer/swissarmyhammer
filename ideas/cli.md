@@ -59,6 +59,9 @@ impl McpTool for CreateMemoTool {
 
 Replace static CLI enums with dynamic command generation from MCP tool definitions:
 
+This will result in all MCP commands being available at `sah <cli_category> <cli_name>` for every tool that is visible to the cli.
+
+
 ```rust
 pub enum Commands {
     // Pure CLI commands (no MCP equivalent)
@@ -71,12 +74,7 @@ pub enum Commands {
     Plan { plan_filename: String },
     Implement,
     
-    // Dynamic MCP pass-through to be called with `sah mcp ...`
-    Mcp {
-        tool_name: String,
-        #[command(flatten)]
-        args: Vec<String>, // Raw args parsed dynamically
-    },
+    // Dynamic MCP pass-through to be called will not be in the enum, but additional dynamic commands
 }
 ```
 
@@ -114,9 +112,7 @@ impl CliBuilder {
     
     pub fn build_cli(&self) -> Command {
         let mut cli = Command::new("swissarmyhammer")
-            // Add static commands
-            .subcommand(Command::new("serve"))
-            .subcommand(Command::new("doctor"))
+            // Add static commands from the Commands enum
             // etc.
             ;
             
