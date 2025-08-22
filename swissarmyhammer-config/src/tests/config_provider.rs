@@ -1,6 +1,7 @@
 //! Integration tests for ConfigProvider
 
 use crate::ConfigProvider;
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
@@ -41,6 +42,7 @@ fn test_config_provider_with_environment_variables() {
 }
 
 #[test]
+#[serial]
 fn test_config_provider_with_project_files() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -127,6 +129,7 @@ features:
 }
 
 #[test]
+#[serial]
 fn test_config_provider_json_format() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -188,6 +191,7 @@ fn test_config_provider_json_format() {
 }
 
 #[test]
+#[serial]
 fn test_config_provider_no_caching() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();

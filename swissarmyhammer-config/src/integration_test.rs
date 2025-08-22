@@ -3,10 +3,12 @@
 #[cfg(test)]
 mod tests {
     use crate::{ConfigProvider, TemplateContext};
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
     #[test]
+    #[serial]
     fn test_basic_functionality() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
@@ -58,6 +60,7 @@ port = 5432
     }
 
     #[test]
+    #[serial]
     fn test_template_context_operations() {
         let mut ctx = TemplateContext::new();
 
@@ -90,6 +93,7 @@ port = 5432
     }
 
     #[test]
+    #[serial]
     fn test_env_var_substitution_basic() {
         std::env::set_var("TEST_ENV_VAR", "test_env_value");
 

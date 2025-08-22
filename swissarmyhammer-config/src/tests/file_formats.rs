@@ -1,10 +1,12 @@
 //! Tests for different configuration file formats
 
 use crate::ConfigProvider;
+use serial_test::serial;
 use std::fs;
 use tempfile::TempDir;
 
 #[test]
+#[serial]
 fn test_toml_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -97,12 +99,17 @@ mcp = false
 }
 
 #[test]
+#[serial]
 fn test_yaml_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
+
+    // Remove any other config files to ensure only YAML is loaded
+    let _ = fs::remove_file(sah_dir.join("sah.toml"));
+    let _ = fs::remove_file(sah_dir.join("sah.json"));
 
     fs::write(
         sah_dir.join("sah.yaml"),
@@ -191,22 +198,25 @@ features:
     }
 
     // Check simple array
-    if let Some(features) = context.get("features") {
-        if let serde_json::Value::Array(arr) = features {
-            assert!(arr.contains(&serde_json::Value::String("workflows".to_string())));
-            assert!(arr.contains(&serde_json::Value::String("mcp".to_string())));
-            assert!(arr.contains(&serde_json::Value::String("analytics".to_string())));
-        }
+    if let Some(serde_json::Value::Array(arr)) = context.get("features") {
+        assert!(arr.contains(&serde_json::Value::String("workflows".to_string())));
+        assert!(arr.contains(&serde_json::Value::String("mcp".to_string())));
+        assert!(arr.contains(&serde_json::Value::String("analytics".to_string())));
     }
 }
 
 #[test]
+#[serial]
 fn test_json_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
+
+    // Remove any other config files to ensure only JSON is loaded
+    let _ = fs::remove_file(sah_dir.join("sah.toml"));
+    let _ = fs::remove_file(sah_dir.join("sah.yaml"));
 
     fs::write(
         sah_dir.join("sah.json"),
@@ -324,6 +334,7 @@ fn test_json_format_comprehensive() {
 }
 
 #[test]
+#[serial]
 fn test_format_precedence_same_file() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
