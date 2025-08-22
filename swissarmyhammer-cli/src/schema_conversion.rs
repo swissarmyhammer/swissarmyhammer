@@ -8,6 +8,7 @@
 //! reverse conversion from parsed CLI arguments back to the JSON format expected
 //! by MCP tools.
 
+use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::ArgMatches;
 use serde_json::{Map, Value};
 
@@ -16,8 +17,8 @@ use thiserror::Error;
 /// Errors that can occur during schema conversion
 #[derive(Debug, Error)]
 pub enum ConversionError {
-    #[error("Missing required argument: {0}")]
-    MissingRequired(String),
+    #[error("Missing required argument: {field}")]
+    MissingRequired { field: String },
 
     #[error("Invalid argument type for {name}: expected {expected}, got {actual}")]
     InvalidType {
@@ -26,8 +27,8 @@ pub enum ConversionError {
         actual: String,
     },
 
-    #[error("Schema validation failed: {0}")]
-    SchemaValidation(String),
+    #[error("Schema validation failed: {message}")]
+    SchemaValidation { message: String },
 
     #[error("Failed to parse {field} as {data_type}: {message}")]
     ParseError {
@@ -36,8 +37,14 @@ pub enum ConversionError {
         message: String,
     },
 
-    #[error("Unsupported schema type: {schema_type}")]
-    UnsupportedSchemaType { schema_type: String },
+    #[error("Unsupported schema type: {schema_type} for parameter {parameter}")]
+    UnsupportedSchemaType {
+        schema_type: String,
+        parameter: String,
+    },
+
+    #[error("Schema validation error: {0}")]
+    ValidationError(#[from] ValidationError),
 }
 
 /// Schema converter for bidirectional JSON Schema ↔ Clap conversion
@@ -51,6 +58,9 @@ impl SchemaConverter {
     /// format expected by MCP tools. Uses the schema to understand expected
     /// types and validate required fields.
     ///
+    /// This method now includes comprehensive schema validation before conversion
+    /// to ensure robust error handling and user-friendly error messages.
+    ///
     /// # Arguments
     /// * `matches` - Parsed command line arguments from Clap
     /// * `schema` - JSON Schema defining expected argument structure
@@ -60,18 +70,20 @@ impl SchemaConverter {
     ///
     /// # Errors
     /// Returns `ConversionError` for missing required fields, type mismatches,
-    /// or schema validation failures
+    /// schema validation failures, or unsupported schema types
     pub fn matches_to_json_args(
         matches: &ArgMatches,
         schema: &Value,
     ) -> Result<Map<String, Value>, ConversionError> {
+        // First validate the schema comprehensively
+        SchemaValidator::validate_schema(schema)?;
         let mut args = Map::new();
 
         // Extract properties from schema
         let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
-            return Err(ConversionError::SchemaValidation(
-                "Schema missing 'properties' object".to_string(),
-            ));
+            return Err(ConversionError::SchemaValidation {
+                message: "Schema missing 'properties' object".to_string(),
+            });
         };
 
         // Extract required fields list
@@ -90,7 +102,9 @@ impl SchemaConverter {
                     args.insert(prop_name.clone(), value);
                 }
                 None if is_required => {
-                    return Err(ConversionError::MissingRequired(prop_name.clone()));
+                    return Err(ConversionError::MissingRequired {
+                        field: prop_name.clone(),
+                    });
                 }
                 None => {
                     // Optional field not provided - don't include in args
@@ -133,6 +147,7 @@ impl SchemaConverter {
             "array" => Self::extract_array(matches, prop_name, prop_schema),
             unsupported => Err(ConversionError::UnsupportedSchemaType {
                 schema_type: unsupported.to_string(),
+                parameter: prop_name.to_string(),
             }),
         }
     }
@@ -224,6 +239,86 @@ impl SchemaConverter {
             Ok(Some(Value::Array(json_values)))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Provide user-friendly conversion suggestions based on schema type
+    pub fn provide_conversion_suggestions(schema_type: &str) -> String {
+        match schema_type {
+            "object" => {
+                "Nested objects are not supported. Consider flattening the schema or using a string representation.".to_string()
+            }
+            "null" => {
+                "Null type parameters are not supported in CLI. Consider making the parameter optional or using a different type.".to_string()
+            }
+            unknown => {
+                format!(
+                    "Unknown type '{}'. Supported types: string, boolean, integer, number, array.",
+                    unknown
+                )
+            }
+        }
+    }
+
+    /// Format a conversion error with helpful context and suggestions
+    pub fn format_conversion_error(error: &ConversionError, tool_name: &str) -> String {
+        match error {
+            ConversionError::MissingRequired { field } => {
+                format!(
+                    "❌ Missing required argument '--{}' for tool '{}'.\n\n💡 Use '--help' to see all required arguments.\n🔄 To fix this interactively, run: sah <command> --interactive",
+                    field, tool_name
+                )
+            }
+            ConversionError::InvalidType {
+                name,
+                expected,
+                actual,
+            } => {
+                format!(
+                    "❌ Invalid type for argument '--{}' in tool '{}': expected {}, got {}.\n\n💡 Please check the argument format and try again.\n📖 Use '--help' to see expected argument types.",
+                    name, tool_name, expected, actual
+                )
+            }
+            ConversionError::ParseError {
+                field,
+                data_type,
+                message,
+            } => {
+                let suggestion = match data_type.as_str() {
+                    "integer" => "Use whole numbers only (e.g., 42, -17, 0)",
+                    "number" => "Use numeric values (e.g., 3.14, -2.5, 100)",
+                    _ => "Check the format of your input",
+                };
+
+                format!(
+                    "❌ Failed to parse '--{}' as {} for tool '{}': {}.\n\n💡 {}\n📖 Use '--help' to see expected argument formats.",
+                    field, data_type, tool_name, message, suggestion
+                )
+            }
+            ConversionError::SchemaValidation { message } => {
+                format!(
+                    "❌ Schema validation failed for tool '{}': {}.\n\n💡 This is likely an internal tool configuration error. Please report this issue.\n🔧 Tool developers should verify their schema follows JSON Schema specification.",
+                    tool_name, message
+                )
+            }
+            ConversionError::UnsupportedSchemaType {
+                schema_type,
+                parameter,
+            } => {
+                let suggestion = Self::provide_conversion_suggestions(schema_type);
+                format!(
+                    "❌ Tool '{}' uses unsupported argument type '{}' for parameter '{}'.\n\n💡 {}\n🔧 This tool may not be compatible with CLI execution.",
+                    tool_name, schema_type, parameter, suggestion
+                )
+            }
+            ConversionError::ValidationError(validation_err) => {
+                format!(
+                    "❌ Schema validation error in tool '{}': {}\n\n💡 {}\n🔧 Tool developers should fix this schema definition.",
+                    tool_name,
+                    validation_err,
+                    validation_err.suggestion().unwrap_or_default()
+                )
+            }
         }
     }
 }
@@ -384,7 +479,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            ConversionError::MissingRequired(_)
+            ConversionError::MissingRequired { .. }
         ));
     }
 
@@ -426,6 +521,44 @@ mod tests {
     }
 
     #[test]
+    fn test_format_conversion_error() {
+        let error = ConversionError::MissingRequired {
+            field: "title".to_string(),
+        };
+
+        let formatted = SchemaConverter::format_conversion_error(&error, "test_tool");
+        assert!(formatted.contains("Missing required argument '--title'"));
+        assert!(formatted.contains("💡"));
+        assert!(formatted.contains("🔄"));
+    }
+
+    #[test]
+    fn test_provide_conversion_suggestions() {
+        let object_suggestion = SchemaConverter::provide_conversion_suggestions("object");
+        assert!(object_suggestion.contains("Nested objects are not supported"));
+
+        let null_suggestion = SchemaConverter::provide_conversion_suggestions("null");
+        assert!(null_suggestion.contains("Null type parameters are not supported"));
+
+        let unknown_suggestion = SchemaConverter::provide_conversion_suggestions("unknown_type");
+        assert!(unknown_suggestion.contains("Unknown type"));
+        assert!(unknown_suggestion.contains("Supported types:"));
+    }
+
+    #[test]
+    fn test_format_parse_error() {
+        let error = ConversionError::ParseError {
+            field: "count".to_string(),
+            data_type: "integer".to_string(),
+            message: "invalid digit found in string".to_string(),
+        };
+
+        let formatted = SchemaConverter::format_conversion_error(&error, "test_tool");
+        assert!(formatted.contains("Failed to parse '--count' as integer"));
+        assert!(formatted.contains("Use whole numbers only"));
+    }
+
+    #[test]
     fn test_invalid_schema_structure() {
         let matches = create_test_matches(&["test"]);
 
@@ -438,7 +571,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            ConversionError::SchemaValidation(_)
+            ConversionError::ValidationError(_)
         ));
     }
 }

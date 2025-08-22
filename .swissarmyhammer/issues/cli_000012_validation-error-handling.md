@@ -5,6 +5,44 @@ Refer to /Users/wballard/github/sah-cli/ideas/cli.md
 ## Objective
 Implement robust validation and error handling for the dynamic CLI system, ensuring schema conversion edge cases are handled gracefully and users receive helpful error messages.
 
+## Proposed Solution
+
+After analyzing the existing codebase, I will implement validation and error handling through the following approach:
+
+### 1. Schema Validation Framework (`schema_validation.rs`)
+- Create a comprehensive `ValidationError` enum with detailed error types
+- Implement `SchemaValidator` with static methods for validating schema structures
+- Add validation for supported types, required fields, and schema completeness
+- Include helpful error messages with suggestions for fixing issues
+
+### 2. Enhanced Schema Converter
+- Integrate validation into the existing `SchemaConverter` in `schema_conversion.rs`
+- Add detailed error context and user-friendly error messages  
+- Provide suggestions for common schema issues
+- Maintain backward compatibility with existing conversion logic
+
+### 3. Tool Registry Validation
+- Add validation methods to `ToolRegistry` for checking all CLI tools at startup
+- Implement graceful degradation for problematic tools (warn but continue)
+- Add optional strict validation mode for development/testing
+
+### 4. CLI Builder Integration
+- Update `CliBuilder` to validate tools during CLI construction
+- Implement fallback behavior that skips invalid tools with warnings
+- Add startup validation option that can be enabled/disabled
+
+### 5. Dynamic CLI Error Handling
+- Enhanced error handling in the dynamic CLI execution path
+- Better error messages for tool resolution failures
+- Improved argument conversion error reporting
+
+### Key Design Decisions:
+1. **Non-breaking**: All changes maintain backward compatibility
+2. **Graceful degradation**: Invalid tools are skipped with warnings, not crashes
+3. **User-focused**: Error messages provide actionable guidance
+4. **Developer-friendly**: Detailed validation for development scenarios
+5. **Performance-aware**: Validation can be cached and optimized
+
 ## Technical Details
 
 ### Schema Validation Framework

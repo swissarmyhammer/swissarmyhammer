@@ -560,6 +560,179 @@ impl ToolRegistry {
             .map(|tool| tool.as_ref())
             .collect()
     }
+
+    /// Validate all CLI tools for schema compatibility
+    ///
+    /// Performs comprehensive validation of all tools that should appear in the CLI
+    /// to ensure their schemas are compatible with CLI argument generation.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - All CLI tools have valid schemas
+    /// * `Err(Vec<ToolValidationError>)` - List of validation errors found
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// match registry.validate_cli_tools() {
+    ///     Ok(()) => println!("All tools are valid"),
+    ///     Err(errors) => {
+    ///         for error in errors {
+    ///             eprintln!("Tool validation error: {}", error);
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    pub fn validate_cli_tools(&self) -> Result<(), Vec<ToolValidationError>> {
+        let mut errors = Vec::new();
+
+        // Validate all tools, not just CLI tools, to catch missing category errors
+        for tool in self.tools.values() {
+            if let Err(validation_errors) = self.validate_tool(tool.as_ref()) {
+                errors.extend(validation_errors);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Validate a single tool for CLI compatibility
+    ///
+    /// Performs comprehensive validation of a single tool including:
+    /// - Schema structure validation
+    /// - Parameter type compatibility
+    /// - CLI category and name validation
+    /// - Required field validation
+    ///
+    /// # Arguments
+    ///
+    /// * `tool` - The tool to validate
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Tool is valid and CLI-compatible
+    /// * `Err(Vec<ToolValidationError>)` - List of validation errors found
+    pub fn validate_tool(&self, tool: &dyn McpTool) -> Result<(), Vec<ToolValidationError>> {
+        let mut errors = Vec::new();
+        let tool_name = tool.name();
+
+        // Validate schema structure
+        if let Err(schema_errors) = self.validate_tool_schema(tool) {
+            errors.extend(schema_errors);
+        }
+
+        // Validate CLI integration requirements
+        if !tool.hidden_from_cli() {
+            if tool.cli_category().is_none() {
+                errors.push(ToolValidationError::MissingCliCategory {
+                    tool_name: tool_name.to_string(),
+                });
+            }
+
+            // Validate CLI name is reasonable
+            let cli_name = tool.cli_name();
+            if cli_name.is_empty() {
+                errors.push(ToolValidationError::InvalidCliName {
+                    tool_name: tool_name.to_string(),
+                    cli_name: cli_name.to_string(),
+                    reason: "CLI name cannot be empty".to_string(),
+                });
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Validate the schema structure of a tool
+    fn validate_tool_schema(&self, tool: &dyn McpTool) -> Result<(), Vec<ToolValidationError>> {
+        let mut errors = Vec::new();
+        let tool_name = tool.name();
+        let schema = tool.schema();
+
+        // Use the local schema validator defined above
+        
+        match SchemaValidator::validate_schema(&schema) {
+            Ok(()) => {},
+            Err(validation_error) => {
+                errors.push(ToolValidationError::SchemaValidation {
+                    tool_name: tool_name.to_string(),
+                    error: validation_error,
+                });
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Validate all tools with comprehensive error reporting
+    ///
+    /// This method validates all tools in the registry (not just CLI tools) and
+    /// provides detailed error reporting suitable for development and debugging.
+    ///
+    /// # Returns
+    ///
+    /// `ToolValidationReport` containing validation results and statistics
+    pub fn validate_all_tools(&self) -> ToolValidationReport {
+        let mut report = ToolValidationReport::new();
+
+        for tool in self.tools.values() {
+            let _tool_name = tool.name();
+            report.total_tools += 1;
+
+            match self.validate_tool(tool.as_ref()) {
+                Ok(()) => {
+                    report.valid_tools += 1;
+                }
+                Err(errors) => {
+                    report.invalid_tools += 1;
+                    for error in errors {
+                        report.errors.push(error);
+                    }
+                }
+            }
+        }
+
+        report
+    }
+
+    /// Get validation warnings for tools (non-failing validation)
+    ///
+    /// This method performs validation but returns warnings instead of errors,
+    /// suitable for graceful degradation scenarios where invalid tools should
+    /// be skipped rather than cause complete failure.
+    ///
+    /// # Returns
+    ///
+    /// `Vec<ToolValidationWarning>` - List of validation warnings
+    pub fn get_tool_validation_warnings(&self) -> Vec<ToolValidationWarning> {
+        let mut warnings = Vec::new();
+
+        for tool in self.tools.values() {
+            if let Err(errors) = self.validate_tool(tool.as_ref()) {
+                for error in errors {
+                    warnings.push(ToolValidationWarning {
+                        tool_name: tool.name().to_string(),
+                        error: error,
+                        severity: ToolValidationSeverity::Warning,
+                    });
+                }
+            }
+        }
+
+        warnings
+    }
 }
 
 /// Base implementation providing common utility methods for MCP tools
@@ -629,6 +802,240 @@ impl BaseToolImpl {
             )],
             is_error: Some(true),
         }
+    }
+}
+
+/// Errors that can occur during tool validation
+#[derive(Debug, Clone)]
+pub enum ToolValidationError {
+    /// Tool schema validation failed
+    SchemaValidation {
+        /// Name of the tool that failed validation
+        tool_name: String,
+        /// The validation error that occurred
+        error: ValidationError,
+    },
+
+    /// Tool is missing a CLI category but is not hidden from CLI
+    MissingCliCategory {
+        /// Name of the tool missing a CLI category
+        tool_name: String,
+    },
+
+    /// Tool has an invalid CLI name
+    InvalidCliName {
+        /// Name of the tool with invalid CLI name
+        tool_name: String,
+        /// The invalid CLI name
+        cli_name: String,
+        /// Reason why the CLI name is invalid
+        reason: String,
+    },
+
+    /// Tool description is missing or invalid
+    InvalidDescription {
+        /// Name of the tool with invalid description
+        tool_name: String,
+        /// Reason why the description is invalid
+        reason: String,
+    },
+
+    /// Tool name conflicts with another tool
+    NameConflict {
+        /// Name of the tool with a conflict
+        tool_name: String,
+        /// Name of the conflicting tool
+        conflicting_tool: String,
+    },
+}
+
+impl std::fmt::Display for ToolValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolValidationError::SchemaValidation { tool_name, error } => {
+                write!(f, "Schema validation failed for tool '{}': {}", tool_name, error)
+            }
+            ToolValidationError::MissingCliCategory { tool_name } => {
+                write!(f, "Tool '{}' is visible in CLI but missing CLI category", tool_name)
+            }
+            ToolValidationError::InvalidCliName { tool_name, cli_name, reason } => {
+                write!(f, "Tool '{}' has invalid CLI name '{}': {}", tool_name, cli_name, reason)
+            }
+            ToolValidationError::InvalidDescription { tool_name, reason } => {
+                write!(f, "Tool '{}' has invalid description: {}", tool_name, reason)
+            }
+            ToolValidationError::NameConflict { tool_name, conflicting_tool } => {
+                write!(f, "Tool '{}' conflicts with existing tool '{}'", tool_name, conflicting_tool)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ToolValidationError {}
+
+/// Validation warning for tools
+#[derive(Debug, Clone)]
+pub struct ToolValidationWarning {
+    /// Name of the tool with a validation issue
+    pub tool_name: String,
+    /// The validation error that occurred
+    pub error: ToolValidationError,
+    /// Severity level of the validation issue
+    pub severity: ToolValidationSeverity,
+}
+
+/// Severity levels for tool validation issues
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ToolValidationSeverity {
+    /// Warning level issue that doesn't prevent functionality
+    Warning,
+    /// Error level issue that may cause problems
+    Error,
+    /// Critical level issue that will prevent functionality
+    Critical,
+}
+
+/// Comprehensive validation report for all tools
+#[derive(Debug)]
+pub struct ToolValidationReport {
+    /// Total number of tools validated
+    pub total_tools: usize,
+    /// Number of tools that passed validation
+    pub valid_tools: usize,
+    /// Number of tools that failed validation
+    pub invalid_tools: usize,
+    /// List of all validation errors found
+    pub errors: Vec<ToolValidationError>,
+}
+
+impl ToolValidationReport {
+    /// Create a new empty validation report
+    pub fn new() -> Self {
+        Self {
+            total_tools: 0,
+            valid_tools: 0,
+            invalid_tools: 0,
+            errors: Vec::new(),
+        }
+    }
+
+    /// Check if all tools passed validation
+    pub fn is_valid(&self) -> bool {
+        self.errors.is_empty()
+    }
+
+    /// Generate a summary string of the validation results
+    pub fn summary(&self) -> String {
+        if self.is_valid() {
+            format!("✅ All {} tools are valid", self.total_tools)
+        } else {
+            format!(
+                "❌ {} of {} tools have validation errors ({} valid, {} invalid)",
+                self.invalid_tools,
+                self.total_tools,
+                self.valid_tools,
+                self.invalid_tools
+            )
+        }
+    }
+}
+
+// Import the schema validation types we need
+// We need to create a validation module or import from the CLI crate
+use serde_json::Value;
+
+// For now, let's define a simple ValidationError type here
+// In a real implementation, this would be imported from the schema validation module
+/// Errors that can occur during schema validation
+#[derive(Debug, Clone)]
+pub enum ValidationError {
+    /// Schema type is not supported for CLI generation
+    UnsupportedSchemaType { 
+        /// The unsupported schema type
+        schema_type: String, 
+        /// The parameter name where the type was found
+        parameter: String 
+    },
+    /// Schema is invalid or malformed
+    InvalidSchema { 
+        /// Description of the validation failure
+        message: String 
+    },
+    /// Required schema field is missing
+    MissingSchemaField { 
+        /// Name of the missing field
+        field: String 
+    },
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::UnsupportedSchemaType { schema_type, parameter } => {
+                write!(f, "Unsupported schema type '{}' for parameter '{}'", schema_type, parameter)
+            }
+            ValidationError::InvalidSchema { message } => {
+                write!(f, "Invalid schema structure: {}", message)
+            }
+            ValidationError::MissingSchemaField { field } => {
+                write!(f, "Missing required schema field: {}", field)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+// Simple schema validator for the tool registry
+// This is a simplified version - in practice, we'd import the full validator
+struct SchemaValidator;
+
+impl SchemaValidator {
+    fn validate_schema(schema: &Value) -> Result<(), ValidationError> {
+        // Basic validation - check that it's an object with properties
+        if !schema.is_object() {
+            return Err(ValidationError::InvalidSchema {
+                message: "Schema must be a JSON object".to_string(),
+            });
+        }
+
+        let schema_obj = schema.as_object().unwrap();
+
+        // Check for properties field
+        if !schema_obj.contains_key("properties") {
+            return Err(ValidationError::MissingSchemaField {
+                field: "properties".to_string(),
+            });
+        }
+
+        // Basic type checking for properties
+        if let Some(properties) = schema_obj.get("properties").and_then(|p| p.as_object()) {
+            for (prop_name, prop_schema) in properties {
+                if let Some(prop_obj) = prop_schema.as_object() {
+                    if let Some(prop_type) = prop_obj.get("type").and_then(|t| t.as_str()) {
+                        match prop_type {
+                            "string" | "integer" | "number" | "boolean" | "array" => {
+                                // These are supported
+                            }
+                            "object" => {
+                                return Err(ValidationError::UnsupportedSchemaType {
+                                    schema_type: prop_type.to_string(),
+                                    parameter: prop_name.clone(),
+                                });
+                            }
+                            unknown => {
+                                return Err(ValidationError::UnsupportedSchemaType {
+                                    schema_type: unknown.to_string(),
+                                    parameter: prop_name.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1307,5 +1714,210 @@ mod tests {
         let tool = FilesReadTool;
         assert_eq!(tool.cli_category(), Some("file"));
         assert_eq!(tool.cli_name(), "read");
+    }
+
+    // Test tools for validation testing
+    struct ValidTool;
+    struct InvalidSchemaTool;
+    struct MissingCategoryTool;
+
+    #[async_trait::async_trait]
+    impl McpTool for ValidTool {
+        fn name(&self) -> &'static str {
+            "valid_test"
+        }
+        fn description(&self) -> &'static str {
+            "A valid test tool"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "param": {"type": "string", "description": "Test parameter"}
+                },
+                "required": ["param"]
+            })
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+        fn cli_category(&self) -> Option<&'static str> {
+            Some("test")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for InvalidSchemaTool {
+        fn name(&self) -> &'static str {
+            "invalid_schema_test"
+        }
+        fn description(&self) -> &'static str {
+            "A tool with invalid schema"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "nested": {
+                        "type": "object",  // Not supported
+                        "properties": {}
+                    }
+                }
+            })
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+        fn cli_category(&self) -> Option<&'static str> {
+            Some("test")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for MissingCategoryTool {
+        fn name(&self) -> &'static str {
+            "missing_category_test"
+        }
+        fn description(&self) -> &'static str {
+            "A tool missing CLI category"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "param": {"type": "string"}
+                }
+            })
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+        fn cli_category(&self) -> Option<&'static str> {
+            None // Missing category but not hidden from CLI
+        }
+    }
+
+    #[test]
+    fn test_tool_validation_valid_tool() {
+        let mut registry = ToolRegistry::new();
+        let tool = ValidTool;
+        registry.register(tool);
+
+        let result = registry.validate_cli_tools();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_tool_validation_invalid_schema() {
+        let mut registry = ToolRegistry::new();
+        let tool = InvalidSchemaTool;
+        registry.register(tool);
+
+        let result = registry.validate_cli_tools();
+        assert!(result.is_err());
+
+        let errors = result.unwrap_err();
+        assert!(!errors.is_empty());
+        assert!(matches!(
+            errors[0],
+            ToolValidationError::SchemaValidation { .. }
+        ));
+    }
+
+    #[test]
+    fn test_tool_validation_missing_category() {
+        let mut registry = ToolRegistry::new();
+        let tool = MissingCategoryTool;
+        registry.register(tool);
+
+        let result = registry.validate_cli_tools();
+        assert!(result.is_err());
+
+        let errors = result.unwrap_err();
+        assert!(!errors.is_empty());
+        assert!(matches!(
+            errors[0],
+            ToolValidationError::MissingCliCategory { .. }
+        ));
+    }
+
+    #[test]
+    fn test_tool_validation_report() {
+        let mut registry = ToolRegistry::new();
+        registry.register(ValidTool);
+        registry.register(InvalidSchemaTool);
+        registry.register(MissingCategoryTool);
+
+        let report = registry.validate_all_tools();
+        
+        assert_eq!(report.total_tools, 3);
+        assert_eq!(report.valid_tools, 1);
+        assert_eq!(report.invalid_tools, 2);
+        assert!(!report.is_valid());
+        assert!(!report.errors.is_empty());
+
+        let summary = report.summary();
+        assert!(summary.contains("❌"));
+        assert!(summary.contains("2 of 3 tools"));
+    }
+
+    #[test]
+    fn test_tool_validation_warnings() {
+        let mut registry = ToolRegistry::new();
+        registry.register(ValidTool);
+        registry.register(InvalidSchemaTool);
+
+        let warnings = registry.get_tool_validation_warnings();
+        
+        // Should have warning for InvalidSchemaTool but not for ValidTool
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].tool_name, "invalid_schema_test");
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        let error = ToolValidationError::SchemaValidation {
+            tool_name: "test_tool".to_string(),
+            error: ValidationError::UnsupportedSchemaType {
+                schema_type: "object".to_string(),
+                parameter: "test_param".to_string(),
+            },
+        };
+
+        let display_str = format!("{}", error);
+        assert!(display_str.contains("Schema validation failed"));
+        assert!(display_str.contains("test_tool"));
+    }
+
+    #[test]
+    fn test_individual_tool_validation() {
+        let registry = ToolRegistry::new();
+        
+        // Test valid tool
+        let valid_tool = ValidTool;
+        let result = registry.validate_tool(&valid_tool);
+        assert!(result.is_ok());
+
+        // Test invalid schema tool
+        let invalid_tool = InvalidSchemaTool;
+        let result = registry.validate_tool(&invalid_tool);
+        assert!(result.is_err());
+
+        // Test missing category tool
+        let missing_cat_tool = MissingCategoryTool;
+        let result = registry.validate_tool(&missing_cat_tool);
+        assert!(result.is_err());
     }
 }

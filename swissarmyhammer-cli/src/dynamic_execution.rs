@@ -209,7 +209,7 @@ pub fn display_mcp_result(result: CallToolResult) -> Result<()> {
 /// Formatted error message suitable for display to users
 pub fn format_conversion_error(error: ConversionError, tool_name: &str) -> String {
     match error {
-        ConversionError::MissingRequired(field) => {
+        ConversionError::MissingRequired { field } => {
             format!(
                 "Missing required argument '--{}' for tool '{}'.\nUse '--help' to see all required arguments.",
                 field, tool_name
@@ -235,16 +235,22 @@ pub fn format_conversion_error(error: ConversionError, tool_name: &str) -> Strin
                 field, data_type, tool_name, message
             )
         }
-        ConversionError::SchemaValidation(msg) => {
+        ConversionError::SchemaValidation { message } => {
             format!(
                 "Schema validation failed for tool '{}': {}.\nThis may indicate an internal tool configuration error.",
-                tool_name, msg
+                tool_name, message
             )
         }
-        ConversionError::UnsupportedSchemaType { schema_type } => {
+        ConversionError::UnsupportedSchemaType { schema_type, parameter } => {
             format!(
-                "Tool '{}' uses unsupported argument type '{}'. This tool may not be compatible with CLI execution.",
-                tool_name, schema_type
+                "Tool '{}' uses unsupported argument type '{}' for parameter '{}'. This tool may not be compatible with CLI execution.",
+                tool_name, schema_type, parameter
+            )
+        }
+        ConversionError::ValidationError(validation_err) => {
+            format!(
+                "Schema validation error in tool '{}': {}\nThis is likely an internal tool configuration error.",
+                tool_name, validation_err
             )
         }
     }

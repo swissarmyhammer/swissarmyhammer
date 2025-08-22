@@ -4,6 +4,7 @@
 //! eliminating the need for redundant CLI command enums and ensuring consistency
 //! between MCP and CLI interfaces.
 
+use swissarmyhammer_cli::schema_validation::{SchemaValidator, ValidationError};
 use clap::{Arg, ArgAction, Command};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -38,6 +39,52 @@ enum ArgType {
     Float,
     Boolean,
     Array,
+}
+
+/// Statistics about CLI tool validation
+#[derive(Debug, Clone)]
+pub struct CliValidationStats {
+    pub total_tools: usize,
+    pub valid_tools: usize,
+    pub invalid_tools: usize,
+    pub validation_errors: usize,
+}
+
+impl CliValidationStats {
+    pub fn new() -> Self {
+        Self {
+            total_tools: 0,
+            valid_tools: 0,
+            invalid_tools: 0,
+            validation_errors: 0,
+        }
+    }
+
+    pub fn is_all_valid(&self) -> bool {
+        self.invalid_tools == 0 && self.validation_errors == 0
+    }
+
+    pub fn success_rate(&self) -> f64 {
+        if self.total_tools == 0 {
+            100.0
+        } else {
+            (self.valid_tools as f64 / self.total_tools as f64) * 100.0
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        if self.is_all_valid() {
+            format!("✅ All {} CLI tools are valid", self.total_tools)
+        } else {
+            format!(
+                "⚠️  {} of {} CLI tools are valid ({:.1}% success rate, {} validation errors)",
+                self.valid_tools,
+                self.total_tools,
+                self.success_rate(),
+                self.validation_errors
+            )
+        }
+    }
 }
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
@@ -75,8 +122,10 @@ impl CliBuilder {
 
             for tool in tools {
                 if !tool.hidden_from_cli() {
-                    let tool_cmd_data = Self::precompute_tool_command(tool);
-                    tools_in_category.insert(tool.cli_name().to_string(), tool_cmd_data);
+                    // Only add tools that pass validation
+                    if let Some(tool_cmd_data) = Self::precompute_tool_command(tool) {
+                        tools_in_category.insert(tool.cli_name().to_string(), tool_cmd_data);
+                    }
                 }
             }
 
@@ -90,16 +139,26 @@ impl CliBuilder {
         }
     }
 
-    /// Pre-compute command data for a tool
-    fn precompute_tool_command(tool: &dyn McpTool) -> CommandData {
+    /// Pre-compute command data for a tool with validation
+    fn precompute_tool_command(tool: &dyn McpTool) -> Option<CommandData> {
         let schema = tool.schema();
 
-        CommandData {
+        // Validate schema before processing
+        if let Err(validation_error) = SchemaValidator::validate_schema(&schema) {
+            tracing::warn!(
+                "Skipping tool '{}' from CLI due to schema validation error: {}",
+                tool.name(),
+                validation_error
+            );
+            return None;
+        }
+
+        Some(CommandData {
             name: tool.cli_name().to_string(),
             about: tool.cli_about().map(|s| s.to_string()),
             long_about: Some(tool.description().to_string()),
             args: Self::precompute_args(&schema),
-        }
+        })
     }
 
     /// Pre-compute argument data from JSON schema
@@ -217,6 +276,155 @@ This CLI includes both static commands and dynamic commands generated from MCP t
         }
 
         cli
+    }
+
+    /// Build CLI with comprehensive validation and error reporting
+    ///
+    /// This method performs full validation of all tools before building the CLI
+    /// and returns detailed error information if validation fails.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Command)` - Successfully built CLI with all tools validated
+    /// * `Err(Vec<ValidationError>)` - CLI build failed due to validation errors
+    pub fn build_cli_with_validation(&self) -> Result<Command, Vec<ValidationError>> {
+        // Validate all CLI tools first
+        let validation_errors = self.validate_all_tools();
+        
+        if !validation_errors.is_empty() {
+            return Err(validation_errors);
+        }
+
+        Ok(self.build_cli())
+    }
+
+    /// Build CLI with warnings for validation issues (graceful degradation)
+    ///
+    /// This method builds the CLI but logs warnings for any validation issues,
+    /// skipping problematic tools rather than failing completely.
+    ///
+    /// # Returns
+    ///
+    /// Always returns a `Command`, but may skip invalid tools with warnings
+    pub fn build_cli_with_warnings(&self) -> Command {
+        let warnings = self.get_validation_warnings();
+        
+        if !warnings.is_empty() {
+            tracing::warn!("Found {} tool validation warnings during CLI build:", warnings.len());
+            for (i, warning) in warnings.iter().enumerate() {
+                tracing::warn!("  {}. {}", i + 1, warning);
+            }
+        }
+
+        // The build_cli method already includes graceful degradation
+        // by skipping tools that fail validation
+        self.build_cli()
+    }
+
+    /// Validate all tools that should appear in CLI
+    ///
+    /// Performs comprehensive validation of all CLI-visible tools and collects
+    /// all validation errors found.
+    ///
+    /// # Returns
+    ///
+    /// Vec of validation errors (empty if all tools are valid)
+    pub fn validate_all_tools(&self) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+
+        let categories = self.tool_registry.get_cli_categories();
+        for category in categories {
+            let tools = self.tool_registry.get_tools_for_category(&category);
+            for tool in tools {
+                if let Err(tool_errors) = self.validate_single_tool(tool) {
+                    errors.extend(tool_errors);
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Validate a single tool for CLI compatibility
+    fn validate_single_tool(&self, tool: &dyn McpTool) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+
+        // Validate schema
+        if let Err(schema_error) = SchemaValidator::validate_schema(&tool.schema()) {
+            errors.push(schema_error);
+        }
+
+        // Validate CLI integration requirements
+        if !tool.hidden_from_cli() {
+            if tool.cli_category().is_none() {
+                errors.push(ValidationError::MissingSchemaField {
+                    field: format!("CLI category for tool {}", tool.name()),
+                });
+            }
+
+            // Validate CLI name
+            let cli_name = tool.cli_name();
+            if cli_name.is_empty() {
+                errors.push(ValidationError::InvalidParameterName {
+                    parameter: tool.name().to_string(),
+                    reason: "CLI name cannot be empty".to_string(),
+                });
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Get validation warnings for all tools (non-failing validation)
+    ///
+    /// This method performs validation but returns warnings instead of errors,
+    /// suitable for graceful degradation scenarios.
+    ///
+    /// # Returns
+    ///
+    /// Vec of user-friendly warning messages
+    pub fn get_validation_warnings(&self) -> Vec<String> {
+        let errors = self.validate_all_tools();
+        
+        errors.into_iter().map(|error| {
+            format!("Tool validation warning: {}", error)
+        }).collect()
+    }
+
+    /// Get statistics about CLI tool validation
+    ///
+    /// Provides summary information about tool validation status for
+    /// debugging and monitoring purposes.
+    ///
+    /// # Returns
+    ///
+    /// `CliValidationStats` with counts and status information
+    pub fn get_validation_stats(&self) -> CliValidationStats {
+        let mut stats = CliValidationStats::new();
+        
+        let categories = self.tool_registry.get_cli_categories();
+        for category in categories {
+            let tools = self.tool_registry.get_tools_for_category(&category);
+            for tool in tools {
+                stats.total_tools += 1;
+                
+                match self.validate_single_tool(tool) {
+                    Ok(()) => {
+                        stats.valid_tools += 1;
+                    }
+                    Err(errors) => {
+                        stats.invalid_tools += 1;
+                        stats.validation_errors += errors.len();
+                    }
+                }
+            }
+        }
+
+        stats
     }
 
     /// Build a command for a specific tool category from pre-computed data

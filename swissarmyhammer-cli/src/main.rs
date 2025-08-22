@@ -82,7 +82,33 @@ async fn run_with_dynamic_cli() {
 
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
-    let dynamic_cli = cli_builder.build_cli();
+    
+    // Get validation statistics for startup reporting
+    let validation_stats = cli_builder.get_validation_stats();
+    
+    // Check for validation issues and report them
+    if !validation_stats.is_all_valid() {
+        // Always show validation summary for issues (not just in verbose mode)
+        eprintln!("⚠️  CLI Validation Issues: {}", validation_stats.summary());
+        
+        // Show detailed warnings if there are validation problems
+        let warnings = cli_builder.get_validation_warnings();
+        if !warnings.is_empty() {
+            eprintln!("Validation warnings ({} issues):", warnings.len());
+            for (i, warning) in warnings.iter().enumerate().take(5) {
+                eprintln!("  {}. {}", i + 1, warning);
+            }
+            if warnings.len() > 5 {
+                eprintln!("  ... and {} more warnings", warnings.len() - 5);
+                eprintln!("  Use --verbose for complete validation report");
+            }
+        }
+        eprintln!(); // Add blank line for readability
+    }
+    
+    // Build CLI with warnings for validation issues (graceful degradation)
+    // This will skip problematic tools but continue building the CLI
+    let dynamic_cli = cli_builder.build_cli_with_warnings();
 
     // Parse arguments with dynamic CLI
     let matches = match dynamic_cli.try_get_matches() {
@@ -110,6 +136,27 @@ async fn handle_dynamic_matches(
 
     // Initialize logging similar to static CLI
     configure_logging(verbose, debug, quiet, false).await;
+
+    // Show detailed validation report in verbose mode
+    if verbose {
+        let tool_registry = cli_tool_context.get_tool_registry_arc();
+        let cli_builder = CliBuilder::new(tool_registry);
+        let validation_stats = cli_builder.get_validation_stats();
+        
+        if verbose {
+            eprintln!("🔍 CLI Tool Validation Report:");
+            eprintln!("   {}", validation_stats.summary());
+            
+            if !validation_stats.is_all_valid() {
+                eprintln!("   Tools with issues:");
+                let warnings = cli_builder.get_validation_warnings();
+                for (i, warning) in warnings.iter().enumerate() {
+                    eprintln!("     {}. {}", i + 1, warning);
+                }
+            }
+            eprintln!(); // Add blank line
+        }
+    }
 
     // Handle subcommands
     match matches.subcommand() {
