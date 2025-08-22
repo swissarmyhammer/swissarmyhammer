@@ -70,9 +70,12 @@ impl ConfigProvider {
         // FileDiscovery already provides proper ordering: global files first, project files second
         let discovery = FileDiscovery::new();
         let config_files = discovery.discover_all();
-        
-        debug!("Found {} configuration files to process", config_files.len());
-        
+
+        debug!(
+            "Found {} configuration files to process",
+            config_files.len()
+        );
+
         for config_file in config_files {
             trace!(
                 "Processing config file: {} ({:?}, scope: {:?}, priority: {})",
@@ -81,7 +84,7 @@ impl ConfigProvider {
                 config_file.scope,
                 config_file.priority
             );
-            
+
             figment = figment.merge(self.load_config_file(&config_file)?);
         }
 
@@ -94,8 +97,6 @@ impl ConfigProvider {
         info!("Successfully built figment configuration with complete precedence order");
         Ok(figment)
     }
-
-
 
     /// Load a single configuration file based on its format
     fn load_config_file(&self, config_file: &ConfigFile) -> ConfigResult<Figment> {
@@ -126,12 +127,10 @@ impl ConfigProvider {
 
         // Then add SWISSARMYHAMMER_ prefix (higher priority - will override SAH_ vars)
         let swissarmyhammer_env = Env::prefixed("SWISSARMYHAMMER_")
-            .split("__") // Support nested config via double underscores  
+            .split("__") // Support nested config via double underscores
             .map(|key| key.as_str().to_lowercase().into());
 
-        let figment = Figment::new()
-            .merge(sah_env)
-            .merge(swissarmyhammer_env);
+        let figment = Figment::new().merge(sah_env).merge(swissarmyhammer_env);
 
         trace!("Environment variables loaded with nested configuration support");
         Ok(figment)
@@ -167,7 +166,7 @@ mod tests {
         // With no configuration files, should still have default values
         // Plus any environment variables that happen to be set
         assert!(!context.is_empty()); // Should have at least the default values
-        
+
         // Should contain some expected defaults
         assert!(context.get("environment").is_some());
         assert!(context.get("debug").is_some());
@@ -181,7 +180,7 @@ mod tests {
         // Default config should not be empty now
         let config: RawConfig = figment.extract().unwrap();
         assert!(!config.is_empty());
-        
+
         // Should contain expected default keys
         assert!(config.values.contains_key("environment"));
         assert!(config.values.contains_key("debug"));
@@ -204,17 +203,20 @@ mod tests {
         // Check that environment variables are loaded with correct keys
         assert!(config.contains_key("test_var"));
         assert!(config.contains_key("other_var"));
-        
+
         // Check nested configuration support
         if let Some(serde_json::Value::Object(database)) = config.get("database") {
             assert!(database.contains_key("host"));
             assert!(database.contains_key("port"));
-            assert_eq!(database["host"], serde_json::Value::String("localhost".to_string()));
+            assert_eq!(
+                database["host"],
+                serde_json::Value::String("localhost".to_string())
+            );
             // Figment may parse numeric strings as numbers, so accept both
             let port_val = &database["port"];
             assert!(
-                port_val == &serde_json::Value::String("5432".to_string()) ||
-                port_val == &serde_json::Value::Number(5432.into()),
+                port_val == &serde_json::Value::String("5432".to_string())
+                    || port_val == &serde_json::Value::Number(5432.into()),
                 "Expected port to be either string '5432' or number 5432, got: {:?}",
                 port_val
             );
@@ -290,7 +292,7 @@ number_key = 42
             config.get("number_key"),
             Some(&serde_json::Value::Number(42.into()))
         );
-        
+
         // Should also have default values
         assert!(config.contains_key("environment"));
     }
@@ -331,7 +333,7 @@ number_key: 42
             config.get("number_key"),
             Some(&serde_json::Value::Number(42.into()))
         );
-        
+
         // Should also have default values
         assert!(config.contains_key("environment"));
     }
@@ -374,7 +376,7 @@ number_key: 42
             config.get("number_key"),
             Some(&serde_json::Value::Number(42.into()))
         );
-        
+
         // Should also have default values
         assert!(config.contains_key("environment"));
     }

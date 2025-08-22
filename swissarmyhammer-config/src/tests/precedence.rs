@@ -282,7 +282,7 @@ fn test_defaults_are_lowest_priority() {
     assert!(context.get("environment").is_some());
     assert!(context.get("debug").is_some());
     assert!(context.get("project_name").is_some());
-    
+
     // Check that defaults have expected values
     assert_eq!(
         context.get("environment"),
@@ -398,7 +398,7 @@ custom_key = "from_file"
 }
 
 #[test]
-#[serial] 
+#[serial]
 fn test_nested_environment_variables() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
@@ -426,26 +426,41 @@ fn test_nested_environment_variables() {
 
     // Check for nested structures
     if let Some(serde_json::Value::Object(database)) = context.get("database") {
-        assert_eq!(database["host"], serde_json::Value::String("localhost".to_string()));
+        assert_eq!(
+            database["host"],
+            serde_json::Value::String("localhost".to_string())
+        );
         // Figment may parse numeric strings as numbers
         let port_val = &database["port"];
         assert!(
-            port_val == &serde_json::Value::String("5432".to_string()) ||
-            port_val == &serde_json::Value::Number(5432.into()),
+            port_val == &serde_json::Value::String("5432".to_string())
+                || port_val == &serde_json::Value::Number(5432.into()),
             "Expected port to be either string '5432' or number 5432, got: {:?}",
             port_val
         );
-        assert_eq!(database["name"], serde_json::Value::String("testdb".to_string()));
-        
+        assert_eq!(
+            database["name"],
+            serde_json::Value::String("testdb".to_string())
+        );
+
         // SWISSARMYHAMMER prefix should override SAH for same path
         if database.contains_key("user") {
-            assert_eq!(database["user"], serde_json::Value::String("admin".to_string()));
+            assert_eq!(
+                database["user"],
+                serde_json::Value::String("admin".to_string())
+            );
         }
     }
 
     if let Some(serde_json::Value::Object(logging)) = context.get("logging") {
-        assert_eq!(logging["level"], serde_json::Value::String("debug".to_string()));
-        assert_eq!(logging["format"], serde_json::Value::String("json".to_string()));
+        assert_eq!(
+            logging["level"],
+            serde_json::Value::String("debug".to_string())
+        );
+        assert_eq!(
+            logging["format"],
+            serde_json::Value::String("json".to_string())
+        );
     }
 }
 
@@ -462,7 +477,7 @@ fn test_complete_precedence_order() {
 
     // Create project directory
     let project_dir = temp_dir.path().join("project");
-    let project_sah_dir = project_dir.join(".swissarmyhammer");  
+    let project_sah_dir = project_dir.join(".swissarmyhammer");
     fs::create_dir_all(&project_sah_dir).unwrap();
 
     // Create global config (lower priority than project)
@@ -491,7 +506,7 @@ will_be_overridden = "project_default"
 
     // Change to project directory
     std::env::set_current_dir(&project_dir).unwrap();
-    
+
     // Temporarily set HOME to simulate global config discovery
     let original_home = std::env::var("HOME").ok();
     std::env::set_var("HOME", &home_dir);

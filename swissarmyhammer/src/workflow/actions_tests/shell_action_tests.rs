@@ -1669,8 +1669,8 @@ mod comprehensive_error_handling_tests {
         // stderr should be empty or contain only shell initialization warnings
         let stderr = context.get("stderr").unwrap().as_str().unwrap();
         assert!(
-            stderr.trim().is_empty() 
-            || stderr.contains("shell-init: error retrieving current directory")
+            stderr.trim().is_empty()
+                || stderr.contains("shell-init: error retrieving current directory")
         );
     }
 

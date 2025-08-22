@@ -2428,9 +2428,9 @@ mod tests {
         // Verify stderr is empty or contains only shell initialization warnings
         let stderr = context.get("stderr").unwrap().as_str().unwrap();
         assert!(
-            stderr.is_empty() 
-            || stderr.trim().is_empty() 
-            || stderr.contains("shell-init: error retrieving current directory")
+            stderr.is_empty()
+                || stderr.trim().is_empty()
+                || stderr.contains("shell-init: error retrieving current directory")
         );
 
         // Verify duration is tracked

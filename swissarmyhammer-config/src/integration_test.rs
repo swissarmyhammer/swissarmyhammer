@@ -134,7 +134,9 @@ port = 5432
         assert_eq!(context.get("debug"), Some(&serde_json::Value::Bool(false)));
         assert_eq!(
             context.get("project_name"),
-            Some(&serde_json::Value::String("swissarmyhammer-project".to_string()))
+            Some(&serde_json::Value::String(
+                "swissarmyhammer-project".to_string()
+            ))
         );
     }
 
@@ -200,7 +202,11 @@ database:
         // Database object should be merged from all sources
         if let Some(serde_json::Value::Object(database)) = context.get("database") {
             // Values from different formats should be merged
-            assert!(database.contains_key("host") || database.contains_key("port") || database.contains_key("ssl"));
+            assert!(
+                database.contains_key("host")
+                    || database.contains_key("port")
+                    || database.contains_key("ssl")
+            );
         }
 
         // Should still have default values
@@ -280,17 +286,21 @@ file = "/var/log/app.log"
                 let host_val = &database["host"];
                 if let serde_json::Value::String(host_str) = host_val {
                     // Should be either the substituted value or an override
-                    assert!(host_str == "production-db.example.com" || host_str == "localhost" || !host_str.is_empty());
+                    assert!(
+                        host_str == "production-db.example.com"
+                            || host_str == "localhost"
+                            || !host_str.is_empty()
+                    );
                 }
             }
-            
+
             if database.contains_key("password") {
                 let password_val = &database["password"];
                 if let serde_json::Value::String(password_str) = password_val {
                     assert!(password_str == "secret123" || !password_str.is_empty());
                 }
             }
-            
+
             if database.contains_key("fallback_host") {
                 let fallback_val = &database["fallback_host"];
                 if let serde_json::Value::String(fallback_str) = fallback_val {
@@ -405,26 +415,29 @@ beta_api = true
 
         // Check nested structures exist and have correct values
         if let Some(serde_json::Value::Object(server)) = context.get("server") {
-            assert_eq!(server["host"], serde_json::Value::String("0.0.0.0".to_string()));
+            assert_eq!(
+                server["host"],
+                serde_json::Value::String("0.0.0.0".to_string())
+            );
             // Environment should override (comes as string)
             if let Some(port_val) = server.get("port") {
                 // Could be number from file or string from env
                 let port_str = match port_val {
                     serde_json::Value::String(s) => s.clone(),
                     serde_json::Value::Number(n) => n.to_string(),
-                    _ => panic!("Unexpected port value type")
+                    _ => panic!("Unexpected port value type"),
                 };
                 // Should be overridden by env var
                 assert_eq!(port_str, "9090");
             }
-            
+
             if let Some(serde_json::Value::Object(ssl)) = server.get("ssl") {
                 // Environment should override (comes as string)
                 if let Some(enabled_val) = ssl.get("enabled") {
                     match enabled_val {
                         serde_json::Value::String(s) => assert_eq!(s, "false"),
                         serde_json::Value::Bool(b) => assert!(!(*b)),
-                        _ => panic!("Unexpected enabled value type")
+                        _ => panic!("Unexpected enabled value type"),
                     }
                 }
                 assert!(ssl.contains_key("cert_path"));
@@ -433,14 +446,14 @@ beta_api = true
 
         if let Some(serde_json::Value::Object(database)) = context.get("database") {
             assert!(database.contains_key("primary"));
-            
+
             if let Some(serde_json::Value::Object(pool)) = database.get("pool") {
                 // Environment should override (check both string and number)
                 if let Some(max_conn_val) = pool.get("max_connections") {
                     match max_conn_val {
                         serde_json::Value::String(s) => assert_eq!(s, "50"),
                         serde_json::Value::Number(n) => assert_eq!(n, &50.into()),
-                        _ => panic!("Unexpected max_connections value type")
+                        _ => panic!("Unexpected max_connections value type"),
                     }
                 }
                 assert!(pool.contains_key("min_connections"));
@@ -454,7 +467,7 @@ beta_api = true
                     match new_ui_val {
                         serde_json::Value::String(s) => assert_eq!(s, "true"),
                         serde_json::Value::Bool(b) => assert!(*b),
-                        _ => panic!("Unexpected new_ui value type")
+                        _ => panic!("Unexpected new_ui value type"),
                     }
                 }
                 assert!(experimental.contains_key("beta_api"));
