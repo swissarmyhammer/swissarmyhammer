@@ -1,6 +1,7 @@
 //! Core data structures for SwissArmyHammer configuration system
 
 use crate::{ConfigError, ConfigResult};
+use liquid::ValueView;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, trace, warn};
@@ -123,6 +124,27 @@ impl TemplateContext {
     /// Merge another context into this one with precedence
     ///
     /// Variables from `other` will override variables in `self` for conflicting keys.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    ///
+    /// let mut base_ctx = TemplateContext::new();
+    /// base_ctx.set("app_name", serde_json::Value::String("MyApp".to_string()));
+    /// base_ctx.set("version", serde_json::Value::String("1.0.0".to_string()));
+    ///
+    /// let mut override_ctx = TemplateContext::new();
+    /// override_ctx.set("version", serde_json::Value::String("2.0.0".to_string()));
+    /// override_ctx.set("debug", serde_json::Value::Bool(true));
+    ///
+    /// base_ctx.merge(&override_ctx);
+    ///
+    /// // `version` is overridden, `app_name` is preserved, `debug` is added
+    /// assert_eq!(base_ctx.get_string("app_name"), Some("MyApp".to_string()));
+    /// assert_eq!(base_ctx.get_string("version"), Some("2.0.0".to_string()));
+    /// assert_eq!(base_ctx.get_bool("debug"), Some(true));
+    /// ```
     pub fn merge(&mut self, other: &TemplateContext) {
         debug!(
             "Merging template context with {} variables",
@@ -135,6 +157,30 @@ impl TemplateContext {
     }
 
     /// Merge with configuration context (config has lower priority)
+    ///
+    /// Configuration variables are added only if they don't conflict with existing variables.
+    /// Existing template variables have higher priority and will not be overridden.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut ctx = TemplateContext::new();
+    /// ctx.set("user_setting", serde_json::Value::String("custom".to_string()));
+    ///
+    /// let mut config_vars = HashMap::new();
+    /// config_vars.insert("user_setting".to_string(), serde_json::Value::String("default".to_string()));
+    /// config_vars.insert("global_timeout".to_string(), serde_json::Value::Number(30.into()));
+    ///
+    /// ctx.merge_config(config_vars);
+    ///
+    /// // user_setting keeps its original value (higher priority)
+    /// assert_eq!(ctx.get_string("user_setting"), Some("custom".to_string()));
+    /// // global_timeout is added from config
+    /// assert_eq!(ctx.get_number("global_timeout"), Some(30.0));
+    /// ```
     pub fn merge_config(&mut self, config_vars: HashMap<String, serde_json::Value>) {
         debug!("Merging config variables with lower priority: {} variables", config_vars.len());
         // Insert config vars first, then existing vars will override them
@@ -146,6 +192,33 @@ impl TemplateContext {
     }
 
     /// Merge with workflow variables (workflow has higher priority)
+    ///
+    /// Workflow variables override any existing variables with the same keys.
+    /// This is typically used to inject runtime state into template contexts.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut ctx = TemplateContext::new();
+    /// ctx.set("environment", serde_json::Value::String("development".to_string()));
+    /// ctx.set("debug_mode", serde_json::Value::Bool(false));
+    ///
+    /// let mut workflow_vars = HashMap::new();
+    /// workflow_vars.insert("environment".to_string(), serde_json::Value::String("production".to_string()));
+    /// workflow_vars.insert("workflow_id".to_string(), serde_json::Value::String("deploy-001".to_string()));
+    ///
+    /// ctx.merge_workflow(workflow_vars);
+    ///
+    /// // environment is overridden by workflow
+    /// assert_eq!(ctx.get_string("environment"), Some("production".to_string()));
+    /// // debug_mode is preserved
+    /// assert_eq!(ctx.get_bool("debug_mode"), Some(false));
+    /// // workflow_id is added
+    /// assert_eq!(ctx.get_string("workflow_id"), Some("deploy-001".to_string()));
+    /// ```
     pub fn merge_workflow(&mut self, workflow_vars: HashMap<String, serde_json::Value>) {
         debug!("Merging workflow variables with higher priority: {} variables", workflow_vars.len());
         // Workflow vars override existing vars
@@ -167,6 +240,37 @@ impl TemplateContext {
     /// Supports patterns:
     /// - `${VAR}` - Replace with environment variable VAR
     /// - `${VAR:-default}` - Replace with VAR or default if VAR is unset
+    ///
+    /// Substitution works recursively through nested JSON objects and arrays.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::env;
+    ///
+    /// // Set up environment variables
+    /// env::set_var("DATABASE_HOST", "localhost");
+    /// env::set_var("DATABASE_PORT", "5432");
+    ///
+    /// let mut ctx = TemplateContext::new();
+    /// ctx.set("connection", serde_json::json!({
+    ///     "url": "postgresql://${DATABASE_HOST}:${DATABASE_PORT}/myapp",
+    ///     "timeout": "${CONNECTION_TIMEOUT:-30}",
+    ///     "pool_size": "${POOL_SIZE:-10}"
+    /// }));
+    ///
+    /// ctx.substitute_env_vars().unwrap();
+    ///
+    /// let connection = ctx.get("connection").unwrap();
+    /// assert_eq!(connection["url"], "postgresql://localhost:5432/myapp");
+    /// assert_eq!(connection["timeout"], "30"); // default used
+    /// assert_eq!(connection["pool_size"], "10"); // default used
+    ///
+    /// // Clean up
+    /// env::remove_var("DATABASE_HOST");
+    /// env::remove_var("DATABASE_PORT");
+    /// ```
     pub fn substitute_env_vars(&mut self) -> ConfigResult<()> {
         debug!("Performing environment variable substitution");
         let mut updated_vars = HashMap::new();
@@ -181,6 +285,31 @@ impl TemplateContext {
     }
 
     /// Get context with environment variables substituted (non-mutating)
+    ///
+    /// Creates a new context with environment variables substituted without modifying the original.
+    /// This is useful for functional-style programming where immutability is preferred.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::env;
+    ///
+    /// env::set_var("API_KEY", "secret123");
+    ///
+    /// let original_ctx = TemplateContext::new();
+    /// original_ctx.set("api_url", serde_json::Value::String("https://api.example.com/${API_KEY}".to_string()));
+    ///
+    /// let substituted_ctx = original_ctx.with_env_substitution().unwrap();
+    ///
+    /// // Original context is unchanged
+    /// assert_eq!(original_ctx.get_string("api_url"), Some("https://api.example.com/${API_KEY}".to_string()));
+    /// 
+    /// // New context has substituted values
+    /// assert_eq!(substituted_ctx.get_string("api_url"), Some("https://api.example.com/secret123".to_string()));
+    ///
+    /// env::remove_var("API_KEY");
+    /// ```
     pub fn with_env_substitution(&self) -> ConfigResult<TemplateContext> {
         debug!("Creating context with environment variable substitution");
         let mut result = self.clone();
@@ -372,16 +501,73 @@ impl From<TemplateContext> for liquid::Object {
     }
 }
 
-// TODO: Implement From<liquid::Object> for TemplateContext once we understand the liquid::Value API better
-// This will be added in a follow-up implementation
+impl From<liquid::Object> for TemplateContext {
+    fn from(obj: liquid::Object) -> Self {
+        Self::from_liquid_object(obj)
+    }
+}
 
 impl TemplateContext {
-    /// Create TemplateContext from liquid::Object (manual implementation)
-    pub fn from_liquid_object(_obj: liquid::Object) -> Self {
-        // For now, we'll implement this as a no-op and return empty context
-        // This will be properly implemented once we understand the liquid::Value enum
-        warn!("from_liquid_object is not yet fully implemented");
-        Self::new()
+    /// Create TemplateContext from liquid::Object
+    pub fn from_liquid_object(obj: liquid::Object) -> Self {
+        debug!("Converting liquid object to template context");
+        let mut vars = HashMap::new();
+
+        for (key, value) in obj.iter() {
+            if let Some(json_value) = Self::liquid_to_json(value) {
+                vars.insert(key.to_string(), json_value);
+            } else {
+                warn!(
+                    "Failed to convert liquid variable '{}' to JSON value: {:?}",
+                    key, value
+                );
+            }
+        }
+
+        Self::with_vars(vars)
+    }
+
+    /// Convert a liquid value to a JSON value
+    fn liquid_to_json(value: &liquid::model::Value) -> Option<serde_json::Value> {
+        match value {
+            liquid::model::Value::Nil => Some(serde_json::Value::Null),
+            liquid::model::Value::Scalar(scalar) => {
+                // Handle scalar values - try to convert to appropriate JSON type
+                if let Some(b) = scalar.to_bool() {
+                    Some(serde_json::Value::Bool(b))
+                } else if let Some(i) = scalar.to_integer() {
+                    Some(serde_json::Value::Number(serde_json::Number::from(i)))
+                } else if let Some(f) = scalar.to_float() {
+                    serde_json::Number::from_f64(f).map(serde_json::Value::Number)
+                } else {
+                    // Fallback to string representation
+                    Some(serde_json::Value::String(scalar.to_kstr().to_string()))
+                }
+            }
+            liquid::model::Value::Array(arr) => {
+                let mut json_arr = Vec::new();
+                for item in arr {
+                    if let Some(json_val) = Self::liquid_to_json(item) {
+                        json_arr.push(json_val);
+                    }
+                }
+                Some(serde_json::Value::Array(json_arr))
+            }
+            liquid::model::Value::Object(obj) => {
+                let mut json_obj = serde_json::Map::new();
+                for (k, v) in obj.iter() {
+                    if let Some(json_val) = Self::liquid_to_json(v) {
+                        json_obj.insert(k.to_string(), json_val);
+                    }
+                }
+                Some(serde_json::Value::Object(json_obj))
+            }
+            // Handle any other liquid value types by converting to string
+            _ => {
+                warn!("Unknown liquid value type, converting to string");
+                Some(serde_json::Value::String(format!("{:?}", value)))
+            }
+        }
     }
 }
 

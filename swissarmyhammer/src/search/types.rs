@@ -936,7 +936,7 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
-        let config_result = panic::catch_unwind(|| SemanticConfig::default());
+        let config_result = panic::catch_unwind(SemanticConfig::default);
 
         // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
@@ -973,7 +973,7 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Use panic::catch_unwind to ensure directory is restored even on panic
-        let config_result = panic::catch_unwind(|| SemanticConfig::default());
+        let config_result = panic::catch_unwind(SemanticConfig::default);
 
         // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
