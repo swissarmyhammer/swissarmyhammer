@@ -86,7 +86,9 @@ mod tests {
     fn test_prompt_resolver_loads_user_prompts() {
         let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         let home_dir = std::env::var("HOME").unwrap();
-        let user_prompts_dir = PathBuf::from(&home_dir).join(".swissarmyhammer").join("prompts");
+        let user_prompts_dir = PathBuf::from(&home_dir)
+            .join(".swissarmyhammer")
+            .join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a test prompt file
@@ -204,6 +206,7 @@ mod tests {
 
     #[test]
     fn test_user_prompt_overrides_builtin_source_tracking() {
+        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();

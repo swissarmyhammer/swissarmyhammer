@@ -56,3 +56,34 @@ Per specification: `test_concurrent_workflow_abort_handling` is allowed to remai
 - Look for any workflow execution caching or global state that prevents parallel execution
 - The specification emphasizes removing caching if it causes serialization
 - Use `.home_path()` and `.swissarmyhammer_dir()` from the isolated environment for workflow storage paths
+## Proposed Solution
+
+After analyzing the 10 serial tests in `workflow/run.rs`, I found that:
+
+1. **No exempt test**: `test_concurrent_workflow_abort_handling` does not exist in this file
+2. **All 10 tests are similar**: They all test abort file cleanup functionality with hardcoded `.swissarmyhammer/.abort` paths
+3. **Root cause**: Tests use hardcoded paths that conflict when run in parallel
+
+### Implementation Steps
+
+1. **Remove all 10 `#[serial_test::serial]` attributes** from lines 232, 270, 290, 311, 350, 378, 406, 455, 482, 516
+
+2. **Replace hardcoded paths with isolated environment paths** in all tests:
+   - Change `.swissarmyhammer/.abort` to use `env.swissarmyhammer_dir().join(".abort")`
+   - Change `std::fs::create_dir_all(".swissarmyhammer")` to use isolated directory
+
+3. **Keep existing IsolatedTestEnvironment usage** where already present and add to tests that don't have it
+
+4. **Update WorkflowRun::new()** if needed to work with different `.swissarmyhammer` locations
+
+### Tests to modify:
+- `test_abort_file_cleanup_when_file_exists`
+- `test_abort_file_cleanup_when_file_does_not_exist` 
+- `test_abort_file_cleanup_continues_on_permission_error`
+- `test_multiple_workflow_runs_cleanup_abort_file`
+- `test_abort_file_cleanup_with_unicode_content`
+- `test_abort_file_cleanup_with_large_content`
+- `test_abort_file_cleanup_concurrent_workflow_runs`
+- `test_abort_file_cleanup_empty_file`
+- `test_abort_file_cleanup_with_newlines`
+- `test_workflow_initialization_after_cleanup`

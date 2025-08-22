@@ -258,7 +258,8 @@ mod tests {
         let var_name = "TEST_VAR_NOT_SET_DEFAULT_1234";
         env::remove_var(var_name);
 
-        let result = processor.substitute_variables(&format!("Database: ${{{var_name}:-localhost}}"))?;
+        let result =
+            processor.substitute_variables(&format!("Database: ${{{var_name}:-localhost}}"))?;
         assert_eq!(result, "Database: localhost");
 
         Ok(())
@@ -273,7 +274,8 @@ mod tests {
         let var_name = "TEST_DB_HOST_ENVVAR_5678";
         env::set_var(var_name, "production.example.com");
 
-        let result = processor.substitute_variables(&format!("Database: ${{{var_name}:-localhost}}"))?;
+        let result =
+            processor.substitute_variables(&format!("Database: ${{{var_name}:-localhost}}"))?;
         assert_eq!(result, "Database: production.example.com");
 
         // Clean up
@@ -323,15 +325,16 @@ mod tests {
 
         // Use unique variable names to avoid conflicts
         let host_var = "DB_HOST_MULTI_7777";
-        let port_var = "DB_PORT_MULTI_6666";  
+        let port_var = "DB_PORT_MULTI_6666";
         let name_var = "DB_NAME_MULTI_5555";
-        
+
         env::set_var(host_var, "db.example.com");
         env::set_var(port_var, "5432");
         env::remove_var(name_var);
 
-        let result = processor
-            .substitute_variables(&format!("Connection: ${{{host_var}}}:${{{port_var}}}/${{{name_var}:-myapp}}"))?;
+        let result = processor.substitute_variables(&format!(
+            "Connection: ${{{host_var}}}:${{{port_var}}}/${{{name_var}:-myapp}}"
+        ))?;
         assert_eq!(result, "Connection: db.example.com:5432/myapp");
 
         // Clean up
@@ -482,8 +485,9 @@ mod tests {
         let var_name = "TEST_SPECIAL_DEFAULT_3333";
         env::remove_var(var_name);
 
-        let result = processor
-            .substitute_variables(&format!("Config: ${{{var_name}:-http://localhost:8080/api}}"))?;
+        let result = processor.substitute_variables(&format!(
+            "Config: ${{{var_name}:-http://localhost:8080/api}}"
+        ))?;
         assert_eq!(result, "Config: http://localhost:8080/api");
 
         Ok(())
