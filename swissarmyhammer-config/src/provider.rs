@@ -12,7 +12,6 @@ use figment::{
     Figment,
 };
 use tracing::{debug, info, trace};
-use std::path::PathBuf;
 
 
 /// Configuration provider using figment
