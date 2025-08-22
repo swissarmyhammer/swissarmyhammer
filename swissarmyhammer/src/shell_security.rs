@@ -558,7 +558,6 @@ pub fn log_shell_completion(command: &str, exit_code: i32, execution_time_ms: u6
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    
 
     #[test]
     fn test_shell_security_validator_creation() {

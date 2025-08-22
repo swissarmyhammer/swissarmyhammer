@@ -367,7 +367,6 @@ mod tests {
     fn test_get_todo_directory_git_repository_requirement() {
         // Test 1: Outside Git repository - should fail
         use std::env;
-        
 
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let original_dir = match env::current_dir() {

@@ -263,7 +263,6 @@ pub fn format_issue_status(completed: bool) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    
 
     #[test]
     fn test_content_source_from_args() {
@@ -335,7 +334,6 @@ mod tests {
     fn test_get_current_issue_from_branch() {
         use crate::git::GitOperations;
         use std::process::Command;
-        
 
         // Create a temporary git repository for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();

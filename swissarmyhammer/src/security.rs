@@ -297,7 +297,6 @@ fn check_template_nesting_depth(template: &str) -> usize {
 mod tests {
     use super::*;
     use std::fs;
-    
 
     #[test]
     fn test_validate_path_security_safe_path() {

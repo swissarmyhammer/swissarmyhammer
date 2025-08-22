@@ -253,8 +253,37 @@ pub mod types {
 
     /// Parse size string (legacy compatibility)
     pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
-        // Simple implementation - just parse as number for now
-        size_str.parse::<usize>().map_err(|e| e.to_string())
+        let size_str = size_str.trim().to_uppercase();
+
+        if size_str.is_empty() {
+            return Err("Empty size string".to_string());
+        }
+
+        // Extract numeric part and unit
+        let (numeric_part, unit) = if let Some(pos) = size_str.find(|c: char| c.is_alphabetic()) {
+            (&size_str[..pos], &size_str[pos..])
+        } else {
+            // No unit, assume bytes
+            return size_str
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid numeric value: {size_str}"));
+        };
+
+        let base_size: usize = numeric_part
+            .parse()
+            .map_err(|_| format!("Invalid numeric value: {numeric_part}"))?;
+
+        let multiplier = match unit {
+            "B" | "" => 1,
+            "KB" => 1_024,
+            "MB" => 1_024 * 1_024,
+            "GB" => 1_024 * 1_024 * 1_024,
+            _ => return Err(format!("Unknown size unit: {unit}")),
+        };
+
+        base_size
+            .checked_mul(multiplier)
+            .ok_or_else(|| "Size value too large".to_string())
     }
 
     // Re-export common config types for compatibility
@@ -801,5 +830,28 @@ shared_key = "from_config"
         assert!(context.contains_key("_template_vars"));
         let template_vars = context.get("_template_vars").unwrap();
         assert!(template_vars.is_object());
+    }
+
+    #[test]
+    fn test_parse_size_string() {
+        use crate::compat::types::parse_size_string;
+
+        // Test valid cases
+        assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size_string("10MB").unwrap(), 10 * 1024 * 1024);
+        assert_eq!(parse_size_string("1KB").unwrap(), 1024);
+        assert_eq!(parse_size_string("1024").unwrap(), 1024);
+        assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
+
+        // Test with spaces
+        assert_eq!(parse_size_string(" 1MB ").unwrap(), 1024 * 1024);
+
+        // Test lowercase (should be handled by to_uppercase)
+        assert_eq!(parse_size_string("1mb").unwrap(), 1024 * 1024);
+
+        // Test error cases
+        assert!(parse_size_string("").is_err());
+        assert!(parse_size_string("invalid").is_err());
+        assert!(parse_size_string("1TB").is_err()); // Unknown unit
     }
 }

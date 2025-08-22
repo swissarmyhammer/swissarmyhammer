@@ -1641,7 +1641,6 @@ mod tests {
     fn test_prompt_loader_loads_only_valid_prompts() {
         use std::fs;
 
-
         // This test verifies that PromptLoader only successfully loads files
         // that are valid prompts (with proper YAML front matter)
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
@@ -1767,7 +1766,6 @@ This is another prompt.
     #[test]
     fn test_partial_template_without_description() {
         use std::fs;
-
 
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
