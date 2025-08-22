@@ -65,3 +65,75 @@ Set up initial `lib.rs` with:
 - No configuration loading logic yet - that comes in the next step
 - Ensure the crate follows the same coding standards as the rest of the project
 - Use the same license and metadata as other workspace crates
+
+## Proposed Solution
+
+Based on my analysis of the current configuration system (sah_config and toml_config modules) and the specification, I will:
+
+### 1. Create New Crate Structure
+- Create `swissarmyhammer-config/` directory with proper Rust crate structure
+- Configure `Cargo.toml` with figment dependencies and required features
+- Set up workspace integration
+
+### 2. Design Philosophy
+- Use figment directly rather than creating wrapper abstractions
+- Keep it simple and focused on the core requirement: providing template variables
+- No caching - read config fresh each time for immediate updates
+- Support multiple file formats (TOML, YAML, JSON) and precedence order
+
+### 3. Implementation Steps
+1. Create crate directory and basic structure
+2. Define error types for configuration operations
+3. Set up module structure in lib.rs
+4. Configure dependencies (figment with toml, yaml, json, env features)
+5. Update workspace to include new crate member
+6. Verify build succeeds
+
+### 4. Key Dependencies
+```toml
+figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+tracing = "0.1"
+dirs = "5.0"
+```
+
+This first step focuses only on crate creation and basic structure. The actual configuration loading logic and figment integration will come in subsequent issues.
+
+## Implementation Complete
+
+Successfully created the `swissarmyhammer-config` crate with the following structure:
+
+### Created Files
+- `swissarmyhammer-config/Cargo.toml` - Crate configuration with figment dependencies
+- `swissarmyhammer-config/src/lib.rs` - Library entry point with documentation
+- `swissarmyhammer-config/src/error.rs` - Comprehensive error types for configuration operations
+
+### Dependencies Added
+```toml
+figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
+serde = { workspace = true }
+thiserror = "1.0"
+tracing = { workspace = true }
+dirs = { workspace = true }
+```
+
+### Workspace Integration
+- Updated workspace `Cargo.toml` to include new crate member
+- All builds pass successfully: `cargo build`, `cargo clippy`, `cargo fmt`
+
+### Error Types Defined
+- `ConfigError` enum covering all expected configuration scenarios
+- Proper error chaining with `thiserror`
+- Integration with figment error types
+- Support for file not found, parsing, validation, and path resolution errors
+
+### Validation Results
+- ✅ Crate builds successfully with `cargo build -p swissarmyhammer-config`
+- ✅ Full workspace builds without conflicts
+- ✅ No clippy warnings or errors
+- ✅ Code properly formatted with rustfmt
+- ✅ Dependencies correctly configured with features
+
+## Next Steps
+This crate is now ready for the next phase: implementing the actual configuration loading logic with figment, file discovery, and template context integration.
