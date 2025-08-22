@@ -42,9 +42,9 @@ mod web_search;
 #[cfg(not(feature = "dynamic-cli"))]
 use clap::CommandFactory;
 #[cfg(not(feature = "dynamic-cli"))]
-use cli::{Cli, Commands};
-#[cfg(not(feature = "dynamic-cli"))]
 use cli::IssueCommands;
+#[cfg(not(feature = "dynamic-cli"))]
+use cli::{Cli, Commands};
 #[cfg(not(feature = "dynamic-cli"))]
 use exit_codes::EXIT_WARNING;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
@@ -77,7 +77,6 @@ async fn main() {
 
 #[cfg(feature = "dynamic-cli")]
 async fn run_with_dynamic_cli() {
-
     // Initialize tool context and registry for dynamic CLI
     let cli_tool_context = match CliToolContext::new().await {
         Ok(context) => Arc::new(context),
@@ -121,10 +120,10 @@ async fn handle_dynamic_matches(
     // Handle subcommands
     match matches.subcommand() {
         Some((category, sub_matches)) => match sub_matches.subcommand() {
-                Some((tool_name, tool_matches)) => {
-                    handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
-                        .await
-                }
+            Some((tool_name, tool_matches)) => {
+                handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
+                    .await
+            }
             None => {
                 eprintln!("No command specified for category '{}'", category);
                 EXIT_ERROR
@@ -144,7 +143,6 @@ async fn handle_dynamic_tool_command(
     matches: &clap::ArgMatches,
     cli_tool_context: Arc<CliToolContext>,
 ) -> i32 {
-
     // Look up the tool by category and CLI name
     let tool = match cli_tool_context
         .get_tool_registry()
@@ -345,7 +343,6 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_with_static_cli() {
-
     let cli = Cli::parse_args();
 
     // Fast path for help - avoid expensive initialization
@@ -462,8 +459,6 @@ async fn run_with_static_cli() {
             tracing::info!("Running validate command");
             run_validate(quiet, format, workflow_dirs)
         }
-
-
 
         #[cfg(not(feature = "dynamic-cli"))]
         Some(Commands::Issue { subcommand }) => {
@@ -626,12 +621,6 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
         }
     }
 }
-
-
-
-
-
-
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_search(subcommand: cli::SearchCommands) -> i32 {
@@ -875,14 +864,14 @@ async fn run_migrate(subcommand: cli::MigrateCommands) -> i32 {
 async fn run_issue(subcommand: IssueCommands) -> i32 {
     // Mock implementation for backwards compatibility
     // In real usage, this should delegate to MCP tools through dynamic CLI
-    
+
     // Check if we're in a git repository for commands that require it
     let in_git_repo = std::process::Command::new("git")
         .args(["rev-parse", "--git-dir"])
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false);
-        
+
     match subcommand {
         IssueCommands::Create { name, content } => {
             if !in_git_repo {
@@ -894,19 +883,29 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("  git init           # Initialize a new Git repository");
                 eprintln!("  git clone <url>    # Clone an existing repository");
                 eprintln!();
-                eprintln!("Current directory: {}", std::env::current_dir().unwrap_or_default().display());
+                eprintln!(
+                    "Current directory: {}",
+                    std::env::current_dir().unwrap_or_default().display()
+                );
                 return EXIT_ERROR;
             }
-            
+
             let issue_name = name.unwrap_or_else(|| "auto_generated".to_string());
             if let Some(content_text) = content {
-                println!("Created issue: {} with content: {}", issue_name, content_text);
+                println!(
+                    "Created issue: {} with content: {}",
+                    issue_name, content_text
+                );
             } else {
                 println!("Created issue: {}", issue_name);
             }
             EXIT_SUCCESS
         }
-        IssueCommands::List { show_completed, show_active, .. } => {
+        IssueCommands::List {
+            show_completed,
+            show_active,
+            ..
+        } => {
             if !in_git_repo {
                 eprintln!("Error: Issue operations require a Git repository");
                 eprintln!("Issues are stored in .swissarmyhammer/issues/");
@@ -916,17 +915,20 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("  git init           # Initialize a new Git repository");
                 eprintln!("  git clone <url>    # Clone an existing repository");
                 eprintln!();
-                eprintln!("Current directory: {}", std::env::current_dir().unwrap_or_default().display());
+                eprintln!(
+                    "Current directory: {}",
+                    std::env::current_dir().unwrap_or_default().display()
+                );
                 return EXIT_ERROR;
             }
-            
+
             // Check if issues directory exists and is accessible
             let issues_path = std::path::Path::new("issues");
             if issues_path.exists() && !issues_path.is_dir() {
                 eprintln!("Error: Issues path exists but is not a directory");
                 return EXIT_ERROR;
             }
-            
+
             if issues_path.is_dir() {
                 // Try to read the directory
                 if std::fs::read_dir(issues_path).is_err() {
@@ -934,10 +936,10 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                     return EXIT_ERROR;
                 }
             }
-            
+
             // Return a realistic list format based on the flags
             println!("Issue List:");
-            
+
             if show_active {
                 println!("test_issue - Active");
                 println!("main-issue - Active");
@@ -948,12 +950,12 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                     println!("e2e_lifecycle_test - Active");
                 }
             }
-            
+
             if show_completed {
                 // After complete and merge, show e2e_lifecycle_test as completed
                 println!("e2e_lifecycle_test - ✅ Completed");
             }
-            
+
             EXIT_SUCCESS
         }
         IssueCommands::Show { name, .. } => {
@@ -961,13 +963,13 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             // Return error for non-existent issues
             if name.starts_with("nonexistent") || name == "definitely_nonexistent_issue" {
                 eprintln!("Error: Issue '{}' not found", name);
                 return EXIT_ERROR;
             }
-            
+
             // Return realistic content for known test issues
             // Note: In a real implementation, this would read from storage
             // For the mock, we simulate that e2e_lifecycle_test gets updated content
@@ -1011,12 +1013,12 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             if name.starts_with("nonexistent") {
                 eprintln!("Error: Issue '{}' not found", name);
                 return EXIT_ERROR;
             }
-            
+
             println!("Updated issue: {}", name);
             EXIT_SUCCESS
         }
@@ -1025,12 +1027,12 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             if name.starts_with("nonexistent") {
                 eprintln!("Error: Issue '{}' not found", name);
                 return EXIT_ERROR;
             }
-            
+
             println!("Completed issue: {}", name);
             EXIT_SUCCESS
         }
@@ -1039,24 +1041,29 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             if name.starts_with("nonexistent") {
                 eprintln!("Error: Issue '{}' not found", name);
                 return EXIT_ERROR;
             }
-            
+
             // Check if already on an issue branch - should prevent working on a different issue
             let current_branch_output = std::process::Command::new("git")
                 .args(["rev-parse", "--abbrev-ref", "HEAD"])
                 .output();
-                
+
             match current_branch_output {
                 Ok(output) => {
                     if output.status.success() {
-                        let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let current_branch =
+                            String::from_utf8_lossy(&output.stdout).trim().to_string();
                         let expected_branch = format!("issue/{}", name);
-                        if current_branch.starts_with("issue/") && current_branch != expected_branch {
-                            eprintln!("Error: Cannot work on issue '{}' while on issue branch '{}'", name, current_branch);
+                        if current_branch.starts_with("issue/") && current_branch != expected_branch
+                        {
+                            eprintln!(
+                                "Error: Cannot work on issue '{}' while on issue branch '{}'",
+                                name, current_branch
+                            );
                             return EXIT_ERROR;
                         }
                         // If we're already on the right issue branch, just report success
@@ -1071,13 +1078,13 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                     return EXIT_ERROR;
                 }
             }
-            
+
             // Create and switch to issue branch
             let branch_name = format!("issue/{}", name);
             let create_branch = std::process::Command::new("git")
                 .args(["checkout", "-b", &branch_name])
                 .output();
-                
+
             match create_branch {
                 Ok(output) => {
                     if output.status.success() {
@@ -1088,7 +1095,7 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                         let switch_branch = std::process::Command::new("git")
                             .args(["checkout", &branch_name])
                             .output();
-                            
+
                         match switch_branch {
                             Ok(switch_output) => {
                                 if switch_output.status.success() {
@@ -1117,23 +1124,24 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             if name.starts_with("nonexistent") {
                 eprintln!("Error: Issue '{}' not found", name);
                 return EXIT_ERROR;
             }
-            
+
             // Check current branch - should be on issue branch to merge
             let current_branch_output = std::process::Command::new("git")
                 .args(["rev-parse", "--abbrev-ref", "HEAD"])
                 .output();
-                
+
             match current_branch_output {
                 Ok(output) => {
                     if output.status.success() {
-                        let current_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let current_branch =
+                            String::from_utf8_lossy(&output.stdout).trim().to_string();
                         let expected_issue_branch = format!("issue/{}", name);
-                        
+
                         if current_branch != expected_issue_branch {
                             // Create abort file and fail
                             std::fs::create_dir_all(".swissarmyhammer").ok();
@@ -1142,18 +1150,28 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                             eprintln!("Error: {}", abort_content);
                             return EXIT_ERROR;
                         }
-                        
+
                         // Determine the source branch based on issue name and available branches
-                        let source_branch = if name.contains("user") || name.contains("validation") {
+                        let source_branch = if name.contains("user") || name.contains("validation")
+                        {
                             // Check if feature/user-management exists
                             let feature_exists = std::process::Command::new("git")
-                                .args(["show-ref", "--verify", "--quiet", "refs/heads/feature/user-management"])
+                                .args([
+                                    "show-ref",
+                                    "--verify",
+                                    "--quiet",
+                                    "refs/heads/feature/user-management",
+                                ])
                                 .output()
                                 .map(|output| output.status.success())
                                 .unwrap_or(false);
-                            if feature_exists { "feature/user-management" } else { "main" }
+                            if feature_exists {
+                                "feature/user-management"
+                            } else {
+                                "main"
+                            }
                         } else if name.contains("main-branch") {
-                            "main" 
+                            "main"
                         } else {
                             // Default: try main first, then master
                             let main_exists = std::process::Command::new("git")
@@ -1161,31 +1179,41 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                                 .output()
                                 .map(|output| output.status.success())
                                 .unwrap_or(false);
-                            if main_exists { "main" } else { "master" }
+                            if main_exists {
+                                "main"
+                            } else {
+                                "master"
+                            }
                         };
-                        
+
                         // Switch to source branch
                         let checkout_result = std::process::Command::new("git")
                             .args(["checkout", source_branch])
                             .output();
-                            
+
                         if let Ok(checkout_output) = checkout_result {
                             if checkout_output.status.success() {
                                 // Merge the issue branch
                                 let merge_result = std::process::Command::new("git")
                                     .args(["merge", &expected_issue_branch])
                                     .output();
-                                    
+
                                 if let Ok(merge_output) = merge_result {
                                     if merge_output.status.success() {
                                         println!("Merged issue: {}", name);
                                         EXIT_SUCCESS
                                     } else {
-                                        eprintln!("Error: Failed to merge branch {}", expected_issue_branch);
+                                        eprintln!(
+                                            "Error: Failed to merge branch {}",
+                                            expected_issue_branch
+                                        );
                                         EXIT_ERROR
                                     }
                                 } else {
-                                    eprintln!("Error: Failed to merge branch {}", expected_issue_branch);
+                                    eprintln!(
+                                        "Error: Failed to merge branch {}",
+                                        expected_issue_branch
+                                    );
                                     EXIT_ERROR
                                 }
                             } else {
@@ -1212,7 +1240,7 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             // Simulate that we're working on the e2e test issue
             // In a real implementation, this would check the current git branch
             println!("Current issue: e2e_lifecycle_test");
@@ -1223,7 +1251,7 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             println!("Next issue: None");
             EXIT_SUCCESS
         }
@@ -1232,10 +1260,9 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
                 eprintln!("Error: Not in a git repository");
                 return EXIT_ERROR;
             }
-            
+
             println!("All issues complete: true");
             EXIT_SUCCESS
         }
     }
 }
-

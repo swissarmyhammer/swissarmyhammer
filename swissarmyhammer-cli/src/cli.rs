@@ -247,8 +247,6 @@ Examples:
         workflow_dirs: Vec<String>,
     },
 
-
-
     /// Issue management commands (requires Git repository)
     #[cfg(not(feature = "dynamic-cli"))]
     #[command(long_about = "
@@ -969,12 +967,6 @@ for better discoverability and clearer intent.
     },
 }
 
-
-
-
-
-
-
 #[derive(Subcommand, Debug)]
 pub enum SearchCommands {
     /// Index files for semantic search
@@ -1281,7 +1273,6 @@ pub enum ShellOutputFormat {
     Json,
     Yaml,
 }
-
 
 impl Cli {
     #[cfg(not(feature = "dynamic-cli"))]
@@ -1952,12 +1943,6 @@ mod tests {
         assert!(cli.verbose);
         assert!(!cli.quiet);
     }
-
-
-
-
-
-
 
     #[test]
     fn test_search_index_single_pattern() {

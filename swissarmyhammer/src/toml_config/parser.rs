@@ -162,7 +162,10 @@ impl ConfigParser {
 
     /// Load configuration from repository root starting from a specific directory
     /// This method allows tests to specify a starting directory without changing global state
-    pub fn load_from_repo_root_with_start_dir(&self, start_dir: &Path) -> Result<Option<Configuration>, ConfigError> {
+    pub fn load_from_repo_root_with_start_dir(
+        &self,
+        start_dir: &Path,
+    ) -> Result<Option<Configuration>, ConfigError> {
         let mut search_dir = start_dir;
 
         // First, find the repository root

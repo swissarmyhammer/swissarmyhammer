@@ -457,7 +457,7 @@ impl ToolRegistry {
         self.tools
             .values()
             .find(|tool| {
-                !tool.hidden_from_cli() 
+                !tool.hidden_from_cli()
                     && tool.cli_category() == Some(category)
                     && tool.cli_name() == cli_name
             })

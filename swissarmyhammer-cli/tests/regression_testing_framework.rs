@@ -131,7 +131,6 @@ impl RegressionTestSuite {
                 description: "Issue list command completes successfully".to_string(),
                 requires_setup: true,
             },
-
             // Error cases with setup
             ExpectedOutput {
                 command: vec![
@@ -147,7 +146,6 @@ impl RegressionTestSuite {
                 description: "Non-existent issue produces appropriate error".to_string(),
                 requires_setup: true,
             },
-
         ];
 
         Self {
@@ -439,7 +437,7 @@ async fn test_regression_framework() -> Result<()> {
     // Save detailed report for debugging
     let debug_report_path = temp_path.join("regression_debug_report.md");
     let _ = report.save_detailed_report(&debug_report_path);
-    
+
     // Print report for debugging before assertion
     report.print_summary();
 

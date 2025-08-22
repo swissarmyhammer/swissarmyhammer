@@ -49,19 +49,21 @@ pub async fn handle_dynamic_command(
     context: Arc<ToolContext>,
 ) -> Result<()> {
     // Look up the tool in the registry by category and CLI name
-    let tool = tool_registry.get_tool_by_cli_name(category, tool_name).ok_or_else(|| {
-        let available_tools: Vec<String> = tool_registry
-            .get_tools_for_category(category)
-            .iter()
-            .map(|t| t.cli_name().to_string())
-            .collect();
-        anyhow!(
-            "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
-            tool_name,
-            category,
-            available_tools.join(", ")
-        )
-    })?;
+    let tool = tool_registry
+        .get_tool_by_cli_name(category, tool_name)
+        .ok_or_else(|| {
+            let available_tools: Vec<String> = tool_registry
+                .get_tools_for_category(category)
+                .iter()
+                .map(|t| t.cli_name().to_string())
+                .collect();
+            anyhow!(
+                "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
+                tool_name,
+                category,
+                available_tools.join(", ")
+            )
+        })?;
 
     // Get the tool's schema for argument conversion
     let schema = tool.schema();
@@ -117,7 +119,10 @@ pub async fn handle_dynamic_command(
         .with_context(|| {
             format!(
                 "Executing MCP tool '{}' (CLI: {} {}) with {} argument(s)",
-                tool.name(), category, tool_name, arg_count
+                tool.name(),
+                category,
+                tool_name,
+                arg_count
             )
         })?;
 
