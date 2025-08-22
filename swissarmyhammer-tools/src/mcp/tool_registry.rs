@@ -211,6 +211,11 @@ impl ToolContext {
 /// - Success cases
 /// - Error conditions
 /// - Edge cases
+///
+/// # CLI Integration
+///
+/// The trait includes optional CLI integration methods that enable dynamic CLI command
+/// generation without requiring modifications to existing tool implementations.
 #[async_trait::async_trait]
 pub trait McpTool: Send + Sync {
     /// Get the tool's unique identifier name
@@ -275,6 +280,94 @@ pub trait McpTool: Send + Sync {
         arguments: serde_json::Map<String, serde_json::Value>,
         context: &ToolContext,
     ) -> std::result::Result<CallToolResult, McpError>;
+
+    /// Get the CLI category for grouping related commands
+    ///
+    /// Returns the category name for CLI command organization. Commands are
+    /// grouped into categories following a noun-based pattern (e.g., "memo", "issue").
+    /// 
+    /// The default implementation extracts the category from the tool name using
+    /// the `{category}_{action}` naming convention.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&'static str)` - The category name if the tool should appear in CLI
+    /// * `None` - If the tool should not be exposed as a CLI command
+    ///
+    /// # Examples
+    ///
+    /// * `memo_create` → Some("memo")
+    /// * `issue_list` → Some("issue")
+    /// * `files_read` → Some("file")
+    fn cli_category(&self) -> Option<&'static str> {
+        // Extract category from tool name by taking prefix before first underscore
+        let name = self.name();
+        if let Some(underscore_pos) = name.find('_') {
+            match &name[..underscore_pos] {
+                "memo" => Some("memo"),
+                "issue" => Some("issue"),
+                "file" | "files" => Some("file"),
+                "search" => Some("search"),
+                "web" => Some("web"),
+                "shell" => Some("shell"),
+                "todo" => Some("todo"),
+                "outline" => Some("outline"),
+                "notify" => Some("notify"),
+                "abort" => Some("abort"),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Get the CLI command name within its category
+    ///
+    /// Returns the specific command name to use within the CLI category.
+    /// The default implementation extracts the action from the tool name using
+    /// the `{category}_{action}` naming convention.
+    ///
+    /// # Examples
+    ///
+    /// * `memo_create` → "create"
+    /// * `issue_list` → "list" 
+    /// * `files_read` → "read"
+    fn cli_name(&self) -> &'static str {
+        // Extract action from tool name by taking suffix after first underscore
+        let name = self.name();
+        if let Some(underscore_pos) = name.find('_') {
+            &name[underscore_pos + 1..]
+        } else {
+            name
+        }
+    }
+
+    /// Get brief CLI help text for the command
+    ///
+    /// Returns a concise description for CLI help output. The default
+    /// implementation uses the first line of the tool's description.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&'static str)` - Brief help text for CLI display
+    /// * `None` - Use the full description or auto-generate help text
+    fn cli_about(&self) -> Option<&'static str> {
+        // Use first line of description as brief about text
+        let desc = self.description();
+        desc.lines().next()
+    }
+
+    /// Check if the tool should be hidden from CLI command generation
+    ///
+    /// Returns true if the tool should not be exposed as a CLI command.
+    /// Useful for internal tools or tools that don't make sense in CLI context.
+    ///
+    /// # Default
+    ///
+    /// All tools are visible in CLI by default.
+    fn hidden_from_cli(&self) -> bool {
+        false
+    }
 }
 
 /// Registry for managing MCP tools
@@ -753,5 +846,236 @@ mod tests {
         } else {
             panic!("Expected text content");
         }
+    }
+
+    /// Test tools for CLI integration testing
+    struct MemoCreateTool;
+    struct IssueListTool;
+    struct FilesReadTool;
+    struct SearchQueryTool;
+    struct WebSearchTool;
+    struct ShellExecuteTool;
+    struct TodoCreateTool;
+    struct OutlineGenerateTool;
+    struct NotifyCreateTool;
+    struct AbortCreateTool;
+    struct UnknownCategoryTool;
+    struct NoUnderscoreTool;
+    struct MultiLineTool;
+
+    #[async_trait::async_trait]
+    impl McpTool for MemoCreateTool {
+        fn name(&self) -> &'static str { "memo_create" }
+        fn description(&self) -> &'static str { "Create a new memo with the given title and content" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for IssueListTool {
+        fn name(&self) -> &'static str { "issue_list" }
+        fn description(&self) -> &'static str { "List all available issues with their status" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for FilesReadTool {
+        fn name(&self) -> &'static str { "files_read" }
+        fn description(&self) -> &'static str { "Read and return file contents from the local filesystem" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for SearchQueryTool {
+        fn name(&self) -> &'static str { "search_query" }
+        fn description(&self) -> &'static str { "Perform semantic search across indexed files" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for WebSearchTool {
+        fn name(&self) -> &'static str { "web_search" }
+        fn description(&self) -> &'static str { "Perform comprehensive web searches using DuckDuckGo" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for ShellExecuteTool {
+        fn name(&self) -> &'static str { "shell_execute" }
+        fn description(&self) -> &'static str { "Execute shell commands with timeout controls" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for TodoCreateTool {
+        fn name(&self) -> &'static str { "todo_create" }
+        fn description(&self) -> &'static str { "Add a new item to a todo list" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for OutlineGenerateTool {
+        fn name(&self) -> &'static str { "outline_generate" }
+        fn description(&self) -> &'static str { "Generate structured code overviews using Tree-sitter parsing" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for NotifyCreateTool {
+        fn name(&self) -> &'static str { "notify_create" }
+        fn description(&self) -> &'static str { "Send notification messages from LLM to user" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for AbortCreateTool {
+        fn name(&self) -> &'static str { "abort_create" }
+        fn description(&self) -> &'static str { "Create an abort file to signal workflow termination" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for UnknownCategoryTool {
+        fn name(&self) -> &'static str { "unknown_something" }
+        fn description(&self) -> &'static str { "A tool with an unknown category prefix" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for NoUnderscoreTool {
+        fn name(&self) -> &'static str { "noundercore" }
+        fn description(&self) -> &'static str { "A tool without underscore in name" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpTool for MultiLineTool {
+        fn name(&self) -> &'static str { "multi_line" }
+        fn description(&self) -> &'static str { "First line of description\nSecond line should not appear\nThird line also should not appear" }
+        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
+        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+            Ok(BaseToolImpl::create_success_response("Test"))
+        }
+    }
+
+    #[test]
+    fn test_cli_category_extraction() {
+        // Test known categories
+        assert_eq!(MemoCreateTool.cli_category(), Some("memo"));
+        assert_eq!(IssueListTool.cli_category(), Some("issue"));
+        assert_eq!(FilesReadTool.cli_category(), Some("file"));
+        assert_eq!(SearchQueryTool.cli_category(), Some("search"));
+        assert_eq!(WebSearchTool.cli_category(), Some("web"));
+        assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
+        assert_eq!(TodoCreateTool.cli_category(), Some("todo"));
+        assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
+        assert_eq!(NotifyCreateTool.cli_category(), Some("notify"));
+        assert_eq!(AbortCreateTool.cli_category(), Some("abort"));
+        
+        // Test unknown category
+        assert_eq!(UnknownCategoryTool.cli_category(), None);
+        
+        // Test no underscore
+        assert_eq!(NoUnderscoreTool.cli_category(), None);
+    }
+
+    #[test]
+    fn test_cli_name_extraction() {
+        // Test action extraction
+        assert_eq!(MemoCreateTool.cli_name(), "create");
+        assert_eq!(IssueListTool.cli_name(), "list");
+        assert_eq!(FilesReadTool.cli_name(), "read");
+        assert_eq!(SearchQueryTool.cli_name(), "query");
+        assert_eq!(WebSearchTool.cli_name(), "search");
+        assert_eq!(ShellExecuteTool.cli_name(), "execute");
+        assert_eq!(TodoCreateTool.cli_name(), "create");
+        assert_eq!(OutlineGenerateTool.cli_name(), "generate");
+        assert_eq!(NotifyCreateTool.cli_name(), "create");
+        assert_eq!(AbortCreateTool.cli_name(), "create");
+        
+        // Test unknown category still extracts action
+        assert_eq!(UnknownCategoryTool.cli_name(), "something");
+        
+        // Test no underscore returns full name
+        assert_eq!(NoUnderscoreTool.cli_name(), "noundercore");
+    }
+
+    #[test]
+    fn test_cli_about_extraction() {
+        // Test first line extraction
+        assert_eq!(MemoCreateTool.cli_about(), Some("Create a new memo with the given title and content"));
+        assert_eq!(IssueListTool.cli_about(), Some("List all available issues with their status"));
+        assert_eq!(FilesReadTool.cli_about(), Some("Read and return file contents from the local filesystem"));
+        assert_eq!(MultiLineTool.cli_about(), Some("First line of description"));
+    }
+
+    #[test]
+    fn test_hidden_from_cli_default() {
+        // Test default implementation returns false
+        assert!(!MemoCreateTool.hidden_from_cli());
+        assert!(!IssueListTool.hidden_from_cli());
+        assert!(!FilesReadTool.hidden_from_cli());
+        assert!(!UnknownCategoryTool.hidden_from_cli());
+        assert!(!NoUnderscoreTool.hidden_from_cli());
+    }
+
+    #[test]
+    fn test_cli_integration_comprehensive() {
+        // Test a tool that should be visible in CLI
+        let tool = MemoCreateTool;
+        assert_eq!(tool.cli_category(), Some("memo"));
+        assert_eq!(tool.cli_name(), "create");
+        assert_eq!(tool.cli_about(), Some("Create a new memo with the given title and content"));
+        assert!(!tool.hidden_from_cli());
+        
+        // Test a tool that should not be visible in CLI (unknown category)
+        let tool = UnknownCategoryTool;
+        assert_eq!(tool.cli_category(), None);
+        assert_eq!(tool.cli_name(), "something");
+        assert_eq!(tool.cli_about(), Some("A tool with an unknown category prefix"));
+        assert!(!tool.hidden_from_cli());
+    }
+
+    #[test]
+    fn test_files_category_alias() {
+        // Test that "files" prefix maps to "file" category
+        let tool = FilesReadTool;
+        assert_eq!(tool.cli_category(), Some("file"));
+        assert_eq!(tool.cli_name(), "read");
     }
 }
