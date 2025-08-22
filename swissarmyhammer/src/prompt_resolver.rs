@@ -80,7 +80,6 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
-    
 
     #[test]
     fn test_prompt_resolver_loads_user_prompts() {

@@ -185,12 +185,6 @@ pub use swissarmyhammer_config::compat::{
     ConfigValue, Configuration, ConfigurationError, ValidationError,
 };
 
-/// Core configuration data structures and TOML parsing
-pub use toml_config::{
-    ConfigError, ConfigParser, ConfigValue as CoreConfigValue, Configuration as CoreConfiguration,
-    ValidationLimits,
-};
-
 /// New core data structures for sah.toml configuration  
 pub use toml_core::{
     load_config as load_toml_core_config, load_repo_config as load_toml_core_repo_config,
@@ -207,12 +201,6 @@ pub mod error;
 
 /// Configuration management
 pub mod config;
-
-/// sah.toml configuration support
-pub mod sah_config;
-
-/// Core TOML configuration data structures and parsing
-pub mod toml_config;
 
 /// Core TOML configuration data structures (new implementation)
 pub mod toml_core;
@@ -276,14 +264,6 @@ pub mod prelude {
     pub use swissarmyhammer_config::compat::{
         load_and_merge_repo_config, load_config, load_repo_config, merge_config_into_context,
         validate_config_file, ConfigValue, Configuration, ConfigurationError, ValidationError,
-    };
-
-    // Core configuration data structures for convenient access
-    pub use crate::toml_config::{
-        load_config as load_core_config, load_repo_config_wrapper as load_core_repo_config,
-        parse_toml_string, validate_config_file as validate_core_config_file, ConfigError,
-        ConfigParser, ConfigValue as CoreConfigValue, Configuration as CoreConfiguration,
-        ValidationLimits,
     };
 
     // New core TOML configuration data structures for convenient access

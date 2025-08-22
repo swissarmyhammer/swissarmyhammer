@@ -340,7 +340,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_start_stop() {
         use std::fs;
-        
 
         // Create a temporary directory for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
@@ -401,7 +400,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_custom_config() {
         use std::fs;
-        
 
         // Create a temporary directory for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
@@ -442,7 +440,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_drop() {
         use std::fs;
-        
 
         // Create a temporary directory for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
@@ -475,7 +472,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_restart() {
         use std::fs;
-        
 
         // Use isolated test environment for directory changes
         let _guard = IsolatedTestEnvironment::new().unwrap();
@@ -580,7 +576,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_simple_start() {
         use std::fs;
-        
 
         // Create a temporary directory for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
@@ -605,7 +600,6 @@ mod tests {
     #[tokio::test]
     async fn test_file_watcher_error_callback() {
         use std::fs;
-        
 
         // Create a temporary directory for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();

@@ -337,7 +337,6 @@ impl PromptStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn create_test_prompt(name: &str, template: &str) -> Prompt {
         Prompt::new(name, template)

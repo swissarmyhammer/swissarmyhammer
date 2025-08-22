@@ -926,7 +926,6 @@ mod tests {
     #[test]
     fn test_semantic_config_home_fallback() {
         use std::panic;
-        
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
@@ -960,7 +959,6 @@ mod tests {
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
         use std::panic;
-        
 
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
@@ -995,8 +993,6 @@ mod tests {
 
     #[test]
     fn test_semantic_config_environment_variable_override() {
-        
-
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
         let test_db_path = temp_dir.path().join("test_semantic.db");
 
