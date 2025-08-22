@@ -925,8 +925,8 @@ mod tests {
 
     #[test]
     fn test_semantic_config_home_fallback() {
-        use tempfile::TempDir;
         use std::panic;
+        use tempfile::TempDir;
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = TempDir::new().unwrap();
@@ -959,8 +959,8 @@ mod tests {
     #[test]
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
-        use tempfile::TempDir;
         use std::panic;
+        use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
 

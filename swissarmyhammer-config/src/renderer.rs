@@ -129,7 +129,7 @@ impl TemplateRenderer {
         // Convert TemplateContext to Liquid Object and add all template variables as nil
         // so that missing variables render as empty instead of erroring
         let mut liquid_object = context.to_liquid_object();
-        
+
         // Extract all variables from the template and initialize missing ones as nil
         let variables = extract_template_variables(template);
         for var in variables {
@@ -137,9 +137,10 @@ impl TemplateRenderer {
                 liquid_object.insert(var.into(), liquid::model::Value::Nil);
             }
         }
-        
+
         // Parse the template
-        let parsed_template = self.parser
+        let parsed_template = self
+            .parser
             .parse(template)
             .map_err(|e| ConfigError::template_error(format!("Template parse error: {}", e)))?;
 
@@ -148,7 +149,10 @@ impl TemplateRenderer {
             .render(&liquid_object)
             .map_err(|e| ConfigError::template_error(format!("Template render error: {}", e)))?;
 
-        trace!("Template rendered successfully, length: {} chars", result.len());
+        trace!(
+            "Template rendered successfully, length: {} chars",
+            result.len()
+        );
         Ok(result)
     }
 
@@ -195,7 +199,7 @@ impl TemplateRenderer {
 
         // Create ConfigProvider to load configuration
         let provider = ConfigProvider::new();
-        
+
         // Create template context with workflow variables
         let context = if let Some(vars) = workflow_vars {
             provider.create_context_with_vars(vars)?
@@ -212,10 +216,10 @@ impl TemplateRenderer {
     /// This creates a parser with the same configuration as the legacy template system.
     /// For now, we use the standard library without custom tags to maintain simplicity.
     fn create_parser() -> ConfigResult<liquid::Parser> {
-        let parser = liquid::ParserBuilder::with_stdlib()
-            .build()
-            .map_err(|e| ConfigError::template_error(format!("Failed to build Liquid parser: {}", e)))?;
-        
+        let parser = liquid::ParserBuilder::with_stdlib().build().map_err(|e| {
+            ConfigError::template_error(format!("Failed to build Liquid parser: {}", e))
+        })?;
+
         Ok(parser)
     }
 }
@@ -239,7 +243,7 @@ fn extract_template_variables(template: &str) -> Vec<String> {
     // Match {{ variable }}, {{ variable.property }}, {{ variable | filter }}, etc.
     let variable_re = regex::Regex::new(r"\{\{\s*(\w+)(?:\.\w+)*\s*(?:\|[^\}]+)?\}\}")
         .expect("Failed to compile variable regex");
-    
+
     // Check for variables in {% if %}, {% unless %}, {% for %} tags
     let tag_re = regex::Regex::new(r"\{%\s*(?:if|unless|for\s+\w+\s+in)\s+(\w+)")
         .expect("Failed to compile tag regex");
@@ -284,7 +288,9 @@ mod tests {
         context.set("name", "Alice");
         context.set("count", 42);
 
-        let result = renderer.render("{{greeting}} {{name}}! You have {{count}} items.", &context).unwrap();
+        let result = renderer
+            .render("{{greeting}} {{name}}! You have {{count}} items.", &context)
+            .unwrap();
         assert_eq!(result, "Hello Alice! You have 42 items.");
     }
 
@@ -304,7 +310,9 @@ mod tests {
         let mut context = TemplateContext::new();
         context.set("name", "alice");
 
-        let result = renderer.render("Hello {{name | capitalize}}!", &context).unwrap();
+        let result = renderer
+            .render("Hello {{name | capitalize}}!", &context)
+            .unwrap();
         assert_eq!(result, "Hello Alice!");
     }
 
@@ -313,7 +321,9 @@ mod tests {
         let renderer = TemplateRenderer::new().unwrap();
         let context = TemplateContext::new();
 
-        let result = renderer.render("Hello {{name | default: 'World'}}!", &context).unwrap();
+        let result = renderer
+            .render("Hello {{name | default: 'World'}}!", &context)
+            .unwrap();
         assert_eq!(result, "Hello World!");
     }
 
@@ -362,16 +372,14 @@ mod tests {
     #[test]
     fn test_render_with_config_with_workflow_vars() {
         let renderer = TemplateRenderer::new().unwrap();
-        
+
         let mut workflow_vars = HashMap::new();
         workflow_vars.insert("user_name".to_string(), serde_json::json!("Alice"));
         workflow_vars.insert("role".to_string(), serde_json::json!("admin"));
 
-        let result = renderer.render_with_config(
-            "Welcome {{user_name}}! Role: {{role}}",
-            Some(workflow_vars)
-        );
-        
+        let result = renderer
+            .render_with_config("Welcome {{user_name}}! Role: {{role}}", Some(workflow_vars));
+
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Welcome Alice! Role: admin");
     }
@@ -380,14 +388,17 @@ mod tests {
     fn test_nested_json_objects_in_context() {
         let renderer = TemplateRenderer::new().unwrap();
         let mut context = TemplateContext::new();
-        
-        context.set("user", serde_json::json!({
-            "name": "Alice",
-            "profile": {
-                "age": 30,
-                "city": "New York"
-            }
-        }));
+
+        context.set(
+            "user",
+            serde_json::json!({
+                "name": "Alice",
+                "profile": {
+                    "age": 30,
+                    "city": "New York"
+                }
+            }),
+        );
 
         let result = renderer.render("{{user.name}} is {{user.profile.age}} years old and lives in {{user.profile.city}}", &context).unwrap();
         assert_eq!(result, "Alice is 30 years old and lives in New York");
@@ -397,10 +408,15 @@ mod tests {
     fn test_array_access_in_templates() {
         let renderer = TemplateRenderer::new().unwrap();
         let mut context = TemplateContext::new();
-        
+
         context.set("colors", serde_json::json!(["red", "green", "blue"]));
 
-        let result = renderer.render("First color: {{colors[0]}}, Second: {{colors[1]}}", &context).unwrap();
+        let result = renderer
+            .render(
+                "First color: {{colors[0]}}, Second: {{colors[1]}}",
+                &context,
+            )
+            .unwrap();
         assert_eq!(result, "First color: red, Second: green");
     }
 
@@ -408,17 +424,20 @@ mod tests {
     fn test_complex_template_with_mixed_data_types() {
         let renderer = TemplateRenderer::new().unwrap();
         let mut context = TemplateContext::new();
-        
-        context.set("project", serde_json::json!({
-            "name": "SwissArmyHammer",
-            "version": "1.0.0",
-            "active": true,
-            "contributors": ["Alice", "Bob", "Charlie"],
-            "stats": {
-                "commits": 150,
-                "issues": 12
-            }
-        }));
+
+        context.set(
+            "project",
+            serde_json::json!({
+                "name": "SwissArmyHammer",
+                "version": "1.0.0",
+                "active": true,
+                "contributors": ["Alice", "Bob", "Charlie"],
+                "stats": {
+                    "commits": 150,
+                    "issues": 12
+                }
+            }),
+        );
 
         let template = r#"
 Project: {{project.name}} v{{project.version}}
@@ -432,7 +451,7 @@ Stats: {{project.stats.commits}} commits, {{project.stats.issues}} issues
 Status: Active
 Contributors: Alice, Bob, Charlie
 Stats: 150 commits, 12 issues"#;
-        
+
         assert_eq!(result, expected);
     }
 

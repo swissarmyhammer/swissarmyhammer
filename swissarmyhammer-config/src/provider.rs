@@ -596,9 +596,15 @@ yaml_only: yaml_value
         let context = provider.create_context_with_vars(workflow_vars).unwrap();
 
         // Workflow var should override config default
-        assert_eq!(context.get_string("environment"), Some("production".to_string()));
+        assert_eq!(
+            context.get_string("environment"),
+            Some("production".to_string())
+        );
         // Workflow-only var should be present
-        assert_eq!(context.get_string("workflow_id"), Some("deploy-001".to_string()));
+        assert_eq!(
+            context.get_string("workflow_id"),
+            Some("deploy-001".to_string())
+        );
     }
 
     #[test]
@@ -614,7 +620,9 @@ yaml_only: yaml_value
         let provider = ConfigProvider::new();
 
         // Should have environment default available
-        let result = provider.render_template("Environment: {{environment}}", None).unwrap();
+        let result = provider
+            .render_template("Environment: {{environment}}", None)
+            .unwrap();
         assert!(result.contains("Environment: "));
         assert!(!result.contains("{{environment}}")); // Should be substituted
     }
@@ -626,7 +634,9 @@ yaml_only: yaml_value
         workflow_vars.insert("greeting".to_string(), serde_json::json!("Hello"));
         workflow_vars.insert("name".to_string(), serde_json::json!("Alice"));
 
-        let result = provider.render_template("{{greeting}} {{name}}!", Some(workflow_vars)).unwrap();
+        let result = provider
+            .render_template("{{greeting}} {{name}}!", Some(workflow_vars))
+            .unwrap();
         assert_eq!(result, "Hello Alice!");
     }
 
@@ -634,10 +644,12 @@ yaml_only: yaml_value
     fn test_render_template_with_defaults() {
         let provider = ConfigProvider::new();
 
-        let result = provider.render_template(
-            "{{greeting | default: 'Hello'}} {{name | default: 'World'}}!",
-            None
-        ).unwrap();
+        let result = provider
+            .render_template(
+                "{{greeting | default: 'Hello'}} {{name | default: 'World'}}!",
+                None,
+            )
+            .unwrap();
         assert_eq!(result, "Hello World!");
     }
 
@@ -647,7 +659,9 @@ yaml_only: yaml_value
         let mut workflow_vars = HashMap::new();
         workflow_vars.insert("environment".to_string(), serde_json::json!("production"));
 
-        let result = provider.render_template("Environment: {{environment}}", Some(workflow_vars)).unwrap();
+        let result = provider
+            .render_template("Environment: {{environment}}", Some(workflow_vars))
+            .unwrap();
         assert_eq!(result, "Environment: production");
     }
 
@@ -655,16 +669,24 @@ yaml_only: yaml_value
     fn test_render_template_complex() {
         let provider = ConfigProvider::new();
         let mut workflow_vars = HashMap::new();
-        workflow_vars.insert("user".to_string(), serde_json::json!({
-            "name": "Alice",
-            "role": "admin"
-        }));
-        workflow_vars.insert("items".to_string(), serde_json::json!(["task1", "task2", "task3"]));
+        workflow_vars.insert(
+            "user".to_string(),
+            serde_json::json!({
+                "name": "Alice",
+                "role": "admin"
+            }),
+        );
+        workflow_vars.insert(
+            "items".to_string(),
+            serde_json::json!(["task1", "task2", "task3"]),
+        );
 
         let template = r#"Welcome {{user.name}}! Role: {{user.role}}
 Tasks: {% for item in items %}{{item}}{% unless forloop.last %}, {% endunless %}{% endfor %}"#;
 
-        let result = provider.render_template(template, Some(workflow_vars)).unwrap();
+        let result = provider
+            .render_template(template, Some(workflow_vars))
+            .unwrap();
         assert!(result.contains("Welcome Alice! Role: admin"));
         assert!(result.contains("Tasks: task1, task2, task3"));
     }

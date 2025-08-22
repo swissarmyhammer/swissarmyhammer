@@ -177,17 +177,23 @@ fn test_template_context_multiple_env_vars_in_single_string() {
 fn test_template_context_bidirectional_liquid_conversion() {
     // Create a TemplateContext with various data types
     let mut original_ctx = TemplateContext::new();
-    original_ctx.set("string_val", serde_json::Value::String("hello world".to_string()));
+    original_ctx.set(
+        "string_val",
+        serde_json::Value::String("hello world".to_string()),
+    );
     original_ctx.set("int_val", serde_json::Value::Number(42.into()));
     original_ctx.set("float_val", serde_json::json!(2.71)); // Using e approximation instead of PI
     original_ctx.set("bool_val", serde_json::Value::Bool(true));
     original_ctx.set("null_val", serde_json::Value::Null);
     original_ctx.set("array_val", serde_json::json!(["item1", 2, true]));
-    original_ctx.set("object_val", serde_json::json!({
-        "nested_string": "nested value",
-        "nested_number": 123,
-        "nested_array": [1, 2, 3]
-    }));
+    original_ctx.set(
+        "object_val",
+        serde_json::json!({
+            "nested_string": "nested value",
+            "nested_number": 123,
+            "nested_array": [1, 2, 3]
+        }),
+    );
 
     // Convert to liquid::Object
     let liquid_obj = original_ctx.to_liquid_object();
@@ -197,11 +203,17 @@ fn test_template_context_bidirectional_liquid_conversion() {
     let roundtrip_ctx = TemplateContext::from_liquid_object(liquid_obj);
 
     // Verify all values are preserved
-    assert_eq!(roundtrip_ctx.get_string("string_val"), Some("hello world".to_string()));
+    assert_eq!(
+        roundtrip_ctx.get_string("string_val"),
+        Some("hello world".to_string())
+    );
     assert_eq!(roundtrip_ctx.get_number("int_val"), Some(42.0));
     assert_eq!(roundtrip_ctx.get_number("float_val"), Some(2.71));
     assert_eq!(roundtrip_ctx.get_bool("bool_val"), Some(true));
-    assert_eq!(roundtrip_ctx.get("null_val"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        roundtrip_ctx.get("null_val"),
+        Some(&serde_json::Value::Null)
+    );
 
     // Verify array conversion
     let array_val = roundtrip_ctx.get("array_val").unwrap();
@@ -218,13 +230,19 @@ fn test_template_context_bidirectional_liquid_conversion() {
 fn test_template_context_from_trait_liquid_object() {
     // Test the From trait implementation
     let mut original_ctx = TemplateContext::new();
-    original_ctx.set("test_key", serde_json::Value::String("test_value".to_string()));
+    original_ctx.set(
+        "test_key",
+        serde_json::Value::String("test_value".to_string()),
+    );
 
     // Convert to liquid::Object using Into trait
     let liquid_obj: liquid::Object = original_ctx.clone().into();
-    
+
     // Convert back using From trait
     let ctx_from_liquid: TemplateContext = liquid_obj.into();
-    
-    assert_eq!(ctx_from_liquid.get_string("test_key"), Some("test_value".to_string()));
+
+    assert_eq!(
+        ctx_from_liquid.get_string("test_key"),
+        Some("test_value".to_string())
+    );
 }

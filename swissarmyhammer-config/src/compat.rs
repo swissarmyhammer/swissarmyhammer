@@ -102,7 +102,9 @@ pub fn merge_config_into_context(
     context: &mut HashMap<String, serde_json::Value>,
 ) -> ConfigResult<()> {
     debug!("Merging configuration into context using legacy compatibility layer");
-    warn!("merge_config_into_context is deprecated - use ConfigProvider and TemplateContext instead");
+    warn!(
+        "merge_config_into_context is deprecated - use ConfigProvider and TemplateContext instead"
+    );
 
     // Load configuration using the new system
     let provider = ConfigProvider::new();
@@ -131,11 +133,15 @@ pub fn merge_config_into_context(
     }
 
     // Update the context with merged template variables
-    context.insert("_template_vars".to_string(), serde_json::Value::Object(merged_vars));
+    context.insert(
+        "_template_vars".to_string(),
+        serde_json::Value::Object(merged_vars),
+    );
 
     debug!(
         "Successfully merged configuration into context, _template_vars has {} variables",
-        context.get("_template_vars")
+        context
+            .get("_template_vars")
             .and_then(|v| v.as_object())
             .map(|o| o.len())
             .unwrap_or(0)
@@ -183,11 +189,13 @@ pub fn load_and_merge_repo_config(
     context: &mut HashMap<String, serde_json::Value>,
 ) -> ConfigResult<bool> {
     debug!("Loading and merging repository configuration using legacy compatibility layer");
-    warn!("load_and_merge_repo_config is deprecated - use ConfigProvider and TemplateContext instead");
+    warn!(
+        "load_and_merge_repo_config is deprecated - use ConfigProvider and TemplateContext instead"
+    );
 
     // Try to load configuration
     let provider = ConfigProvider::new();
-    
+
     // Use the template context loading which handles all the complexity
     match provider.load_template_context() {
         Ok(template_context) => {
@@ -231,14 +239,14 @@ mod tests {
     #[test]
     fn test_merge_config_into_context_empty_context() {
         let mut context = HashMap::new();
-        
+
         let result = merge_config_into_context(&mut context);
         assert!(result.is_ok());
 
         // Should have created _template_vars with config defaults
         assert!(context.contains_key("_template_vars"));
         let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
-        
+
         // Should have some default config values
         assert!(template_vars.contains_key("environment"));
         assert!(template_vars.contains_key("debug"));
@@ -259,13 +267,19 @@ mod tests {
         assert!(result.is_ok());
 
         let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
-        
+
         // Workflow vars should be preserved
-        assert_eq!(template_vars.get("workflow_var"), Some(&json!("workflow_value")));
-        
+        assert_eq!(
+            template_vars.get("workflow_var"),
+            Some(&json!("workflow_value"))
+        );
+
         // Workflow should override config for same key
-        assert_eq!(template_vars.get("environment"), Some(&json!("workflow_env")));
-        
+        assert_eq!(
+            template_vars.get("environment"),
+            Some(&json!("workflow_env"))
+        );
+
         // Should have config vars that don't conflict
         assert!(template_vars.contains_key("debug"));
     }
@@ -295,7 +309,7 @@ mod tests {
         // Should have added _template_vars with config
         assert!(context.contains_key("_template_vars"));
         assert!(context.contains_key("other_key")); // Should preserve other keys
-        
+
         let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
         assert!(template_vars.contains_key("environment"));
     }
@@ -314,7 +328,7 @@ mod tests {
         // Should succeed but indicate no config was found (though we might have defaults)
         assert!(result.is_ok());
         let config_loaded = result.unwrap();
-        
+
         // With the new system, we always have defaults, so this might return true
         // The key is that it doesn't error
         if config_loaded {
@@ -336,7 +350,8 @@ mod tests {
 test_key = "test_value"
 project_name = "TestProject"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -354,7 +369,10 @@ project_name = "TestProject"
         assert!(context.contains_key("_template_vars"));
         let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
         assert_eq!(template_vars.get("test_key"), Some(&json!("test_value")));
-        assert_eq!(template_vars.get("project_name"), Some(&json!("TestProject")));
+        assert_eq!(
+            template_vars.get("project_name"),
+            Some(&json!("TestProject"))
+        );
     }
 
     #[test]
@@ -371,7 +389,8 @@ project_name = "TestProject"
 config_key = "config_value"
 shared_key = "from_config"
 "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -394,15 +413,24 @@ shared_key = "from_config"
         assert!(config_loaded);
 
         let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
-        
+
         // Should have config values
-        assert_eq!(template_vars.get("config_key"), Some(&json!("config_value")));
-        
+        assert_eq!(
+            template_vars.get("config_key"),
+            Some(&json!("config_value"))
+        );
+
         // Should have workflow values
-        assert_eq!(template_vars.get("workflow_key"), Some(&json!("workflow_value")));
-        
+        assert_eq!(
+            template_vars.get("workflow_key"),
+            Some(&json!("workflow_value"))
+        );
+
         // Workflow should override config
-        assert_eq!(template_vars.get("shared_key"), Some(&json!("from_workflow")));
+        assert_eq!(
+            template_vars.get("shared_key"),
+            Some(&json!("from_workflow"))
+        );
     }
 
     #[test]
@@ -420,11 +448,17 @@ shared_key = "from_config"
         assert!(result.is_ok());
 
         let template_vars = context.get("_template_vars").unwrap().as_object().unwrap();
-        
+
         // Workflow vars should have highest priority
-        assert_eq!(template_vars.get("workflow_var"), Some(&json!("workflow_value")));
-        assert_eq!(template_vars.get("environment"), Some(&json!("workflow_environment")));
-        
+        assert_eq!(
+            template_vars.get("workflow_var"),
+            Some(&json!("workflow_value"))
+        );
+        assert_eq!(
+            template_vars.get("environment"),
+            Some(&json!("workflow_environment"))
+        );
+
         // Config vars should be added for keys that don't exist in workflow
         assert!(template_vars.contains_key("debug")); // From config defaults
     }
@@ -432,15 +466,21 @@ shared_key = "from_config"
     #[test]
     fn test_backwards_compatibility_structure() {
         let mut context = HashMap::new();
-        context.insert("other_workflow_data".to_string(), json!("should_be_preserved"));
+        context.insert(
+            "other_workflow_data".to_string(),
+            json!("should_be_preserved"),
+        );
 
         let result = merge_config_into_context(&mut context);
         assert!(result.is_ok());
 
         // Should preserve non-_template_vars keys
         assert!(context.contains_key("other_workflow_data"));
-        assert_eq!(context.get("other_workflow_data"), Some(&json!("should_be_preserved")));
-        
+        assert_eq!(
+            context.get("other_workflow_data"),
+            Some(&json!("should_be_preserved"))
+        );
+
         // Should have _template_vars in correct format
         assert!(context.contains_key("_template_vars"));
         let template_vars = context.get("_template_vars").unwrap();
