@@ -10,9 +10,11 @@ description = "Configuration management for SwissArmyHammer using Figment"
 [dependencies]
 figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 thiserror = "1.0"
 tracing = { workspace = true }
 dirs = { workspace = true }
+liquid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

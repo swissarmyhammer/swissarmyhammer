@@ -47,8 +47,25 @@
 /// Error types and result aliases for configuration operations
 pub mod error;
 
+/// Core data structures for configuration system
+pub mod types;
+
+/// Configuration provider using Figment
+pub mod provider;
+
+/// Integration tests (only compiled in test mode)
+#[cfg(test)]
+pub mod tests;
+
+
+/// Integration tests
+#[cfg(test)]
+pub mod integration_test;
+
 // Re-export main types for easier access
 pub use error::{ConfigError, ConfigResult};
+pub use types::{TemplateContext, RawConfig};
+pub use provider::ConfigProvider;
 
 /// Current version of the configuration system
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
