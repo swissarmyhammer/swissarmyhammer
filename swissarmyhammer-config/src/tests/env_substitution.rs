@@ -1,8 +1,10 @@
 //! Tests for environment variable substitution
 
 use crate::types::TemplateContext;
+use serial_test::serial;
 
 #[test]
+#[serial]
 fn test_complex_env_substitution_patterns() {
     std::env::set_var("HOST", "api.example.com");
     std::env::set_var("PORT", "8080");

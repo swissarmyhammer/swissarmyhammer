@@ -13,6 +13,7 @@ use figment::{
 };
 use tracing::{debug, info, trace};
 
+
 /// Configuration provider using figment
 ///
 /// This provider loads configuration from multiple sources with a clear precedence order.
@@ -440,11 +441,20 @@ impl ConfigProvider {
     fn load_config_file(&self, config_file: &ConfigFile) -> ConfigResult<Figment> {
         let path = &config_file.path;
 
-        match config_file.format {
-            ConfigFormat::Toml => Ok(Figment::from(Toml::file(path))),
-            ConfigFormat::Yaml => Ok(Figment::from(Yaml::file(path))),
-            ConfigFormat::Json => Ok(Figment::from(Json::file(path))),
+        let figment = match config_file.format {
+            ConfigFormat::Toml => Figment::from(Toml::file(path)),
+            ConfigFormat::Yaml => Figment::from(Yaml::file(path)),
+            ConfigFormat::Json => Figment::from(Json::file(path)),
+        };
+
+        // Test if the file can be parsed by attempting to extract a dummy value
+        // This will trigger any parsing errors at the file level
+        let test_result: Result<std::collections::HashMap<String, serde_json::Value>, figment::Error> = figment.extract();
+        if let Err(e) = test_result {
+            return Err(ConfigError::parse_error(Some(path.to_path_buf()), e));
         }
+
+        Ok(figment)
     }
 
     /// Load environment variables with SAH_ and SWISSARMYHAMMER_ prefixes
