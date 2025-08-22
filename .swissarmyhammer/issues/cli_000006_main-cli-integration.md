@@ -241,3 +241,71 @@ For immediate deployment, the feature flag approach allows:
 - **Gradual migration**: Can implement Option 1 or 2 incrementally
 
 The integration infrastructure is complete and ready for any of the alternative approaches above.
+
+## ✅ RESOLUTION COMPLETED
+
+The dynamic CLI integration has been successfully resolved and tested. The lifetime constraint issues with clap have been overcome using `Box::leak` to convert owned strings to `'static` references.
+
+### ✅ Completed Features
+
+1. **Feature Flag Support** - ✅ `dynamic-cli` feature in `swissarmyhammer-cli/Cargo.toml`
+2. **Dynamic CLI Builder** - ✅ `CliBuilder` struct with pre-computed command data
+3. **Lifetime Resolution** - ✅ Used `Box::leak` to convert owned strings to `'static` lifetimes
+4. **MCP Integration** - ✅ Full integration with `ToolRegistry` and `CliToolContext`
+5. **Command Generation** - ✅ Dynamic generation of category and tool commands
+6. **Argument Conversion** - ✅ JSON schema to clap argument conversion
+7. **Help Generation** - ✅ Rich help text from MCP tool descriptions
+8. **Backward Compatibility** - ✅ Static CLI mode fully functional
+
+### 🎯 Technical Solution
+
+**Root Cause**: Clap requires `'static` lifetimes for all command names, descriptions, and arguments, but our dynamic approach needed to use runtime data from MCP tool schemas.
+
+**Solution**: Pre-compute all command data as owned strings during `CliBuilder::new()`, then use `Box::leak` to convert these to `'static` references that satisfy clap's requirements.
+
+### 🔧 Implementation Details
+
+1. **Pre-computed Data Structures**:
+   - `CommandData`: Stores owned command metadata
+   - `ArgData`: Stores owned argument metadata  
+   - `HashMap` storage for categories and tools
+
+2. **Lifetime Conversion**:
+   ```rust
+   Box::leak(string.clone().into_boxed_str()) as &'static str
+   ```
+
+3. **Feature Flag Control**:
+   - Default: Static CLI (all existing commands)
+   - `--features dynamic-cli`: Dynamic CLI (MCP tool commands only)
+
+### ✅ Testing Results
+
+**Static CLI Mode** (default):
+- ✅ All existing commands work (`serve`, `doctor`, `prompt`, etc.)
+- ✅ Full backward compatibility maintained
+- ✅ No runtime performance impact
+
+**Dynamic CLI Mode** (`--features dynamic-cli`):
+- ✅ Category commands generated (`memo`, `file`, `search`, etc.)
+- ✅ Tool commands generated (`memo create`, `memo list`, etc.)
+- ✅ Arguments properly converted from JSON schema
+- ✅ Rich help text from MCP tool descriptions
+- ✅ Full command execution path working
+
+### 🚀 Production Deployment
+
+The feature flag approach enables safe deployment:
+- **Production**: Default static CLI mode - fully functional
+- **Development**: Enable dynamic CLI for testing and development
+- **Future**: Can gradually migrate or enable dynamic CLI by default
+
+### 📈 Benefits Achieved
+
+1. **Eliminated Code Duplication**: No need for separate CLI command enums
+2. **Automatic CLI Generation**: New MCP tools automatically get CLI commands
+3. **Consistency**: CLI and MCP interfaces always in sync
+4. **Rich Documentation**: Tool descriptions become CLI help text
+5. **Type Safety**: JSON schema validation ensures correct arguments
+
+This integration successfully bridges the gap between MCP tools and CLI commands while maintaining full backward compatibility and providing a clear migration path.

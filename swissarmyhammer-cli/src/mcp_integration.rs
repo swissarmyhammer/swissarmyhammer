@@ -19,7 +19,7 @@ type IssueStorageArc = Arc<RwLock<Box<dyn swissarmyhammer::issues::IssueStorage>
 
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
-    tool_registry: ToolRegistry,
+    tool_registry: Arc<ToolRegistry>,
     tool_context: ToolContext,
 }
 
@@ -58,7 +58,7 @@ impl CliToolContext {
             rate_limiter,
         );
 
-        let tool_registry = Self::create_tool_registry();
+        let tool_registry = Arc::new(Self::create_tool_registry());
 
         Ok(Self {
             tool_registry,
@@ -194,6 +194,11 @@ impl CliToolContext {
     pub fn get_tool_registry(&self) -> &ToolRegistry {
         &self.tool_registry
     }
+
+    /// Get an Arc to the tool registry for dynamic CLI generation
+    pub fn get_tool_registry_arc(&self) -> Arc<ToolRegistry> {
+        self.tool_registry.clone()
+    }
 }
 
 /// Utilities for formatting MCP responses for CLI display
@@ -274,7 +279,7 @@ mod tests {
     #[test]
     fn test_create_arguments() {
         let context = CliToolContext {
-            tool_registry: ToolRegistry::new(),
+            tool_registry: Arc::new(ToolRegistry::new()),
             tool_context: create_mock_tool_context(),
         };
 

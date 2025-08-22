@@ -126,7 +126,7 @@ impl SchemaConverter {
             .unwrap_or("string"); // Default to string if type not specified
 
         match schema_type {
-            "boolean" => Self::extract_boolean(matches, prop_name),
+            "boolean" => Self::extract_boolean(matches, prop_name, prop_schema),
             "string" => Self::extract_string(matches, prop_name),
             "integer" => Self::extract_integer(matches, prop_name),
             "number" => Self::extract_number(matches, prop_name),
@@ -141,15 +141,15 @@ impl SchemaConverter {
     fn extract_boolean(
         matches: &ArgMatches,
         prop_name: &str,
+        _prop_schema: &Value,
     ) -> Result<Option<Value>, ConversionError> {
-        // For boolean flags, we use get_flag which returns true if provided, false otherwise
-        // But we only want to include the value in JSON if it was actually provided
-        // We'll use a simple heuristic: if get_flag returns true, include it
-        // This means unprovided flags will be omitted from JSON (None)
-        // and provided flags will be included as true (Some(true))
-        if matches.get_flag(prop_name) {
+        let flag_value = matches.get_flag(prop_name);
+        
+        if flag_value {
+            // Flag was provided and is true, always include it
             Ok(Some(Value::Bool(true)))
         } else {
+            // Flag was not provided, let MCP tool handle the default or absence
             Ok(None)
         }
     }
@@ -287,14 +287,14 @@ mod tests {
     #[test]
     fn test_extract_boolean_flag() {
         let matches = create_test_matches(&["test", "--enabled"]);
-        let result = SchemaConverter::extract_boolean(&matches, "enabled").unwrap();
+        let result = SchemaConverter::extract_boolean(&matches, "enabled", &json!({"type": "boolean"})).unwrap();
         assert_eq!(result, Some(Value::Bool(true)));
     }
 
     #[test]
     fn test_extract_missing_boolean() {
         let matches = create_test_matches(&["test"]);
-        let result = SchemaConverter::extract_boolean(&matches, "enabled").unwrap();
+        let result = SchemaConverter::extract_boolean(&matches, "enabled", &json!({"type": "boolean"})).unwrap();
         assert_eq!(result, None);
     }
 

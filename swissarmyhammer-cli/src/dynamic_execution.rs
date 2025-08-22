@@ -54,16 +54,53 @@ pub async fn handle_dynamic_command(
     // Look up the tool in the registry
     let tool = tool_registry
         .get_tool(&mcp_tool_name)
-        .ok_or_else(|| anyhow!("Tool not found: {}", mcp_tool_name))?;
+        .ok_or_else(|| {
+            let available_tools: Vec<String> = tool_registry
+                .get_tools_for_category(category)
+                .iter()
+                .map(|t| t.cli_name().to_string())
+                .collect();
+            anyhow!(
+                "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
+                tool_name,
+                category,
+                available_tools.join(", ")
+            )
+        })?;
 
     // Get the tool's schema for argument conversion
     let schema = tool.schema();
 
     // Convert Clap matches to JSON arguments
     let arguments = SchemaConverter::matches_to_json_args(matches, &schema)
-        .map_err(|e| anyhow!("Argument conversion failed: {}", e))
-        .with_context(|| format!("Converting arguments for tool {}", mcp_tool_name))?;
+        .map_err(|e| anyhow!(
+            "Argument conversion failed for tool '{}' (category: {}): {}",
+            tool_name,
+            category,
+            e
+        ))
+        .with_context(|| {
+            let required_fields = schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| arr.len())
+                .unwrap_or(0);
+            let total_properties = schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .map(|obj| obj.len())
+                .unwrap_or(0);
+            format!(
+                "Converting arguments for tool '{}' in category '{}' (schema: {} properties, {} required)",
+                tool_name,
+                category,
+                total_properties,
+                required_fields
+            )
+        })?;
 
+    let arg_count = arguments.len();
+    
     tracing::debug!(
         "Executing tool {} with arguments: {:?}",
         mcp_tool_name,
@@ -74,12 +111,24 @@ pub async fn handle_dynamic_command(
     let result = tool
         .execute(arguments, &context)
         .await
-        .map_err(|e| anyhow!("Tool execution failed: {}", e))
-        .with_context(|| format!("Executing tool {}", mcp_tool_name))?;
+        .map_err(|e| anyhow!(
+            "Tool execution failed for '{}' in category '{}': {}",
+            tool_name,
+            category,
+            e
+        ))
+        .with_context(|| {
+            format!(
+                "Executing MCP tool '{}' (full name: {}) with {} argument(s)",
+                tool_name,
+                mcp_tool_name,
+                arg_count
+            )
+        })?;
 
     // Format and display the result
     display_mcp_result(result)
-        .with_context(|| format!("Displaying result for tool {}", mcp_tool_name))?;
+        .with_context(|| format!("Displaying result for tool '{}' in category '{}'", tool_name, category))?;
 
     Ok(())
 }

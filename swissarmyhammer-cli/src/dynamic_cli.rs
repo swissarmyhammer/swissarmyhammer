@@ -6,94 +6,105 @@
 
 use clap::{Arg, ArgAction, Command};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolRegistry};
 
-/// Dynamic CLI builder that generates commands from MCP tool registry
-pub struct CliBuilder<'a> {
-    tool_registry: &'a ToolRegistry,
+/// Pre-computed command data with owned strings for clap's 'static requirements
+#[derive(Debug, Clone)]
+struct CommandData {
+    name: String,
+    about: Option<String>,
+    long_about: Option<String>,
+    args: Vec<ArgData>,
 }
 
-impl<'a> CliBuilder<'a> {
+/// Pre-computed argument data with owned strings
+#[derive(Debug, Clone)]
+struct ArgData {
+    name: String,
+    help: Option<String>,
+    is_required: bool,
+    arg_type: ArgType,
+    default_value: Option<String>,
+    possible_values: Option<Vec<String>>,
+}
+
+/// Argument type for proper clap configuration
+#[derive(Debug, Clone)]
+enum ArgType {
+    String,
+    Integer,
+    Float,
+    Boolean,
+    Array,
+}
+
+/// Dynamic CLI builder that generates commands from MCP tool registry
+pub struct CliBuilder {
+    tool_registry: Arc<ToolRegistry>,
+    // Pre-computed command data with owned strings
+    category_commands: HashMap<String, CommandData>,
+    tool_commands: HashMap<String, HashMap<String, CommandData>>,
+}
+
+impl CliBuilder {
     /// Create a new CLI builder with the given tool registry
-    pub fn new(tool_registry: &'a ToolRegistry) -> Self {
-        Self { tool_registry }
-    }
-
-    /// Build the complete CLI with both static and dynamic commands
-    pub fn build_cli(&self) -> Command {
-        let mut cli = Command::new("swissarmyhammer")
-            .version(env!("CARGO_PKG_VERSION"))
-            .about("An MCP server for managing prompts as markdown files")
-            .long_about("
-swissarmyhammer is an MCP (Model Context Protocol) server that manages
-prompts as markdown files. It supports file watching, template substitution,
-and seamless integration with Claude Code.
-
-This CLI includes both static commands and dynamic commands generated from MCP tools.
-")
-            // Add verbose/debug/quiet flags from parent CLI
-            .arg(Arg::new("verbose")
-                .short('v')
-                .long("verbose")
-                .help("Enable verbose logging")
-                .action(ArgAction::SetTrue))
-            .arg(Arg::new("debug")
-                .short('d')
-                .long("debug")
-                .help("Enable debug logging")
-                .action(ArgAction::SetTrue))
-            .arg(Arg::new("quiet")
-                .short('q')
-                .long("quiet")
-                .help("Suppress all output except errors")
-                .action(ArgAction::SetTrue));
-
-        // Add dynamic MCP tool commands
-        let tool_categories = self.tool_registry.get_cli_categories();
-        for category in tool_categories {
-            cli = cli.subcommand(self.build_category_command(&category));
-        }
-
-        cli
-    }
-
-    /// Build a command for a specific tool category
-    fn build_category_command(&self, category: &str) -> Command {
-        let about_text = format!("{} management commands", category.to_uppercase());
-        let mut cmd = Command::new(category)
-            .about(about_text);
-
-        let tools = self.tool_registry.get_tools_for_category(category);
-        for tool in tools {
-            if !tool.hidden_from_cli() {
-                cmd = cmd.subcommand(self.build_tool_command(tool));
+    pub fn new(tool_registry: Arc<ToolRegistry>) -> Self {
+        let mut category_commands = HashMap::new();
+        let mut tool_commands = HashMap::new();
+        
+        // Pre-compute all command data
+        let categories = tool_registry.get_cli_categories();
+        for category in categories {
+            let category_name = category.to_string();
+            
+            // Create category command data
+            let category_cmd_data = CommandData {
+                name: category_name.clone(),
+                about: Some(format!("{} management commands", category.to_uppercase())),
+                long_about: None,
+                args: Vec::new(),
+            };
+            category_commands.insert(category_name.clone(), category_cmd_data);
+            
+            // Create tool commands for this category
+            let mut tools_in_category = HashMap::new();
+            let tools = tool_registry.get_tools_for_category(&category);
+            
+            for tool in tools {
+                if !tool.hidden_from_cli() {
+                    let tool_cmd_data = Self::precompute_tool_command(tool);
+                    tools_in_category.insert(tool.cli_name().to_string(), tool_cmd_data);
+                }
             }
+            
+            tool_commands.insert(category_name, tools_in_category);
         }
-
-        cmd
+        
+        Self {
+            tool_registry,
+            category_commands,
+            tool_commands,
+        }
     }
-
-    /// Build a command for a specific MCP tool
-    fn build_tool_command(&self, tool: &dyn McpTool) -> Command {
+    
+    /// Pre-compute command data for a tool
+    fn precompute_tool_command(tool: &dyn McpTool) -> CommandData {
         let schema = tool.schema();
-        let mut cmd = Command::new(tool.cli_name());
-
-        // Set about text from tool
-        if let Some(about) = tool.cli_about() {
-            cmd = cmd.about(about);
+        
+        CommandData {
+            name: tool.cli_name().to_string(),
+            about: tool.cli_about().map(|s| s.to_string()),
+            long_about: Some(tool.description().to_string()),
+            args: Self::precompute_args(&schema),
         }
-
-        // Set long about from full description
-        cmd = cmd.long_about(tool.description());
-
-        // Convert JSON schema to clap arguments
-        cmd = self.schema_to_clap_args(cmd, &schema);
-
-        cmd
     }
-
-    /// Convert JSON schema properties to clap arguments
-    fn schema_to_clap_args(&self, mut cmd: Command, schema: &Value) -> Command {
+    
+    /// Pre-compute argument data from JSON schema
+    fn precompute_args(schema: &Value) -> Vec<ArgData> {
+        let mut args = Vec::new();
+        
         if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
             // Determine required fields
             let required_fields: std::collections::HashSet<String> = schema
@@ -106,91 +117,207 @@ This CLI includes both static commands and dynamic commands generated from MCP t
                         .collect()
                 })
                 .unwrap_or_default();
-
+            
             for (prop_name, prop_schema) in properties {
-                let arg = self.json_schema_to_clap_arg(
+                let arg_data = Self::precompute_arg_data(
                     prop_name,
                     prop_schema,
                     required_fields.contains(prop_name),
                 );
-                cmd = cmd.arg(arg);
+                args.push(arg_data);
+            }
+        }
+        
+        args
+    }
+    
+    /// Pre-compute data for a single argument
+    fn precompute_arg_data(name: &str, schema: &Value, is_required: bool) -> ArgData {
+        // Determine argument type
+        let arg_type = match schema.get("type").and_then(|t| t.as_str()) {
+            Some("boolean") => ArgType::Boolean,
+            Some("integer") => ArgType::Integer,
+            Some("number") => ArgType::Float,
+            Some("array") => ArgType::Array,
+            _ => ArgType::String,
+        };
+        
+        // Extract help text
+        let help = schema
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string());
+        
+        // Extract default value
+        let default_value = schema
+            .get("default")
+            .and_then(|d| d.as_str())
+            .map(|s| s.to_string());
+        
+        // Extract possible values for enums
+        let possible_values = schema
+            .get("enum")
+            .and_then(|e| e.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            });
+        
+        ArgData {
+            name: name.to_string(),
+            help,
+            is_required,
+            arg_type,
+            default_value,
+            possible_values,
+        }
+    }
+
+    /// Build the complete CLI with both static and dynamic commands
+    pub fn build_cli(&self) -> Command {
+        let mut cli = Command::new("swissarmyhammer")
+            .version(env!("CARGO_PKG_VERSION"))
+            .about("An MCP server for managing prompts as markdown files")
+            .long_about(
+                "
+swissarmyhammer is an MCP (Model Context Protocol) server that manages
+prompts as markdown files. It supports file watching, template substitution,
+and seamless integration with Claude Code.
+
+This CLI includes both static commands and dynamic commands generated from MCP tools.
+",
+            )
+            // Add verbose/debug/quiet flags from parent CLI
+            .arg(
+                Arg::new("verbose")
+                    .short('v')
+                    .long("verbose")
+                    .help("Enable verbose logging")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("debug")
+                    .short('d')
+                    .long("debug")
+                    .help("Enable debug logging")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("quiet")
+                    .short('q')
+                    .long("quiet")
+                    .help("Suppress all output except errors")
+                    .action(ArgAction::SetTrue),
+            );
+
+        // Add dynamic MCP tool commands using pre-computed data
+        for (category_name, category_data) in &self.category_commands {
+            cli = cli.subcommand(self.build_category_command_from_data(category_name, category_data));
+        }
+
+        cli
+    }
+
+    /// Build a command for a specific tool category from pre-computed data
+    fn build_category_command_from_data(&self, category_name: &str, category_data: &CommandData) -> Command {
+        let mut cmd = Command::new(Box::leak(category_data.name.clone().into_boxed_str()) as &'static str);
+        
+        if let Some(about) = &category_data.about {
+            cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
+        }
+        
+        if let Some(long_about) = &category_data.long_about {
+            cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
+        }
+
+        // Add tool subcommands for this category
+        if let Some(tools_in_category) = self.tool_commands.get(category_name) {
+            for (_tool_name, tool_data) in tools_in_category {
+                cmd = cmd.subcommand(self.build_tool_command_from_data(tool_data));
             }
         }
 
         cmd
     }
 
-    /// Convert a single JSON schema property to a clap argument
-    fn json_schema_to_clap_arg(
-        &self,
-        name: &str,
-        schema: &Value,
-        is_required: bool,
-    ) -> Arg {
-        let mut arg = Arg::new(name).long(name);
+    /// Build a command for a specific MCP tool from pre-computed data
+    fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
+        let mut cmd = Command::new(Box::leak(tool_data.name.clone().into_boxed_str()) as &'static str);
 
-        // Set help text from description
-        if let Some(desc) = schema.get("description").and_then(|d| d.as_str()) {
-            arg = arg.help(desc);
+        if let Some(about) = &tool_data.about {
+            cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
+        }
+
+        if let Some(long_about) = &tool_data.long_about {
+            cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
+        }
+
+        // Add arguments from pre-computed data
+        for arg_data in &tool_data.args {
+            cmd = cmd.arg(self.build_arg_from_data(arg_data));
+        }
+
+        cmd
+    }
+
+    /// Build a clap argument from pre-computed data
+    fn build_arg_from_data(&self, arg_data: &ArgData) -> Arg {
+        let name_static = Box::leak(arg_data.name.clone().into_boxed_str()) as &'static str;
+        let mut arg = Arg::new(name_static).long(name_static);
+
+        // Set help text
+        if let Some(help) = &arg_data.help {
+            arg = arg.help(Box::leak(help.clone().into_boxed_str()) as &'static str);
         }
 
         // Set as required if specified
-        if is_required {
+        if arg_data.is_required {
             arg = arg.required(true);
         }
 
         // Configure based on type
-        match schema.get("type").and_then(|t| t.as_str()) {
-            Some("boolean") => {
+        match arg_data.arg_type {
+            ArgType::Boolean => {
                 arg = arg.action(ArgAction::SetTrue);
             }
-            Some("integer") => {
+            ArgType::Integer => {
                 arg = arg.value_parser(clap::value_parser!(i64));
-                if !is_required {
+                if !arg_data.is_required {
                     arg = arg.value_name("NUMBER");
                 }
             }
-            Some("number") => {
+            ArgType::Float => {
                 arg = arg.value_parser(clap::value_parser!(f64));
-                if !is_required {
+                if !arg_data.is_required {
                     arg = arg.value_name("NUMBER");
                 }
             }
-            Some("array") => {
+            ArgType::Array => {
                 arg = arg.action(ArgAction::Append);
-                if !is_required {
+                if !arg_data.is_required {
                     arg = arg.value_name("VALUE");
                 }
             }
-            _ => {
-                // Default to string
-                if !is_required {
+            ArgType::String => {
+                if !arg_data.is_required {
                     arg = arg.value_name("TEXT");
                 }
             }
         }
 
         // Handle enum values
-        if let Some(enum_values) = schema.get("enum").and_then(|e| e.as_array()) {
-            let string_values: Vec<&str> = enum_values
-                .iter()
-                .filter_map(|v| v.as_str())
+        if let Some(possible_values) = &arg_data.possible_values {
+            let str_values: Vec<&'static str> = possible_values.iter()
+                .map(|s| Box::leak(s.clone().into_boxed_str()) as &'static str)
                 .collect();
-            if !string_values.is_empty() {
-                arg = arg.value_parser(clap::builder::PossibleValuesParser::new(string_values));
-            }
+            arg = arg.value_parser(clap::builder::PossibleValuesParser::new(str_values));
         }
 
         // Handle default values
-        if let Some(default_val) = schema.get("default") {
-            if let Some(default_str) = default_val.as_str() {
-                arg = arg.default_value(default_str);
-            } else if let Some(default_bool) = default_val.as_bool() {
-                if default_bool {
-                    // For boolean defaults that are true, we need special handling
-                    arg = arg.action(ArgAction::SetFalse);
-                }
-            }
+        if let Some(default_value) = &arg_data.default_value {
+            arg = arg.default_value(Box::leak(default_value.clone().into_boxed_str()) as &'static str);
         }
 
         arg
