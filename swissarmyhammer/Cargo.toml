@@ -120,7 +120,7 @@ test-utils = []
 tempfile = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
-serial_test = { workspace = true }
+
 futures = "0.3"
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 
