@@ -206,9 +206,8 @@ mod tests {
 
     #[test]
     fn test_user_prompt_overrides_builtin_source_tracking() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let user_prompts_dir = guard.home_path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();
 
         // Create a user prompt with the same name as a builtin prompt
@@ -225,11 +224,6 @@ This is a user-defined debug/error prompt that should override the builtin one.
 
         let mut resolver = PromptResolver::new();
         let mut library = PromptLibrary::new();
-
-        // Store original HOME value to restore later
-
-        // Temporarily change home directory for test
-        std::env::set_var("HOME", temp_dir.path());
 
         // Load builtin prompts first
         resolver.load_all_prompts(&mut library).unwrap();
