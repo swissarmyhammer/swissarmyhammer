@@ -63,6 +63,12 @@ pub mod defaults;
 #[cfg(test)]
 pub mod tests;
 
+/// Template renderer with TemplateContext integration
+pub mod renderer;
+
+/// Legacy compatibility layer for existing template integration
+pub mod compat;
+
 /// Integration tests
 #[cfg(test)]
 pub mod integration_test;
@@ -72,6 +78,7 @@ pub use defaults::ConfigDefaults;
 pub use discovery::{ConfigFile, ConfigFormat, ConfigScope, FileDiscovery};
 pub use error::{ConfigError, ConfigResult};
 pub use provider::ConfigProvider;
+pub use renderer::TemplateRenderer;
 pub use types::{RawConfig, TemplateContext};
 
 /// Current version of the configuration system

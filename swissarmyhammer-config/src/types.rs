@@ -31,7 +31,10 @@ impl TemplateContext {
 
     /// Create from configuration values only
     pub fn from_config(config_vars: HashMap<String, serde_json::Value>) -> Self {
-        debug!("Creating TemplateContext from config with {} variables", config_vars.len());
+        debug!(
+            "Creating TemplateContext from config with {} variables",
+            config_vars.len()
+        );
         Self::with_vars(config_vars)
     }
 
@@ -42,50 +45,42 @@ impl TemplateContext {
 
     /// Get variable as string if possible
     pub fn get_string(&self, key: &str) -> Option<String> {
-        self.vars.get(key).and_then(|v| {
-            match v {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Number(n) => Some(n.to_string()),
-                serde_json::Value::Bool(b) => Some(b.to_string()),
-                _ => None,
-            }
+        self.vars.get(key).and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            _ => None,
         })
     }
 
     /// Get variable as boolean if possible
     pub fn get_bool(&self, key: &str) -> Option<bool> {
-        self.vars.get(key).and_then(|v| {
-            match v {
-                serde_json::Value::Bool(b) => Some(*b),
-                serde_json::Value::String(s) => {
-                    match s.to_lowercase().as_str() {
-                        "true" | "yes" | "1" => Some(true),
-                        "false" | "no" | "0" => Some(false),
-                        _ => None,
-                    }
-                }
-                serde_json::Value::Number(n) => n.as_i64().map(|i| i != 0),
+        self.vars.get(key).and_then(|v| match v {
+            serde_json::Value::Bool(b) => Some(*b),
+            serde_json::Value::String(s) => match s.to_lowercase().as_str() {
+                "true" | "yes" | "1" => Some(true),
+                "false" | "no" | "0" => Some(false),
                 _ => None,
-            }
+            },
+            serde_json::Value::Number(n) => n.as_i64().map(|i| i != 0),
+            _ => None,
         })
     }
 
     /// Get variable as number if possible
     pub fn get_number(&self, key: &str) -> Option<f64> {
-        self.vars.get(key).and_then(|v| {
-            match v {
-                serde_json::Value::Number(n) => n.as_f64(),
-                serde_json::Value::String(s) => s.parse().ok(),
-                _ => None,
-            }
+        self.vars.get(key).and_then(|v| match v {
+            serde_json::Value::Number(n) => n.as_f64(),
+            serde_json::Value::String(s) => s.parse().ok(),
+            _ => None,
         })
     }
 
     /// Set a template variable
-    pub fn set<K, V>(&mut self, key: K, value: V) 
-    where 
+    pub fn set<K, V>(&mut self, key: K, value: V)
+    where
         K: Into<String>,
-        V: Into<serde_json::Value>
+        V: Into<serde_json::Value>,
     {
         let key = key.into();
         let value = value.into();
@@ -182,7 +177,10 @@ impl TemplateContext {
     /// assert_eq!(ctx.get_number("global_timeout"), Some(30.0));
     /// ```
     pub fn merge_config(&mut self, config_vars: HashMap<String, serde_json::Value>) {
-        debug!("Merging config variables with lower priority: {} variables", config_vars.len());
+        debug!(
+            "Merging config variables with lower priority: {} variables",
+            config_vars.len()
+        );
         // Insert config vars first, then existing vars will override them
         let mut merged = config_vars;
         for (key, value) in &self.vars {
@@ -220,7 +218,10 @@ impl TemplateContext {
     /// assert_eq!(ctx.get_string("workflow_id"), Some("deploy-001".to_string()));
     /// ```
     pub fn merge_workflow(&mut self, workflow_vars: HashMap<String, serde_json::Value>) {
-        debug!("Merging workflow variables with higher priority: {} variables", workflow_vars.len());
+        debug!(
+            "Merging workflow variables with higher priority: {} variables",
+            workflow_vars.len()
+        );
         // Workflow vars override existing vars
         for (key, value) in workflow_vars {
             trace!("Workflow variable override: {} = {:?}", key, value);
@@ -304,7 +305,7 @@ impl TemplateContext {
     ///
     /// // Original context is unchanged
     /// assert_eq!(original_ctx.get_string("api_url"), Some("https://api.example.com/${API_KEY}".to_string()));
-    /// 
+    ///
     /// // New context has substituted values
     /// assert_eq!(substituted_ctx.get_string("api_url"), Some("https://api.example.com/secret123".to_string()));
     ///
@@ -361,9 +362,15 @@ impl TemplateContext {
     /// Get variables in the legacy `_template_vars` format
     pub fn as_legacy_context(&self) -> HashMap<String, serde_json::Value> {
         let mut legacy = HashMap::new();
-        legacy.insert("_template_vars".to_string(), serde_json::Value::Object(
-            self.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-        ));
+        legacy.insert(
+            "_template_vars".to_string(),
+            serde_json::Value::Object(
+                self.vars
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+        );
         legacy
     }
 
@@ -838,7 +845,10 @@ mod tests {
         ctx.set("number_string", "123.45");
 
         // Test string getter
-        assert_eq!(ctx.get_string("string_val"), Some("test_string".to_string()));
+        assert_eq!(
+            ctx.get_string("string_val"),
+            Some("test_string".to_string())
+        );
         assert_eq!(ctx.get_string("bool_val"), Some("true".to_string()));
         assert_eq!(ctx.get_string("number_val"), Some("42.5".to_string()));
         assert_eq!(ctx.get_string("nonexistent"), None);
@@ -867,10 +877,7 @@ mod tests {
             "new_key1".to_string(),
             serde_json::Value::String("value1".to_string()),
         );
-        new_vars.insert(
-            "new_key2".to_string(),
-            serde_json::Value::Number(42.into()),
-        );
+        new_vars.insert("new_key2".to_string(), serde_json::Value::Number(42.into()));
 
         ctx.extend(new_vars);
 

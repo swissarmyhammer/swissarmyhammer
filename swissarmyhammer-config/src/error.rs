@@ -40,6 +40,10 @@ pub enum ConfigError {
     /// Environment variable error
     #[error("Environment variable error: {message}")]
     EnvironmentError { message: String },
+
+    /// Template processing error
+    #[error("Template error: {message}")]
+    TemplateError { message: String },
 }
 
 impl ConfigError {
@@ -76,6 +80,13 @@ impl ConfigError {
     /// Create a new environment error
     pub fn environment_error(message: impl Into<String>) -> Self {
         Self::EnvironmentError {
+            message: message.into(),
+        }
+    }
+
+    /// Create a new template error
+    pub fn template_error(message: impl Into<String>) -> Self {
+        Self::TemplateError {
             message: message.into(),
         }
     }

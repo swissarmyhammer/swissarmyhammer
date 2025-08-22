@@ -51,6 +51,121 @@ impl ConfigProvider {
         Ok(context)
     }
 
+    /// Create template context with additional workflow variables
+    ///
+    /// This method loads the base configuration context and then merges it with
+    /// workflow variables. Workflow variables have higher priority and will override
+    /// configuration values with the same keys.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_vars` - HashMap of workflow variables that override config values
+    ///
+    /// # Returns
+    ///
+    /// Returns a TemplateContext with both configuration and workflow variables,
+    /// with workflow variables taking precedence over configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::ConfigProvider;
+    /// use std::collections::HashMap;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let provider = ConfigProvider::new();
+    /// let mut workflow_vars = HashMap::new();
+    /// workflow_vars.insert("environment".to_string(), serde_json::json!("production"));
+    /// workflow_vars.insert("user_name".to_string(), serde_json::json!("Alice"));
+    ///
+    /// let context = provider.create_context_with_vars(workflow_vars)?;
+    /// // context now contains both config values and workflow variables
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_context_with_vars(
+        &self,
+        workflow_vars: std::collections::HashMap<String, serde_json::Value>,
+    ) -> ConfigResult<TemplateContext> {
+        debug!(
+            "Creating template context with {} workflow variables",
+            workflow_vars.len()
+        );
+
+        // Load base configuration context
+        let mut context = self.load_template_context()?;
+
+        // Merge workflow variables with higher precedence
+        context.merge_workflow(workflow_vars);
+
+        info!(
+            "Successfully created template context with {} total variables",
+            context.len()
+        );
+        Ok(context)
+    }
+
+    /// Render a template with configuration and optional workflow variables
+    ///
+    /// This is a convenience method that combines configuration loading, context creation,
+    /// and template rendering in a single operation. It's useful for simple template
+    /// rendering scenarios where you don't need to reuse the context or renderer.
+    ///
+    /// # Arguments
+    ///
+    /// * `template` - The template string containing Liquid syntax
+    /// * `workflow_vars` - Optional HashMap of workflow variables that override config values
+    ///
+    /// # Returns
+    ///
+    /// Returns the rendered template string or a `ConfigError` if rendering fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::ConfigProvider;
+    /// use std::collections::HashMap;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let provider = ConfigProvider::new();
+    ///
+    /// // Simple rendering with just configuration
+    /// let simple_result = provider.render_template(
+    ///     "Project: {{project_name | default: 'Unknown'}}",
+    ///     None
+    /// )?;
+    ///
+    /// // Rendering with workflow variables
+    /// let mut workflow_vars = HashMap::new();
+    /// workflow_vars.insert("user_name".to_string(), serde_json::json!("Alice"));
+    /// let complex_result = provider.render_template(
+    ///     "Welcome {{user_name}}! Project: {{project_name}}",
+    ///     Some(workflow_vars)
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn render_template(
+        &self,
+        template: &str,
+        workflow_vars: Option<std::collections::HashMap<String, serde_json::Value>>,
+    ) -> ConfigResult<String> {
+        use crate::TemplateRenderer;
+
+        debug!("Rendering template with ConfigProvider");
+
+        // Create template context with workflow variables if provided
+        let context = if let Some(vars) = workflow_vars {
+            self.create_context_with_vars(vars)?
+        } else {
+            self.load_template_context()?
+        };
+
+        // Create renderer and render template
+        let renderer = TemplateRenderer::new()?;
+        renderer.render(template, &context)
+    }
+
     /// Build the figment configuration with all sources in precedence order
     ///
     /// Sources are loaded in precedence order (later sources override earlier ones):
@@ -439,5 +554,140 @@ yaml_only: yaml_value
             context.get("env_only"),
             Some(&serde_json::Value::String("env_value".to_string()))
         );
+    }
+
+    #[test]
+    fn test_create_context_with_vars_empty() {
+        let provider = ConfigProvider::new();
+        let workflow_vars = HashMap::new();
+
+        let context = provider.create_context_with_vars(workflow_vars).unwrap();
+
+        // Should have default configuration values
+        assert!(!context.is_empty());
+        assert!(context.get("environment").is_some());
+    }
+
+    #[test]
+    fn test_create_context_with_vars_with_data() {
+        let provider = ConfigProvider::new();
+        let mut workflow_vars = HashMap::new();
+        workflow_vars.insert("user_name".to_string(), serde_json::json!("Alice"));
+        workflow_vars.insert("role".to_string(), serde_json::json!("admin"));
+        workflow_vars.insert("active".to_string(), serde_json::json!(true));
+
+        let context = provider.create_context_with_vars(workflow_vars).unwrap();
+
+        // Should have both config and workflow variables
+        assert!(context.get("environment").is_some()); // From config
+        assert_eq!(context.get_string("user_name"), Some("Alice".to_string()));
+        assert_eq!(context.get_string("role"), Some("admin".to_string()));
+        assert_eq!(context.get_bool("active"), Some(true));
+    }
+
+    #[test]
+    fn test_create_context_with_vars_precedence() {
+        let provider = ConfigProvider::new();
+        let mut workflow_vars = HashMap::new();
+        // Override a default config value
+        workflow_vars.insert("environment".to_string(), serde_json::json!("production"));
+        workflow_vars.insert("workflow_id".to_string(), serde_json::json!("deploy-001"));
+
+        let context = provider.create_context_with_vars(workflow_vars).unwrap();
+
+        // Workflow var should override config default
+        assert_eq!(
+            context.get_string("environment"),
+            Some("production".to_string())
+        );
+        // Workflow-only var should be present
+        assert_eq!(
+            context.get_string("workflow_id"),
+            Some("deploy-001".to_string())
+        );
+    }
+
+    #[test]
+    fn test_render_template_simple() {
+        let provider = ConfigProvider::new();
+
+        let result = provider.render_template("Hello World!", None).unwrap();
+        assert_eq!(result, "Hello World!");
+    }
+
+    #[test]
+    fn test_render_template_with_config() {
+        let provider = ConfigProvider::new();
+
+        // Should have environment default available
+        let result = provider
+            .render_template("Environment: {{environment}}", None)
+            .unwrap();
+        assert!(result.contains("Environment: "));
+        assert!(!result.contains("{{environment}}")); // Should be substituted
+    }
+
+    #[test]
+    fn test_render_template_with_workflow_vars() {
+        let provider = ConfigProvider::new();
+        let mut workflow_vars = HashMap::new();
+        workflow_vars.insert("greeting".to_string(), serde_json::json!("Hello"));
+        workflow_vars.insert("name".to_string(), serde_json::json!("Alice"));
+
+        let result = provider
+            .render_template("{{greeting}} {{name}}!", Some(workflow_vars))
+            .unwrap();
+        assert_eq!(result, "Hello Alice!");
+    }
+
+    #[test]
+    fn test_render_template_with_defaults() {
+        let provider = ConfigProvider::new();
+
+        let result = provider
+            .render_template(
+                "{{greeting | default: 'Hello'}} {{name | default: 'World'}}!",
+                None,
+            )
+            .unwrap();
+        assert_eq!(result, "Hello World!");
+    }
+
+    #[test]
+    fn test_render_template_workflow_overrides_config() {
+        let provider = ConfigProvider::new();
+        let mut workflow_vars = HashMap::new();
+        workflow_vars.insert("environment".to_string(), serde_json::json!("production"));
+
+        let result = provider
+            .render_template("Environment: {{environment}}", Some(workflow_vars))
+            .unwrap();
+        assert_eq!(result, "Environment: production");
+    }
+
+    #[test]
+    fn test_render_template_complex() {
+        let provider = ConfigProvider::new();
+        let mut workflow_vars = HashMap::new();
+        workflow_vars.insert(
+            "user".to_string(),
+            serde_json::json!({
+                "name": "Alice",
+                "role": "admin"
+            }),
+        );
+        workflow_vars.insert(
+            "items".to_string(),
+            serde_json::json!(["task1", "task2", "task3"]),
+        );
+
+        let template = r#"Welcome {{user.name}}! Role: {{user.role}}
+Tasks: {% for item in items %}{{item}}{% unless forloop.last %}, {% endunless %}{% endfor %}"#;
+
+        let result = provider
+            .render_template(template, Some(workflow_vars))
+            .unwrap();
+        assert!(result.contains("Welcome Alice! Role: admin"));
+        assert!(result.contains("Tasks: task1, task2, task3"));
     }
 }
