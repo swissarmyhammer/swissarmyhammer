@@ -190,3 +190,59 @@ If issues are discovered after removal:
 - `swissarmyhammer/src/lib.rs` (remove module declarations)
 - `swissarmyhammer/Cargo.toml` (clean up dependencies)
 - Documentation files (remove old references)
+
+## Proposed Solution
+
+I will implement a careful, phased removal approach to eliminate the old configuration modules:
+
+### Phase 1: Pre-Removal Verification
+1. Run the existing test suite to ensure the new system is working correctly
+2. Audit the entire codebase for any remaining references to `sah_config` and `toml_config`
+3. Verify all functionality has been migrated to the new figment-based system
+
+### Phase 2: Safe Module Removal  
+1. First comment out the module declarations in `lib.rs` and verify the build still works
+2. Remove the actual module directories: `src/sah_config/` and `src/toml_config/`
+3. Update `lib.rs` to permanently remove the module declarations
+4. Clean up any unused dependencies in `Cargo.toml`
+
+### Phase 3: Final Verification
+1. Run `cargo clean && cargo build` to ensure clean compilation
+2. Run full test suite with `cargo nextest run --fail-fast`
+3. Run `cargo clippy` to verify no warnings about missing modules
+4. Verify no functionality has been broken
+
+This approach minimizes risk by verifying each step before proceeding to irreversible changes.
+
+## Analysis Results
+
+After running tests and auditing the codebase, I discovered that **the migration is NOT complete**. The old modules are still actively used:
+
+### Active Usage Found:
+
+1. **swissarmyhammer-tools** - Uses `sah_config::types::parse_size_string` in shell execution module
+2. **swissarmyhammer-cli** - Contains `validate_sah_config` functions that appear to still be in use  
+3. **Test failures** - There are 21 failing tests, including several from the old `sah_config` and `toml_config` modules
+4. **Library exports** - Both modules are still exported in `lib.rs` and included in the prelude
+
+### Test Failures Include:
+- `sah_config::loader::tests::test_shell_env_overrides`
+- `sah_config::loader::tests::test_invalid_env_values` 
+- `sah_config::loader::tests::test_load_shell_config_defaults`
+- `toml_config::module_tests::test_load_repo_config_wrapper`
+- `toml_config::parser::tests::test_load_from_repo_root`
+
+### Recommendation
+
+This issue should be **postponed** until the migration work is truly complete. The following needs to happen first:
+
+1. **Complete the migration** - All functionality from `sah_config` and `toml_config` needs to be moved to the new system
+2. **Update dependents** - `swissarmyhammer-tools` and `swissarmyhammer-cli` need to be updated to use the new APIs
+3. **Fix failing tests** - All tests should pass with the new configuration system
+4. **Verify compatibility** - Ensure the new system provides all the same functionality
+
+Only after these steps are complete should we proceed with removing the old modules.
+
+## Current Status: BLOCKED
+
+This issue cannot proceed safely until the migration dependencies are resolved.
