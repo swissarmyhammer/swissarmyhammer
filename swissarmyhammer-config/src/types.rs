@@ -1,6 +1,6 @@
 //! Core data structures for SwissArmyHammer configuration system
 
-use crate::{ConfigError, ConfigResult};
+use crate::ConfigResult;
 use liquid::ValueView;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -238,8 +238,11 @@ impl TemplateContext {
 
     /// Process environment variable substitution in all template variables
     ///
+    /// Uses the legacy-compatible behavior where missing environment variables
+    /// without defaults return empty strings rather than errors.
+    ///
     /// Supports patterns:
-    /// - `${VAR}` - Replace with environment variable VAR
+    /// - `${VAR}` - Replace with environment variable VAR, empty string if not set
     /// - `${VAR:-default}` - Replace with VAR or default if VAR is unset
     ///
     /// Substitution works recursively through nested JSON objects and arrays.
@@ -258,7 +261,7 @@ impl TemplateContext {
     /// ctx.set("connection", serde_json::json!({
     ///     "url": "postgresql://${DATABASE_HOST}:${DATABASE_PORT}/myapp",
     ///     "timeout": "${CONNECTION_TIMEOUT:-30}",
-    ///     "pool_size": "${POOL_SIZE:-10}"
+    ///     "pool_size": "${POOL_SIZE}"  // Will be empty string if not set
     /// }));
     ///
     /// ctx.substitute_env_vars().unwrap();
@@ -266,28 +269,53 @@ impl TemplateContext {
     /// let connection = ctx.get("connection").unwrap();
     /// assert_eq!(connection["url"], "postgresql://localhost:5432/myapp");
     /// assert_eq!(connection["timeout"], "30"); // default used
-    /// assert_eq!(connection["pool_size"], "10"); // default used
+    /// assert_eq!(connection["pool_size"], ""); // empty string for missing var
     ///
     /// // Clean up
     /// env::remove_var("DATABASE_HOST");
     /// env::remove_var("DATABASE_PORT");
     /// ```
     pub fn substitute_env_vars(&mut self) -> ConfigResult<()> {
-        debug!("Performing environment variable substitution");
-        let mut updated_vars = HashMap::new();
-
-        for (key, value) in &self.vars {
-            let substituted = self.substitute_value(value)?;
-            updated_vars.insert(key.clone(), substituted);
-        }
-
-        self.vars = updated_vars;
-        Ok(())
+        debug!("Performing environment variable substitution (legacy compatible mode)");
+        crate::env_substitution::LEGACY_PROCESSOR
+            .with(|processor| processor.substitute_vars(&mut self.vars))
     }
 
-    /// Get context with environment variables substituted (non-mutating)
+    /// Process environment variable substitution in strict mode
+    ///
+    /// In strict mode, missing environment variables without defaults will return errors
+    /// rather than empty strings. This provides better validation but may break compatibility
+    /// with existing templates that expect empty string behavior.
+    ///
+    /// # Arguments
+    /// * None
+    ///
+    /// # Returns
+    /// * `ConfigResult<()>` - Ok if successful, Err if any environment variables are missing
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::env;
+    ///
+    /// let mut ctx = TemplateContext::new();
+    /// ctx.set("config", serde_json::Value::String("${MISSING_VAR}".to_string()));
+    ///
+    /// // This will return an error because MISSING_VAR is not set and has no default
+    /// let result = ctx.substitute_env_vars_strict();
+    /// assert!(result.is_err());
+    /// ```
+    pub fn substitute_env_vars_strict(&mut self) -> ConfigResult<()> {
+        debug!("Performing environment variable substitution (strict mode)");
+        crate::env_substitution::STRICT_PROCESSOR
+            .with(|processor| processor.substitute_vars(&mut self.vars))
+    }
+
+    /// Get context with environment variables substituted (non-mutating, legacy mode)
     ///
     /// Creates a new context with environment variables substituted without modifying the original.
+    /// Uses legacy-compatible behavior where missing variables without defaults become empty strings.
     /// This is useful for functional-style programming where immutability is preferred.
     ///
     /// # Example
@@ -298,8 +326,9 @@ impl TemplateContext {
     ///
     /// env::set_var("API_KEY", "secret123");
     ///
-    /// let original_ctx = TemplateContext::new();
+    /// let mut original_ctx = TemplateContext::new();
     /// original_ctx.set("api_url", serde_json::Value::String("https://api.example.com/${API_KEY}".to_string()));
+    /// original_ctx.set("missing", serde_json::Value::String("${MISSING_VAR}".to_string()));
     ///
     /// let substituted_ctx = original_ctx.with_env_substitution().unwrap();
     ///
@@ -308,14 +337,88 @@ impl TemplateContext {
     ///
     /// // New context has substituted values
     /// assert_eq!(substituted_ctx.get_string("api_url"), Some("https://api.example.com/secret123".to_string()));
+    /// assert_eq!(substituted_ctx.get_string("missing"), Some("".to_string())); // empty string for missing var
     ///
     /// env::remove_var("API_KEY");
     /// ```
     pub fn with_env_substitution(&self) -> ConfigResult<TemplateContext> {
-        debug!("Creating context with environment variable substitution");
+        debug!("Creating context with environment variable substitution (legacy compatible mode)");
         let mut result = self.clone();
         result.substitute_env_vars()?;
         Ok(result)
+    }
+
+    /// Get context with environment variables substituted in strict mode (non-mutating)
+    ///
+    /// Creates a new context with environment variables substituted without modifying the original.
+    /// Uses strict mode where missing variables without defaults return errors.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::env;
+    ///
+    /// env::set_var("API_KEY", "secret123");
+    ///
+    /// let mut original_ctx = TemplateContext::new();
+    /// original_ctx.set("api_url", serde_json::Value::String("https://api.example.com/${API_KEY}".to_string()));
+    /// original_ctx.set("missing", serde_json::Value::String("${MISSING_VAR}".to_string()));
+    ///
+    /// // This will return an error because MISSING_VAR is not set
+    /// let result = original_ctx.with_env_substitution_strict();
+    /// assert!(result.is_err());
+    ///
+    /// env::remove_var("API_KEY");
+    /// ```
+    pub fn with_env_substitution_strict(&self) -> ConfigResult<TemplateContext> {
+        debug!("Creating context with environment variable substitution (strict mode)");
+        let mut result = self.clone();
+        result.substitute_env_vars_strict()?;
+        Ok(result)
+    }
+
+    /// Substitute environment variables in a specific variable
+    ///
+    /// This method allows selective substitution of individual template variables,
+    /// useful for optimization or when only specific variables need processing.
+    ///
+    /// # Arguments
+    /// * `key` - The key of the variable to process
+    /// * `strict` - Whether to use strict mode (errors for missing vars) or legacy mode (empty strings)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::types::TemplateContext;
+    /// use std::env;
+    ///
+    /// env::set_var("SELECTIVE_VAR", "selected");
+    ///
+    /// let mut ctx = TemplateContext::new();
+    /// ctx.set("var1", serde_json::Value::String("${SELECTIVE_VAR}".to_string()));
+    /// ctx.set("var2", serde_json::Value::String("${OTHER_VAR}".to_string()));
+    ///
+    /// // Only substitute var1
+    /// ctx.substitute_var("var1", false).unwrap();
+    ///
+    /// assert_eq!(ctx.get_string("var1"), Some("selected".to_string()));
+    /// assert_eq!(ctx.get_string("var2"), Some("${OTHER_VAR}".to_string())); // unchanged
+    ///
+    /// env::remove_var("SELECTIVE_VAR");
+    /// ```
+    pub fn substitute_var(&mut self, key: &str, strict: bool) -> ConfigResult<()> {
+        if let Some(value) = self.vars.get_mut(key) {
+            if strict {
+                crate::env_substitution::STRICT_PROCESSOR
+                    .with(|processor| processor.substitute_value(value))
+            } else {
+                crate::env_substitution::LEGACY_PROCESSOR
+                    .with(|processor| processor.substitute_value(value))
+            }
+        } else {
+            Ok(()) // Variable doesn't exist, nothing to do
+        }
     }
 
     /// Convert to a liquid template object for rendering
@@ -372,86 +475,6 @@ impl TemplateContext {
             ),
         );
         legacy
-    }
-
-    /// Substitute environment variables in a single JSON value
-    fn substitute_value(&self, value: &serde_json::Value) -> ConfigResult<serde_json::Value> {
-        match value {
-            serde_json::Value::String(s) => {
-                let substituted = self.substitute_env_vars_in_string(s)?;
-                Ok(serde_json::Value::String(substituted))
-            }
-            serde_json::Value::Array(arr) => {
-                let mut new_arr = Vec::new();
-                for item in arr {
-                    new_arr.push(self.substitute_value(item)?);
-                }
-                Ok(serde_json::Value::Array(new_arr))
-            }
-            serde_json::Value::Object(obj) => {
-                let mut new_obj = serde_json::Map::new();
-                for (k, v) in obj {
-                    new_obj.insert(k.clone(), self.substitute_value(v)?);
-                }
-                Ok(serde_json::Value::Object(new_obj))
-            }
-            _ => Ok(value.clone()),
-        }
-    }
-
-    /// Substitute environment variables in a string using ${VAR} and ${VAR:-default} patterns
-    fn substitute_env_vars_in_string(&self, input: &str) -> ConfigResult<String> {
-        let mut result = input.to_string();
-        let mut start = 0;
-
-        while let Some(dollar_pos) = result[start..].find("${") {
-            let dollar_pos = start + dollar_pos;
-            if let Some(brace_pos) = result[dollar_pos..].find('}') {
-                let brace_pos = dollar_pos + brace_pos;
-                let var_expr = &result[dollar_pos + 2..brace_pos];
-
-                let (var_name, default_value) = if let Some(colon_pos) = var_expr.find(":-") {
-                    let var_name = &var_expr[..colon_pos];
-                    let default = &var_expr[colon_pos + 2..];
-                    (var_name, Some(default))
-                } else {
-                    (var_expr, None)
-                };
-
-                let replacement = match std::env::var(var_name) {
-                    Ok(value) => {
-                        trace!(
-                            "Environment variable substitution: {} = {}",
-                            var_name,
-                            value
-                        );
-                        value
-                    }
-                    Err(_) => {
-                        if let Some(default) = default_value {
-                            trace!("Using default value for {}: {}", var_name, default);
-                            default.to_string()
-                        } else {
-                            warn!(
-                                "Environment variable '{}' not found and no default provided",
-                                var_name
-                            );
-                            return Err(ConfigError::environment_error(format!(
-                                "Environment variable '{}' not found and no default provided",
-                                var_name
-                            )));
-                        }
-                    }
-                };
-
-                result.replace_range(dollar_pos..=brace_pos, &replacement);
-                start = dollar_pos + replacement.len();
-            } else {
-                start = dollar_pos + 2;
-            }
-        }
-
-        Ok(result)
     }
 
     /// Convert a JSON value to a liquid value
@@ -740,19 +763,33 @@ mod tests {
     }
 
     #[test]
-    fn test_env_var_substitution_missing_no_default() {
+    fn test_env_var_substitution_missing_no_default_legacy_mode() {
         let mut ctx = TemplateContext::new();
         ctx.set(
             "config_key".to_string(),
             serde_json::Value::String("${NONEXISTENT_VAR}".to_string()),
         );
 
-        let result = ctx.substitute_env_vars();
+        // Legacy mode should return empty string for missing vars
+        ctx.substitute_env_vars().unwrap();
+        assert_eq!(
+            ctx.get("config_key"),
+            Some(&serde_json::Value::String("".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_env_var_substitution_missing_no_default_strict_mode() {
+        let mut ctx = TemplateContext::new();
+        ctx.set(
+            "config_key".to_string(),
+            serde_json::Value::String("${NONEXISTENT_VAR}".to_string()),
+        );
+
+        // Strict mode should return error for missing vars
+        let result = ctx.substitute_env_vars_strict();
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConfigError::EnvironmentError { .. }
-        ));
+        assert!(result.unwrap_err().to_string().contains("NONEXISTENT_VAR"));
     }
 
     #[test]
@@ -762,7 +799,7 @@ mod tests {
         let mut ctx = TemplateContext::new();
         let nested_obj = serde_json::json!({
             "inner": "${NESTED_TEST}",
-            "array": ["${NESTED_TEST}", "static"]
+            "array": ["${NESTED_TEST}", "static", "${MISSING_VAR}"]
         });
         ctx.set("nested".to_string(), nested_obj);
 
@@ -770,7 +807,7 @@ mod tests {
 
         let expected = serde_json::json!({
             "inner": "nested_value",
-            "array": ["nested_value", "static"]
+            "array": ["nested_value", "static", ""] // empty string for missing var in legacy mode
         });
         assert_eq!(ctx.get("nested"), Some(&expected));
 
@@ -1013,6 +1050,7 @@ mod tests {
         let mut ctx = TemplateContext::new();
         ctx.set("var1", "${IMMUTABLE_TEST}");
         ctx.set("var2", "unchanged");
+        ctx.set("var3", "${MISSING_VAR}"); // Should become empty string in legacy mode
 
         let new_ctx = ctx.with_env_substitution().unwrap();
 
@@ -1031,8 +1069,79 @@ mod tests {
             new_ctx.get("var2"),
             Some(&serde_json::Value::String("unchanged".to_string()))
         );
+        assert_eq!(
+            new_ctx.get("var3"),
+            Some(&serde_json::Value::String("".to_string()))
+        ); // empty string for missing var
 
         std::env::remove_var("IMMUTABLE_TEST");
+    }
+
+    #[test]
+    fn test_template_context_with_env_substitution_strict() {
+        std::env::set_var("STRICT_TEST", "strict_value");
+
+        let mut ctx = TemplateContext::new();
+        ctx.set("var1", "${STRICT_TEST}");
+        ctx.set("var2", "unchanged");
+        ctx.set("var3", "${MISSING_VAR}"); // Should cause error in strict mode
+
+        // This should fail because MISSING_VAR is not set
+        let result = ctx.with_env_substitution_strict();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("MISSING_VAR"));
+
+        // But without the missing var, it should work
+        ctx.vars_mut().remove("var3");
+        let new_ctx = ctx.with_env_substitution_strict().unwrap();
+
+        // New context should have substitution
+        assert_eq!(
+            new_ctx.get("var1"),
+            Some(&serde_json::Value::String("strict_value".to_string()))
+        );
+        assert_eq!(
+            new_ctx.get("var2"),
+            Some(&serde_json::Value::String("unchanged".to_string()))
+        );
+
+        std::env::remove_var("STRICT_TEST");
+    }
+
+    #[test]
+    fn test_substitute_var_selective() {
+        std::env::set_var("SELECTIVE_TEST", "selective_value");
+
+        let mut ctx = TemplateContext::new();
+        ctx.set("var1", "${SELECTIVE_TEST}");
+        ctx.set("var2", "${SELECTIVE_TEST}");
+        ctx.set("var3", "${MISSING_VAR}");
+
+        // Only substitute var1 in legacy mode
+        ctx.substitute_var("var1", false).unwrap();
+
+        // Only substitute var2 in strict mode (should fail)
+        let result = ctx.substitute_var("var3", true);
+        assert!(result.is_err());
+
+        // var1 should be substituted, others unchanged
+        assert_eq!(
+            ctx.get("var1"),
+            Some(&serde_json::Value::String("selective_value".to_string()))
+        );
+        assert_eq!(
+            ctx.get("var2"),
+            Some(&serde_json::Value::String("${SELECTIVE_TEST}".to_string()))
+        );
+        assert_eq!(
+            ctx.get("var3"),
+            Some(&serde_json::Value::String("${MISSING_VAR}".to_string()))
+        );
+
+        // Nonexistent variable should not cause error
+        ctx.substitute_var("nonexistent", false).unwrap();
+
+        std::env::remove_var("SELECTIVE_TEST");
     }
 
     #[test]

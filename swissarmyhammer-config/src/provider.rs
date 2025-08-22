@@ -28,9 +28,10 @@ impl ConfigProvider {
     /// Load template context from all configuration sources
     ///
     /// This is the main entry point that combines all configuration sources
-    /// and returns a ready-to-use TemplateContext with environment variable substitution.
+    /// and returns a ready-to-use TemplateContext with environment variable substitution
+    /// in legacy-compatible mode (missing variables become empty strings).
     pub fn load_template_context(&self) -> ConfigResult<TemplateContext> {
-        debug!("Loading template context from configuration sources");
+        debug!("Loading template context from configuration sources (legacy mode)");
 
         let figment = self.build_figment()?;
         let raw_config = figment
@@ -41,7 +42,7 @@ impl ConfigProvider {
 
         let mut context = raw_config.to_template_context();
 
-        // Perform environment variable substitution
+        // Perform environment variable substitution in legacy-compatible mode
         context.substitute_env_vars()?;
 
         info!(
@@ -51,11 +52,113 @@ impl ConfigProvider {
         Ok(context)
     }
 
-    /// Create template context with additional workflow variables
+    /// Load template context with strict environment variable validation
+    ///
+    /// This method is similar to load_template_context but uses strict mode for
+    /// environment variable substitution. Missing environment variables without
+    /// defaults will cause errors rather than returning empty strings.
+    ///
+    /// # Returns
+    ///
+    /// Returns a TemplateContext with environment variables substituted, or an error
+    /// if any required environment variables are missing.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::ConfigProvider;
+    /// use std::env;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let provider = ConfigProvider::new();
+    ///
+    /// // This may fail if any config values reference missing environment variables
+    /// let context = provider.load_template_context_strict()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn load_template_context_strict(&self) -> ConfigResult<TemplateContext> {
+        debug!("Loading template context from configuration sources (strict mode)");
+
+        let figment = self.build_figment()?;
+        let raw_config = figment
+            .extract::<RawConfig>()
+            .map_err(|e| ConfigError::parse_error(None, e))?;
+
+        debug!("Loaded {} configuration values", raw_config.values.len());
+
+        let mut context = raw_config.to_template_context();
+
+        // Perform environment variable substitution in strict mode
+        context.substitute_env_vars_strict()?;
+
+        info!(
+            "Successfully loaded template context with {} variables (strict mode)",
+            context.len()
+        );
+        Ok(context)
+    }
+
+    /// Load raw template context without environment variable substitution
+    ///
+    /// This method loads configuration values into a TemplateContext without
+    /// performing any environment variable substitution. This is useful for:
+    /// - Debugging configuration loading
+    /// - Inspecting raw configuration values
+    /// - Selective or custom environment variable processing
+    ///
+    /// # Returns
+    ///
+    /// Returns a TemplateContext with raw configuration values (no environment substitution).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::ConfigProvider;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let provider = ConfigProvider::new();
+    ///
+    /// // Get raw context for inspection
+    /// let raw_context = provider.load_raw_context()?;
+    ///
+    /// // Manually process specific variables if needed
+    /// let mut processed_context = raw_context.clone();
+    /// processed_context.substitute_var("database_url", true)?; // strict mode for this var
+    /// processed_context.substitute_var("api_key", false)?; // legacy mode for this var
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn load_raw_context(&self) -> ConfigResult<TemplateContext> {
+        debug!(
+            "Loading raw template context from configuration sources (no environment substitution)"
+        );
+
+        let figment = self.build_figment()?;
+        let raw_config = figment
+            .extract::<RawConfig>()
+            .map_err(|e| ConfigError::parse_error(None, e))?;
+
+        debug!("Loaded {} configuration values", raw_config.values.len());
+
+        let context = raw_config.to_template_context();
+        // No environment variable substitution performed
+
+        info!(
+            "Successfully loaded raw template context with {} variables",
+            context.len()
+        );
+        Ok(context)
+    }
+
+    /// Create template context with additional workflow variables (legacy mode)
     ///
     /// This method loads the base configuration context and then merges it with
     /// workflow variables. Workflow variables have higher priority and will override
-    /// configuration values with the same keys.
+    /// configuration values with the same keys. Uses legacy-compatible environment
+    /// variable substitution (missing vars become empty strings).
+    ///
+    /// Environment variable substitution is applied to both config and workflow variables.
     ///
     /// # Arguments
     ///
@@ -85,21 +188,141 @@ impl ConfigProvider {
     /// ```
     pub fn create_context_with_vars(
         &self,
-        workflow_vars: std::collections::HashMap<String, serde_json::Value>,
+        mut workflow_vars: std::collections::HashMap<String, serde_json::Value>,
     ) -> ConfigResult<TemplateContext> {
         debug!(
-            "Creating template context with {} workflow variables",
+            "Creating template context with {} workflow variables (legacy mode)",
             workflow_vars.len()
         );
 
-        // Load base configuration context
+        // Load base configuration context in legacy mode
         let mut context = self.load_template_context()?;
 
-        // Merge workflow variables with higher precedence
+        // Process environment variable substitution in workflow variables
+        crate::env_substitution::LEGACY_PROCESSOR
+            .with(|processor| processor.substitute_vars(&mut workflow_vars))?;
+
+        // Merge processed workflow variables with higher precedence
         context.merge_workflow(workflow_vars);
 
         info!(
             "Successfully created template context with {} total variables",
+            context.len()
+        );
+        Ok(context)
+    }
+
+    /// Create template context with additional workflow variables (strict mode)
+    ///
+    /// This method loads the base configuration context in strict mode and then merges
+    /// it with workflow variables. Missing environment variables without defaults will
+    /// cause errors rather than returning empty strings.
+    ///
+    /// Environment variable substitution is applied to both config and workflow variables.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_vars` - HashMap of workflow variables that override config values
+    ///
+    /// # Returns
+    ///
+    /// Returns a TemplateContext with both configuration and workflow variables,
+    /// or an error if any required environment variables are missing.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::ConfigProvider;
+    /// use std::collections::HashMap;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let provider = ConfigProvider::new();
+    /// let mut workflow_vars = HashMap::new();
+    /// workflow_vars.insert("environment".to_string(), serde_json::json!("production"));
+    /// workflow_vars.insert("user_name".to_string(), serde_json::json!("Alice"));
+    ///
+    /// // This may fail if any config values reference missing environment variables
+    /// let context = provider.create_context_with_vars_strict(workflow_vars)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_context_with_vars_strict(
+        &self,
+        mut workflow_vars: std::collections::HashMap<String, serde_json::Value>,
+    ) -> ConfigResult<TemplateContext> {
+        debug!(
+            "Creating template context with {} workflow variables (strict mode)",
+            workflow_vars.len()
+        );
+
+        // Load base configuration context in strict mode
+        let mut context = self.load_template_context_strict()?;
+
+        // Process environment variable substitution in workflow variables (strict mode)
+        crate::env_substitution::STRICT_PROCESSOR
+            .with(|processor| processor.substitute_vars(&mut workflow_vars))?;
+
+        // Merge processed workflow variables with higher precedence
+        context.merge_workflow(workflow_vars);
+
+        info!(
+            "Successfully created template context with {} total variables (strict mode)",
+            context.len()
+        );
+        Ok(context)
+    }
+
+    /// Create template context with workflow variables from raw configuration
+    ///
+    /// This method loads raw configuration (without environment variable substitution)
+    /// and merges it with workflow variables. This allows for custom or selective
+    /// environment variable processing after merging.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_vars` - HashMap of workflow variables that override config values
+    ///
+    /// # Returns
+    ///
+    /// Returns a TemplateContext with both raw configuration and workflow variables
+    /// (no environment variable substitution performed on either config or workflow vars).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use swissarmyhammer_config::ConfigProvider;
+    /// use std::collections::HashMap;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let provider = ConfigProvider::new();
+    /// let mut workflow_vars = HashMap::new();
+    /// workflow_vars.insert("user_name".to_string(), serde_json::json!("${USER}"));
+    ///
+    /// // Get context without environment substitution
+    /// let mut context = provider.create_raw_context_with_vars(workflow_vars)?;
+    ///
+    /// // Perform selective environment substitution
+    /// context.substitute_var("user_name", true)?; // strict mode for user_name
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_raw_context_with_vars(
+        &self,
+        workflow_vars: std::collections::HashMap<String, serde_json::Value>,
+    ) -> ConfigResult<TemplateContext> {
+        debug!(
+            "Creating raw template context with {} workflow variables (no environment substitution)",
+            workflow_vars.len()
+        );
+
+        // Load raw configuration context without environment substitution
+        let mut context = self.load_raw_context()?;
+
+        // Merge workflow variables with higher precedence (no processing)
+        context.merge_workflow(workflow_vars);
+
+        info!(
+            "Successfully created raw template context with {} total variables",
             context.len()
         );
         Ok(context)

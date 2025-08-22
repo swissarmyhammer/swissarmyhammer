@@ -73,6 +73,9 @@ pub mod compat;
 #[cfg(test)]
 pub mod integration_test;
 
+/// Environment variable substitution for template contexts
+pub mod env_substitution;
+
 // Re-export main types for easier access
 pub use defaults::ConfigDefaults;
 pub use discovery::{ConfigFile, ConfigFormat, ConfigScope, FileDiscovery};

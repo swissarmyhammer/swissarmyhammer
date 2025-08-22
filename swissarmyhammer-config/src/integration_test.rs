@@ -344,11 +344,21 @@ database_url = "${MISSING_DATABASE_URL}"
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
+
+        // Test legacy mode first (should succeed with empty string)
         let result = provider.load_template_context();
+        assert!(result.is_ok());
+        let context = result.unwrap();
+        assert_eq!(
+            context.get_string("database_url"),
+            Some("".to_string()) // Empty string in legacy mode
+        );
+
+        // Test strict mode (should fail due to missing environment variable)
+        let result = provider.load_template_context_strict();
 
         std::env::set_current_dir(original_dir).unwrap();
 
-        // Should fail due to missing environment variable
         assert!(result.is_err());
     }
 

@@ -201,7 +201,22 @@ fn test_env_substitution_error_handling() {
         serde_json::Value::String("${DEFINITELY_MISSING_VAR}".to_string()),
     );
 
+    // Test legacy mode (should return empty string, not error)
     let result = ctx.substitute_env_vars();
+    assert!(result.is_ok());
+    assert_eq!(
+        ctx.get("missing_var"),
+        Some(&serde_json::Value::String("".to_string()))
+    );
+
+    // Reset for strict mode test
+    ctx.set(
+        "missing_var".to_string(),
+        serde_json::Value::String("${DEFINITELY_MISSING_VAR}".to_string()),
+    );
+
+    // Test strict mode (should return error)
+    let result = ctx.substitute_env_vars_strict();
     assert!(result.is_err());
 
     if let Err(err) = result {
