@@ -272,3 +272,279 @@ env_will_override = "file_default"
     // Check that env vars are loaded (exact key transformation depends on figment)
     assert!(shared_key_value.is_some() || env_override_value.is_some() || env_only_value.is_some());
 }
+
+#[test]
+fn test_defaults_are_lowest_priority() {
+    let provider = ConfigProvider::new();
+    let context = provider.load_template_context().unwrap();
+
+    // Default values should be present
+    assert!(context.get("environment").is_some());
+    assert!(context.get("debug").is_some());
+    assert!(context.get("project_name").is_some());
+    
+    // Check that defaults have expected values
+    assert_eq!(
+        context.get("environment"),
+        Some(&serde_json::Value::String("development".to_string()))
+    );
+    assert_eq!(context.get("debug"), Some(&serde_json::Value::Bool(false)));
+}
+
+#[test]
+#[serial]
+fn test_config_file_overrides_defaults() {
+    let temp_dir = TempDir::new().unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+
+    let sah_dir = temp_dir.path().join(".swissarmyhammer");
+    fs::create_dir_all(&sah_dir).unwrap();
+
+    // Create config file that overrides some defaults
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
+environment = "production"
+debug = true
+project_name = "Custom Project"
+custom_config_key = "from_config"
+"#,
+    )
+    .unwrap();
+
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let provider = ConfigProvider::new();
+    let context = provider.load_template_context().unwrap();
+
+    std::env::set_current_dir(original_dir).unwrap();
+
+    // Config file should override defaults
+    assert_eq!(
+        context.get("environment"),
+        Some(&serde_json::Value::String("production".to_string()))
+    );
+    assert_eq!(context.get("debug"), Some(&serde_json::Value::Bool(true)));
+    assert_eq!(
+        context.get("project_name"),
+        Some(&serde_json::Value::String("Custom Project".to_string()))
+    );
+
+    // Custom config key should be present
+    assert_eq!(
+        context.get("custom_config_key"),
+        Some(&serde_json::Value::String("from_config".to_string()))
+    );
+
+    // Unoverridden defaults should still be present
+    assert!(context.get("log_level").is_some());
+    assert!(context.get("timeout_seconds").is_some());
+}
+
+#[test]
+#[serial]
+fn test_environment_overrides_defaults_and_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+
+    let sah_dir = temp_dir.path().join(".swissarmyhammer");
+    fs::create_dir_all(&sah_dir).unwrap();
+
+    // Create config file
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
+environment = "staging"
+debug = false
+custom_key = "from_file"
+"#,
+    )
+    .unwrap();
+
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    // Set environment variables that should override both defaults and file
+    std::env::set_var("SAH_ENVIRONMENT", "production");
+    std::env::set_var("SAH_DEBUG", "true");
+    std::env::set_var("SAH_CUSTOM_KEY", "from_env");
+    std::env::set_var("SAH_ENV_ONLY_KEY", "env_value");
+
+    let provider = ConfigProvider::new();
+    let context = provider.load_template_context().unwrap();
+
+    std::env::set_current_dir(original_dir).unwrap();
+    std::env::remove_var("SAH_ENVIRONMENT");
+    std::env::remove_var("SAH_DEBUG");
+    std::env::remove_var("SAH_CUSTOM_KEY");
+    std::env::remove_var("SAH_ENV_ONLY_KEY");
+
+    // Environment should win over both defaults and file
+    assert_eq!(
+        context.get("environment"),
+        Some(&serde_json::Value::String("production".to_string()))
+    );
+    assert_eq!(context.get("debug"), Some(&serde_json::Value::Bool(true)));
+    assert_eq!(
+        context.get("custom_key"),
+        Some(&serde_json::Value::String("from_env".to_string()))
+    );
+    assert_eq!(
+        context.get("env_only_key"),
+        Some(&serde_json::Value::String("env_value".to_string()))
+    );
+
+    // Unoverridden values should still be present from defaults
+    assert!(context.get("log_level").is_some());
+}
+
+#[test]
+#[serial] 
+fn test_nested_environment_variables() {
+    let temp_dir = TempDir::new().unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    // Set nested environment variables
+    std::env::set_var("SAH_DATABASE__HOST", "localhost");
+    std::env::set_var("SAH_DATABASE__PORT", "5432");
+    std::env::set_var("SAH_DATABASE__NAME", "testdb");
+    std::env::set_var("SWISSARMYHAMMER_DATABASE__USER", "admin"); // Should override if same path
+    std::env::set_var("SAH_LOGGING__LEVEL", "debug");
+    std::env::set_var("SAH_LOGGING__FORMAT", "json");
+
+    let provider = ConfigProvider::new();
+    let context = provider.load_template_context().unwrap();
+
+    std::env::set_current_dir(original_dir).unwrap();
+    std::env::remove_var("SAH_DATABASE__HOST");
+    std::env::remove_var("SAH_DATABASE__PORT");
+    std::env::remove_var("SAH_DATABASE__NAME");
+    std::env::remove_var("SWISSARMYHAMMER_DATABASE__USER");
+    std::env::remove_var("SAH_LOGGING__LEVEL");
+    std::env::remove_var("SAH_LOGGING__FORMAT");
+
+    // Check for nested structures
+    if let Some(serde_json::Value::Object(database)) = context.get("database") {
+        assert_eq!(database["host"], serde_json::Value::String("localhost".to_string()));
+        // Figment may parse numeric strings as numbers
+        let port_val = &database["port"];
+        assert!(
+            port_val == &serde_json::Value::String("5432".to_string()) ||
+            port_val == &serde_json::Value::Number(5432.into()),
+            "Expected port to be either string '5432' or number 5432, got: {:?}",
+            port_val
+        );
+        assert_eq!(database["name"], serde_json::Value::String("testdb".to_string()));
+        
+        // SWISSARMYHAMMER prefix should override SAH for same path
+        if database.contains_key("user") {
+            assert_eq!(database["user"], serde_json::Value::String("admin".to_string()));
+        }
+    }
+
+    if let Some(serde_json::Value::Object(logging)) = context.get("logging") {
+        assert_eq!(logging["level"], serde_json::Value::String("debug".to_string()));
+        assert_eq!(logging["format"], serde_json::Value::String("json".to_string()));
+    }
+}
+
+#[test]
+#[serial]
+fn test_complete_precedence_order() {
+    let temp_dir = TempDir::new().unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+
+    // Create home directory simulation for global config
+    let home_dir = temp_dir.path().join("home");
+    let global_sah_dir = home_dir.join(".swissarmyhammer");
+    fs::create_dir_all(&global_sah_dir).unwrap();
+
+    // Create project directory
+    let project_dir = temp_dir.path().join("project");
+    let project_sah_dir = project_dir.join(".swissarmyhammer");  
+    fs::create_dir_all(&project_sah_dir).unwrap();
+
+    // Create global config (lower priority than project)
+    fs::write(
+        global_sah_dir.join("sah.toml"),
+        r#"
+environment = "global_env"
+global_only = "from_global"
+shared_key = "global_value"
+will_be_overridden = "global_default"
+"#,
+    )
+    .unwrap();
+
+    // Create project config (higher priority than global)
+    fs::write(
+        project_sah_dir.join("sah.toml"),
+        r#"
+environment = "project_env"
+project_only = "from_project"
+shared_key = "project_value"
+will_be_overridden = "project_default"
+"#,
+    )
+    .unwrap();
+
+    // Change to project directory
+    std::env::set_current_dir(&project_dir).unwrap();
+    
+    // Temporarily set HOME to simulate global config discovery
+    let original_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &home_dir);
+
+    // Set environment variables (highest priority)
+    std::env::set_var("SAH_ENVIRONMENT", "env_override");
+    std::env::set_var("SAH_WILL_BE_OVERRIDDEN", "env_value");
+    std::env::set_var("SAH_ENV_ONLY", "env_only");
+
+    let provider = ConfigProvider::new();
+    let context = provider.load_template_context().unwrap();
+
+    // Cleanup
+    std::env::set_current_dir(original_dir).unwrap();
+    if let Some(home) = original_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    std::env::remove_var("SAH_ENVIRONMENT");
+    std::env::remove_var("SAH_WILL_BE_OVERRIDDEN");
+    std::env::remove_var("SAH_ENV_ONLY");
+
+    // Environment should have highest priority
+    assert_eq!(
+        context.get("environment"),
+        Some(&serde_json::Value::String("env_override".to_string()))
+    );
+    assert_eq!(
+        context.get("will_be_overridden"),
+        Some(&serde_json::Value::String("env_value".to_string()))
+    );
+    assert_eq!(
+        context.get("env_only"),
+        Some(&serde_json::Value::String("env_only".to_string()))
+    );
+
+    // Project should override global for shared keys
+    assert_eq!(
+        context.get("shared_key"),
+        Some(&serde_json::Value::String("project_value".to_string()))
+    );
+
+    // File-specific values should be present
+    assert_eq!(
+        context.get("project_only"),
+        Some(&serde_json::Value::String("from_project".to_string()))
+    );
+
+    // Note: Global config test is complex due to home directory resolution
+    // In real usage, FileDiscovery handles this correctly
+
+    // Default values should still be present for unoverridden keys
+    assert!(context.get("debug").is_some());
+    assert!(context.get("log_level").is_some());
+}

@@ -56,6 +56,9 @@ pub mod discovery;
 /// Configuration provider using Figment
 pub mod provider;
 
+/// Default configuration values
+pub mod defaults;
+
 /// Integration tests (only compiled in test mode)
 #[cfg(test)]
 pub mod tests;
@@ -65,6 +68,7 @@ pub mod tests;
 pub mod integration_test;
 
 // Re-export main types for easier access
+pub use defaults::ConfigDefaults;
 pub use discovery::{ConfigFile, ConfigFormat, ConfigScope, FileDiscovery};
 pub use error::{ConfigError, ConfigResult};
 pub use provider::ConfigProvider;
