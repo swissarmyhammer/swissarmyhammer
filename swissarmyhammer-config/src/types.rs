@@ -53,7 +53,10 @@ impl TemplateContext {
     ///
     /// Variables from `other` will override variables in `self` for conflicting keys.
     pub fn merge(&mut self, other: &TemplateContext) {
-        debug!("Merging template context with {} variables", other.vars.len());
+        debug!(
+            "Merging template context with {} variables",
+            other.vars.len()
+        );
         for (key, value) in &other.vars {
             trace!("Merging variable: {} = {:?}", key, value);
             self.vars.insert(key.clone(), value.clone());
@@ -86,10 +89,13 @@ impl TemplateContext {
         let mut object = liquid::Object::new();
 
         for (key, value) in &self.vars {
-            if let Some(liquid_value) = self.json_to_liquid(value) {
+            if let Some(liquid_value) = Self::json_to_liquid(value) {
                 object.insert(key.clone().into(), liquid_value);
             } else {
-                warn!("Failed to convert variable '{}' to liquid value: {:?}", key, value);
+                warn!(
+                    "Failed to convert variable '{}' to liquid value: {:?}",
+                    key, value
+                );
             }
         }
 
@@ -152,7 +158,11 @@ impl TemplateContext {
 
                 let replacement = match std::env::var(var_name) {
                     Ok(value) => {
-                        trace!("Environment variable substitution: {} = {}", var_name, value);
+                        trace!(
+                            "Environment variable substitution: {} = {}",
+                            var_name,
+                            value
+                        );
                         value
                     }
                     Err(_) => {
@@ -160,7 +170,10 @@ impl TemplateContext {
                             trace!("Using default value for {}: {}", var_name, default);
                             default.to_string()
                         } else {
-                            warn!("Environment variable '{}' not found and no default provided", var_name);
+                            warn!(
+                                "Environment variable '{}' not found and no default provided",
+                                var_name
+                            );
                             return Err(ConfigError::environment_error(format!(
                                 "Environment variable '{}' not found and no default provided",
                                 var_name
@@ -180,24 +193,22 @@ impl TemplateContext {
     }
 
     /// Convert a JSON value to a liquid value
-    fn json_to_liquid(&self, value: &serde_json::Value) -> Option<liquid::model::Value> {
+    fn json_to_liquid(value: &serde_json::Value) -> Option<liquid::model::Value> {
         match value {
             serde_json::Value::Null => Some(liquid::model::Value::Nil),
             serde_json::Value::Bool(b) => Some(liquid::model::Value::scalar(*b)),
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
                     Some(liquid::model::Value::scalar(i))
-                } else if let Some(f) = n.as_f64() {
-                    Some(liquid::model::Value::scalar(f))
                 } else {
-                    None
+                    n.as_f64().map(liquid::model::Value::scalar)
                 }
             }
             serde_json::Value::String(s) => Some(liquid::model::Value::scalar(s.clone())),
             serde_json::Value::Array(arr) => {
                 let mut liquid_arr = Vec::new();
                 for item in arr {
-                    if let Some(liquid_val) = self.json_to_liquid(item) {
+                    if let Some(liquid_val) = Self::json_to_liquid(item) {
                         liquid_arr.push(liquid_val);
                     }
                 }
@@ -206,7 +217,7 @@ impl TemplateContext {
             serde_json::Value::Object(obj) => {
                 let mut liquid_obj = liquid::Object::new();
                 for (k, v) in obj {
-                    if let Some(liquid_val) = self.json_to_liquid(v) {
+                    if let Some(liquid_val) = Self::json_to_liquid(v) {
                         liquid_obj.insert(k.clone().into(), liquid_val);
                     }
                 }
@@ -271,40 +282,73 @@ mod tests {
     #[test]
     fn test_template_context_with_vars() {
         let mut vars = HashMap::new();
-        vars.insert("key1".to_string(), serde_json::Value::String("value1".to_string()));
+        vars.insert(
+            "key1".to_string(),
+            serde_json::Value::String("value1".to_string()),
+        );
         vars.insert("key2".to_string(), serde_json::Value::Number(42.into()));
 
         let ctx = TemplateContext::with_vars(vars);
         assert!(!ctx.is_empty());
         assert_eq!(ctx.len(), 2);
-        assert_eq!(ctx.get("key1"), Some(&serde_json::Value::String("value1".to_string())));
+        assert_eq!(
+            ctx.get("key1"),
+            Some(&serde_json::Value::String("value1".to_string()))
+        );
         assert_eq!(ctx.get("key2"), Some(&serde_json::Value::Number(42.into())));
     }
 
     #[test]
     fn test_template_context_set_get() {
         let mut ctx = TemplateContext::new();
-        ctx.set("test_key".to_string(), serde_json::Value::String("test_value".to_string()));
+        ctx.set(
+            "test_key".to_string(),
+            serde_json::Value::String("test_value".to_string()),
+        );
 
-        assert_eq!(ctx.get("test_key"), Some(&serde_json::Value::String("test_value".to_string())));
+        assert_eq!(
+            ctx.get("test_key"),
+            Some(&serde_json::Value::String("test_value".to_string()))
+        );
         assert_eq!(ctx.get("nonexistent"), None);
     }
 
     #[test]
     fn test_template_context_merge() {
         let mut ctx1 = TemplateContext::new();
-        ctx1.set("key1".to_string(), serde_json::Value::String("value1".to_string()));
-        ctx1.set("key2".to_string(), serde_json::Value::String("original".to_string()));
+        ctx1.set(
+            "key1".to_string(),
+            serde_json::Value::String("value1".to_string()),
+        );
+        ctx1.set(
+            "key2".to_string(),
+            serde_json::Value::String("original".to_string()),
+        );
 
         let mut ctx2 = TemplateContext::new();
-        ctx2.set("key2".to_string(), serde_json::Value::String("overridden".to_string()));
-        ctx2.set("key3".to_string(), serde_json::Value::String("value3".to_string()));
+        ctx2.set(
+            "key2".to_string(),
+            serde_json::Value::String("overridden".to_string()),
+        );
+        ctx2.set(
+            "key3".to_string(),
+            serde_json::Value::String("value3".to_string()),
+        );
 
         ctx1.merge(&ctx2);
 
-        assert_eq!(ctx1.get("key1"), Some(&serde_json::Value::String("value1".to_string())));
-        assert_eq!(ctx1.get("key2"), Some(&serde_json::Value::String("overridden".to_string())));
-        assert_eq!(ctx1.get("key3"), Some(&serde_json::Value::String("value3".to_string())));
+        assert_eq!(
+            ctx1.get("key1"),
+            Some(&serde_json::Value::String("value1".to_string()))
+        );
+        assert_eq!(
+            ctx1.get("key2"),
+            Some(&serde_json::Value::String("overridden".to_string()))
+        );
+        assert_eq!(
+            ctx1.get("key3"),
+            Some(&serde_json::Value::String("value3".to_string()))
+        );
         assert_eq!(ctx1.len(), 3);
     }
 
@@ -313,11 +357,17 @@ mod tests {
         std::env::set_var("TEST_VAR", "test_value");
 
         let mut ctx = TemplateContext::new();
-        ctx.set("config_key".to_string(), serde_json::Value::String("${TEST_VAR}".to_string()));
+        ctx.set(
+            "config_key".to_string(),
+            serde_json::Value::String("${TEST_VAR}".to_string()),
+        );
 
         ctx.substitute_env_vars().unwrap();
 
-        assert_eq!(ctx.get("config_key"), Some(&serde_json::Value::String("test_value".to_string())));
+        assert_eq!(
+            ctx.get("config_key"),
+            Some(&serde_json::Value::String("test_value".to_string()))
+        );
 
         std::env::remove_var("TEST_VAR");
     }
@@ -325,21 +375,33 @@ mod tests {
     #[test]
     fn test_env_var_substitution_with_default() {
         let mut ctx = TemplateContext::new();
-        ctx.set("config_key".to_string(), serde_json::Value::String("${NONEXISTENT_VAR:-default_value}".to_string()));
+        ctx.set(
+            "config_key".to_string(),
+            serde_json::Value::String("${NONEXISTENT_VAR:-default_value}".to_string()),
+        );
 
         ctx.substitute_env_vars().unwrap();
 
-        assert_eq!(ctx.get("config_key"), Some(&serde_json::Value::String("default_value".to_string())));
+        assert_eq!(
+            ctx.get("config_key"),
+            Some(&serde_json::Value::String("default_value".to_string()))
+        );
     }
 
     #[test]
     fn test_env_var_substitution_missing_no_default() {
         let mut ctx = TemplateContext::new();
-        ctx.set("config_key".to_string(), serde_json::Value::String("${NONEXISTENT_VAR}".to_string()));
+        ctx.set(
+            "config_key".to_string(),
+            serde_json::Value::String("${NONEXISTENT_VAR}".to_string()),
+        );
 
         let result = ctx.substitute_env_vars();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::EnvironmentError { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::EnvironmentError { .. }
+        ));
     }
 
     #[test]
@@ -373,21 +435,33 @@ mod tests {
     #[test]
     fn test_raw_config_from_map() {
         let mut values = HashMap::new();
-        values.insert("key".to_string(), serde_json::Value::String("value".to_string()));
+        values.insert(
+            "key".to_string(),
+            serde_json::Value::String("value".to_string()),
+        );
 
         let config = RawConfig::from_map(values);
         assert!(!config.is_empty());
-        assert_eq!(config.values.get("key"), Some(&serde_json::Value::String("value".to_string())));
+        assert_eq!(
+            config.values.get("key"),
+            Some(&serde_json::Value::String("value".to_string()))
+        );
     }
 
     #[test]
     fn test_raw_config_to_template_context() {
         let mut values = HashMap::new();
-        values.insert("key".to_string(), serde_json::Value::String("value".to_string()));
+        values.insert(
+            "key".to_string(),
+            serde_json::Value::String("value".to_string()),
+        );
 
         let config = RawConfig::from_map(values);
         let ctx = config.to_template_context();
 
-        assert_eq!(ctx.get("key"), Some(&serde_json::Value::String("value".to_string())));
+        assert_eq!(
+            ctx.get("key"),
+            Some(&serde_json::Value::String("value".to_string()))
+        );
     }
 }

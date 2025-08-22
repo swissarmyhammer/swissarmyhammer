@@ -23,7 +23,7 @@ pub enum ConfigError {
     ParseError {
         path: Option<PathBuf>,
         #[source]
-        source: figment::Error,
+        source: Box<figment::Error>,
     },
 
     /// Configuration validation failed
@@ -55,7 +55,10 @@ impl ConfigError {
 
     /// Create a new parse error
     pub fn parse_error(path: Option<PathBuf>, source: figment::Error) -> Self {
-        Self::ParseError { path, source }
+        Self::ParseError {
+            path,
+            source: Box::new(source),
+        }
     }
 
     /// Create a new validation error

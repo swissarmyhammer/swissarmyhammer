@@ -57,15 +57,14 @@ pub mod provider;
 #[cfg(test)]
 pub mod tests;
 
-
 /// Integration tests
 #[cfg(test)]
 pub mod integration_test;
 
 // Re-export main types for easier access
 pub use error::{ConfigError, ConfigResult};
-pub use types::{TemplateContext, RawConfig};
 pub use provider::ConfigProvider;
+pub use types::{RawConfig, TemplateContext};
 
 /// Current version of the configuration system
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

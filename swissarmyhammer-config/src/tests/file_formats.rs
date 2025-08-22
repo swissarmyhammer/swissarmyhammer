@@ -8,11 +8,13 @@ use tempfile::TempDir;
 fn test_toml_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
-    fs::write(sah_dir.join("sah.toml"), r#"
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
 # SwissArmyHammer Configuration
 app_name = "TOML Test App"
 version = "1.0.0"
@@ -39,7 +41,9 @@ port = 8081
 workflows = true
 prompts = true
 mcp = false
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -49,13 +53,22 @@ mcp = false
     std::env::set_current_dir(original_dir).unwrap();
 
     // Check basic values
-    assert_eq!(context.get("app_name"), Some(&serde_json::Value::String("TOML Test App".to_string())));
-    assert_eq!(context.get("version"), Some(&serde_json::Value::String("1.0.0".to_string())));
+    assert_eq!(
+        context.get("app_name"),
+        Some(&serde_json::Value::String("TOML Test App".to_string()))
+    );
+    assert_eq!(
+        context.get("version"),
+        Some(&serde_json::Value::String("1.0.0".to_string()))
+    );
     assert_eq!(context.get("debug"), Some(&serde_json::Value::Bool(true)));
 
     // Check nested objects
     if let Some(database) = context.get("database") {
-        assert_eq!(database["host"], serde_json::Value::String("localhost".to_string()));
+        assert_eq!(
+            database["host"],
+            serde_json::Value::String("localhost".to_string())
+        );
         assert_eq!(database["port"], serde_json::Value::Number(5432.into()));
         assert_eq!(database["ssl"], serde_json::Value::Bool(true));
     } else {
@@ -87,11 +100,13 @@ mcp = false
 fn test_yaml_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
-    fs::write(sah_dir.join("sah.yaml"), r#"
+    fs::write(
+        sah_dir.join("sah.yaml"),
+        r#"
 # SwissArmyHammer YAML Configuration
 app_name: "YAML Test App"
 version: "2.0.0"
@@ -126,7 +141,9 @@ features:
   - prompts
   - mcp
   - analytics
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -136,15 +153,24 @@ features:
     std::env::set_current_dir(original_dir).unwrap();
 
     // Check basic values
-    assert_eq!(context.get("app_name"), Some(&serde_json::Value::String("YAML Test App".to_string())));
-    assert_eq!(context.get("version"), Some(&serde_json::Value::String("2.0.0".to_string())));
+    assert_eq!(
+        context.get("app_name"),
+        Some(&serde_json::Value::String("YAML Test App".to_string()))
+    );
+    assert_eq!(
+        context.get("version"),
+        Some(&serde_json::Value::String("2.0.0".to_string()))
+    );
     assert_eq!(context.get("debug"), Some(&serde_json::Value::Bool(false)));
 
     // Check nested objects
     if let Some(database) = context.get("database") {
-        assert_eq!(database["host"], serde_json::Value::String("yaml-db.example.com".to_string()));
+        assert_eq!(
+            database["host"],
+            serde_json::Value::String("yaml-db.example.com".to_string())
+        );
         assert_eq!(database["port"], serde_json::Value::Number(3306.into()));
-        
+
         if let serde_json::Value::Array(options) = &database["options"] {
             assert!(options.contains(&serde_json::Value::String("timeout=30".to_string())));
         } else {
@@ -154,8 +180,14 @@ features:
 
     // Check nested environments
     if let Some(environments) = context.get("environments") {
-        assert_eq!(environments["development"]["debug"], serde_json::Value::Bool(true));
-        assert_eq!(environments["production"]["debug"], serde_json::Value::Bool(false));
+        assert_eq!(
+            environments["development"]["debug"],
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            environments["production"]["debug"],
+            serde_json::Value::Bool(false)
+        );
     }
 
     // Check simple array
@@ -172,11 +204,13 @@ features:
 fn test_json_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
-    fs::write(sah_dir.join("sah.json"), r#"{
+    fs::write(
+        sah_dir.join("sah.json"),
+        r#"{
     "app_name": "JSON Test App",
     "version": "3.0.0",
     "debug": true,
@@ -223,7 +257,9 @@ fn test_json_format_comprehensive() {
         "author": "SwissArmyHammer",
         "config_version": 1.2
     }
-}"#).unwrap();
+}"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
     std::env::set_var("DB_PASSWORD", "secure_password_123");
@@ -235,26 +271,47 @@ fn test_json_format_comprehensive() {
     std::env::remove_var("DB_PASSWORD");
 
     // Check basic values
-    assert_eq!(context.get("app_name"), Some(&serde_json::Value::String("JSON Test App".to_string())));
-    assert_eq!(context.get("version"), Some(&serde_json::Value::String("3.0.0".to_string())));
+    assert_eq!(
+        context.get("app_name"),
+        Some(&serde_json::Value::String("JSON Test App".to_string()))
+    );
+    assert_eq!(
+        context.get("version"),
+        Some(&serde_json::Value::String("3.0.0".to_string()))
+    );
 
     // Check deeply nested objects
     if let Some(database) = context.get("database") {
-        assert_eq!(database["credentials"]["username"], serde_json::Value::String("app_user".to_string()));
-        assert_eq!(database["credentials"]["password_env"], serde_json::Value::String("secure_password_123".to_string()));
+        assert_eq!(
+            database["credentials"]["username"],
+            serde_json::Value::String("app_user".to_string())
+        );
+        assert_eq!(
+            database["credentials"]["password_env"],
+            serde_json::Value::String("secure_password_123".to_string())
+        );
 
         // Check array of objects
         if let serde_json::Value::Array(pools) = &database["pools"] {
             assert_eq!(pools.len(), 2);
-            assert_eq!(pools[0]["name"], serde_json::Value::String("read".to_string()));
+            assert_eq!(
+                pools[0]["name"],
+                serde_json::Value::String("read".to_string())
+            );
             assert_eq!(pools[0]["size"], serde_json::Value::Number(5.into()));
         }
     }
 
     // Check nested objects with multiple levels
     if let Some(api) = context.get("api") {
-        assert_eq!(api["endpoints"]["users"], serde_json::Value::String("/api/v1/users".to_string()));
-        assert_eq!(api["rate_limits"]["per_minute"], serde_json::Value::Number(100.into()));
+        assert_eq!(
+            api["endpoints"]["users"],
+            serde_json::Value::String("/api/v1/users".to_string())
+        );
+        assert_eq!(
+            api["rate_limits"]["per_minute"],
+            serde_json::Value::Number(100.into())
+        );
     }
 
     // Check mixed numeric types in metadata
@@ -270,25 +327,37 @@ fn test_json_format_comprehensive() {
 fn test_format_precedence_same_file() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create multiple formats of the same config
-    fs::write(sah_dir.join("sah.toml"), r#"
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
 shared_key = "from_toml"
 format_source = "toml"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    fs::write(sah_dir.join("sah.yaml"), r#"
+    fs::write(
+        sah_dir.join("sah.yaml"),
+        r#"
 shared_key: "from_yaml"
 format_source: "yaml"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    fs::write(sah_dir.join("sah.json"), r#"{
+    fs::write(
+        sah_dir.join("sah.json"),
+        r#"{
     "shared_key": "from_json",
     "format_source": "json"
-}"#).unwrap();
+}"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -301,7 +370,7 @@ format_source: "yaml"
     // but all formats should be loaded and merged
     assert!(context.get("shared_key").is_some());
     assert!(context.get("format_source").is_some());
-    
+
     // We should have values from at least one format
     let shared_val = context.get("shared_key").unwrap().as_str().unwrap();
     assert!(shared_val == "from_toml" || shared_val == "from_yaml" || shared_val == "from_json");

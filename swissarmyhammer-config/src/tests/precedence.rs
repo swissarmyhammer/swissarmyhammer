@@ -8,17 +8,21 @@ use tempfile::TempDir;
 fn test_environment_overrides_files() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create config file with base values
-    fs::write(sah_dir.join("sah.toml"), r#"
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
 app_name = "File App"
 version = "1.0.0"
 debug = false
 database_host = "file-db.example.com"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -39,36 +43,42 @@ database_host = "file-db.example.com"
     // Note: Exact key format depends on figment's transformation
     let app_name_value = context.get("app_name").or_else(|| context.get("APP_NAME"));
     let _debug_value = context.get("debug").or_else(|| context.get("DEBUG"));
-    let _database_host_value = context.get("database_host").or_else(|| context.get("DATABASE_HOST"));
+    let _database_host_value = context
+        .get("database_host")
+        .or_else(|| context.get("DATABASE_HOST"));
 
     // At least one of these should be present and have the env value
     if let Some(app_name) = app_name_value {
-        if app_name.as_str() == Some("Env App") {
-            // Environment override worked
-            assert!(true);
-        }
+        assert_eq!(app_name.as_str(), Some("Env App"));
     }
-    
+
     // File-only value should still be present
     assert!(context.get("version").is_some());
-    assert_eq!(context.get("version"), Some(&serde_json::Value::String("1.0.0".to_string())));
+    assert_eq!(
+        context.get("version"),
+        Some(&serde_json::Value::String("1.0.0".to_string()))
+    );
 }
 
 #[test]
 fn test_project_overrides_global() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create project config with test values (similar to working test pattern)
-    fs::write(sah_dir.join("sah.toml"), r#"
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
 app_name = "Project App"
 version = "1.0.0"
 project_setting = "from_project"
 shared_setting = "project_value"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -78,21 +88,33 @@ shared_setting = "project_value"
     std::env::set_current_dir(original_dir).unwrap();
 
     // Project config values should be loaded
-    assert_eq!(context.get("app_name"), Some(&serde_json::Value::String("Project App".to_string())));
-    assert_eq!(context.get("shared_setting"), Some(&serde_json::Value::String("project_value".to_string())));
-    
+    assert_eq!(
+        context.get("app_name"),
+        Some(&serde_json::Value::String("Project App".to_string()))
+    );
+    assert_eq!(
+        context.get("shared_setting"),
+        Some(&serde_json::Value::String("project_value".to_string()))
+    );
+
     // Project-only setting should be present
-    assert_eq!(context.get("project_setting"), Some(&serde_json::Value::String("from_project".to_string())));
-    
+    assert_eq!(
+        context.get("project_setting"),
+        Some(&serde_json::Value::String("from_project".to_string()))
+    );
+
     // Version should be present (it's in the project config)
-    assert_eq!(context.get("version"), Some(&serde_json::Value::String("1.0.0".to_string())));
+    assert_eq!(
+        context.get("version"),
+        Some(&serde_json::Value::String("1.0.0".to_string()))
+    );
 }
 
 #[test]
 fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
     // Set environment variables with both prefixes
@@ -120,9 +142,15 @@ fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
     }
 
     // Unique variables from both prefixes should be present
-    let sah_only = context.get("only_var").or_else(|| context.get("ONLY_VAR")).is_some();
-    let swissarmyhammer_only = context.get("only_var").or_else(|| context.get("ONLY_VAR")).is_some();
-    
+    let sah_only = context
+        .get("only_var")
+        .or_else(|| context.get("ONLY_VAR"))
+        .is_some();
+    let swissarmyhammer_only = context
+        .get("only_var")
+        .or_else(|| context.get("ONLY_VAR"))
+        .is_some();
+
     // At least one should be present
     assert!(sah_only || swissarmyhammer_only);
 }
@@ -131,25 +159,37 @@ fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
 fn test_file_format_precedence_within_same_source() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create configs in different formats with overlapping keys
-    fs::write(sah_dir.join("sah.toml"), r#"
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
 format_test = "toml_value"
 toml_only = "from_toml"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    fs::write(sah_dir.join("sah.yaml"), r#"
+    fs::write(
+        sah_dir.join("sah.yaml"),
+        r#"
 format_test: yaml_value
 yaml_only: from_yaml
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    fs::write(sah_dir.join("sah.json"), r#"{
+    fs::write(
+        sah_dir.join("sah.json"),
+        r#"{
     "format_test": "json_value",
     "json_only": "from_json"
-}"#).unwrap();
+}"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -173,17 +213,21 @@ yaml_only: from_yaml
 fn test_full_precedence_chain() {
     let temp_dir = TempDir::new().unwrap();
     let original_dir = std::env::current_dir().unwrap();
-    
+
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
 
     // Create project config
-    fs::write(sah_dir.join("sah.toml"), r#"
+    fs::write(
+        sah_dir.join("sah.toml"),
+        r#"
 app_name = "Project App"
 shared_key = "from_file"
 file_only = "file_value"
 env_will_override = "file_default"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -201,12 +245,22 @@ env_will_override = "file_default"
     std::env::remove_var("SAH_ENV_ONLY");
 
     // File-only values should be present
-    assert_eq!(context.get("app_name"), Some(&serde_json::Value::String("Project App".to_string())));
-    assert_eq!(context.get("file_only"), Some(&serde_json::Value::String("file_value".to_string())));
+    assert_eq!(
+        context.get("app_name"),
+        Some(&serde_json::Value::String("Project App".to_string()))
+    );
+    assert_eq!(
+        context.get("file_only"),
+        Some(&serde_json::Value::String("file_value".to_string()))
+    );
 
     // Environment should override file values
-    let shared_key_value = context.get("shared_key").or_else(|| context.get("SHARED_KEY"));
-    let env_override_value = context.get("env_will_override").or_else(|| context.get("ENV_WILL_OVERRIDE"));
+    let shared_key_value = context
+        .get("shared_key")
+        .or_else(|| context.get("SHARED_KEY"));
+    let env_override_value = context
+        .get("env_will_override")
+        .or_else(|| context.get("ENV_WILL_OVERRIDE"));
     let env_only_value = context.get("env_only").or_else(|| context.get("ENV_ONLY"));
 
     // Check that env vars are loaded (exact key transformation depends on figment)
