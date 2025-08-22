@@ -10,56 +10,76 @@ pub enum ConfigError {
     #[error("Configuration file not found: {path}")]
     FileNotFound { path: PathBuf },
 
-    /// Failed to read configuration file
+    /// Configuration file could not be read
     #[error("Failed to read configuration file {path}: {source}")]
-    FileRead {
+    FileReadError {
         path: PathBuf,
+        #[source]
         source: std::io::Error,
     },
 
     /// Configuration parsing failed
-    #[error("Failed to parse configuration: {source}")]
-    ParseError { source: figment::Error },
+    #[error("Failed to parse configuration{}: {source}", path.as_ref().map(|p| format!(" from {}", p.display())).unwrap_or_default())]
+    ParseError {
+        path: Option<PathBuf>,
+        #[source]
+        source: Box<figment::Error>,
+    },
 
     /// Configuration validation failed
     #[error("Configuration validation failed: {message}")]
     ValidationError { message: String },
 
-    /// Home directory could not be determined
-    #[error("Unable to determine home directory")]
-    HomeDirectoryNotFound,
+    /// Directory access error (e.g., home directory)
+    #[error("Directory access error: {source}")]
+    DirectoryError {
+        #[source]
+        source: std::io::Error,
+    },
 
-    /// Current directory could not be determined
-    #[error("Unable to determine current directory")]
-    CurrentDirectoryNotFound,
-
-    /// Git repository root could not be found
-    #[error("Git repository root not found")]
-    GitRootNotFound,
-
-    /// Invalid configuration value
-    #[error("Invalid configuration value for key '{key}': {message}")]
-    InvalidValue { key: String, message: String },
-
-    /// Configuration file format not supported
-    #[error("Unsupported configuration file format: {format}")]
-    UnsupportedFormat { format: String },
+    /// Environment variable error
+    #[error("Environment variable error: {message}")]
+    EnvironmentError { message: String },
 }
 
-impl From<figment::Error> for ConfigError {
-    fn from(error: figment::Error) -> Self {
-        ConfigError::ParseError { source: error }
+impl ConfigError {
+    /// Create a new file not found error
+    pub fn file_not_found(path: PathBuf) -> Self {
+        Self::FileNotFound { path }
     }
-}
 
-impl From<std::io::Error> for ConfigError {
-    fn from(error: std::io::Error) -> Self {
-        match error.kind() {
-            std::io::ErrorKind::NotFound => ConfigError::CurrentDirectoryNotFound,
-            _ => ConfigError::FileRead {
-                path: PathBuf::new(),
-                source: error,
-            },
+    /// Create a new file read error
+    pub fn file_read_error(path: PathBuf, source: std::io::Error) -> Self {
+        Self::FileReadError { path, source }
+    }
+
+    /// Create a new parse error
+    pub fn parse_error(path: Option<PathBuf>, source: figment::Error) -> Self {
+        Self::ParseError {
+            path,
+            source: Box::new(source),
+        }
+    }
+
+    /// Create a new validation error
+    pub fn validation_error(message: impl Into<String>) -> Self {
+        Self::ValidationError {
+            message: message.into(),
+        }
+    }
+
+    /// Create a new directory error
+    pub fn directory_error(source: std::io::Error) -> Self {
+        Self::DirectoryError { source }
+    }
+
+    /// Create a new environment error
+    pub fn environment_error(message: impl Into<String>) -> Self {
+        Self::EnvironmentError {
+            message: message.into(),
         }
     }
 }
+
+/// Result type for configuration operations
+pub type ConfigResult<T> = Result<T, ConfigError>;

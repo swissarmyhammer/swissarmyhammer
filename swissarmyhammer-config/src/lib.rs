@@ -1,43 +1,70 @@
-//! # SwissArmyHammer Configuration System
+//! SwissArmyHammer Configuration System using Figment
 //!
-//! This crate provides a configuration system for SwissArmyHammer using the `figment` library.
+//! This crate provides configuration management for SwissArmyHammer using the `figment` library.
 //! It supports multiple configuration file formats (TOML, YAML, JSON) with a clear precedence
 //! order and environment variable integration.
 //!
-//! ## Features
+//! # Features
 //!
-//! - **Multiple formats**: TOML, YAML, and JSON configuration files
-//! - **File discovery**: Automatic search in project and home directories
-//! - **Precedence order**: Clear hierarchy for configuration sources
-//! - **Environment variables**: Support for `SAH_` and `SWISSARMYHAMMER_` prefixed variables
-//! - **Template integration**: Direct integration with liquid templating system
+//! - **Multiple File Formats**: Support for TOML, YAML, and JSON configuration files
+//! - **Precedence Order**: Configuration sources are merged with clear precedence rules
+//! - **Environment Variables**: Support for environment variable substitution and overrides
+//! - **File Discovery**: Automatic discovery of configuration files in standard locations
+//! - **Validation**: Comprehensive configuration validation and error reporting
 //!
-//! ## Configuration File Discovery
+//! # Configuration File Discovery
 //!
-//! The system searches for configuration files in the following order:
-//! 1. Project directory: `./.swissarmyhammer/{sah,swissarmyhammer}.{toml,yaml,yml,json}`
-//! 2. Home directory: `~/.swissarmyhammer/{sah,swissarmyhammer}.{toml,yaml,yml,json}`
+//! The system searches for configuration files in the following locations and formats:
 //!
-//! ## Configuration Precedence
+//! ## Project Configuration
+//! - `./.swissarmyhammer/sah.{toml,yaml,yml,json}`
+//! - `./.swissarmyhammer/swissarmyhammer.{toml,yaml,yml,json}`
+//!
+//! ## User Configuration
+//! - `~/.swissarmyhammer/sah.{toml,yaml,yml,json}`
+//! - `~/.swissarmyhammer/swissarmyhammer.{toml,yaml,yml,json}`
+//!
+//! # Precedence Order
 //!
 //! Configuration sources are merged in the following order (later sources override earlier ones):
-//! 1. Default values (hardcoded in application)
-//! 2. Global config file (`~/.swissarmyhammer/` directory)
-//! 3. Project config file (`.swissarmyhammer/` directory in current project)
-//! 4. Environment variables (with `SAH_` or `SWISSARMYHAMMER_` prefix)
-//! 5. Command line arguments (highest priority)
 //!
-//! ## Usage
+//! 1. **Default values** (hardcoded in application)
+//! 2. **Global config file** (`~/.swissarmyhammer/` directory)
+//! 3. **Project config file** (`.swissarmyhammer/` directory in current project)
+//! 4. **Environment variables** (with `SAH_` or `SWISSARMYHAMMER_` prefix)
+//! 5. **Command line arguments** (highest priority)
 //!
-//! This crate is designed to be used by the SwissArmyHammer ecosystem for template variable
-//! provisioning. It does not cache configuration data, allowing for immediate updates when
-//! configuration files are modified.
+//! # Example
+//!
+//! ```no_run
+//! use swissarmyhammer_config::{ConfigError, ConfigResult};
+//!
+//! // This will be implemented in future iterations
+//! // let config = swissarmyhammer_config::load_config()?;
+//! # Ok::<(), ConfigError>(())
+//! ```
 
-/// Configuration error types
+/// Error types and result aliases for configuration operations
 pub mod error;
 
-// Re-export main types for easier access
-pub use error::ConfigError;
+/// Core data structures for configuration system
+pub mod types;
 
-/// The result type used throughout this crate
-pub type Result<T> = std::result::Result<T, ConfigError>;
+/// Configuration provider using Figment
+pub mod provider;
+
+/// Integration tests (only compiled in test mode)
+#[cfg(test)]
+pub mod tests;
+
+/// Integration tests
+#[cfg(test)]
+pub mod integration_test;
+
+// Re-export main types for easier access
+pub use error::{ConfigError, ConfigResult};
+pub use provider::ConfigProvider;
+pub use types::{RawConfig, TemplateContext};
+
+/// Current version of the configuration system
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
