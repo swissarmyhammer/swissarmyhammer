@@ -17,6 +17,7 @@ mod file;
 mod flow;
 #[cfg(not(feature = "dynamic-cli"))]
 mod issue;
+
 #[cfg(not(feature = "dynamic-cli"))]
 mod list;
 mod logging;
@@ -76,6 +77,7 @@ async fn main() {
 
 #[cfg(feature = "dynamic-cli")]
 async fn run_with_dynamic_cli() {
+
     // Initialize tool context and registry for dynamic CLI
     let cli_tool_context = match CliToolContext::new().await {
         Ok(context) => Arc::new(context),
@@ -119,10 +121,10 @@ async fn handle_dynamic_matches(
     // Handle subcommands
     match matches.subcommand() {
         Some((category, sub_matches)) => match sub_matches.subcommand() {
-            Some((tool_name, tool_matches)) => {
-                handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
-                    .await
-            }
+                Some((tool_name, tool_matches)) => {
+                    handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
+                        .await
+                }
             None => {
                 eprintln!("No command specified for category '{}'", category);
                 EXIT_ERROR
@@ -142,12 +144,35 @@ async fn handle_dynamic_tool_command(
     matches: &clap::ArgMatches,
     cli_tool_context: Arc<CliToolContext>,
 ) -> i32 {
-    // Construct full tool name (category_tool_name)
-    let full_tool_name = format!("{}_{}", category, tool_name);
+
+    // Look up the tool by category and CLI name
+    let tool = match cli_tool_context
+        .get_tool_registry()
+        .get_tool_by_cli_name(category, tool_name)
+    {
+        Some(tool) => tool,
+        None => {
+            let available_tools: Vec<String> = cli_tool_context
+                .get_tool_registry()
+                .get_tools_for_category(category)
+                .iter()
+                .map(|t| format!("{} -> {}", t.cli_name(), t.name()))
+                .collect();
+            eprintln!(
+                "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
+                tool_name,
+                category,
+                available_tools.join(", ")
+            );
+            return EXIT_ERROR;
+        }
+    };
+
+    let full_tool_name = tool.name();
 
     // Convert clap matches to JSON arguments
     let arguments =
-        match convert_matches_to_arguments(matches, &full_tool_name, &cli_tool_context).await {
+        match convert_matches_to_arguments(matches, full_tool_name, &cli_tool_context).await {
             Ok(args) => args,
             Err(e) => {
                 eprintln!("Error processing arguments: {}", e);
@@ -157,7 +182,7 @@ async fn handle_dynamic_tool_command(
 
     // Execute the MCP tool
     match cli_tool_context
-        .execute_tool(&full_tool_name, arguments)
+        .execute_tool(full_tool_name, arguments)
         .await
     {
         Ok(result) => {
@@ -320,6 +345,7 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_with_static_cli() {
+
     let cli = Cli::parse_args();
 
     // Fast path for help - avoid expensive initialization
@@ -436,10 +462,7 @@ async fn run_with_static_cli() {
             tracing::info!("Running validate command");
             run_validate(quiet, format, workflow_dirs)
         }
-        Some(Commands::Issue { subcommand }) => {
-            tracing::info!("Running issue command");
-            run_issue(subcommand).await
-        }
+
 
         Some(Commands::File { subcommand }) => {
             tracing::info!("Running file command");
@@ -472,6 +495,10 @@ async fn run_with_static_cli() {
         Some(Commands::Migrate { subcommand }) => {
             tracing::info!("Running migrate command");
             run_migrate(subcommand).await
+        }
+        Some(Commands::Issue { subcommand }) => {
+            tracing::info!("Running issue command");
+            run_issue(subcommand).await
         }
         None => {
             // This case is handled early above for performance
@@ -602,25 +629,7 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
     }
 }
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
-    use error::CliError;
-    use issue;
 
-    match issue::handle_issue_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            // Check if this is a CliError and preserve exit code
-            if let Some(cli_error) = e.downcast_ref::<CliError>() {
-                tracing::error!("Issue error: {}", cli_error);
-                cli_error.exit_code
-            } else {
-                tracing::error!("Issue error: {}", e);
-                EXIT_WARNING
-            }
-        }
-    }
-}
 
 
 
@@ -871,6 +880,19 @@ async fn run_migrate(subcommand: cli::MigrateCommands) -> i32 {
         Err(e) => {
             tracing::error!("Migration error: {}", e);
             EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(not(feature = "dynamic-cli"))]
+async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
+    use issue;
+
+    match issue::handle_issue_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            tracing::error!("Issue error: {}", e);
+            EXIT_WARNING
         }
     }
 }

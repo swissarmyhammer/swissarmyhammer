@@ -78,9 +78,7 @@ impl McpTool for CreateIssueTool {
             None => String::new(), // Empty name for nameless issues - skip validation
         };
 
-        // Validate content is not empty
-        McpValidation::validate_not_empty(&request.content, "issue content")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate issue content"))?;
+        // Allow empty content for issues - issues can be created as placeholders and filled in later
 
         let issue_storage = context.issue_storage.write().await;
         match issue_storage

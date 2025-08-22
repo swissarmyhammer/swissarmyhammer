@@ -48,11 +48,8 @@ pub async fn handle_dynamic_command(
     tool_registry: Arc<ToolRegistry>,
     context: Arc<ToolContext>,
 ) -> Result<()> {
-    // Construct tool name using MCP naming convention: {category}_{action}
-    let mcp_tool_name = format!("{}_{}", category, tool_name);
-
-    // Look up the tool in the registry
-    let tool = tool_registry.get_tool(&mcp_tool_name).ok_or_else(|| {
+    // Look up the tool in the registry by category and CLI name
+    let tool = tool_registry.get_tool_by_cli_name(category, tool_name).ok_or_else(|| {
         let available_tools: Vec<String> = tool_registry
             .get_tools_for_category(category)
             .iter()
@@ -101,7 +98,7 @@ pub async fn handle_dynamic_command(
 
     tracing::debug!(
         "Executing tool {} with arguments: {:?}",
-        mcp_tool_name,
+        tool.name(),
         arguments
     );
 
@@ -119,8 +116,8 @@ pub async fn handle_dynamic_command(
         })
         .with_context(|| {
             format!(
-                "Executing MCP tool '{}' (full name: {}) with {} argument(s)",
-                tool_name, mcp_tool_name, arg_count
+                "Executing MCP tool '{}' (CLI: {} {}) with {} argument(s)",
+                tool.name(), category, tool_name, arg_count
             )
         })?;
 

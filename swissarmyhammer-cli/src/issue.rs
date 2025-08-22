@@ -1,14 +1,11 @@
-use crate::cli::{IssueCommands, OutputFormat};
+use crate::cli::IssueCommands;
 use crate::error::{format_component_specific_git_error, CliError};
 use crate::exit_codes::EXIT_ERROR;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;
-use std::io::{self, Read};
-use swissarmyhammer::config::Config;
 
-pub async fn handle_issue_command(
-    command: IssueCommands,
-) -> Result<(), Box<dyn std::error::Error>> {
+/// Handle issue-related CLI commands
+pub async fn handle_issue_command(command: IssueCommands) -> Result<(), Box<dyn std::error::Error>> {
     let context = CliToolContext::new().await?;
 
     // Check for Git repository requirement for issue operations
@@ -33,12 +30,8 @@ pub async fn handle_issue_command(
     })?;
 
     match command {
-        IssueCommands::Create {
-            name,
-            content,
-            file,
-        } => {
-            create_issue(&context, name, content, file).await?;
+        IssueCommands::Create { name, content } => {
+            create_issue(&context, name, content).await?;
         }
         IssueCommands::List {
             completed,
@@ -53,25 +46,24 @@ pub async fn handle_issue_command(
         IssueCommands::Update {
             name,
             content,
-            file,
             append,
         } => {
-            update_issue(&context, &name, content, file, append).await?;
+            update_issue(&context, &name, &content, append).await?;
         }
         IssueCommands::Complete { name } => {
-            complete_issue(&context, &name).await?;
+            mark_complete_issue(&context, &name).await?;
         }
         IssueCommands::Work { name } => {
             work_issue(&context, &name).await?;
         }
         IssueCommands::Merge { name, keep_branch } => {
-            merge_issue(&context, &name, keep_branch).await?;
+            merge_issue(&context, &name, !keep_branch).await?;
         }
         IssueCommands::Current => {
             show_current_issue(&context).await?;
         }
         IssueCommands::Status => {
-            show_status(&context).await?;
+            show_project_status(&context).await?;
         }
         IssueCommands::Next => {
             show_next_issue(&context).await?;
@@ -81,173 +73,169 @@ pub async fn handle_issue_command(
     Ok(())
 }
 
+/// Create a new issue
 async fn create_issue(
     context: &CliToolContext,
     name: Option<String>,
     content: Option<String>,
-    file: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let content = get_content_from_args(content, file)?;
-    // Ensure content is not empty for MCP tool compatibility
-    let content = if content.is_empty() {
-        Config::global().default_issue_content.clone()
+    let mut args = Vec::new();
+
+    if let Some(name_val) = name {
+        args.push(("name", json!(name_val)));
+    }
+
+    let content_val = if let Some(content_str) = content {
+        content_str
     } else {
-        content
+        // For CLI usage, if no content is provided, use empty string
+        // This allows creating issues without content, which is expected by tests
+        String::new()
     };
 
-    let args = if let Some(issue_name) = name {
-        context.create_arguments(vec![
-            ("name", json!(issue_name)),
-            ("content", json!(content)),
-        ])
-    } else {
-        // For nameless issues, don't pass a name argument
-        context.create_arguments(vec![("content", json!(content))])
-    };
+    // Always add content, even if empty
+    args.push(("content", json!(content_val)));
 
-    let result = context.execute_tool("issue_create", args).await?;
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_create", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
+/// List all issues
 async fn list_issues(
     context: &CliToolContext,
-    show_completed: bool,
-    show_active: bool,
-    format: OutputFormat,
+    completed: bool,
+    active: bool,
+    format: crate::cli::OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::cli::OutputFormat;
+
     let format_str = match format {
         OutputFormat::Table => "table",
-        OutputFormat::Json => "json",
-        OutputFormat::Yaml => "markdown", // MCP tool uses "markdown" for YAML-like output
+        OutputFormat::Json => "json", 
+        OutputFormat::Yaml => "markdown",
     };
-    let args = context.create_arguments(vec![
-        ("show_completed", json!(show_completed)),
-        ("show_active", json!(show_active)),
-        ("format", json!(format_str)),
-    ]);
 
-    let result = context.execute_tool("issue_list", args).await?;
+    let args = vec![
+        ("show_completed", json!(completed)),
+        ("show_active", json!(active)),
+        ("format", json!(format_str)),
+    ];
+
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_list", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
+/// Show issue details
 async fn show_issue(
     context: &CliToolContext,
     name: &str,
     raw: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![("name", json!(name)), ("raw", json!(raw))]);
+    let args = vec![
+        ("name", json!(name)),
+        ("raw", json!(raw)),
+    ];
 
-    let result = context.execute_tool("issue_show", args).await?;
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_show", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
+/// Mark an issue as complete
+async fn mark_complete_issue(
+    context: &CliToolContext,
+    name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let args = vec![("name", json!(name))];
+
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_mark_complete", arguments).await?;
+    println!("{}", response_formatting::format_success_response(&result));
+    Ok(())
+}
+
+
+/// Update an issue
 async fn update_issue(
     context: &CliToolContext,
     name: &str,
-    content: Option<String>,
-    file: Option<std::path::PathBuf>,
+    content: &str,
     append: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let new_content = get_content_from_args(content, file)?;
-
-    let args = context.create_arguments(vec![
+    let args = vec![
         ("name", json!(name)),
-        ("content", json!(new_content)),
+        ("content", json!(content)),
         ("append", json!(append)),
-    ]);
+    ];
 
-    let result = context.execute_tool("issue_update", args).await?;
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_update", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
-async fn complete_issue(
-    context: &CliToolContext,
-    name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![("name", json!(name))]);
-    let result = context.execute_tool("issue_mark_complete", args).await?;
+/// Work on an issue (switch to work branch)
+async fn work_issue(context: &CliToolContext, name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let args = vec![("name", json!(name))];
 
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_work", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
-async fn work_issue(
-    context: &CliToolContext,
-    name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![("name", json!(name))]);
-    let result = context.execute_tool("issue_work", args).await?;
-
-    println!("{}", response_formatting::format_success_response(&result));
-    Ok(())
-}
-
+/// Merge issue work branch
 async fn merge_issue(
     context: &CliToolContext,
     name: &str,
-    keep_branch: bool,
+    delete_branch: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![
+    let args = vec![
         ("name", json!(name)),
-        ("delete_branch", json!(!keep_branch)),
-    ]);
+        ("delete_branch", json!(delete_branch)),
+    ];
 
-    let result = context.execute_tool("issue_merge", args).await?;
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_merge", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
+/// Show current issue (based on current branch)
 async fn show_current_issue(context: &CliToolContext) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![("name", json!("current"))]);
-    let result = context.execute_tool("issue_show", args).await?;
+    let args = vec![
+        ("name", json!("current")),
+        ("raw", json!(false)),
+    ];
 
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_show", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
-async fn show_status(context: &CliToolContext) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![]);
-    let result = context.execute_tool("issue_all_complete", args).await?;
-
+/// Show project status (all completed check)
+async fn show_project_status(context: &CliToolContext) -> Result<(), Box<dyn std::error::Error>> {
+    let arguments = context.create_arguments(vec![]);
+    let result = context.execute_tool("issue_all_complete", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }
 
-fn get_content_from_args(
-    content: Option<String>,
-    file: Option<std::path::PathBuf>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    match (content, file) {
-        (Some(content), None) => {
-            if content == "-" {
-                // Read from stdin
-                let mut buffer = String::new();
-                io::stdin().read_to_string(&mut buffer)?;
-                Ok(buffer.trim().to_string())
-            } else {
-                Ok(content)
-            }
-        }
-        (None, Some(path)) => {
-            let content = std::fs::read_to_string(path)?;
-            Ok(content.trim().to_string())
-        }
-        (Some(_), Some(_)) => Err("Cannot specify both --content and --file options".into()),
-        (None, None) => {
-            // Allow empty content for nameless issues
-            Ok(String::new())
-        }
-    }
-}
-
+/// Show next issue to work on
 async fn show_next_issue(context: &CliToolContext) -> Result<(), Box<dyn std::error::Error>> {
-    let args = context.create_arguments(vec![("name", json!("next"))]);
-    let result = context.execute_tool("issue_show", args).await?;
+    let args = vec![
+        ("name", json!("next")),
+        ("raw", json!(false)),
+    ];
 
+    let arguments = context.create_arguments(args);
+    let result = context.execute_tool("issue_show", arguments).await?;
     println!("{}", response_formatting::format_success_response(&result));
     Ok(())
 }

@@ -109,3 +109,36 @@ Ensure all issue command arguments map correctly:
 - Verify branch operations work correctly
 - Test all issue workflow scenarios
 - Pay attention to boolean flag handling
+
+## Proposed Solution
+
+Based on my analysis of the codebase and the successful memo command migration, here's my approach:
+
+### 1. Understanding the Pattern
+The memo command migration shows how static CLI commands are replaced with dynamic generation:
+- Issue tools (like `issue_create`, `issue_list`, etc.) are already implemented as MCP tools
+- The `ToolRegistry::cli_category()` method already maps issue tools to the "issue" category
+- The `CliBuilder` in `dynamic_cli.rs` generates commands from the tool registry automatically
+- Dynamic execution happens via `handle_dynamic_command()` in `dynamic_execution.rs`
+
+### 2. Migration Steps
+
+1. **Remove Static Enums**: Delete `IssueCommands` enum from `cli.rs`
+2. **Remove Static Command**: Remove `Issue { subcommand: IssueCommands }` from main `Commands` enum 
+3. **Remove Handler**: Remove `run_issue()` function and `issue.rs` module from `main.rs`
+4. **No Changes Needed**: The tool registry already maps issue tools correctly, and dynamic CLI generation will automatically pick them up
+
+### 3. Special Commands Handling
+The existing MCP tools already handle the special commands:
+- `issue show current` → `issue_show` with `name: "current"`
+- `issue show next` → `issue_show` with `name: "next"` 
+- `issue status` → `issue_all_complete` (no args)
+- Other commands map directly with argument preservation
+
+### 4. Testing Strategy
+- Build and test basic issue commands work: `issue create`, `issue list`, `issue show`
+- Test special commands: `issue show current`, `issue show next`, `issue status`
+- Verify argument mapping works correctly for all commands
+- Ensure Git repository requirements are still enforced
+
+This approach follows the exact pattern used for memo commands and should work seamlessly since the MCP tools already exist.

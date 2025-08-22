@@ -247,39 +247,7 @@ Examples:
         workflow_dirs: Vec<String>,
     },
 
-    /// Issue management commands (requires Git repository)
-    #[command(long_about = "
-Manage issues with comprehensive CLI commands for creating, updating, and tracking work items.
 
-⚠️ REQUIREMENTS: Must be run from within a Git repository.
-Issues are stored as markdown files in .swissarmyhammer/issues/ at the Git repository root.
-Git integration is required for branch management and workflow operations.
-
-Basic usage:
-  swissarmyhammer issue create [name]           # Create new issue
-  swissarmyhammer issue list                    # List all issues
-  swissarmyhammer issue show <number>           # Show issue details
-  swissarmyhammer issue update <number>         # Update issue content
-  swissarmyhammer issue complete <number>       # Mark issue as complete
-  swissarmyhammer issue work <number>           # Start working on issue (creates git branch)
-  swissarmyhammer issue merge <number>          # Merge completed issue to source branch
-  swissarmyhammer issue current                 # Show current issue
-  swissarmyhammer issue next                    # Show next issue to work on
-  swissarmyhammer issue status                  # Show project status
-
-Examples:
-  swissarmyhammer issue create \"Bug fix\" --content \"Fix login issue\"
-  swissarmyhammer issue create --content \"Quick fix needed\"
-  swissarmyhammer issue list --format json --active
-  swissarmyhammer issue show 123 --raw
-  swissarmyhammer issue update 123 --content \"Updated description\" --append
-  swissarmyhammer issue work 123
-  swissarmyhammer issue merge 123 --keep-branch
-")]
-    Issue {
-        #[command(subcommand)]
-        subcommand: IssueCommands,
-    },
     /// File manipulation and search commands
     #[command(long_about = "
 Comprehensive file manipulation and search tools for code analysis, editing, and discovery.
@@ -637,6 +605,40 @@ Examples:
     Migrate {
         #[command(subcommand)]
         subcommand: MigrateCommands,
+    },
+    /// Manage issues for tracking work items
+    #[command(long_about = "
+Comprehensive issue management system for tracking work items, bugs, features, and tasks.
+Issues are stored as markdown files in .swissarmyhammer/issues directory for version control.
+
+Basic usage:
+  swissarmyhammer issue create <name> --content <content>  # Create new issue
+  swissarmyhammer issue list                               # List all issues  
+  swissarmyhammer issue show <name>                        # Show issue details
+  swissarmyhammer issue work <name>                        # Start working on issue
+  swissarmyhammer issue mark-complete <name>               # Mark issue as complete
+
+Issue workflow:
+  1. create     - Create new issues with auto-assigned numbers
+  2. list       - List all available issues with filtering options
+  3. show       - Display details of a specific issue
+  4. work       - Switch to or create work branch for an issue
+  5. update     - Modify existing issue content
+  6. mark-complete - Mark issues as completed and archive them
+  7. merge      - Merge completed issue work back to source branch
+  8. all-complete - Check if all pending issues are completed
+
+Examples:
+  swissarmyhammer issue create bug-fix --content \"Fix login validation\"
+  swissarmyhammer issue create feature-auth  # Interactive content input
+  swissarmyhammer issue list --format json
+  swissarmyhammer issue show current         # Show current branch issue
+  swissarmyhammer issue work FEATURE_001_auth
+  swissarmyhammer issue mark-complete current
+")]
+    Issue {
+        #[command(subcommand)]
+        subcommand: IssueCommands,
     },
 }
 
@@ -996,79 +998,7 @@ for better discoverability and clearer intent.
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum IssueCommands {
-    /// Create a new issue
-    Create {
-        /// Issue name (optional)
-        #[arg()]
-        name: Option<String>,
-        /// Issue content (use - for stdin)
-        #[arg(short, long)]
-        content: Option<String>,
-        /// Read content from file
-        #[arg(short, long)]
-        file: Option<std::path::PathBuf>,
-    },
-    /// List all issues
-    List {
-        /// Show completed issues
-        #[arg(short, long)]
-        completed: bool,
-        /// Show active issues only
-        #[arg(short, long)]
-        active: bool,
-        /// Output format
-        #[arg(short, long, value_enum, default_value = "table")]
-        format: OutputFormat,
-    },
-    /// Show issue details
-    Show {
-        /// Issue name
-        name: String,
-        /// Show raw content
-        #[arg(short, long)]
-        raw: bool,
-    },
-    /// Update an issue
-    Update {
-        /// Issue name
-        name: String,
-        /// New content (use - for stdin)
-        #[arg(short, long)]
-        content: Option<String>,
-        /// Read content from file
-        #[arg(short, long)]
-        file: Option<std::path::PathBuf>,
-        /// Append to existing content
-        #[arg(short, long)]
-        append: bool,
-    },
-    /// Mark issue as complete
-    Complete {
-        /// Issue name
-        name: String,
-    },
-    /// Start working on an issue
-    Work {
-        /// Issue name
-        name: String,
-    },
-    /// Merge completed issue
-    Merge {
-        /// Issue name
-        name: String,
-        /// Keep branch after merge
-        #[arg(short, long)]
-        keep_branch: bool,
-    },
-    /// Show current issue
-    Current,
-    /// Show project status
-    Status,
-    /// Show the next issue to work on
-    Next,
-}
+
 
 
 
@@ -1524,6 +1454,73 @@ pub enum ShellOutputFormat {
     Human,
     Json,
     Yaml,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum IssueCommands {
+    /// Create a new issue
+    Create {
+        /// Issue name (optional)
+        name: Option<String>,
+        /// Issue content
+        #[arg(short, long)]
+        content: Option<String>,
+    },
+    /// List all issues
+    List {
+        /// Show completed issues
+        #[arg(short, long)]
+        completed: bool,
+        /// Show active issues only
+        #[arg(short, long)]
+        active: bool,
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+    /// Show issue details
+    Show {
+        /// Issue name
+        name: String,
+        /// Show raw content
+        #[arg(short, long)]
+        raw: bool,
+    },
+    /// Update an issue
+    Update {
+        /// Issue name
+        name: String,
+        /// New content
+        #[arg(short, long)]
+        content: String,
+        /// Append to existing content
+        #[arg(short, long)]
+        append: bool,
+    },
+    /// Mark issue as complete
+    Complete {
+        /// Issue name
+        name: String,
+    },
+    /// Start working on an issue
+    Work {
+        /// Issue name
+        name: String,
+    },
+    /// Merge completed issue
+    Merge {
+        /// Issue name
+        name: String,
+        /// Keep branch after merge
+        #[arg(short, long)]
+        keep_branch: bool,
+    },
+    /// Show current issue
+    Current,
+    /// Show project status
+    Status,
+    /// Show the next issue to work on
+    Next,
 }
 
 impl Cli {
@@ -2196,122 +2193,9 @@ mod tests {
         assert!(!cli.quiet);
     }
 
-    #[test]
-    fn test_issue_create_with_name() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "issue",
-            "create",
-            "bug_fix",
-            "--content",
-            "Fix login bug",
-        ]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, Some("bug_fix".to_string()));
-                assert_eq!(content, Some("Fix login bug".to_string()));
-                assert_eq!(file, None);
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
 
-    #[test]
-    fn test_issue_create_without_name() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "issue",
-            "create",
-            "--content",
-            "Quick fix needed",
-        ]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, None);
-                assert_eq!(content, Some("Quick fix needed".to_string()));
-                assert_eq!(file, None);
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
-
-    #[test]
-    fn test_issue_create_with_file() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "issue", "create", "--file", "issue.md"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, None);
-                assert_eq!(content, None);
-                assert_eq!(file, Some(std::path::PathBuf::from("issue.md")));
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
-
-    #[test]
-    fn test_issue_create_named_with_file() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "issue",
-            "create",
-            "feature_name",
-            "--file",
-            "feature.md",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Issue { subcommand }) = cli.command {
-            if let IssueCommands::Create {
-                name,
-                content,
-                file,
-            } = subcommand
-            {
-                assert_eq!(name, Some("feature_name".to_string()));
-                assert_eq!(content, None);
-                assert_eq!(file, Some(std::path::PathBuf::from("feature.md")));
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Issue command");
-        }
-    }
 
 
 

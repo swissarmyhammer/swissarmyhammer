@@ -439,6 +439,31 @@ impl ToolRegistry {
         self.tools.get(name).map(|tool| tool.as_ref())
     }
 
+    /// Get a tool by category and CLI name
+    ///
+    /// Finds a tool that belongs to the specified category and has the specified CLI name.
+    /// This is used by the dynamic CLI to map from CLI commands to actual tool names.
+    ///
+    /// # Arguments
+    ///
+    /// * `category` - The CLI category (e.g., "issue", "memo")
+    /// * `cli_name` - The CLI command name (e.g., "status", "complete")
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&dyn McpTool)` - The tool if found
+    /// * `None` - If no tool matches the category and CLI name
+    pub fn get_tool_by_cli_name(&self, category: &str, cli_name: &str) -> Option<&dyn McpTool> {
+        self.tools
+            .values()
+            .find(|tool| {
+                !tool.hidden_from_cli() 
+                    && tool.cli_category() == Some(category)
+                    && tool.cli_name() == cli_name
+            })
+            .map(|tool| tool.as_ref())
+    }
+
     /// List all registered tool names
     pub fn list_tool_names(&self) -> Vec<String> {
         self.tools.keys().cloned().collect()
