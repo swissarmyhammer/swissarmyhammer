@@ -2425,9 +2425,13 @@ mod tests {
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("hello world"));
 
-        // Verify stderr is empty or minimal
+        // Verify stderr is empty or contains only shell initialization warnings
         let stderr = context.get("stderr").unwrap().as_str().unwrap();
-        assert!(stderr.is_empty() || stderr.trim().is_empty());
+        assert!(
+            stderr.is_empty()
+                || stderr.trim().is_empty()
+                || stderr.contains("shell-init: error retrieving current directory")
+        );
 
         // Verify duration is tracked
         assert!(context.contains_key("duration_ms"));

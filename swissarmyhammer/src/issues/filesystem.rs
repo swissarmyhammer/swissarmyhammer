@@ -6070,16 +6070,16 @@ mod tests {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Don't change current directory - use directory-specific version instead
 
         // Setup: Create old issues directory
         let issues_dir = temp_dir.path().join("issues");
         std::fs::create_dir_all(&issues_dir).unwrap();
         std::fs::write(issues_dir.join("test.md"), "Test content").unwrap();
 
-        // Test: Use new_default_with_migration_info()
+        // Test: Use new_default_in() with specific directory to avoid current_dir issues
         let (storage, migration_result) =
-            FileSystemIssueStorage::new_default_with_migration_info().unwrap();
+            FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
 
         // Verify: Migration result is returned
         assert!(migration_result.is_some());
@@ -6102,7 +6102,7 @@ mod tests {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
         let temp_dir = TempDir::new().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        // Don't change current directory - use directory-specific version instead
 
         // Setup: Create issues directory with multiple files
         let issues_dir = temp_dir.path().join("issues");
@@ -6118,7 +6118,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = FileSystemIssueStorage::new_default_with_config(&config);
+        let result = FileSystemIssueStorage::new_default_with_config_in(temp_dir.path(), &config);
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(error_message.contains("exceeds maximum for automatic migration"));
@@ -6130,7 +6130,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = FileSystemIssueStorage::new_default_with_config(&config);
+        let result = FileSystemIssueStorage::new_default_with_config_in(temp_dir.path(), &config);
         assert!(result.is_ok());
     }
 
