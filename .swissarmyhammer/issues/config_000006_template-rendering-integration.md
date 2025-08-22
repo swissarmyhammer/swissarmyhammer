@@ -115,6 +115,8 @@ Update action parameter rendering:
 
 ### 6. Legacy Compatibility Layer
 
+Make it work eith the new functionality directly.
+
 Create compatibility functions in `src/compat.rs`:
 
 ```rust
@@ -178,7 +180,7 @@ Create integration tests in `src/tests/renderer_tests.rs`:
 1. **Phase 1**: Add new renderer alongside existing system
 2. **Phase 2**: Update one rendering area at a time (prompts → workflows → actions)
 3. **Phase 3**: Remove old code after all tests pass
-4. **Phase 4**: Clean up compatibility layer if no longer needed
+4. **Phase 4**: Clean up compatibility layer
 
 ## Files Changed
 

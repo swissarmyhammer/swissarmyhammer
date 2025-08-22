@@ -1,0 +1,18 @@
+[package]
+name = "swissarmyhammer-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configuration management for SwissArmyHammer using Figment"
+
+[dependencies]
+figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror = "1.0"
+tracing = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
