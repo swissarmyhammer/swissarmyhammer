@@ -707,7 +707,27 @@ mod tests {
 
     // Helper to create a temporary git repository
     fn create_test_git_repo() -> Result<TempDir> {
-        let temp_dir = TempDir::new()?;
+        // Retry TempDir creation in case of intermittent filesystem issues
+        let temp_dir = (0..3)
+            .find_map(|attempt| {
+                match TempDir::new() {
+                    Ok(dir) => Some(dir),
+                    Err(e) if attempt < 2 => {
+                        eprintln!("TempDir creation attempt {} failed: {}", attempt + 1, e);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        None
+                    }
+                    Err(e) => {
+                        eprintln!("TempDir creation failed after 3 attempts: {}", e);
+                        eprintln!("TMPDIR: {:?}", std::env::var("TMPDIR"));
+                        eprintln!("Current dir: {:?}", std::env::current_dir());
+                        None
+                    }
+                }
+            })
+            .ok_or_else(|| SwissArmyHammerError::Other(
+                "Failed to create temporary directory for test".to_string(),
+            ))?;
         let repo_path = temp_dir.path();
 
         // Initialize git repo

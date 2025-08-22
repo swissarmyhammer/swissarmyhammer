@@ -1,6 +1,8 @@
 # Shell Execute Tool
 
-Execute shell commands with timeout controls and proper output handling for interactive AI workflows.
+Execute shell or bash commands with timeout controls and proper output handling for interactive AI workflows.
+
+This is the preferred way to run any kind of shell command.
 
 ## Purpose
 
