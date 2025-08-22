@@ -263,32 +263,7 @@ async fn test_file_commands_work_without_git() {
     );
 }
 
-/// Test that shell commands don't require Git repository
-#[tokio::test]
-async fn test_shell_commands_work_without_git() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    let result = run_sah_command_in_process(&["shell", "execute", "echo test"]).await;
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
-
-    let output = result.unwrap();
-    assert_eq!(
-        output.exit_code, 0,
-        "Command should succeed. stderr: {}",
-        output.stderr
-    );
-    assert!(
-        output.stdout.contains("test"),
-        "Should contain echo output: {}",
-        output.stdout
-    );
-}
+// Removed test_shell_commands_work_without_git - shell command was migrated away from static CLI
 
 /// Test that web search commands don't require Git repository
 #[tokio::test]

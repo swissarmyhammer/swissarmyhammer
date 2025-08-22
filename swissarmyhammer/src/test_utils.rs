@@ -446,7 +446,19 @@ impl IsolatedTestEnvironment {
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
 /// better error handling and consistent behavior across tests.
 pub fn create_temp_dir() -> TempDir {
-    TempDir::new().expect("Failed to create temporary directory for test")
+    // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
+    for attempt in 1..=3 {
+        match TempDir::new() {
+            Ok(temp_dir) => return temp_dir,
+            Err(_e) if attempt < 3 => {
+                // Add small delay before retry to reduce contention
+                std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                continue;
+            }
+            Err(e) => panic!("Failed to create temporary directory for test after {} attempts: {}", attempt, e),
+        }
+    }
+    unreachable!()
 }
 
 /// Create a set of standard test prompts for testing

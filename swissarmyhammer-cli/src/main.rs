@@ -4,7 +4,7 @@ use std::process;
 mod cli;
 #[cfg(not(feature = "dynamic-cli"))]
 mod completions;
-pub mod config;
+
 #[cfg(not(feature = "dynamic-cli"))]
 mod doctor;
 #[cfg(feature = "dynamic-cli")]
@@ -21,23 +21,17 @@ mod list;
 mod logging;
 mod mcp_integration;
 #[cfg(not(feature = "dynamic-cli"))]
-mod migrate;
-#[cfg(not(feature = "dynamic-cli"))]
 mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
 #[cfg(not(feature = "dynamic-cli"))]
 mod prompt;
 #[cfg(not(feature = "dynamic-cli"))]
 mod search;
-#[cfg(not(feature = "dynamic-cli"))]
-mod shell;
 mod signal_handler;
 #[cfg(not(feature = "dynamic-cli"))]
 mod test;
 #[cfg(not(feature = "dynamic-cli"))]
 mod validate;
-#[cfg(not(feature = "dynamic-cli"))]
-mod web_search;
 
 #[cfg(not(feature = "dynamic-cli"))]
 use clap::CommandFactory;
@@ -470,25 +464,9 @@ async fn run_with_static_cli() {
             tracing::info!("Running plan command");
             run_plan(plan_filename).await
         }
-        Some(Commands::WebSearch { subcommand }) => {
-            tracing::info!("Running web search command");
-            run_web_search(subcommand).await
-        }
-        Some(Commands::Config { subcommand }) => {
-            tracing::info!("Running config command");
-            run_config(subcommand).await
-        }
         Some(Commands::Implement) => {
             tracing::info!("Running implement command");
             run_implement().await
-        }
-        Some(Commands::Shell { subcommand }) => {
-            tracing::info!("Running shell command");
-            run_shell(subcommand).await
-        }
-        Some(Commands::Migrate { subcommand }) => {
-            tracing::info!("Running migrate command");
-            run_migrate(subcommand).await
         }
         None => {
             // This case is handled early above for performance
@@ -762,18 +740,7 @@ async fn run_plan(plan_filename: String) -> i32 {
     }
 }
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
-    use config;
 
-    match config::handle_config_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Config error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_implement() -> i32 {
@@ -813,42 +780,11 @@ async fn run_implement() -> i32 {
     }
 }
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
-    use shell;
 
-    match shell::handle_shell_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Shell error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
-    use web_search;
 
-    match web_search::handle_web_search_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Web search error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_migrate(subcommand: cli::MigrateCommands) -> i32 {
-    match migrate::handle_migrate_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Migration error: {}", e);
-            EXIT_ERROR
-        }
-    }
-}
+
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_issue(subcommand: IssueCommands) -> i32 {
