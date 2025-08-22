@@ -5,7 +5,6 @@
 
 use crate::toml_config::{ConfigError, ConfigParser, ConfigValue, Configuration, ValidationLimits};
 use std::collections::HashMap;
-use tempfile::TempDir;
 
 /// Test ConfigValue enum conversion and serialization
 mod config_value_tests {

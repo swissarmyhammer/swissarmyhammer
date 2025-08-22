@@ -6,7 +6,6 @@
 use crate::toml_config::*;
 use std::collections::HashMap;
 use std::fs;
-use tempfile::TempDir;
 
 /// Test comprehensive error scenarios for ConfigError
 mod config_error_tests {

@@ -186,7 +186,7 @@ pub fn parse_toml_string(contents: &str) -> Result<Configuration, ConfigError> {
 mod module_tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_load_config() {

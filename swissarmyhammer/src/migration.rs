@@ -767,7 +767,7 @@ impl ConflictSeverity {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_content_summary_empty() {

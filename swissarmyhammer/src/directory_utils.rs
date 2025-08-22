@@ -212,7 +212,7 @@ pub fn get_or_create_swissarmyhammer_directory_from(
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     // Test helper to create directories safely, ignoring AlreadyExists errors
     fn create_dir_safe<P: AsRef<std::path::Path>>(path: P) {

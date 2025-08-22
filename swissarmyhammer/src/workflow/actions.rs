@@ -2518,7 +2518,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_with_working_directory() {
         use std::fs;
-        use tempfile::TempDir;
+        
 
         // Create a unique temporary directory for testing
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();

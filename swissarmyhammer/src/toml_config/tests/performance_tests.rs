@@ -6,7 +6,6 @@
 use crate::toml_config::*;
 use std::fs;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 
 /// Test performance characteristics of configuration operations
 mod perf_tests {

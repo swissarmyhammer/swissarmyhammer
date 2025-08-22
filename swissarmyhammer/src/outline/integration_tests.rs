@@ -4,7 +4,7 @@
 mod tests {
     use super::super::{FileDiscovery, FileDiscoveryConfig};
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_end_to_end_file_discovery() -> Result<(), Box<dyn std::error::Error>> {

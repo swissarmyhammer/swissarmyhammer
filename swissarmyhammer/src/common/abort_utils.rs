@@ -121,7 +121,7 @@ pub fn remove_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_create_abort_file_success() {

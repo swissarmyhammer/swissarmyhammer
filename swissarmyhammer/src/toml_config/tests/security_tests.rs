@@ -6,7 +6,6 @@
 use crate::toml_config::{ConfigError, ConfigParser, ConfigValue, Configuration, ValidationLimits};
 use std::collections::HashMap;
 use std::fs;
-use tempfile::TempDir;
 
 /// Test file size limits (1MB maximum)
 #[test]

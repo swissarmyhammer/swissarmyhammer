@@ -5,7 +5,6 @@
 
 use crate::toml_config::{load_repo_config, parse_config_string, ConfigValue};
 use std::fs;
-use tempfile::TempDir;
 
 /// Test end-to-end configuration loading from filesystem
 #[test]

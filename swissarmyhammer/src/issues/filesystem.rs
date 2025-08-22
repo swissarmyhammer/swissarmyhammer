@@ -5052,7 +5052,7 @@ mod tests {
     /// Comprehensive tests for core storage functionality added in steps 000284-000288
     mod filesystem_storage_tests {
         use super::*;
-        use tempfile::TempDir;
+        
 
         #[test]
         fn test_new_default_with_swissarmyhammer_directory() {
@@ -5184,7 +5184,7 @@ mod tests {
     /// Comprehensive tests for migration detection functionality
     mod migration_detection_tests {
         use super::*;
-        use tempfile::TempDir;
+        
 
         #[test]
         fn test_should_migrate_with_legacy_directory() {
@@ -5356,7 +5356,7 @@ mod tests {
     /// Tests for directory counting utilities
     mod directory_utilities_tests {
         use super::*;
-        use tempfile::TempDir;
+        
 
         #[test]
         fn test_count_directory_contents_empty() {
@@ -5462,7 +5462,7 @@ mod tests {
     /// Tests for error handling scenarios
     mod error_handling_tests {
         use super::*;
-        use tempfile::TempDir;
+        
 
         #[test]
         fn test_count_directory_contents_nonexistent_directory() {
@@ -5598,7 +5598,7 @@ mod tests {
     /// Integration tests for end-to-end workflows
     mod integration_tests {
         use super::*;
-        use tempfile::TempDir;
+        
 
         #[test]
         fn test_storage_creation_end_to_end() {
@@ -5748,7 +5748,7 @@ mod tests {
     /// Performance tests for migration operations
     mod performance_tests {
         use super::*;
-        use tempfile::TempDir;
+        
 
         #[test]
         fn test_migration_detection_performance() {

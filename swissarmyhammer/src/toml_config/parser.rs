@@ -239,7 +239,7 @@ pub fn load_repo_config() -> Result<Option<Configuration>, ConfigError> {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    
 
     #[test]
     fn test_parse_valid_toml_string() {
