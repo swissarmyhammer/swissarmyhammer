@@ -7,4 +7,5 @@ pub mod flow;
 pub mod mcp_integration;
 pub mod migrate;
 pub mod parameter_cli;
+pub mod schema_conversion;
 pub mod validate;

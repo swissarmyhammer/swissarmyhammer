@@ -285,7 +285,7 @@ pub trait McpTool: Send + Sync {
     ///
     /// Returns the category name for CLI command organization. Commands are
     /// grouped into categories following a noun-based pattern (e.g., "memo", "issue").
-    /// 
+    ///
     /// The default implementation extracts the category from the tool name using
     /// the `{category}_{action}` naming convention.
     ///
@@ -330,7 +330,7 @@ pub trait McpTool: Send + Sync {
     /// # Examples
     ///
     /// * `memo_create` → "create"
-    /// * `issue_list` → "list" 
+    /// * `issue_list` → "list"
     /// * `files_read` → "read"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
@@ -865,130 +865,260 @@ mod tests {
 
     #[async_trait::async_trait]
     impl McpTool for MemoCreateTool {
-        fn name(&self) -> &'static str { "memo_create" }
-        fn description(&self) -> &'static str { "Create a new memo with the given title and content" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "memo_create"
+        }
+        fn description(&self) -> &'static str {
+            "Create a new memo with the given title and content"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for IssueListTool {
-        fn name(&self) -> &'static str { "issue_list" }
-        fn description(&self) -> &'static str { "List all available issues with their status" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "issue_list"
+        }
+        fn description(&self) -> &'static str {
+            "List all available issues with their status"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for FilesReadTool {
-        fn name(&self) -> &'static str { "files_read" }
-        fn description(&self) -> &'static str { "Read and return file contents from the local filesystem" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "files_read"
+        }
+        fn description(&self) -> &'static str {
+            "Read and return file contents from the local filesystem"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for SearchQueryTool {
-        fn name(&self) -> &'static str { "search_query" }
-        fn description(&self) -> &'static str { "Perform semantic search across indexed files" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "search_query"
+        }
+        fn description(&self) -> &'static str {
+            "Perform semantic search across indexed files"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for WebSearchTool {
-        fn name(&self) -> &'static str { "web_search" }
-        fn description(&self) -> &'static str { "Perform comprehensive web searches using DuckDuckGo" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "web_search"
+        }
+        fn description(&self) -> &'static str {
+            "Perform comprehensive web searches using DuckDuckGo"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for ShellExecuteTool {
-        fn name(&self) -> &'static str { "shell_execute" }
-        fn description(&self) -> &'static str { "Execute shell commands with timeout controls" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "shell_execute"
+        }
+        fn description(&self) -> &'static str {
+            "Execute shell commands with timeout controls"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for TodoCreateTool {
-        fn name(&self) -> &'static str { "todo_create" }
-        fn description(&self) -> &'static str { "Add a new item to a todo list" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "todo_create"
+        }
+        fn description(&self) -> &'static str {
+            "Add a new item to a todo list"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for OutlineGenerateTool {
-        fn name(&self) -> &'static str { "outline_generate" }
-        fn description(&self) -> &'static str { "Generate structured code overviews using Tree-sitter parsing" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "outline_generate"
+        }
+        fn description(&self) -> &'static str {
+            "Generate structured code overviews using Tree-sitter parsing"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for NotifyCreateTool {
-        fn name(&self) -> &'static str { "notify_create" }
-        fn description(&self) -> &'static str { "Send notification messages from LLM to user" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "notify_create"
+        }
+        fn description(&self) -> &'static str {
+            "Send notification messages from LLM to user"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for AbortCreateTool {
-        fn name(&self) -> &'static str { "abort_create" }
-        fn description(&self) -> &'static str { "Create an abort file to signal workflow termination" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "abort_create"
+        }
+        fn description(&self) -> &'static str {
+            "Create an abort file to signal workflow termination"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for UnknownCategoryTool {
-        fn name(&self) -> &'static str { "unknown_something" }
-        fn description(&self) -> &'static str { "A tool with an unknown category prefix" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "unknown_something"
+        }
+        fn description(&self) -> &'static str {
+            "A tool with an unknown category prefix"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for NoUnderscoreTool {
-        fn name(&self) -> &'static str { "noundercore" }
-        fn description(&self) -> &'static str { "A tool without underscore in name" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "noundercore"
+        }
+        fn description(&self) -> &'static str {
+            "A tool without underscore in name"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
 
     #[async_trait::async_trait]
     impl McpTool for MultiLineTool {
-        fn name(&self) -> &'static str { "multi_line" }
-        fn description(&self) -> &'static str { "First line of description\nSecond line should not appear\nThird line also should not appear" }
-        fn schema(&self) -> serde_json::Value { serde_json::json!({}) }
-        async fn execute(&self, _args: serde_json::Map<String, serde_json::Value>, _ctx: &ToolContext) -> std::result::Result<CallToolResult, McpError> {
+        fn name(&self) -> &'static str {
+            "multi_line"
+        }
+        fn description(&self) -> &'static str {
+            "First line of description\nSecond line should not appear\nThird line also should not appear"
+        }
+        fn schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        async fn execute(
+            &self,
+            _args: serde_json::Map<String, serde_json::Value>,
+            _ctx: &ToolContext,
+        ) -> std::result::Result<CallToolResult, McpError> {
             Ok(BaseToolImpl::create_success_response("Test"))
         }
     }
@@ -1006,10 +1136,10 @@ mod tests {
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
         assert_eq!(NotifyCreateTool.cli_category(), Some("notify"));
         assert_eq!(AbortCreateTool.cli_category(), Some("abort"));
-        
+
         // Test unknown category
         assert_eq!(UnknownCategoryTool.cli_category(), None);
-        
+
         // Test no underscore
         assert_eq!(NoUnderscoreTool.cli_category(), None);
     }
@@ -1027,10 +1157,10 @@ mod tests {
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
         assert_eq!(NotifyCreateTool.cli_name(), "create");
         assert_eq!(AbortCreateTool.cli_name(), "create");
-        
+
         // Test unknown category still extracts action
         assert_eq!(UnknownCategoryTool.cli_name(), "something");
-        
+
         // Test no underscore returns full name
         assert_eq!(NoUnderscoreTool.cli_name(), "noundercore");
     }
@@ -1038,9 +1168,18 @@ mod tests {
     #[test]
     fn test_cli_about_extraction() {
         // Test first line extraction
-        assert_eq!(MemoCreateTool.cli_about(), Some("Create a new memo with the given title and content"));
-        assert_eq!(IssueListTool.cli_about(), Some("List all available issues with their status"));
-        assert_eq!(FilesReadTool.cli_about(), Some("Read and return file contents from the local filesystem"));
+        assert_eq!(
+            MemoCreateTool.cli_about(),
+            Some("Create a new memo with the given title and content")
+        );
+        assert_eq!(
+            IssueListTool.cli_about(),
+            Some("List all available issues with their status")
+        );
+        assert_eq!(
+            FilesReadTool.cli_about(),
+            Some("Read and return file contents from the local filesystem")
+        );
         assert_eq!(MultiLineTool.cli_about(), Some("First line of description"));
     }
 
@@ -1060,14 +1199,20 @@ mod tests {
         let tool = MemoCreateTool;
         assert_eq!(tool.cli_category(), Some("memo"));
         assert_eq!(tool.cli_name(), "create");
-        assert_eq!(tool.cli_about(), Some("Create a new memo with the given title and content"));
+        assert_eq!(
+            tool.cli_about(),
+            Some("Create a new memo with the given title and content")
+        );
         assert!(!tool.hidden_from_cli());
-        
+
         // Test a tool that should not be visible in CLI (unknown category)
         let tool = UnknownCategoryTool;
         assert_eq!(tool.cli_category(), None);
         assert_eq!(tool.cli_name(), "something");
-        assert_eq!(tool.cli_about(), Some("A tool with an unknown category prefix"));
+        assert_eq!(
+            tool.cli_about(),
+            Some("A tool with an unknown category prefix")
+        );
         assert!(!tool.hidden_from_cli());
     }
 
