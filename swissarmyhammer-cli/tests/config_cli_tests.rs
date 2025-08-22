@@ -175,52 +175,11 @@ async fn test_config_variables_json_format() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_config_test_template_from_stdin() -> Result<()> {
-    let config_content = concat!("app_name = \"TemplateTest\"\n", "version = \"1.5.0\"\n");
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    // Note: stdin functionality requires subprocess, this will fall back
-    let result = run_sah_command_in_process(&["config", "test"]).await?;
 
-    assert_eq!(result.exit_code, 0);
-    // This test may need different verification for in-process execution
-    Ok(())
-}
 
-#[tokio::test]
-async fn test_config_test_template_from_file() -> Result<()> {
-    let config_content = concat!("service_name = \"FileTemplateTest\"\n", "port = 9000\n");
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let template_content = "Service {{ service_name }} running on port {{ port }}";
-    let template_path = temp_dir.path().join("template.txt");
-    fs::write(&template_path, template_content).unwrap();
 
-    let result =
-        run_sah_command_in_process(&["config", "test", template_path.to_str().unwrap()]).await?;
-
-    assert_eq!(result.exit_code, 0);
-    assert!(result
-        .stdout
-        .contains("Service FileTemplateTest running on port 9000"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_config_test_with_variable_overrides() -> Result<()> {
-    let config_content = concat!("name = \"OverrideTest\"\n", "env = \"development\"\n");
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    let result = run_sah_command_in_process(&["config", "test", "--var", "env=production"]).await?;
-
-    assert_eq!(result.exit_code, 0);
-    // This test may need different verification for in-process execution without stdin
-    Ok(())
-}
 
 #[tokio::test]
 async fn test_config_env_no_file() -> Result<()> {
@@ -298,44 +257,11 @@ async fn test_config_env_json_format() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_config_invalid_template_syntax() -> Result<()> {
-    let config_content = "name = \"InvalidTest\"\n";
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let _result = run_sah_command_in_process(&["config", "test"]).await?;
 
-    // This test requires stdin input, may need different verification
-    // For now, just ensure it doesn't crash
-    Ok(())
-}
 
-#[tokio::test]
-async fn test_config_missing_template_file() -> Result<()> {
-    let config_content = "name = \"MissingFileTest\"\n";
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let result = run_sah_command_in_process(&["config", "test", "nonexistent.txt"]).await?;
 
-    assert_ne!(result.exit_code, 0);
-    assert!(result.stderr.contains("Failed to read template file"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_config_invalid_variable_format() -> Result<()> {
-    let config_content = "name = \"InvalidVarTest\"\n";
-    let temp_dir = setup_test_with_config(config_content);
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    let result = run_sah_command_in_process(&["config", "test", "--var", "invalid_format"]).await?;
-
-    assert_ne!(result.exit_code, 0);
-    assert!(result.stderr.contains("Invalid variable format"));
-    Ok(())
-}
 
 #[tokio::test]
 async fn test_config_complex_template_with_nested_access() -> Result<()> {

@@ -338,43 +338,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     };
                     (output.to_string(), String::new(), EXIT_SUCCESS)
                 }
-                ConfigCommands::Test {
-                    template,
-                    variables,
-                    ..
-                } => {
-                    // Handle test template command - check for error conditions
-                    if let Some(template_path) = template {
-                        if template_path == "nonexistent.txt" {
-                            return Ok((
-                                String::new(),
-                                "Failed to read template file".to_string(),
-                                EXIT_ERROR,
-                            ));
-                        }
-                        (
-                            "Service FileTemplateTest running on port 9000".to_string(),
-                            String::new(),
-                            EXIT_SUCCESS,
-                        )
-                    } else {
-                        // Check for invalid variable format
-                        for var in variables {
-                            if var == "invalid_format" {
-                                return Ok((
-                                    String::new(),
-                                    "Invalid variable format".to_string(),
-                                    EXIT_ERROR,
-                                ));
-                            }
-                        }
-                        (
-                            "Template test output".to_string(),
-                            String::new(),
-                            EXIT_SUCCESS,
-                        )
-                    }
-                }
+
             }
         }
         Some(Commands::Flow { subcommand }) => {

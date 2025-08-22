@@ -556,7 +556,7 @@ Configuration files provide project-specific variables for template rendering.
 Basic usage:
   swissarmyhammer config show                   # Display current configuration
   swissarmyhammer config variables              # List all available variables
-  swissarmyhammer config test                   # Test template rendering with config
+
   swissarmyhammer config env                    # Show environment variable usage
 
 Validation:
@@ -570,7 +570,7 @@ Output formats:
 Examples:
   swissarmyhammer config show --format json    # Output configuration as JSON
   swissarmyhammer config variables             # List all configured variables
-  swissarmyhammer config test template.liquid  # Test template with current config
+
   swissarmyhammer config env --missing         # Show missing environment variables
 ")]
     Config {
@@ -1433,17 +1433,7 @@ pub enum ConfigCommands {
         #[arg(short, long)]
         verbose: bool,
     },
-    /// Test template rendering with configuration
-    Test {
-        /// Template file to test (optional - uses stdin if not provided)
-        template: Option<String>,
-        /// Template variables as key=value pairs (overrides config)
-        #[arg(long = "var", value_name = "KEY=VALUE")]
-        variables: Vec<String>,
-        /// Show debug information
-        #[arg(short, long)]
-        debug: bool,
-    },
+
     /// Show environment variable usage
     Env {
         /// Show only missing environment variables
