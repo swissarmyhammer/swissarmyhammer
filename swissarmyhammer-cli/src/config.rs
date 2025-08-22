@@ -3,50 +3,22 @@
 //! This module provides CLI commands for managing and inspecting sah.toml configuration files,
 //! including validation, variable inspection, template testing, and environment variable analysis.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::*;
 use serde_json::json;
-use std::collections::HashMap;
-use std::io::{self, Read};
+
+
 use swissarmyhammer_config::compat::{load_repo_config_for_cli, ConfigValue, Configuration};
 
 use crate::cli::{ConfigCommands, OutputFormat};
 
-/// Convert a ConfigValue to a liquid::model::Value for template rendering
-///
-/// This function recursively converts our sah.toml ConfigValue representation
-/// to liquid values that support proper nested access in templates.
-fn config_value_to_liquid_value(config_value: &ConfigValue) -> liquid::model::Value {
-    match config_value {
-        ConfigValue::String(s) => liquid::model::Value::scalar(s.clone()),
-        ConfigValue::Integer(i) => liquid::model::Value::scalar(*i),
-        ConfigValue::Float(f) => liquid::model::Value::scalar(*f),
-        ConfigValue::Boolean(b) => liquid::model::Value::scalar(*b),
-        ConfigValue::Array(arr) => {
-            let liquid_array: Vec<liquid::model::Value> =
-                arr.iter().map(config_value_to_liquid_value).collect();
-            liquid::model::Value::Array(liquid_array)
-        }
-        ConfigValue::Table(table) => {
-            let mut liquid_object = liquid::model::Object::new();
-            for (key, value) in table {
-                liquid_object.insert(key.clone().into(), config_value_to_liquid_value(value));
-            }
-            liquid::model::Value::Object(liquid_object)
-        }
-    }
-}
 
 /// Handle all config-related commands
 pub async fn handle_config_command(command: ConfigCommands) -> Result<()> {
     match command {
         ConfigCommands::Show { format } => show_config(format).await,
         ConfigCommands::Variables { format, verbose } => show_variables(format, verbose).await,
-        ConfigCommands::Test {
-            template,
-            variables,
-            debug,
-        } => test_template(template, variables, debug).await,
+
         ConfigCommands::Env { missing, format } => show_env_vars(missing, format).await,
     }
 }
@@ -100,89 +72,7 @@ async fn show_variables(format: OutputFormat, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-/// Test template rendering with configuration
-async fn test_template(
-    template: Option<String>,
-    variables: Vec<String>,
-    debug: bool,
-) -> Result<()> {
-    let config = load_repo_config_for_cli()
-        .map_err(|e| anyhow::anyhow!("Failed to load repository configuration: {}", e))?;
 
-    // Read template content
-    let template_content = match template {
-        Some(ref file_path) => std::fs::read_to_string(file_path)
-            .with_context(|| format!("Failed to read template file: {file_path}"))?,
-        None => {
-            // Read from stdin
-            let mut content = String::new();
-            io::stdin()
-                .read_to_string(&mut content)
-                .context("Failed to read template from stdin")?;
-            content
-        }
-    };
-
-    // Parse override variables
-    let mut template_vars = HashMap::new();
-    for var in variables {
-        if let Some((key, value)) = var.split_once('=') {
-            template_vars.insert(key.to_string(), value.to_string());
-        } else {
-            anyhow::bail!("Invalid variable format: {}. Use KEY=VALUE", var);
-        }
-    }
-
-    // Create template vars clone for liquid context
-    let template_vars_for_liquid = template_vars.clone();
-
-    if debug {
-        println!("{}", "Template variables (overrides):".bold());
-        if let Some(ref config) = config {
-            println!("{}", "Configuration variables:".bold());
-            for (key, value) in config.values() {
-                println!("  {}: {}", key.cyan(), format_config_value(value));
-            }
-        }
-        println!();
-        println!("{}", "Template content:".bold());
-        println!("{}", template_content.dimmed());
-        println!();
-        println!("{}", "Rendered output:".bold());
-    }
-
-    // For config testing, use liquid directly to support proper nested access
-    let liquid_parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
-    let liquid_template = liquid_parser
-        .parse(&template_content)
-        .map_err(|e| anyhow::anyhow!("Template parsing failed: {}", e))?;
-
-    // Create proper liquid context with nested structures
-    let mut liquid_context = liquid::model::Object::new();
-
-    // Add configuration variables as nested objects
-    if let Some(ref config) = config {
-        for (key, value) in config.values() {
-            liquid_context.insert(key.clone().into(), config_value_to_liquid_value(value));
-        }
-    }
-
-    // Override with command line variables (as strings)
-    for (key, value) in template_vars_for_liquid {
-        liquid_context.insert(key.into(), liquid::model::Value::scalar(value));
-    }
-
-    match liquid_template.render(&liquid_context) {
-        Ok(rendered) => {
-            println!("{rendered}");
-        }
-        Err(e) => {
-            anyhow::bail!("Template rendering failed: {}", e);
-        }
-    }
-
-    Ok(())
-}
 
 /// Show environment variable usage
 async fn show_env_vars(missing: bool, format: OutputFormat) -> Result<()> {
@@ -489,11 +379,7 @@ pub async fn handle_config_command_captured(command: ConfigCommands) -> Result<S
         ConfigCommands::Variables { format, verbose } => {
             show_variables_captured(format, verbose).await
         }
-        ConfigCommands::Test {
-            template,
-            variables,
-            debug,
-        } => test_template_captured(template, variables, debug).await,
+
         ConfigCommands::Env { missing, format } => show_env_vars_captured(missing, format).await,
     }
 }
@@ -518,16 +404,6 @@ async fn show_variables_captured(format: OutputFormat, verbose: bool) -> Result<
     }
 }
 
-/// Captured version of test_template  
-async fn test_template_captured(
-    template: Option<String>,
-    _variables: Vec<String>,
-    _debug: bool,
-) -> Result<String> {
-    // For now, return a simple message - this would need full implementation
-    let template_name = template.unwrap_or_else(|| "stdin".to_string());
-    Ok(format!("Template test completed for: {}", template_name))
-}
 
 /// Captured version of show_env_vars
 async fn show_env_vars_captured(_missing: bool, _format: OutputFormat) -> Result<String> {

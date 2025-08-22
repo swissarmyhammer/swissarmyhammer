@@ -200,3 +200,113 @@ After removal:
 3. `sah config --help` - Should show remaining subcommands or error if config removed
 4. `sah config test` - Should show "command not found" or similar error
 5. All tests pass with `cargo nextest run`
+
+## Proposed Solution
+
+After analyzing the codebase, I have identified the complete scope of the `config test` command removal. Here's my implementation plan:
+
+### Current State Analysis
+
+The `sah config test` command is currently implemented with:
+
+1. **CLI Definition**: `ConfigCommands::Test` enum variant in `swissarmyhammer-cli/src/cli.rs:1432-1441`
+2. **Handler Functions**: Two versions exist:
+   - `test_template()` in `swissarmyhammer-cli/src/config.rs:104-177` (main implementation)  
+   - `test_template_captured()` in `swissarmyhammer-cli/src/config.rs:522-530` (for testing/capture)
+3. **Tests**: Multiple test functions in `swissarmyhammer-cli/tests/config_cli_tests.rs`:
+   - `test_config_test_template_from_stdin()` (line 179)
+   - `test_config_test_template_from_file()` (line 193)
+   - `test_config_test_with_variable_overrides()` (line 213)
+   - Several error handling test cases using the command
+4. **Help Text**: References in `swissarmyhammer-cli/src/cli.rs` lines 559 and 573
+5. **Supporting Functions**: 
+   - `config_value_to_liquid_value()` function used exclusively by config test
+   - Liquid template parsing and rendering logic
+
+### Other Config Commands to Keep
+
+The following config commands will remain:
+- `config show` - Display current configuration
+- `config variables` - List all available variables  
+- `config env` - Show environment variable usage
+
+### Implementation Steps
+
+1. **Remove CLI Command Definition** (cli.rs)
+   - Remove `Test` variant from `ConfigCommands` enum
+   - Remove associated help text examples
+
+2. **Remove Command Handlers** (config.rs)
+   - Remove `test_template()` function (lines 104-177)
+   - Remove `test_template_captured()` function (lines 522-530)  
+   - Remove the `ConfigCommands::Test` match arm in `handle_config_command_captured()`
+   - Clean up the `config_value_to_liquid_value()` function if only used by test command
+
+3. **Remove Tests** (config_cli_tests.rs)
+   - Remove all test functions that test `config test` functionality
+   - Remove error handling tests that use `config test`
+
+4. **Clean Up Dependencies**
+   - Remove liquid template parsing dependencies if only used by config test
+   - Clean up unused imports
+
+### Files to Modify
+
+- `swissarmyhammer-cli/src/cli.rs` - Remove command definition and help text
+- `swissarmyhammer-cli/src/config.rs` - Remove handler functions and related code
+- `swissarmyhammer-cli/tests/config_cli_tests.rs` - Remove test functions
+
+### Validation Strategy
+
+After removal:
+1. `cargo build` should succeed
+2. `sah config --help` should not show test subcommand
+3. `sah config test` should return "unrecognized subcommand" error
+4. All remaining tests should pass
+5. Other config commands (show, variables, env) should work normally
+## Implementation Complete
+
+Successfully removed the `sah config test` CLI subcommand as specified in the requirements. 
+
+### Summary of Changes Made
+
+1. **CLI Command Definition Removed** (`swissarmyhammer-cli/src/cli.rs`)
+   - Removed `Test` variant from `ConfigCommands` enum
+   - Removed help text examples mentioning `config test`
+
+2. **Command Handlers Removed** (`swissarmyhammer-cli/src/config.rs`)
+   - Removed `test_template()` function (main implementation)
+   - Removed `test_template_captured()` function (testing/capture version)
+   - Removed match arm for `ConfigCommands::Test` in both handlers
+   - Removed `config_value_to_liquid_value()` helper function (only used by config test)
+   - Cleaned up unused imports (`std::io`, `Context`, `HashMap`)
+   - Removed orphaned doc comments
+
+3. **Tests Removed** (`swissarmyhammer-cli/tests/config_cli_tests.rs`)
+   - Removed `test_config_test_template_from_stdin()`
+   - Removed `test_config_test_template_from_file()`
+   - Removed `test_config_test_with_variable_overrides()`
+   - Removed error handling tests using `config test`
+
+4. **Test Utilities Updated** (`swissarmyhammer-cli/tests/in_process_test_utils.rs`)
+   - Removed test harness support for `ConfigCommands::Test`
+
+### Verification Results
+
+✅ **Build Success**: `cargo build` completes without errors or warnings  
+✅ **CLI Help Updated**: `sah config --help` no longer shows `test` subcommand  
+✅ **Command Removed**: `sah config test` returns "unrecognized subcommand 'test'"  
+✅ **Other Commands Work**: `sah config show`, `variables`, and `env` work correctly  
+✅ **Tests Pass**: All remaining tests pass  
+✅ **Clean Linting**: `cargo clippy` produces no warnings  
+
+### Remaining Config Commands
+
+The following config subcommands remain available:
+- `config show` - Display current configuration  
+- `config variables` - List all available variables
+- `config env` - Show environment variable usage
+
+### Alternative Configuration Validation
+
+As intended by the requirements, configuration validation now happens automatically during config loading with the new figment-based system, eliminating the need for a separate test command. Users receive clear error messages when configuration is invalid during normal command execution.
