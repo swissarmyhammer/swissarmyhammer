@@ -22,7 +22,8 @@ mod list;
 mod logging;
 mod mcp_integration;
 #[cfg(not(feature = "dynamic-cli"))]
-mod memo;
+
+
 #[cfg(not(feature = "dynamic-cli"))]
 mod migrate;
 #[cfg(not(feature = "dynamic-cli"))]
@@ -442,10 +443,7 @@ async fn run_with_static_cli() {
             tracing::info!("Running issue command");
             run_issue(subcommand).await
         }
-        Some(Commands::Memo { subcommand }) => {
-            tracing::info!("Running memo command");
-            run_memo(subcommand).await
-        }
+
         Some(Commands::File { subcommand }) => {
             tracing::info!("Running file command");
             run_file(subcommand).await
@@ -627,25 +625,7 @@ async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
     }
 }
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
-    use error::CliError;
-    use memo;
 
-    match memo::handle_memo_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            // Check if this is a CliError and preserve exit code
-            if let Some(cli_error) = e.downcast_ref::<CliError>() {
-                tracing::error!("Memo error: {}", cli_error);
-                cli_error.exit_code
-            } else {
-                tracing::error!("Memo error: {}", e);
-                EXIT_WARNING
-            }
-        }
-    }
-}
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_file(subcommand: cli::FileCommands) -> i32 {

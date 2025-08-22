@@ -246,6 +246,7 @@ Examples:
         #[arg(long = "workflow-dir", value_name = "DIR", hide = true)]
         workflow_dirs: Vec<String>,
     },
+
     /// Issue management commands (requires Git repository)
     #[command(long_about = "
 Manage issues with comprehensive CLI commands for creating, updating, and tracking work items.
@@ -278,41 +279,6 @@ Examples:
     Issue {
         #[command(subcommand)]
         subcommand: IssueCommands,
-    },
-    /// Memoranda (memo) management commands (requires Git repository)
-    #[command(long_about = "
-Manage memos with comprehensive CLI commands for creating, updating, and tracking structured text notes.
-
-⚠️ REQUIREMENTS: Must be run from within a Git repository.
-Memos are stored as markdown files in .swissarmyhammer/memos/ at the Git repository root.
-
-Basic usage:
-  swissarmyhammer memo create <title>           # Create new memo
-  swissarmyhammer memo list                     # List all memos
-  swissarmyhammer memo get <id>                 # Get specific memo
-  swissarmyhammer memo update <id>              # Update memo content
-  swissarmyhammer memo delete <id>              # Delete memo
-  swissarmyhammer memo search <query>           # Search memos
-  swissarmyhammer memo context                  # Get all context for AI
-
-Content input:
-  --content \"text\"                            # Specify content directly
-  --content -                                   # Read content from stdin
-  (no --content)                               # Interactive prompt for content
-
-Examples:
-  swissarmyhammer memo create \"Meeting Notes\"
-  swissarmyhammer memo create \"Task List\" --content \"1. Review code\\n2. Write tests\"
-  swissarmyhammer memo list
-  swissarmyhammer memo search \"meeting\"
-  swissarmyhammer memo get 01GX5Q2D1NPRZ3KXFW2H8V3A1Y
-  swissarmyhammer memo update 01GX5Q2D1NPRZ3KXFW2H8V3A1Y --content \"Updated content\"
-  swissarmyhammer memo delete 01GX5Q2D1NPRZ3KXFW2H8V3A1Y
-  swissarmyhammer memo context
-")]
-    Memo {
-        #[command(subcommand)]
-        subcommand: MemoCommands,
     },
     /// File manipulation and search commands
     #[command(long_about = "
@@ -1104,44 +1070,7 @@ pub enum IssueCommands {
     Next,
 }
 
-#[derive(Subcommand, Debug)]
-pub enum MemoCommands {
-    /// Create a new memo
-    Create {
-        /// Memo title
-        title: String,
-        /// Memo content (use - for stdin)
-        #[arg(short, long)]
-        content: Option<String>,
-    },
-    /// List all memos
-    List,
-    /// Get a specific memo by ID
-    Get {
-        /// Memo ID (ULID)
-        id: String,
-    },
-    /// Update a memo's content
-    Update {
-        /// Memo ID (ULID)
-        id: String,
-        /// New content (use - for stdin)
-        #[arg(short, long)]
-        content: Option<String>,
-    },
-    /// Delete a memo
-    Delete {
-        /// Memo ID (ULID)
-        id: String,
-    },
-    /// Search memos by content and title
-    Search {
-        /// Search query
-        query: String,
-    },
-    /// Get all memos as context for AI
-    Context,
-}
+
 
 #[derive(Subcommand, Debug)]
 pub enum FileCommands {
@@ -2384,170 +2313,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_memo_create_basic() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "memo", "create", "Meeting Notes"]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Create { title, content } = subcommand {
-                assert_eq!(title, "Meeting Notes");
-                assert_eq!(content, None);
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_create_with_content() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "create",
-            "Task List",
-            "--content",
-            "1. Review code\n2. Write tests",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Create { title, content } = subcommand {
-                assert_eq!(title, "Task List");
-                assert_eq!(content, Some("1. Review code\n2. Write tests".to_string()));
-            } else {
-                unreachable!("Expected Create subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_list() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "memo", "list"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::List = subcommand {
-                // Test passes
-            } else {
-                unreachable!("Expected List subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_get() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "get",
-            "01GX5Q2D1NPRZ3KXFW2H8V3A1Y",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Get { id } = subcommand {
-                assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
-            } else {
-                unreachable!("Expected Get subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_update() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "update",
-            "01GX5Q2D1NPRZ3KXFW2H8V3A1Y",
-            "--content",
-            "Updated content",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Update { id, content } = subcommand {
-                assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
-                assert_eq!(content, Some("Updated content".to_string()));
-            } else {
-                unreachable!("Expected Update subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_delete() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "memo",
-            "delete",
-            "01GX5Q2D1NPRZ3KXFW2H8V3A1Y",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Delete { id } = subcommand {
-                assert_eq!(id, "01GX5Q2D1NPRZ3KXFW2H8V3A1Y");
-            } else {
-                unreachable!("Expected Delete subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_search() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "memo", "search", "meeting notes"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Search { query } = subcommand {
-                assert_eq!(query, "meeting notes");
-            } else {
-                unreachable!("Expected Search subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
-
-    #[test]
-    fn test_memo_context() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "memo", "context"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Memo { subcommand }) = cli.command {
-            if let MemoCommands::Context = subcommand {
-                // Test passes
-            } else {
-                unreachable!("Expected Context subcommand");
-            }
-        } else {
-            unreachable!("Expected Memo command");
-        }
-    }
 
     #[test]
     fn test_search_index_single_pattern() {
