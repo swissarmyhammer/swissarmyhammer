@@ -1103,7 +1103,6 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_resolver_user_workflows() {
         use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
@@ -1151,18 +1150,17 @@ stateDiagram-v2
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_resolver_local_workflows() {
+        use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
-        use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let _env =
+            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
 
         // Create a .git directory to make it look like a Git repository
-        let git_dir = temp_dir.path().join(".git");
-        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(".git").unwrap();
 
-        let local_workflows_dir = temp_dir.path().join(".swissarmyhammer").join("workflows");
+        let local_workflows_dir = PathBuf::from(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create a test workflow file
@@ -1185,23 +1183,6 @@ stateDiagram-v2
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
 
-        // Change to the temp directory to simulate local workflows
-        let original_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let _ = std::env::set_current_dir(&temp_dir);
-
-        // Ensure we restore directory on panic or normal exit
-        struct DirGuard {
-            original_dir: std::path::PathBuf,
-        }
-
-        impl Drop for DirGuard {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.original_dir);
-            }
-        }
-
-        let _guard = DirGuard { original_dir };
-
         resolver.load_all_workflows(&mut storage).unwrap();
 
         // Check that at least one workflow was loaded
@@ -1222,7 +1203,6 @@ stateDiagram-v2
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_resolver_precedence() {
         use std::fs;
 

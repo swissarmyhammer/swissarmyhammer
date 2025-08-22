@@ -52,7 +52,7 @@ stateDiagram-v2
 
 - start: log "Making the plan{% if plan_filename %} for {{ plan_filename }}{% endif %}"
 - plan: execute prompt "plan"{% if plan_filename %} with plan_filename="{{ plan_filename }}"{% endif %}
-- done: log "Plan ready, look in ./issues"
+- done: log "Plan ready"
 
 ## Description
 

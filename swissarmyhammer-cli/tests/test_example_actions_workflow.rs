@@ -419,62 +419,6 @@ async fn test_all_branches_are_reachable() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_debug_cel_expressions() -> Result<()> {
-    // Debug test to understand CEL expression evaluation
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
-
-    let mut executor = WorkflowExecutor::new();
-
-    // Run workflow to set up context
-    let mut run = WorkflowRun::new(workflow);
-    let result = executor.execute_state(&mut run).await;
-    assert!(result.is_ok());
-
-    // Debug: Print current context
-    println!("Context after workflow execution:");
-    for (key, value) in &run.context {
-        println!("  {key}: {value:?}");
-    }
-
-    // Test different values for error_handled
-    let test_values = vec![
-        ("string_true", json!("true")),
-        ("bool_true", json!(true)),
-        ("string_false", json!("false")),
-        ("bool_false", json!(false)),
-    ];
-
-    for (label, value) in test_values {
-        run.context
-            .insert("error_handled".to_string(), value.clone());
-        run.context
-            .insert("example_var".to_string(), json!("No Hello"));
-        run.current_state = StateId::new("BranchDecision");
-
-        println!("\nTesting {label} with error_handled = {value:?}");
-
-        // Get the transitions from BranchDecision
-        let transitions: Vec<_> = run
-            .workflow
-            .transitions
-            .iter()
-            .filter(|t| t.from_state.as_str() == "BranchDecision")
-            .collect();
-
-        for transition in transitions {
-            let condition_result = executor.evaluate_condition(&transition.condition, &run.context);
-            println!(
-                "  Transition to {}: condition = {:?}, result = {:?}",
-                transition.to_state, transition.condition, condition_result
-            );
-        }
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_branch1_liquid_template_rendering() -> Result<()> {
     // Test that the Branch1 log message properly renders {{branch_value}} with liquid templating
     use swissarmyhammer::workflow::{Action, LogAction, LogLevel};

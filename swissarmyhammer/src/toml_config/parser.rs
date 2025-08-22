@@ -154,10 +154,33 @@ impl ConfigParser {
     ///
     /// Searches for sah.toml in the current directory and parent directories
     /// up to the repository root (indicated by .git directory).
+    /// Returns None if not within a git repository.
     pub fn load_from_repo_root(&self) -> Result<Option<Configuration>, ConfigError> {
         let current_dir = std::env::current_dir()?;
         let mut search_dir = current_dir.as_path();
 
+        // First, find the repository root
+        let mut repo_root = None;
+        let mut check_dir = search_dir;
+        loop {
+            if check_dir.join(".git").exists() {
+                repo_root = Some(check_dir);
+                break;
+            }
+            match check_dir.parent() {
+                Some(parent) => check_dir = parent,
+                None => break, // Reached filesystem root
+            }
+        }
+
+        // If not in a repository, return None
+        let repo_root = match repo_root {
+            Some(root) => root,
+            None => return Ok(None),
+        };
+
+        // Now search for sah.toml from current directory up to repository root
+        search_dir = current_dir.as_path();
         loop {
             let config_path = search_dir.join("sah.toml");
 
@@ -165,15 +188,15 @@ impl ConfigParser {
                 return Ok(Some(self.parse_file(&config_path)?));
             }
 
-            // Check if we've reached the repository root (has .git directory)
-            if search_dir.join(".git").exists() {
+            // Stop when we reach the repository root
+            if search_dir == repo_root {
                 break;
             }
 
             // Move to parent directory
             match search_dir.parent() {
                 Some(parent) => search_dir = parent,
-                None => break, // Reached filesystem root
+                None => break, // Reached filesystem root (shouldn't happen)
             }
         }
 

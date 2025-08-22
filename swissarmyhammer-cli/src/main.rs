@@ -1,7 +1,7 @@
 use std::process;
 mod cli;
 mod completions;
-mod config;
+pub mod config;
 mod doctor;
 mod error;
 mod exit_codes;

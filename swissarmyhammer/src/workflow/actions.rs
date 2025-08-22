@@ -12,7 +12,7 @@ use crate::workflow::mcp_integration::{response_processing, WorkflowShellContext
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -24,24 +24,30 @@ use tokio::time::timeout;
 
 use crate::{PromptLibrary, PromptResolver};
 
-/// Global test storage registry for tests
-static TEST_STORAGE_REGISTRY: RwLock<Option<Arc<WorkflowStorage>>> = RwLock::new(None);
+thread_local! {
+    /// Thread-local test storage registry for tests
+    static TEST_STORAGE_REGISTRY: std::cell::RefCell<Option<Arc<WorkflowStorage>>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Set test storage for use in tests
 #[cfg(test)]
 pub fn set_test_storage(storage: Arc<WorkflowStorage>) {
-    *TEST_STORAGE_REGISTRY.write().unwrap() = Some(storage);
+    TEST_STORAGE_REGISTRY.with(|registry| {
+        *registry.borrow_mut() = Some(storage);
+    });
 }
 
 /// Clear test storage after tests
 #[cfg(test)]
 pub fn clear_test_storage() {
-    *TEST_STORAGE_REGISTRY.write().unwrap() = None;
+    TEST_STORAGE_REGISTRY.with(|registry| {
+        *registry.borrow_mut() = None;
+    });
 }
 
 /// Get test storage if available
 fn get_test_storage() -> Option<Arc<WorkflowStorage>> {
-    TEST_STORAGE_REGISTRY.read().unwrap().clone()
+    TEST_STORAGE_REGISTRY.with(|registry| registry.borrow().clone())
 }
 
 /// Macro to implement the as_any() method for Action trait implementations

@@ -3,22 +3,19 @@
 use anyhow::Result;
 use predicates::prelude::*;
 use std::fs;
-use swissarmyhammer_cli::{
-    cli::FlowSubcommand,
-    flow::run_flow_command,
-};
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_cli::{cli::FlowSubcommand, flow::run_flow_command};
 
-mod test_utils;
 mod in_process_test_utils;
+mod test_utils;
 
 use in_process_test_utils::run_sah_command_in_process;
 
 /// Run flow command with variables in-process
 async fn run_workflow_with_vars_in_process(
-    workflow_name: &str, 
+    workflow_name: &str,
     vars: Vec<String>,
-    dry_run: bool
+    dry_run: bool,
 ) -> Result<bool> {
     let subcommand = FlowSubcommand::Run {
         workflow: workflow_name.to_string(),
@@ -29,12 +26,11 @@ async fn run_workflow_with_vars_in_process(
         timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
         quiet: true,
     };
-    
+
     let result = run_flow_command(subcommand).await;
-    
+
     Ok(result.is_ok())
 }
-
 
 /// Sync wrapper for CLI commands that returns an assert_cmd::Command-compatible interface
 /// This allows existing .assert() patterns to work with in-process execution
@@ -57,20 +53,24 @@ struct TestCommandResult {
 
 impl TestCommandResult {
     fn success(&self) -> &Self {
-        assert_eq!(self.exit_code, 0, "Command failed with stderr: {}", self.stderr);
+        assert_eq!(
+            self.exit_code, 0,
+            "Command failed with stderr: {}",
+            self.stderr
+        );
         self
     }
-    
+
     fn failure(&self) -> &Self {
         assert_ne!(self.exit_code, 0, "Command unexpectedly succeeded");
         self
     }
-    
+
     fn stdout(&self, predicate: predicates::str::ContainsPredicate) -> &Self {
         assert!(predicate.eval(&self.stdout), "stdout assertion failed");
         self
     }
-    
+
     fn stderr(&self, predicate: predicates::str::ContainsPredicate) -> &Self {
         assert!(predicate.eval(&self.stderr), "stderr assertion failed");
         self
@@ -193,9 +193,9 @@ stateDiagram-v2
     .unwrap();
 
     run_sah_sync_assert(&["flow", "run", "some-workflow", "--var", "invalid_format"])
-    .failure()
-    .stderr(predicate::str::contains("Invalid variable format"))
-    .stderr(predicate::str::contains("key=value"));
+        .failure()
+        .stderr(predicate::str::contains("Invalid variable format"))
+        .stderr(predicate::str::contains("key=value"));
 }
 
 #[tokio::test]
@@ -233,7 +233,8 @@ stateDiagram-v2
         "special-chars-test",
         vec!["message=Hello World! @#$%^&*()".to_string()],
         false,
-    ).await?;
+    )
+    .await?;
 
     assert!(success1, "Workflow should handle special characters");
 
@@ -242,7 +243,8 @@ stateDiagram-v2
         "special-chars-test",
         vec!["message=Test with 'single' and \"double\" quotes".to_string()],
         false,
-    ).await?;
+    )
+    .await?;
 
     assert!(success2, "Workflow should handle quotes and spaces");
     Ok(())
@@ -281,15 +283,9 @@ stateDiagram-v2
     .unwrap();
 
     // Run workflow with equals sign in value
-    run_sah_sync_assert(&[
-        "flow",
-        "run", 
-        "equals-test",
-        "--var",
-        "formula=x=y+z"
-    ])
-    .success()
-    .stderr(predicate::str::contains("Formula: x=y+z"));
+    run_sah_sync_assert(&["flow", "run", "equals-test", "--var", "formula=x=y+z"])
+        .success()
+        .stderr(predicate::str::contains("Formula: x=y+z"));
 }
 
 #[test]
@@ -414,9 +410,13 @@ stateDiagram-v2
             "template_var=value2".to_string(),
         ],
         true, // dry-run
-    ).await?;
+    )
+    .await?;
 
-    assert!(success, "Workflow should execute successfully with multiple vars");
+    assert!(
+        success,
+        "Workflow should execute successfully with multiple vars"
+    );
     Ok(())
 }
 
@@ -467,9 +467,13 @@ stateDiagram-v2
             "item_count=25".to_string(),
         ],
         false, // actual execution
-    ).await?;
+    )
+    .await?;
 
-    assert!(success, "Workflow should execute successfully with liquid templates");
+    assert!(
+        success,
+        "Workflow should execute successfully with liquid templates"
+    );
     Ok(())
 }
 
@@ -508,10 +512,14 @@ stateDiagram-v2
         "missing-vars",
         vec![], // no variables provided
         false,
-    ).await?;
+    )
+    .await?;
 
     // The workflow should still run but with the template placeholders intact
-    assert!(success, "Workflow should still execute with missing template variables");
+    assert!(
+        success,
+        "Workflow should still execute with missing template variables"
+    );
     Ok(())
 }
 
@@ -549,7 +557,9 @@ Processing task "{{ task }}" for user {{ user }}.
 
     // Create workflow with complex templates
     let workflow_path = workflow_dir.join("complex-templates.md");
-    fs::write(&workflow_path, r#"---
+    fs::write(
+        &workflow_path,
+        r#"---
 title: Complex Template Workflow
 description: Tests complex liquid template features
 version: 1.0.0
@@ -566,7 +576,8 @@ stateDiagram-v2
 
 - start: Set task_description="{{ task_type }} for {{ project_name | default: 'Default Project' }}"
 - process: Execute prompt "template-prompt" with user="{{ user_name }}" task="{{ task_type }} for {{ project_name }}"
-"#)?;
+"#,
+    )?;
 
     // Run workflow with complex template variables using dry-run
     let success = run_workflow_with_vars_in_process(
@@ -577,9 +588,13 @@ stateDiagram-v2
             "project_name=SwissArmyHammer".to_string(),
         ],
         true, // dry-run since we don't want to actually execute the prompt
-    ).await?;
+    )
+    .await?;
 
-    assert!(success, "Complex template workflow should execute successfully");
+    assert!(
+        success,
+        "Complex template workflow should execute successfully"
+    );
     Ok(())
 }
 
@@ -620,15 +635,16 @@ stateDiagram-v2
     // Run workflow with template variables
     let success = run_workflow_with_vars_in_process(
         "malformed-templates",
-        vec![
-            "name=Test".to_string(),
-            "items=[1,2,3]".to_string(),
-        ],
+        vec!["name=Test".to_string(), "items=[1,2,3]".to_string()],
         false,
-    ).await?;
+    )
+    .await?;
 
     // The workflow should still run but with original text for malformed templates
-    assert!(success, "Workflow should still execute with malformed liquid templates");
+    assert!(
+        success,
+        "Workflow should still execute with malformed liquid templates"
+    );
     Ok(())
 }
 
@@ -667,7 +683,8 @@ stateDiagram-v2
         "injection-test",
         vec!["user_input={{ '{% raw %}' }}{{ system }}{{ '{% endraw %}' }}".to_string()],
         false,
-    ).await?;
+    )
+    .await?;
 
     // The workflow should safely render the input without executing any injected liquid code
     assert!(success, "Workflow should safely handle injection attempts");
@@ -707,12 +724,10 @@ stateDiagram-v2
     // Run workflow with empty var value
     let success = run_workflow_with_vars_in_process(
         "empty-value-test",
-        vec![
-            "name=".to_string(),
-            "description=".to_string(),
-        ],
+        vec!["name=".to_string(), "description=".to_string()],
         false,
-    ).await?;
+    )
+    .await?;
 
     // Empty values should be accepted and rendered as empty strings
     assert!(success, "Workflow should handle empty var values");
@@ -757,9 +772,13 @@ stateDiagram-v2
             "value=from_set".to_string(), // This should take precedence
         ],
         false,
-    ).await?;
+    )
+    .await?;
 
     // Later --var values should take precedence for template rendering
-    assert!(success, "Workflow should handle duplicate var names with later values taking precedence");
+    assert!(
+        success,
+        "Workflow should handle duplicate var names with later values taking precedence"
+    );
     Ok(())
 }

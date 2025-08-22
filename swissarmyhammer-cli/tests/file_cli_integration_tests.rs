@@ -8,12 +8,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-
-
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
-
-
 
 /// Helper to create test files with content
 fn create_test_file(path: &Path, content: &str) -> Result<()> {
@@ -61,7 +57,9 @@ async fn test_file_read_with_offset_and_limit() -> Result<()> {
     create_test_file(&test_file, &test_content)?;
 
     // Test with offset - offset 6 means start from line 6
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap(), "--offset", "6"]).await?;
+    let result =
+        run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap(), "--offset", "6"])
+            .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
@@ -71,12 +69,23 @@ async fn test_file_read_with_offset_and_limit() -> Result<()> {
     assert!(result.stdout.contains("Line 6"), "Should start from line 6");
 
     // Test with limit
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap(), "--limit", "3"]).await?;
+    let result =
+        run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap(), "--limit", "3"])
+            .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
-    assert!(result.stdout.contains("Line 1"), "Should contain first line");
-    assert!(result.stdout.contains("Line 3"), "Should contain third line");
-    assert!(!result.stdout.contains("Line 4"), "Should not contain fourth line");
+    assert!(
+        result.stdout.contains("Line 1"),
+        "Should contain first line"
+    );
+    assert!(
+        result.stdout.contains("Line 3"),
+        "Should contain third line"
+    );
+    assert!(
+        !result.stdout.contains("Line 4"),
+        "Should not contain fourth line"
+    );
 
     Ok(())
 }
@@ -87,11 +96,14 @@ async fn test_file_read_nonexistent_file() -> Result<()> {
         "file",
         "read",
         "/tmp/nonexistent_file_that_should_not_exist.txt",
-    ]).await?;
+    ])
+    .await?;
 
     assert_ne!(result.exit_code, 0, "Command should fail");
     assert!(
-        result.stderr.contains("No such file") || result.stderr.contains("not found") || result.stdout.contains("error"),
+        result.stderr.contains("No such file")
+            || result.stderr.contains("not found")
+            || result.stdout.contains("error"),
         "Should indicate file not found"
     );
 
@@ -108,7 +120,9 @@ async fn test_file_write_basic_functionality() -> Result<()> {
     let test_file = temp_dir.path().join("write_test.txt");
     let test_content = "This is new content\nWritten via CLI";
 
-    let result = run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), test_content]).await?;
+    let result =
+        run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), test_content])
+            .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(test_file.exists(), "File should be created");
@@ -131,7 +145,9 @@ async fn test_file_write_overwrite_existing() -> Result<()> {
 
     create_test_file(&test_file, initial_content)?;
 
-    let result = run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), new_content]).await?;
+    let result =
+        run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), new_content])
+            .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
 
@@ -151,7 +167,9 @@ async fn test_file_write_creates_parent_directories() -> Result<()> {
     let test_file = temp_dir.path().join("nested/deep/path/test.txt");
     let test_content = "Content in nested directory";
 
-    let result = run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), test_content]).await?;
+    let result =
+        run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), test_content])
+            .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(test_file.exists(), "File should be created");
@@ -184,7 +202,8 @@ async fn test_file_edit_basic_replacement() -> Result<()> {
         test_file.to_str().unwrap(),
         "old_value",
         "new_value",
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
 
@@ -216,7 +235,8 @@ async fn test_file_edit_replace_all() -> Result<()> {
         "TARGET",
         "RESULT",
         "--replace-all",
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
 
@@ -248,7 +268,8 @@ async fn test_file_edit_string_not_found() -> Result<()> {
         test_file.to_str().unwrap(),
         "nonexistent_string",
         "replacement",
-    ]).await?;
+    ])
+    .await?;
 
     // Should handle gracefully (either succeed with no changes or inform about no matches)
     let final_content = fs::read_to_string(&test_file)?;
@@ -289,11 +310,15 @@ async fn test_file_glob_basic_patterns() -> Result<()> {
         "*.txt",
         "--path",
         temp_dir.path().to_str().unwrap(),
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(result.stdout.contains("file1.txt"), "Should find txt files");
-    assert!(!result.stdout.contains("file2.rs"), "Should not find rs files");
+    assert!(
+        !result.stdout.contains("file2.rs"),
+        "Should not find rs files"
+    );
 
     // Test recursive glob pattern
     let result = run_sah_command_in_process(&[
@@ -302,14 +327,18 @@ async fn test_file_glob_basic_patterns() -> Result<()> {
         "**/*.txt",
         "--path",
         temp_dir.path().to_str().unwrap(),
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
         result.stdout.contains("file1.txt"),
         "Should find top-level txt files"
     );
-    assert!(result.stdout.contains("file3.txt"), "Should find nested txt files");
+    assert!(
+        result.stdout.contains("file3.txt"),
+        "Should find nested txt files"
+    );
 
     Ok(())
 }
@@ -330,10 +359,14 @@ async fn test_file_glob_case_sensitivity() -> Result<()> {
         "--path",
         temp_dir.path().to_str().unwrap(),
         "--case-sensitive",
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
-    assert!(result.stdout.contains("notes.txt"), "Should find exact case match");
+    assert!(
+        result.stdout.contains("notes.txt"),
+        "Should find exact case match"
+    );
     assert!(
         !result.stdout.contains("README.TXT"),
         "Should not find different case"
@@ -373,11 +406,14 @@ async fn test_file_grep_basic_search() -> Result<()> {
         "TARGET_STRING",
         "--path",
         temp_dir.path().to_str().unwrap(),
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
-        result.stdout.contains("search1.txt") || result.stdout.contains("3") || result.stdout.contains("found"),
+        result.stdout.contains("search1.txt")
+            || result.stdout.contains("3")
+            || result.stdout.contains("found"),
         "Should find matches in files: {}",
         result.stdout
     );
@@ -406,7 +442,8 @@ async fn test_file_grep_regex_patterns() -> Result<()> {
         r"function\s+\w+",
         "--path",
         temp_dir.path().to_str().unwrap(),
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     // Should find the function definition
@@ -439,11 +476,14 @@ async fn test_file_grep_file_type_filtering() -> Result<()> {
         temp_dir.path().to_str().unwrap(),
         "--type",
         "rs",
-    ]).await?;
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
-        result.stdout.contains("file.rs") || result.stdout.contains("1") || result.stdout.contains("found"),
+        result.stdout.contains("file.rs")
+            || result.stdout.contains("1")
+            || result.stdout.contains("found"),
         "Should find matches only in Rust files: {}",
         result.stdout
     );
@@ -467,7 +507,8 @@ async fn test_complete_file_workflow() -> Result<()> {
         "write",
         test_file.to_str().unwrap(),
         initial_content,
-    ]).await?;
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Write should succeed");
 
     // Step 2: Read and verify content
@@ -485,7 +526,8 @@ async fn test_complete_file_workflow() -> Result<()> {
         test_file.to_str().unwrap(),
         "OLD_VALUE",
         "NEW_VALUE",
-    ]).await?;
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Edit should succeed");
 
     // Step 4: Read and verify the edit
@@ -543,7 +585,8 @@ async fn test_file_discovery_and_search_workflow() -> Result<()> {
         "**/*.rs",
         "--path",
         temp_dir.path().to_str().unwrap(),
-    ]).await?;
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Glob should succeed");
     assert!(result.stdout.contains("main.rs"), "Should find main.rs");
     assert!(result.stdout.contains("lib.rs"), "Should find lib.rs");
@@ -556,7 +599,8 @@ async fn test_file_discovery_and_search_workflow() -> Result<()> {
         "TARGET",
         "--path",
         temp_dir.path().to_str().unwrap(),
-    ]).await?;
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Grep should succeed");
     // Should find matches across multiple files
 
@@ -569,7 +613,8 @@ async fn test_file_discovery_and_search_workflow() -> Result<()> {
         temp_dir.path().to_str().unwrap(),
         "--type",
         "rust",
-    ]).await?;
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Rust-specific grep should succeed");
 
     Ok(())
@@ -606,7 +651,9 @@ async fn test_output_formatting_consistency() -> Result<()> {
 #[tokio::test]
 async fn test_invalid_arguments_handling() -> Result<()> {
     // Test read with invalid offset
-    let result = run_sah_command_in_process(&["file", "read", "/tmp/test.txt", "--offset", "invalid"]).await?;
+    let result =
+        run_sah_command_in_process(&["file", "read", "/tmp/test.txt", "--offset", "invalid"])
+            .await?;
     assert_ne!(result.exit_code, 0, "Should fail with invalid offset");
 
     // Test grep with empty pattern
@@ -623,7 +670,8 @@ async fn test_permission_error_handling() -> Result<()> {
         "file",
         "read",
         "/etc/master.passwd", // Requires root permissions on macOS
-    ]).await?;
+    ])
+    .await?;
     assert_ne!(result.exit_code, 0, "Should fail with permission error");
     assert!(
         result.stderr.contains("Permission denied")
