@@ -15,6 +15,7 @@ thiserror = "1.0"
 tracing = { workspace = true }
 dirs = { workspace = true }
 liquid = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
