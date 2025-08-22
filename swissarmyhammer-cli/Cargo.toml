@@ -90,6 +90,7 @@ swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
+async-trait = "0.1"
 
 nix = { version = "0.27", features = ["signal"] }
 criterion = { version = "0.5", features = ["html_reports"] }

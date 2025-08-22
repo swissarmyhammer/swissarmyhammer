@@ -475,6 +475,69 @@ impl ToolRegistry {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
+
+    /// Get unique CLI categories from all registered tools
+    ///
+    /// Returns a sorted list of unique category names for tools that should
+    /// appear in the CLI (not hidden and have a valid category).
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<String>` - Sorted list of unique category names
+    pub fn get_cli_categories(&self) -> Vec<String> {
+        use std::collections::BTreeSet;
+        
+        let mut categories = BTreeSet::new();
+        
+        for tool in self.tools.values() {
+            if !tool.hidden_from_cli() {
+                if let Some(category) = tool.cli_category() {
+                    categories.insert(category.to_string());
+                }
+            }
+        }
+        
+        categories.into_iter().collect()
+    }
+
+    /// Get all tools for a specific CLI category
+    ///
+    /// Returns references to all tools that belong to the specified category
+    /// and are not hidden from CLI.
+    ///
+    /// # Arguments
+    ///
+    /// * `category` - The category name to filter by
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<&dyn McpTool>` - Tools in the specified category
+    pub fn get_tools_for_category(&self, category: &str) -> Vec<&dyn McpTool> {
+        self.tools
+            .values()
+            .filter(|tool| {
+                !tool.hidden_from_cli()
+                    && tool.cli_category().map_or(false, |cat| cat == category)
+            })
+            .map(|tool| tool.as_ref())
+            .collect()
+    }
+
+    /// Get all tools that should appear in CLI
+    ///
+    /// Returns references to all tools that are not hidden from CLI
+    /// and have a valid category.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<&dyn McpTool>` - All CLI-visible tools
+    pub fn get_cli_tools(&self) -> Vec<&dyn McpTool> {
+        self.tools
+            .values()
+            .filter(|tool| !tool.hidden_from_cli() && tool.cli_category().is_some())
+            .map(|tool| tool.as_ref())
+            .collect()
+    }
 }
 
 /// Base implementation providing common utility methods for MCP tools
