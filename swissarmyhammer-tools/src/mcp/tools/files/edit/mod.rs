@@ -476,21 +476,21 @@ mod tests {
     use crate::mcp::tool_handlers::ToolHandlers;
     use crate::mcp::tool_registry::ToolContext;
     use std::fs;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use swissarmyhammer::common::rate_limiter::MockRateLimiter;
     use swissarmyhammer::git::GitOperations;
-    use swissarmyhammer::issues::FileSystemIssueStorage;
     use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
     use tempfile::TempDir;
     use tokio::sync::{Mutex, RwLock};
 
     /// Create a test context for tool execution
     fn create_test_context() -> ToolContext {
-        let issue_storage = Arc::new(RwLock::new(Box::new(
-            FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
-        )
-            as Box<dyn swissarmyhammer::issues::IssueStorage>));
+        use crate::test_utils::TestIssueEnvironment;
+
+        let test_env = TestIssueEnvironment::new();
+        let issue_storage = Arc::new(RwLock::new(
+            Box::new(test_env.storage()) as Box<dyn swissarmyhammer::issues::IssueStorage>
+        ));
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         let memo_storage = Arc::new(RwLock::new(
             Box::new(MockMemoStorage::new()) as Box<dyn MemoStorage>

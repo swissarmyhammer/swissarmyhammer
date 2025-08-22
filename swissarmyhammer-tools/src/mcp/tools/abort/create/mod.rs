@@ -243,9 +243,6 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         // Create first abort file
         let first_reason = "First abort reason";
         let result1 = create_abort_file(temp_path, first_reason);
@@ -264,8 +261,6 @@ mod tests {
 
         let content2 = std::fs::read_to_string(&abort_file).unwrap();
         assert_eq!(content2, second_reason);
-
-        std::env::set_current_dir(original_dir).unwrap();
     }
 
     #[test]
@@ -333,13 +328,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         let unicode_reason = "Abort with émojis 🚫 and ñoñ-ASCII characters 中文";
         let result = create_abort_file(temp_path, unicode_reason);
-
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
 

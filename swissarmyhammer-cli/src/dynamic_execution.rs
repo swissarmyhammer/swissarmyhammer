@@ -50,37 +50,37 @@ pub async fn handle_dynamic_command(
 ) -> Result<()> {
     // Construct tool name using MCP naming convention: {category}_{action}
     let mcp_tool_name = format!("{}_{}", category, tool_name);
-    
+
     // Look up the tool in the registry
     let tool = tool_registry
         .get_tool(&mcp_tool_name)
         .ok_or_else(|| anyhow!("Tool not found: {}", mcp_tool_name))?;
-    
+
     // Get the tool's schema for argument conversion
     let schema = tool.schema();
-    
+
     // Convert Clap matches to JSON arguments
     let arguments = SchemaConverter::matches_to_json_args(matches, &schema)
         .map_err(|e| anyhow!("Argument conversion failed: {}", e))
         .with_context(|| format!("Converting arguments for tool {}", mcp_tool_name))?;
-    
+
     tracing::debug!(
         "Executing tool {} with arguments: {:?}",
         mcp_tool_name,
         arguments
     );
-    
+
     // Execute the tool via MCP
     let result = tool
         .execute(arguments, &context)
         .await
         .map_err(|e| anyhow!("Tool execution failed: {}", e))
         .with_context(|| format!("Executing tool {}", mcp_tool_name))?;
-    
+
     // Format and display the result
     display_mcp_result(result)
         .with_context(|| format!("Displaying result for tool {}", mcp_tool_name))?;
-    
+
     Ok(())
 }
 
@@ -122,7 +122,7 @@ pub fn display_mcp_result(result: CallToolResult) -> Result<()> {
         }
         return Err(anyhow!("Command execution failed"));
     }
-    
+
     // Display successful result content
     for content in &result.content {
         match &**content {
@@ -140,7 +140,7 @@ pub fn display_mcp_result(result: CallToolResult) -> Result<()> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -162,13 +162,21 @@ pub fn format_conversion_error(error: ConversionError, tool_name: &str) -> Strin
                 field, tool_name
             )
         }
-        ConversionError::InvalidType { name, expected, actual } => {
+        ConversionError::InvalidType {
+            name,
+            expected,
+            actual,
+        } => {
             format!(
                 "Invalid type for argument '--{}' in tool '{}': expected {}, got {}.\nPlease check the argument format.",
                 name, tool_name, expected, actual
             )
         }
-        ConversionError::ParseError { field, data_type, message } => {
+        ConversionError::ParseError {
+            field,
+            data_type,
+            message,
+        } => {
             format!(
                 "Failed to parse '--{}' as {} for tool '{}': {}.\nPlease check the argument value format.",
                 field, data_type, tool_name, message

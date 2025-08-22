@@ -18,24 +18,24 @@ use thiserror::Error;
 pub enum ConversionError {
     #[error("Missing required argument: {0}")]
     MissingRequired(String),
-    
+
     #[error("Invalid argument type for {name}: expected {expected}, got {actual}")]
     InvalidType {
         name: String,
         expected: String,
         actual: String,
     },
-    
+
     #[error("Schema validation failed: {0}")]
     SchemaValidation(String),
-    
+
     #[error("Failed to parse {field} as {data_type}: {message}")]
     ParseError {
         field: String,
         data_type: String,
         message: String,
     },
-    
+
     #[error("Unsupported schema type: {schema_type}")]
     UnsupportedSchemaType { schema_type: String },
 }
@@ -66,29 +66,25 @@ impl SchemaConverter {
         schema: &Value,
     ) -> Result<Map<String, Value>, ConversionError> {
         let mut args = Map::new();
-        
+
         // Extract properties from schema
         let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) else {
             return Err(ConversionError::SchemaValidation(
-                "Schema missing 'properties' object".to_string()
+                "Schema missing 'properties' object".to_string(),
             ));
         };
-        
+
         // Extract required fields list
         let required_fields: Vec<&str> = schema
             .get("required")
             .and_then(|r| r.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
-        
+
         // Process each property in the schema
         for (prop_name, prop_schema) in properties {
             let is_required = required_fields.contains(&prop_name.as_str());
-            
+
             match Self::extract_clap_value(matches, prop_name, prop_schema)? {
                 Some(value) => {
                     args.insert(prop_name.clone(), value);
@@ -101,10 +97,10 @@ impl SchemaConverter {
                 }
             }
         }
-        
+
         Ok(args)
     }
-    
+
     /// Extract a single value from Clap matches based on schema type
     ///
     /// Handles type-specific extraction and conversion from Clap's parsed
@@ -128,7 +124,7 @@ impl SchemaConverter {
             .get("type")
             .and_then(|t| t.as_str())
             .unwrap_or("string"); // Default to string if type not specified
-        
+
         match schema_type {
             "boolean" => Self::extract_boolean(matches, prop_name),
             "string" => Self::extract_string(matches, prop_name),
@@ -140,7 +136,7 @@ impl SchemaConverter {
             }),
         }
     }
-    
+
     /// Extract boolean value from flag presence
     fn extract_boolean(
         matches: &ArgMatches,
@@ -157,7 +153,7 @@ impl SchemaConverter {
             Ok(None)
         }
     }
-    
+
     /// Extract string value
     fn extract_string(
         matches: &ArgMatches,
@@ -169,7 +165,7 @@ impl SchemaConverter {
             Ok(None)
         }
     }
-    
+
     /// Extract integer value with parsing
     fn extract_integer(
         matches: &ArgMatches,
@@ -188,7 +184,7 @@ impl SchemaConverter {
             Ok(None)
         }
     }
-    
+
     /// Extract number value (float) with parsing
     fn extract_number(
         matches: &ArgMatches,
@@ -197,14 +193,15 @@ impl SchemaConverter {
         if let Some(value_str) = matches.get_one::<String>(prop_name) {
             match value_str.parse::<f64>() {
                 Ok(parsed) => {
-                    let number = serde_json::Number::from_f64(parsed)
-                        .ok_or_else(|| ConversionError::ParseError {
+                    let number = serde_json::Number::from_f64(parsed).ok_or_else(|| {
+                        ConversionError::ParseError {
                             field: prop_name.to_string(),
                             data_type: "number".to_string(),
                             message: "Invalid floating point number".to_string(),
-                        })?;
+                        }
+                    })?;
                     Ok(Some(Value::Number(number)))
-                },
+                }
                 Err(e) => Err(ConversionError::ParseError {
                     field: prop_name.to_string(),
                     data_type: "number".to_string(),
@@ -215,7 +212,7 @@ impl SchemaConverter {
             Ok(None)
         }
     }
-    
+
     /// Extract array value from multiple arguments
     fn extract_array(
         matches: &ArgMatches,
@@ -223,17 +220,13 @@ impl SchemaConverter {
         _prop_schema: &Value,
     ) -> Result<Option<Value>, ConversionError> {
         if let Some(values) = matches.get_many::<String>(prop_name) {
-            let json_values: Vec<Value> = values
-                .map(|s| Value::String(s.clone()))
-                .collect();
+            let json_values: Vec<Value> = values.map(|s| Value::String(s.clone())).collect();
             Ok(Some(Value::Array(json_values)))
         } else {
             Ok(None)
         }
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -243,26 +236,36 @@ mod tests {
 
     fn create_test_matches(args: &[&str]) -> ArgMatches {
         Command::new("test")
-            .arg(Arg::new("title")
-                .long("title")
-                .value_name("TITLE")
-                .help("Title of the item"))
-            .arg(Arg::new("content")
-                .long("content")
-                .value_name("CONTENT")
-                .help("Content of the item"))
-            .arg(Arg::new("count")
-                .long("count")
-                .value_name("COUNT")
-                .help("Number of items"))
-            .arg(Arg::new("enabled")
-                .long("enabled")
-                .action(ArgAction::SetTrue)
-                .help("Enable the feature"))
-            .arg(Arg::new("tags")
-                .long("tags")
-                .action(ArgAction::Append)
-                .help("Tags to apply"))
+            .arg(
+                Arg::new("title")
+                    .long("title")
+                    .value_name("TITLE")
+                    .help("Title of the item"),
+            )
+            .arg(
+                Arg::new("content")
+                    .long("content")
+                    .value_name("CONTENT")
+                    .help("Content of the item"),
+            )
+            .arg(
+                Arg::new("count")
+                    .long("count")
+                    .value_name("COUNT")
+                    .help("Number of items"),
+            )
+            .arg(
+                Arg::new("enabled")
+                    .long("enabled")
+                    .action(ArgAction::SetTrue)
+                    .help("Enable the feature"),
+            )
+            .arg(
+                Arg::new("tags")
+                    .long("tags")
+                    .action(ArgAction::Append)
+                    .help("Tags to apply"),
+            )
             .try_get_matches_from(args)
             .unwrap()
     }
@@ -307,7 +310,10 @@ mod tests {
         let matches = create_test_matches(&["test", "--count", "not-a-number"]);
         let result = SchemaConverter::extract_integer(&matches, "count");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConversionError::ParseError { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConversionError::ParseError { .. }
+        ));
     }
 
     #[test]
@@ -326,9 +332,14 @@ mod tests {
     #[test]
     fn test_matches_to_json_args_complete() {
         let matches = create_test_matches(&[
-            "test", "--title", "Test Title", "--content", "Test Content", "--enabled"
+            "test",
+            "--title",
+            "Test Title",
+            "--content",
+            "Test Content",
+            "--enabled",
         ]);
-        
+
         let schema = json!({
             "type": "object",
             "properties": {
@@ -338,18 +349,24 @@ mod tests {
             },
             "required": ["title"]
         });
-        
+
         let result = SchemaConverter::matches_to_json_args(&matches, &schema).unwrap();
-        
-        assert_eq!(result.get("title"), Some(&Value::String("Test Title".to_string())));
-        assert_eq!(result.get("content"), Some(&Value::String("Test Content".to_string())));
+
+        assert_eq!(
+            result.get("title"),
+            Some(&Value::String("Test Title".to_string()))
+        );
+        assert_eq!(
+            result.get("content"),
+            Some(&Value::String("Test Content".to_string()))
+        );
         assert_eq!(result.get("enabled"), Some(&Value::Bool(true)));
     }
 
     #[test]
     fn test_matches_to_json_args_missing_required() {
         let matches = create_test_matches(&["test", "--content", "Test Content"]);
-        
+
         let schema = json!({
             "type": "object",
             "properties": {
@@ -358,16 +375,19 @@ mod tests {
             },
             "required": ["title"]
         });
-        
+
         let result = SchemaConverter::matches_to_json_args(&matches, &schema);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConversionError::MissingRequired(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConversionError::MissingRequired(_)
+        ));
     }
 
     #[test]
     fn test_matches_to_json_args_optional_missing() {
         let matches = create_test_matches(&["test", "--title", "Test Title"]);
-        
+
         let schema = json!({
             "type": "object",
             "properties": {
@@ -376,10 +396,13 @@ mod tests {
             },
             "required": ["title"]
         });
-        
+
         let result = SchemaConverter::matches_to_json_args(&matches, &schema).unwrap();
-        
-        assert_eq!(result.get("title"), Some(&Value::String("Test Title".to_string())));
+
+        assert_eq!(
+            result.get("title"),
+            Some(&Value::String("Test Title".to_string()))
+        );
         assert_eq!(result.get("content"), None); // Optional field not included
         assert_eq!(result.len(), 1);
     }
@@ -387,28 +410,31 @@ mod tests {
     #[test]
     fn test_unsupported_schema_type() {
         let matches = create_test_matches(&["test", "--title", "Test"]);
-        
-        let result = SchemaConverter::extract_clap_value(
-            &matches, 
-            "title", 
-            &json!({"type": "object"})
-        );
-        
+
+        let result =
+            SchemaConverter::extract_clap_value(&matches, "title", &json!({"type": "object"}));
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConversionError::UnsupportedSchemaType { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConversionError::UnsupportedSchemaType { .. }
+        ));
     }
 
     #[test]
     fn test_invalid_schema_structure() {
         let matches = create_test_matches(&["test"]);
-        
+
         let invalid_schema = json!({
             "type": "object"
             // Missing properties
         });
-        
+
         let result = SchemaConverter::matches_to_json_args(&matches, &invalid_schema);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConversionError::SchemaValidation(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConversionError::SchemaValidation(_)
+        ));
     }
 }

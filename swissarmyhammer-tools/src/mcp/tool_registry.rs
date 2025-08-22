@@ -486,9 +486,9 @@ impl ToolRegistry {
     /// * `Vec<String>` - Sorted list of unique category names
     pub fn get_cli_categories(&self) -> Vec<String> {
         use std::collections::BTreeSet;
-        
+
         let mut categories = BTreeSet::new();
-        
+
         for tool in self.tools.values() {
             if !tool.hidden_from_cli() {
                 if let Some(category) = tool.cli_category() {
@@ -496,7 +496,7 @@ impl ToolRegistry {
                 }
             }
         }
-        
+
         categories.into_iter().collect()
     }
 
@@ -515,10 +515,7 @@ impl ToolRegistry {
     pub fn get_tools_for_category(&self, category: &str) -> Vec<&dyn McpTool> {
         self.tools
             .values()
-            .filter(|tool| {
-                !tool.hidden_from_cli()
-                    && (tool.cli_category() == Some(category))
-            })
+            .filter(|tool| !tool.hidden_from_cli() && (tool.cli_category() == Some(category)))
             .map(|tool| tool.as_ref())
             .collect()
     }

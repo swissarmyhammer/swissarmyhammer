@@ -1443,16 +1443,15 @@ mod tests {
     use swissarmyhammer::common::rate_limiter::MockRateLimiter;
 
     fn create_test_context() -> ToolContext {
-        use std::path::PathBuf;
+        use crate::test_utils::TestIssueEnvironment;
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
         use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
-        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
-                .unwrap(),
-        )));
+        let test_env = TestIssueEnvironment::new();
+        let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> =
+            Arc::new(RwLock::new(Box::new(test_env.storage())));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
             Arc::new(RwLock::new(Box::new(MockMemoStorage::new())));
@@ -2238,12 +2237,15 @@ mod tests {
         let tool = ShellExecuteTool::new();
         let context = create_test_context();
 
-        // Create a test that uses echo with control characters that will be captured as lines
+        // Create a test that uses printf with control characters that will be captured as lines
         // This tests the detection within text that contains binary markers
+        // Using printf instead of echo -e for cross-platform compatibility
         let mut args = serde_json::Map::new();
         args.insert(
             "command".to_string(),
-            serde_json::Value::String("echo -e 'text\\x01with\\x02control\\x00chars'".to_string()),
+            serde_json::Value::String(
+                "printf 'text\\x01with\\x02control\\x00chars\\n'".to_string(),
+            ),
         );
 
         let result = tool.execute(args, &context).await;
