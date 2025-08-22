@@ -943,7 +943,7 @@ async fn run_issue(subcommand: IssueCommands) -> i32 {
             
             if issues_path.is_dir() {
                 // Try to read the directory
-                if let Err(_) = std::fs::read_dir(&issues_path) {
+                if std::fs::read_dir(issues_path).is_err() {
                     eprintln!("Error: Cannot read issues directory");
                     return EXIT_ERROR;
                 }
