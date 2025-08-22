@@ -144,7 +144,7 @@ impl SchemaConverter {
         _prop_schema: &Value,
     ) -> Result<Option<Value>, ConversionError> {
         let flag_value = matches.get_flag(prop_name);
-        
+
         if flag_value {
             // Flag was provided and is true, always include it
             Ok(Some(Value::Bool(true)))
@@ -287,14 +287,18 @@ mod tests {
     #[test]
     fn test_extract_boolean_flag() {
         let matches = create_test_matches(&["test", "--enabled"]);
-        let result = SchemaConverter::extract_boolean(&matches, "enabled", &json!({"type": "boolean"})).unwrap();
+        let result =
+            SchemaConverter::extract_boolean(&matches, "enabled", &json!({"type": "boolean"}))
+                .unwrap();
         assert_eq!(result, Some(Value::Bool(true)));
     }
 
     #[test]
     fn test_extract_missing_boolean() {
         let matches = create_test_matches(&["test"]);
-        let result = SchemaConverter::extract_boolean(&matches, "enabled", &json!({"type": "boolean"})).unwrap();
+        let result =
+            SchemaConverter::extract_boolean(&matches, "enabled", &json!({"type": "boolean"}))
+                .unwrap();
         assert_eq!(result, None);
     }
 

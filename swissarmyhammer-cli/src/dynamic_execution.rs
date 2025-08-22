@@ -52,21 +52,19 @@ pub async fn handle_dynamic_command(
     let mcp_tool_name = format!("{}_{}", category, tool_name);
 
     // Look up the tool in the registry
-    let tool = tool_registry
-        .get_tool(&mcp_tool_name)
-        .ok_or_else(|| {
-            let available_tools: Vec<String> = tool_registry
-                .get_tools_for_category(category)
-                .iter()
-                .map(|t| t.cli_name().to_string())
-                .collect();
-            anyhow!(
-                "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
-                tool_name,
-                category,
-                available_tools.join(", ")
-            )
-        })?;
+    let tool = tool_registry.get_tool(&mcp_tool_name).ok_or_else(|| {
+        let available_tools: Vec<String> = tool_registry
+            .get_tools_for_category(category)
+            .iter()
+            .map(|t| t.cli_name().to_string())
+            .collect();
+        anyhow!(
+            "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
+            tool_name,
+            category,
+            available_tools.join(", ")
+        )
+    })?;
 
     // Get the tool's schema for argument conversion
     let schema = tool.schema();
@@ -100,7 +98,7 @@ pub async fn handle_dynamic_command(
         })?;
 
     let arg_count = arguments.len();
-    
+
     tracing::debug!(
         "Executing tool {} with arguments: {:?}",
         mcp_tool_name,
@@ -111,24 +109,28 @@ pub async fn handle_dynamic_command(
     let result = tool
         .execute(arguments, &context)
         .await
-        .map_err(|e| anyhow!(
-            "Tool execution failed for '{}' in category '{}': {}",
-            tool_name,
-            category,
-            e
-        ))
+        .map_err(|e| {
+            anyhow!(
+                "Tool execution failed for '{}' in category '{}': {}",
+                tool_name,
+                category,
+                e
+            )
+        })
         .with_context(|| {
             format!(
                 "Executing MCP tool '{}' (full name: {}) with {} argument(s)",
-                tool_name,
-                mcp_tool_name,
-                arg_count
+                tool_name, mcp_tool_name, arg_count
             )
         })?;
 
     // Format and display the result
-    display_mcp_result(result)
-        .with_context(|| format!("Displaying result for tool '{}' in category '{}'", tool_name, category))?;
+    display_mcp_result(result).with_context(|| {
+        format!(
+            "Displaying result for tool '{}' in category '{}'",
+            tool_name, category
+        )
+    })?;
 
     Ok(())
 }

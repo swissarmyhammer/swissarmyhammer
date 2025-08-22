@@ -2,6 +2,7 @@
 
 use crate::cli::PromptSubcommand;
 use crate::error::{CliError, CliResult};
+#[cfg(not(feature = "dynamic-cli"))]
 use crate::{list, search, test};
 
 /// Main entry point for prompt command

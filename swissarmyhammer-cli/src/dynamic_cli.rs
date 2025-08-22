@@ -42,6 +42,7 @@ enum ArgType {
 
 /// Dynamic CLI builder that generates commands from MCP tool registry
 pub struct CliBuilder {
+    #[allow(dead_code)] // Used during initialization, kept for future functionality
     tool_registry: Arc<ToolRegistry>,
     // Pre-computed command data with owned strings
     category_commands: HashMap<String, CommandData>,
@@ -53,12 +54,12 @@ impl CliBuilder {
     pub fn new(tool_registry: Arc<ToolRegistry>) -> Self {
         let mut category_commands = HashMap::new();
         let mut tool_commands = HashMap::new();
-        
+
         // Pre-compute all command data
         let categories = tool_registry.get_cli_categories();
         for category in categories {
             let category_name = category.to_string();
-            
+
             // Create category command data
             let category_cmd_data = CommandData {
                 name: category_name.clone(),
@@ -67,32 +68,32 @@ impl CliBuilder {
                 args: Vec::new(),
             };
             category_commands.insert(category_name.clone(), category_cmd_data);
-            
+
             // Create tool commands for this category
             let mut tools_in_category = HashMap::new();
             let tools = tool_registry.get_tools_for_category(&category);
-            
+
             for tool in tools {
                 if !tool.hidden_from_cli() {
                     let tool_cmd_data = Self::precompute_tool_command(tool);
                     tools_in_category.insert(tool.cli_name().to_string(), tool_cmd_data);
                 }
             }
-            
+
             tool_commands.insert(category_name, tools_in_category);
         }
-        
+
         Self {
             tool_registry,
             category_commands,
             tool_commands,
         }
     }
-    
+
     /// Pre-compute command data for a tool
     fn precompute_tool_command(tool: &dyn McpTool) -> CommandData {
         let schema = tool.schema();
-        
+
         CommandData {
             name: tool.cli_name().to_string(),
             about: tool.cli_about().map(|s| s.to_string()),
@@ -100,11 +101,11 @@ impl CliBuilder {
             args: Self::precompute_args(&schema),
         }
     }
-    
+
     /// Pre-compute argument data from JSON schema
     fn precompute_args(schema: &Value) -> Vec<ArgData> {
         let mut args = Vec::new();
-        
+
         if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
             // Determine required fields
             let required_fields: std::collections::HashSet<String> = schema
@@ -117,7 +118,7 @@ impl CliBuilder {
                         .collect()
                 })
                 .unwrap_or_default();
-            
+
             for (prop_name, prop_schema) in properties {
                 let arg_data = Self::precompute_arg_data(
                     prop_name,
@@ -127,10 +128,10 @@ impl CliBuilder {
                 args.push(arg_data);
             }
         }
-        
+
         args
     }
-    
+
     /// Pre-compute data for a single argument
     fn precompute_arg_data(name: &str, schema: &Value, is_required: bool) -> ArgData {
         // Determine argument type
@@ -141,30 +142,27 @@ impl CliBuilder {
             Some("array") => ArgType::Array,
             _ => ArgType::String,
         };
-        
+
         // Extract help text
         let help = schema
             .get("description")
             .and_then(|d| d.as_str())
             .map(|s| s.to_string());
-        
+
         // Extract default value
         let default_value = schema
             .get("default")
             .and_then(|d| d.as_str())
             .map(|s| s.to_string());
-        
+
         // Extract possible values for enums
-        let possible_values = schema
-            .get("enum")
-            .and_then(|e| e.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .collect()
-            });
-        
+        let possible_values = schema.get("enum").and_then(|e| e.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        });
+
         ArgData {
             name: name.to_string(),
             help,
@@ -214,27 +212,33 @@ This CLI includes both static commands and dynamic commands generated from MCP t
 
         // Add dynamic MCP tool commands using pre-computed data
         for (category_name, category_data) in &self.category_commands {
-            cli = cli.subcommand(self.build_category_command_from_data(category_name, category_data));
+            cli =
+                cli.subcommand(self.build_category_command_from_data(category_name, category_data));
         }
 
         cli
     }
 
     /// Build a command for a specific tool category from pre-computed data
-    fn build_category_command_from_data(&self, category_name: &str, category_data: &CommandData) -> Command {
-        let mut cmd = Command::new(Box::leak(category_data.name.clone().into_boxed_str()) as &'static str);
-        
+    fn build_category_command_from_data(
+        &self,
+        category_name: &str,
+        category_data: &CommandData,
+    ) -> Command {
+        let mut cmd =
+            Command::new(Box::leak(category_data.name.clone().into_boxed_str()) as &'static str);
+
         if let Some(about) = &category_data.about {
             cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
         }
-        
+
         if let Some(long_about) = &category_data.long_about {
             cmd = cmd.long_about(Box::leak(long_about.clone().into_boxed_str()) as &'static str);
         }
 
         // Add tool subcommands for this category
         if let Some(tools_in_category) = self.tool_commands.get(category_name) {
-            for (_tool_name, tool_data) in tools_in_category {
+            for tool_data in tools_in_category.values() {
                 cmd = cmd.subcommand(self.build_tool_command_from_data(tool_data));
             }
         }
@@ -244,7 +248,8 @@ This CLI includes both static commands and dynamic commands generated from MCP t
 
     /// Build a command for a specific MCP tool from pre-computed data
     fn build_tool_command_from_data(&self, tool_data: &CommandData) -> Command {
-        let mut cmd = Command::new(Box::leak(tool_data.name.clone().into_boxed_str()) as &'static str);
+        let mut cmd =
+            Command::new(Box::leak(tool_data.name.clone().into_boxed_str()) as &'static str);
 
         if let Some(about) = &tool_data.about {
             cmd = cmd.about(Box::leak(about.clone().into_boxed_str()) as &'static str);
@@ -309,7 +314,8 @@ This CLI includes both static commands and dynamic commands generated from MCP t
 
         // Handle enum values
         if let Some(possible_values) = &arg_data.possible_values {
-            let str_values: Vec<&'static str> = possible_values.iter()
+            let str_values: Vec<&'static str> = possible_values
+                .iter()
                 .map(|s| Box::leak(s.clone().into_boxed_str()) as &'static str)
                 .collect();
             arg = arg.value_parser(clap::builder::PossibleValuesParser::new(str_values));
@@ -317,7 +323,8 @@ This CLI includes both static commands and dynamic commands generated from MCP t
 
         // Handle default values
         if let Some(default_value) = &arg_data.default_value {
-            arg = arg.default_value(Box::leak(default_value.clone().into_boxed_str()) as &'static str);
+            arg = arg
+                .default_value(Box::leak(default_value.clone().into_boxed_str()) as &'static str);
         }
 
         arg

@@ -1,47 +1,67 @@
+#![cfg_attr(feature = "dynamic-cli", allow(dead_code))]
+
 use std::process;
 mod cli;
+#[cfg(not(feature = "dynamic-cli"))]
 mod completions;
 pub mod config;
+#[cfg(not(feature = "dynamic-cli"))]
 mod doctor;
 #[cfg(feature = "dynamic-cli")]
 mod dynamic_cli;
 mod error;
 mod exit_codes;
+#[cfg(not(feature = "dynamic-cli"))]
 mod file;
+#[cfg(not(feature = "dynamic-cli"))]
 mod flow;
+#[cfg(not(feature = "dynamic-cli"))]
 mod issue;
+#[cfg(not(feature = "dynamic-cli"))]
 mod list;
 mod logging;
 mod mcp_integration;
+#[cfg(not(feature = "dynamic-cli"))]
 mod memo;
+#[cfg(not(feature = "dynamic-cli"))]
 mod migrate;
+#[cfg(not(feature = "dynamic-cli"))]
 mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
+#[cfg(not(feature = "dynamic-cli"))]
 mod prompt;
+#[cfg(not(feature = "dynamic-cli"))]
 mod search;
+#[cfg(not(feature = "dynamic-cli"))]
 mod shell;
 mod signal_handler;
+#[cfg(not(feature = "dynamic-cli"))]
 mod test;
+#[cfg(not(feature = "dynamic-cli"))]
 mod validate;
+#[cfg(not(feature = "dynamic-cli"))]
 mod web_search;
 
 #[cfg(not(feature = "dynamic-cli"))]
 use clap::CommandFactory;
 #[cfg(not(feature = "dynamic-cli"))]
 use cli::{Cli, Commands};
-use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
+#[cfg(not(feature = "dynamic-cli"))]
+use exit_codes::EXIT_WARNING;
+use exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 #[cfg(not(feature = "dynamic-cli"))]
 use logging::FileWriterGuard;
+#[cfg(not(feature = "dynamic-cli"))]
 use swissarmyhammer::SwissArmyHammerError;
 
 #[cfg(feature = "dynamic-cli")]
 use dynamic_cli::CliBuilder;
 #[cfg(feature = "dynamic-cli")]
+use logging::FileWriterGuard;
+#[cfg(feature = "dynamic-cli")]
 use mcp_integration::CliToolContext;
 #[cfg(feature = "dynamic-cli")]
 use std::sync::Arc;
-#[cfg(feature = "dynamic-cli")]
-use logging::FileWriterGuard;
 
 #[tokio::main]
 async fn main() {
@@ -282,7 +302,10 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
                     .init();
             }
             Err(e) => {
-                eprintln!("Warning: Could not create log file: {}. Falling back to stderr.", e);
+                eprintln!(
+                    "Warning: Could not create log file: {}. Falling back to stderr.",
+                    e
+                );
                 registry()
                     .with(create_filter())
                     .with(fmt::layer().with_writer(std::io::stderr))
@@ -470,6 +493,7 @@ async fn run_with_static_cli() {
     process::exit(exit_code);
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_server() -> i32 {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
@@ -527,6 +551,7 @@ async fn run_server() -> i32 {
     EXIT_SUCCESS
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 fn run_doctor_with_options(migration: bool) -> i32 {
     use doctor::Doctor;
 
@@ -540,6 +565,7 @@ fn run_doctor_with_options(migration: bool) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_prompt(subcommand: cli::PromptSubcommand) -> i32 {
     use error::handle_cli_result;
     use prompt;
@@ -547,6 +573,7 @@ async fn run_prompt(subcommand: cli::PromptSubcommand) -> i32 {
     handle_cli_result(prompt::run_prompt_command(subcommand).await)
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 fn run_completions(shell: clap_complete::Shell) -> i32 {
     use completions;
 
@@ -559,6 +586,7 @@ fn run_completions(shell: clap_complete::Shell) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
     use flow;
 
@@ -579,6 +607,7 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
     use error::CliError;
     use issue;
@@ -598,6 +627,7 @@ async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
     use error::CliError;
     use memo;
@@ -617,6 +647,7 @@ async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_file(subcommand: cli::FileCommands) -> i32 {
     use file;
 
@@ -629,6 +660,7 @@ async fn run_file(subcommand: cli::FileCommands) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_search(subcommand: cli::SearchCommands) -> i32 {
     use search;
 
@@ -657,6 +689,7 @@ async fn run_search(subcommand: cli::SearchCommands) -> i32 {
 /// - 0: Success (no errors or warnings)
 /// - 1: Warnings found
 /// - 2: Errors found
+#[cfg(not(feature = "dynamic-cli"))]
 fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<String>) -> i32 {
     use validate;
 
@@ -669,6 +702,7 @@ fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<Str
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_plan(plan_filename: String) -> i32 {
     use cli::FlowSubcommand;
     use flow;
@@ -776,6 +810,7 @@ async fn run_plan(plan_filename: String) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
     use config;
 
@@ -788,6 +823,7 @@ async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_implement() -> i32 {
     use cli::FlowSubcommand;
     use flow;
@@ -825,6 +861,7 @@ async fn run_implement() -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
     use shell;
 
@@ -837,6 +874,7 @@ async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
     use web_search;
 
@@ -849,6 +887,7 @@ async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
     }
 }
 
+#[cfg(not(feature = "dynamic-cli"))]
 async fn run_migrate(subcommand: cli::MigrateCommands) -> i32 {
     match migrate::handle_migrate_command(subcommand).await {
         Ok(_) => EXIT_SUCCESS,

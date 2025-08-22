@@ -41,6 +41,7 @@ impl CliError {
     }
 
     /// Get the full error chain as a formatted string
+    #[allow(dead_code)]
     pub fn full_chain(&self) -> String {
         let mut result = self.message.clone();
 

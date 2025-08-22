@@ -38,13 +38,19 @@ pub mod types;
 pub mod utils;
 
 /// System check category keywords
+#[cfg(not(feature = "dynamic-cli"))]
 const SYSTEM_CHECK_KEYWORDS: &[&str] = &["PATH", "permissions", "Binary", "Installation"];
+#[cfg(not(feature = "dynamic-cli"))]
 const CONFIG_CHECK_KEYWORDS: &[&str] = &["Claude", "config"];
+#[cfg(not(feature = "dynamic-cli"))]
 const PROMPT_CHECK_KEYWORDS: &[&str] = &["prompt", "YAML"];
+#[cfg(not(feature = "dynamic-cli"))]
 const WORKFLOW_CHECK_KEYWORDS: &[&str] = &["Workflow", "workflow"];
+#[cfg(not(feature = "dynamic-cli"))]
 const MIGRATION_CHECK_KEYWORDS: &[&str] = &["Migration", "migration", "directory consolidation"];
 
 /// Grouping of checks by category for organized display
+#[cfg(not(feature = "dynamic-cli"))]
 #[derive(Debug)]
 pub struct CheckGroups<'a> {
     /// System-level checks (installation, PATH, permissions)
@@ -300,6 +306,7 @@ impl Doctor {
     }
 
     /// Group checks into categories
+    #[cfg(not(feature = "dynamic-cli"))]
     fn group_checks_by_category(&self) -> CheckGroups<'_> {
         CheckGroups {
             system_checks: self

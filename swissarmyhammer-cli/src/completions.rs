@@ -2,6 +2,7 @@ use crate::cli::Cli;
 use anyhow::Result;
 use clap::CommandFactory;
 use clap_complete::{generate_to, Shell};
+#[cfg(not(feature = "dynamic-cli"))]
 use std::io;
 use std::path::Path;
 
@@ -22,6 +23,7 @@ pub fn generate_completions<P: AsRef<Path>>(outdir: P) -> Result<()> {
 }
 
 /// Print shell completion script to stdout
+#[cfg(not(feature = "dynamic-cli"))]
 pub fn print_completion(shell: Shell) -> Result<()> {
     let mut cmd = Cli::command();
 

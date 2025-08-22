@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
+#[cfg(not(feature = "dynamic-cli"))]
 use is_terminal::IsTerminal;
+#[cfg(not(feature = "dynamic-cli"))]
 use std::io;
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -1596,6 +1598,7 @@ pub enum ShellOutputFormat {
 }
 
 impl Cli {
+    #[cfg(not(feature = "dynamic-cli"))]
     pub fn parse_args() -> Self {
         Self::parse()
     }
@@ -1609,10 +1612,12 @@ impl Cli {
         <Self as Parser>::try_parse_from(args)
     }
 
+    #[cfg(not(feature = "dynamic-cli"))]
     pub fn is_tty() -> bool {
         io::stdout().is_terminal()
     }
 
+    #[cfg(not(feature = "dynamic-cli"))]
     pub fn should_use_color() -> bool {
         Self::is_tty() && std::env::var("NO_COLOR").is_err()
     }
