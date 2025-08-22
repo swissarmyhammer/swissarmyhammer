@@ -16,6 +16,10 @@ path = "src/lib.rs"
 name = "sah"
 path = "src/main.rs"
 
+[features]
+default = []
+dynamic-cli = []
+
 
 [dependencies]
 # Library dependencies

@@ -1,6 +1,8 @@
 use std::process;
 mod cli;
 mod completions;
+#[cfg(feature = "dynamic-cli")]
+mod dynamic_cli;
 pub mod config;
 mod doctor;
 mod error;
@@ -29,8 +31,220 @@ use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
 use swissarmyhammer::SwissArmyHammerError;
 
+#[cfg(feature = "dynamic-cli")]
+use dynamic_cli::CliBuilder;
+#[cfg(feature = "dynamic-cli")]
+use mcp_integration::CliToolContext;
+#[cfg(feature = "dynamic-cli")]
+use std::sync::Arc;
+
 #[tokio::main]
 async fn main() {
+    #[cfg(feature = "dynamic-cli")]
+    {
+        run_with_dynamic_cli().await;
+    }
+
+    #[cfg(not(feature = "dynamic-cli"))]
+    {
+        run_with_static_cli().await;
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn run_with_dynamic_cli() {
+    // Initialize tool context and registry for dynamic CLI
+    let cli_tool_context = match CliToolContext::new().await {
+        Ok(context) => Arc::new(context),
+        Err(e) => {
+            eprintln!("Failed to initialize tool context: {}", e);
+            process::exit(EXIT_ERROR);
+        }
+    };
+    
+    let tool_registry_ref = cli_tool_context.get_tool_registry();
+    let cli_builder = CliBuilder::new(tool_registry_ref);
+    let dynamic_cli = cli_builder.build_cli();
+    
+    // Parse arguments with dynamic CLI
+    let matches = match dynamic_cli.try_get_matches() {
+        Ok(matches) => matches,
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(EXIT_ERROR);
+        }
+    };
+    
+    // Handle dynamic command dispatch
+    let exit_code = handle_dynamic_matches(matches, cli_tool_context).await;
+    process::exit(exit_code);
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_dynamic_matches(
+    matches: clap::ArgMatches,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
+    // Handle global verbose/debug/quiet flags
+    let verbose = matches.get_flag("verbose");
+    let debug = matches.get_flag("debug");
+    let quiet = matches.get_flag("quiet");
+    
+    // Initialize logging similar to static CLI
+    configure_logging(verbose, debug, quiet, false).await;
+    
+    // Handle subcommands
+    match matches.subcommand() {
+        Some((category, sub_matches)) => {
+            match sub_matches.subcommand() {
+                Some((tool_name, tool_matches)) => {
+                    handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context).await
+                }
+                None => {
+                    eprintln!("No command specified for category '{}'", category);
+                    EXIT_ERROR
+                }
+            }
+        }
+        None => {
+            eprintln!("No command specified. Use --help for usage information.");
+            EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_dynamic_tool_command(
+    category: &str,
+    tool_name: &str,
+    matches: &clap::ArgMatches,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
+    // Construct full tool name (category_tool_name)
+    let full_tool_name = format!("{}_{}", category, tool_name);
+    
+    // Convert clap matches to JSON arguments
+    let arguments = match convert_matches_to_arguments(matches, &full_tool_name, &cli_tool_context).await {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("Error processing arguments: {}", e);
+            return EXIT_ERROR;
+        }
+    };
+    
+    // Execute the MCP tool
+    match cli_tool_context.execute_tool(&full_tool_name, arguments).await {
+        Ok(result) => {
+            // Format and display the result
+            if result.is_error.unwrap_or(false) {
+                eprintln!("{}", mcp_integration::response_formatting::format_error_response(&result));
+                EXIT_ERROR
+            } else {
+                println!("{}", mcp_integration::response_formatting::format_success_response(&result));
+                EXIT_SUCCESS
+            }
+        }
+        Err(e) => {
+            eprintln!("Tool execution error: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn convert_matches_to_arguments(
+    matches: &clap::ArgMatches,
+    tool_name: &str,
+    cli_tool_context: &CliToolContext,
+) -> Result<serde_json::Map<String, serde_json::Value>, Box<dyn std::error::Error>> {
+    let mut arguments = serde_json::Map::new();
+    
+    // Get the tool to access its schema
+    let tool = cli_tool_context.get_tool_registry().get_tool(tool_name)
+        .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
+    
+    let schema = tool.schema();
+    
+    // Extract properties from schema
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (prop_name, prop_schema) in properties {
+            if let Some(value) = extract_clap_value(matches, prop_name, prop_schema) {
+                arguments.insert(prop_name.clone(), value);
+            }
+        }
+    }
+    
+    Ok(arguments)
+}
+
+#[cfg(feature = "dynamic-cli")]
+fn extract_clap_value(
+    matches: &clap::ArgMatches,
+    prop_name: &str,
+    prop_schema: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    match prop_schema.get("type").and_then(|t| t.as_str()) {
+        Some("boolean") => {
+            if matches.get_flag(prop_name) {
+                Some(serde_json::Value::Bool(true))
+            } else {
+                None
+            }
+        }
+        Some("integer") => {
+            matches.get_one::<i64>(prop_name)
+                .map(|v| serde_json::Value::Number(serde_json::Number::from(*v)))
+        }
+        Some("number") => {
+            matches.get_one::<f64>(prop_name)
+                .and_then(|v| serde_json::Number::from_f64(*v))
+                .map(serde_json::Value::Number)
+        }
+        Some("array") => {
+            let values: Vec<String> = matches.get_many::<String>(prop_name)
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            if values.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Array(
+                    values.into_iter().map(serde_json::Value::String).collect()
+                ))
+            }
+        }
+        _ => {
+            // Default to string
+            matches.get_one::<String>(prop_name)
+                .map(|s| serde_json::Value::String(s.clone()))
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
+    use tracing::Level;
+    use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
+
+    let log_level = if quiet {
+        Level::ERROR
+    } else if debug {
+        Level::DEBUG
+    } else if verbose {
+        Level::TRACE
+    } else {
+        Level::INFO
+    };
+
+    let create_filter = || EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}"));
+
+    registry()
+        .with(create_filter())
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .init();
+}
+
+#[cfg(not(feature = "dynamic-cli"))]
+async fn run_with_static_cli() {
     let cli = Cli::parse_args();
 
     // Fast path for help - avoid expensive initialization

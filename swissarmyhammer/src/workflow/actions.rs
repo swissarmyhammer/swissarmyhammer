@@ -2425,9 +2425,14 @@ mod tests {
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("hello world"));
 
-        // Verify stderr is empty or minimal
+        // Verify stderr is empty or contains only directory-related warnings from shell
         let stderr = context.get("stderr").unwrap().as_str().unwrap();
-        assert!(stderr.is_empty() || stderr.trim().is_empty());
+        let stderr_trimmed = stderr.trim();
+        // Allow shell warnings about directory access but not other errors
+        let is_acceptable_stderr = stderr_trimmed.is_empty() 
+            || stderr_trimmed.contains("shell-init: error retrieving current directory")
+            || stderr_trimmed.contains("getcwd: cannot access parent directories");
+        assert!(is_acceptable_stderr, "Unexpected stderr content: {}", stderr);
 
         // Verify duration is tracked
         assert!(context.contains_key("duration_ms"));

@@ -189,6 +189,11 @@ impl CliToolContext {
         }
         args
     }
+
+    /// Get a reference to the tool registry for dynamic CLI generation
+    pub fn get_tool_registry(&self) -> &ToolRegistry {
+        &self.tool_registry
+    }
 }
 
 /// Utilities for formatting MCP responses for CLI display
