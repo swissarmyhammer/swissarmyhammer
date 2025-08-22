@@ -1,6 +1,7 @@
 //! Configuration provider using Figment for SwissArmyHammer
 
 use crate::{
+    discovery::{ConfigFile, ConfigFormat, FileDiscovery},
     error::ConfigError,
     types::{RawConfig, TemplateContext},
     ConfigResult,
@@ -54,20 +55,17 @@ impl ConfigProvider {
     ///
     /// Sources are loaded in precedence order (later sources override earlier ones):
     /// 1. Default values (hardcoded)
-    /// 2. Global config file (~/.swissarmyhammer/ directory)
-    /// 3. Project config file (.swissarmyhammer/ directory)
-    /// 4. Environment variables (SAH_ and SWISSARMYHAMMER_ prefixes)
-    /// 5. Command line arguments (placeholder for future implementation)
+    /// 2. Configuration files (discovered automatically in priority order)
+    /// 3. Environment variables (SAH_ and SWISSARMYHAMMER_ prefixes)
+    /// 4. Command line arguments (placeholder for future implementation)
     fn build_figment(&self) -> ConfigResult<Figment> {
         debug!("Building figment configuration with precedence order");
 
         let figment = Figment::new()
             // Start with default values
             .merge(self.get_default_config())
-            // Add global config files
-            .merge(self.load_global_config()?)
-            // Add project config files
-            .merge(self.load_project_config()?)
+            // Add discovered configuration files in priority order
+            .merge(self.load_discovered_config_files()?)
             // Add environment variables
             .merge(self.load_env_vars()?);
 
@@ -87,139 +85,38 @@ impl ConfigProvider {
         Figment::new().merge(figment::providers::Serialized::defaults(defaults))
     }
 
-    /// Load global configuration files from ~/.swissarmyhammer/
-    fn load_global_config(&self) -> ConfigResult<Figment> {
-        debug!("Loading global configuration files");
+    /// Load all discovered configuration files using FileDiscovery
+    fn load_discovered_config_files(&self) -> ConfigResult<Figment> {
+        debug!("Loading discovered configuration files");
 
-        let home_dir = dirs::home_dir().ok_or_else(|| {
-            ConfigError::directory_error(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Home directory not found",
-            ))
-        })?;
-
-        let sah_dir = home_dir.join(".swissarmyhammer");
-
-        if !sah_dir.exists() {
-            debug!(
-                "Global SwissArmyHammer directory does not exist: {}",
-                sah_dir.display()
-            );
-            return Ok(Figment::new());
-        }
+        let discovery = FileDiscovery::new();
+        let config_files = discovery.discover_all();
 
         let mut figment = Figment::new();
 
-        // Load configuration files in format precedence order
-        // (later formats can override earlier ones for the same file name)
+        for config_file in config_files {
+            trace!(
+                "Loading config file: {} ({:?})",
+                config_file.path.display(),
+                config_file.format
+            );
 
-        // TOML files
-        let toml_files = [
-            sah_dir.join("sah.toml"),
-            sah_dir.join("swissarmyhammer.toml"),
-        ];
-
-        for path in &toml_files {
-            if path.exists() {
-                trace!("Loading global TOML config: {}", path.display());
-                figment = figment.merge(Toml::file(path));
-            }
+            figment = figment.merge(self.load_config_file(&config_file)?);
         }
 
-        // YAML files
-        let yaml_files = [
-            sah_dir.join("sah.yaml"),
-            sah_dir.join("sah.yml"),
-            sah_dir.join("swissarmyhammer.yaml"),
-            sah_dir.join("swissarmyhammer.yml"),
-        ];
-
-        for path in &yaml_files {
-            if path.exists() {
-                trace!("Loading global YAML config: {}", path.display());
-                figment = figment.merge(Yaml::file(path));
-            }
-        }
-
-        // JSON files
-        let json_files = [
-            sah_dir.join("sah.json"),
-            sah_dir.join("swissarmyhammer.json"),
-        ];
-
-        for path in &json_files {
-            if path.exists() {
-                trace!("Loading global JSON config: {}", path.display());
-                figment = figment.merge(Json::file(path));
-            }
-        }
-
+        debug!("Loaded configuration from FileDiscovery");
         Ok(figment)
     }
 
-    /// Load project configuration files from ./.swissarmyhammer/
-    fn load_project_config(&self) -> ConfigResult<Figment> {
-        debug!("Loading project configuration files");
+    /// Load a single configuration file based on its format
+    fn load_config_file(&self, config_file: &ConfigFile) -> ConfigResult<Figment> {
+        let path = &config_file.path;
 
-        let current_dir = std::env::current_dir().map_err(ConfigError::directory_error)?;
-
-        let sah_dir = current_dir.join(".swissarmyhammer");
-
-        if !sah_dir.exists() {
-            debug!(
-                "Project SwissArmyHammer directory does not exist: {}",
-                sah_dir.display()
-            );
-            return Ok(Figment::new());
+        match config_file.format {
+            ConfigFormat::Toml => Ok(Figment::from(Toml::file(path))),
+            ConfigFormat::Yaml => Ok(Figment::from(Yaml::file(path))),
+            ConfigFormat::Json => Ok(Figment::from(Json::file(path))),
         }
-
-        let mut figment = Figment::new();
-
-        // Load configuration files in format precedence order
-        // (later formats can override earlier ones for the same file name)
-
-        // TOML files
-        let toml_files = [
-            sah_dir.join("sah.toml"),
-            sah_dir.join("swissarmyhammer.toml"),
-        ];
-
-        for path in &toml_files {
-            if path.exists() {
-                trace!("Loading project TOML config: {}", path.display());
-                figment = figment.merge(Toml::file(path));
-            }
-        }
-
-        // YAML files
-        let yaml_files = [
-            sah_dir.join("sah.yaml"),
-            sah_dir.join("sah.yml"),
-            sah_dir.join("swissarmyhammer.yaml"),
-            sah_dir.join("swissarmyhammer.yml"),
-        ];
-
-        for path in &yaml_files {
-            if path.exists() {
-                trace!("Loading project YAML config: {}", path.display());
-                figment = figment.merge(Yaml::file(path));
-            }
-        }
-
-        // JSON files
-        let json_files = [
-            sah_dir.join("sah.json"),
-            sah_dir.join("swissarmyhammer.json"),
-        ];
-
-        for path in &json_files {
-            if path.exists() {
-                trace!("Loading project JSON config: {}", path.display());
-                figment = figment.merge(Json::file(path));
-            }
-        }
-
-        Ok(figment)
     }
 
     /// Load environment variables with SAH_ and SWISSARMYHAMMER_ prefixes
@@ -301,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_project_config_nonexistent() {
+    fn test_load_discovered_config_files_nonexistent() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
 
@@ -310,8 +207,8 @@ mod tests {
 
         let provider = ConfigProvider::new();
 
-        // This should succeed even if no project config exists
-        let figment = provider.load_project_config().unwrap();
+        // This should succeed even if no config files exist
+        let figment = provider.load_discovered_config_files().unwrap();
         let config: RawConfig = figment.extract().unwrap();
 
         // Restore directory
@@ -322,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_project_config_with_toml() {
+    fn test_load_discovered_config_files_with_toml() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
@@ -342,7 +239,7 @@ number_key = 42
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
-        let figment = provider.load_project_config().unwrap();
+        let figment = provider.load_discovered_config_files().unwrap();
         let config: HashMap<String, serde_json::Value> = figment.extract().unwrap();
 
         // Restore original directory
@@ -359,7 +256,7 @@ number_key = 42
     }
 
     #[test]
-    fn test_load_project_config_with_yaml() {
+    fn test_load_discovered_config_files_with_yaml() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
@@ -379,7 +276,7 @@ number_key: 42
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
-        let figment = provider.load_project_config().unwrap();
+        let figment = provider.load_discovered_config_files().unwrap();
         let config: HashMap<String, serde_json::Value> = figment.extract().unwrap();
 
         // Restore original directory
@@ -396,7 +293,7 @@ number_key: 42
     }
 
     #[test]
-    fn test_load_project_config_with_json() {
+    fn test_load_discovered_config_files_with_json() {
         let temp_dir = TempDir::new().unwrap();
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
@@ -418,7 +315,7 @@ number_key: 42
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
-        let figment = provider.load_project_config().unwrap();
+        let figment = provider.load_discovered_config_files().unwrap();
         let config: HashMap<String, serde_json::Value> = figment.extract().unwrap();
 
         // Restore original directory

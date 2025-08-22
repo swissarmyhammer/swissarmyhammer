@@ -50,6 +50,9 @@ pub mod error;
 /// Core data structures for configuration system
 pub mod types;
 
+/// Configuration file discovery system
+pub mod discovery;
+
 /// Configuration provider using Figment
 pub mod provider;
 
@@ -62,6 +65,7 @@ pub mod tests;
 pub mod integration_test;
 
 // Re-export main types for easier access
+pub use discovery::{ConfigFile, ConfigFormat, ConfigScope, FileDiscovery};
 pub use error::{ConfigError, ConfigResult};
 pub use provider::ConfigProvider;
 pub use types::{RawConfig, TemplateContext};
