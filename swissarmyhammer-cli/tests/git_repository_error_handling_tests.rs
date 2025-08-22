@@ -241,6 +241,7 @@ async fn test_git_repository_error_exit_codes() {
 
 /// Test that file commands don't require Git repository (should work)
 #[tokio::test]
+#[ignore = "File commands migrated to dynamic CLI - static CLI no longer supports file commands"]
 async fn test_file_commands_work_without_git() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 

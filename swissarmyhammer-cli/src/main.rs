@@ -464,10 +464,7 @@ async fn run_with_static_cli() {
         }
 
 
-        Some(Commands::File { subcommand }) => {
-            tracing::info!("Running file command");
-            run_file(subcommand).await
-        }
+
         #[cfg(not(feature = "dynamic-cli"))]
         Some(Commands::Issue { subcommand }) => {
             tracing::info!("Running issue command");
@@ -634,18 +631,7 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
 
 
 
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_file(subcommand: cli::FileCommands) -> i32 {
-    use file;
 
-    match file::handle_file_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("File error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_search(subcommand: cli::SearchCommands) -> i32 {
