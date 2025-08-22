@@ -214,3 +214,74 @@ Create tests in `src/tests/context_tests.rs`:
 - `swissarmyhammer-config/src/context.rs` (new)
 - `swissarmyhammer-config/src/tests/context_tests.rs` (new)
 - `swissarmyhammer-config/Cargo.toml` (add regex, liquid dependencies)
+## Proposed Solution
+
+After analyzing the existing code in `swissarmyhammer-config`, I found that a `TemplateContext` struct already exists with basic functionality. I've extended it to implement all the requirements from the specification:
+
+### Implementation Approach
+
+1. **Enhanced Core TemplateContext Structure**: 
+   - Extended the existing struct with additional methods while maintaining backward compatibility
+   - Preserved the `HashMap<String, serde_json::Value>` backend as specified
+   - Added comprehensive type-safe getter methods
+
+2. **Variable Access Methods**:
+   - ✅ `get()` - already existed
+   - ✅ `get_string()`, `get_bool()`, `get_number()` - added with intelligent type coercion
+   - ✅ `set()` - enhanced to accept generic types implementing `Into<serde_json::Value>`
+   - ✅ `extend()`, `contains_key()`, `keys()` - added for comprehensive access
+
+3. **Merging with Proper Precedence**:
+   - ✅ `merge()` - already existed (other context overrides self)
+   - ✅ `merge_config()` - config has lower priority than existing workflow vars
+   - ✅ `merge_workflow()` - workflow has higher priority, overrides existing vars
+   - ✅ `merged_with()` - non-mutating version that creates a new context
+
+4. **Environment Variable Substitution**:
+   - ✅ `substitute_env_vars()` - already existed, preserves exact behavior
+   - ✅ `with_env_substitution()` - added non-mutating version
+   - ✅ Supports `${VAR}` and `${VAR:-default}` patterns in nested structures
+
+5. **Liquid Template Integration**:
+   - ✅ `to_liquid_object()` - already existed
+   - ✅ `From<liquid::Object>` and `Into<liquid::Object>` traits added
+   - ✅ Bidirectional conversion with proper type mapping
+
+6. **Compatibility Layer**:
+   - ✅ `as_hashmap()` - reference access to internal HashMap
+   - ✅ `into_hashmap()` - consuming conversion to HashMap
+   - ✅ `as_legacy_context()` - creates `_template_vars` format for existing code
+   - ✅ `From<HashMap>` and `Into<HashMap>` traits for seamless integration
+
+7. **Factory Methods**:
+   - ✅ `new()` - already existed
+   - ✅ `with_vars()` - already existed  
+   - ✅ `from_config()` - added for config-only initialization
+
+### Key Design Decisions
+
+- **Preserved existing functionality**: All existing methods work exactly as before
+- **Added intelligent type coercion**: `get_string()` can convert numbers/bools to strings, `get_bool()` handles string representations
+- **Maintained precedence semantics**: Config has lowest priority, workflow variables have highest priority
+- **Non-destructive operations**: Added `merged_with()` and `with_env_substitution()` for functional-style operations
+- **Comprehensive error handling**: Environment variable substitution properly handles missing variables and provides clear error messages
+
+### Testing Strategy
+
+Added comprehensive test coverage for all new functionality:
+- Type-safe getters with edge cases
+- All merging scenarios with proper precedence verification
+- Environment variable substitution in complex nested structures
+- Conversion traits bidirectional testing
+- Compatibility layer verification
+- Legacy format compliance
+
+### Integration Points
+
+The enhanced `TemplateContext` can now:
+1. Replace all `HashMap<String, serde_json::Value>` usage in template rendering
+2. Integrate seamlessly with existing `merge_config_into_context()` function
+3. Provide a clean API for prompt, workflow, and action template rendering
+4. Maintain backward compatibility with existing code via compatibility methods
+
+This implementation fully satisfies the specification requirements while building on the existing solid foundation.

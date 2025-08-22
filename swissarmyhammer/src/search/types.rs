@@ -926,6 +926,7 @@ mod tests {
     #[test]
     fn test_semantic_config_home_fallback() {
         use tempfile::TempDir;
+        use std::panic;
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = TempDir::new().unwrap();
@@ -934,10 +935,13 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        let config = SemanticConfig::default();
+        // Use panic::catch_unwind to ensure directory is restored even on panic
+        let config_result = panic::catch_unwind(SemanticConfig::default);
 
-        // Restore original directory
+        // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
+
+        let config = config_result.unwrap();
 
         // Should fallback to home directory since no Git repository was found
         assert!(config
@@ -956,6 +960,7 @@ mod tests {
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
         use tempfile::TempDir;
+        use std::panic;
 
         let temp_dir = TempDir::new().unwrap();
 
@@ -967,10 +972,13 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        let config = SemanticConfig::default();
+        // Use panic::catch_unwind to ensure directory is restored even on panic
+        let config_result = panic::catch_unwind(SemanticConfig::default);
 
-        // Restore original directory
+        // Always restore original directory
         std::env::set_current_dir(original_dir).unwrap();
+
+        let config = config_result.unwrap();
 
         // Should fallback to home directory since Git repository exists but no .swissarmyhammer
         assert!(config
