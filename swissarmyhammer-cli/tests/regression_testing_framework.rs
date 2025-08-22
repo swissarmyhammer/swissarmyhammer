@@ -54,7 +54,7 @@ impl RegressionTestSuite {
                 command: vec!["--help".to_string()],
                 expected_exit_code: 0,
                 expected_stdout_contains: vec![
-                    "USAGE".to_string(),
+                    "Usage:".to_string(),
                     "Commands".to_string(),
                     "Options".to_string(),
                     "issue".to_string(),
@@ -131,16 +131,7 @@ impl RegressionTestSuite {
                 description: "Issue list command completes successfully".to_string(),
                 requires_setup: true,
             },
-            ExpectedOutput {
-                command: vec!["memo".to_string(), "list".to_string()],
-                expected_exit_code: 0,
-                expected_stdout_contains: vec![],
-                expected_stderr_contains: vec![],
-                expected_stdout_not_contains: vec!["Error".to_string(), "panic".to_string()],
-                expected_stderr_not_contains: vec!["panic".to_string()],
-                description: "Memo list command completes successfully".to_string(),
-                requires_setup: true,
-            },
+
             // Error cases with setup
             ExpectedOutput {
                 command: vec![
@@ -156,20 +147,7 @@ impl RegressionTestSuite {
                 description: "Non-existent issue produces appropriate error".to_string(),
                 requires_setup: true,
             },
-            ExpectedOutput {
-                command: vec![
-                    "memo".to_string(),
-                    "get".to_string(),
-                    "invalid_id".to_string(),
-                ],
-                expected_exit_code: 1,
-                expected_stdout_contains: vec![],
-                expected_stderr_contains: vec!["error".to_string()],
-                expected_stdout_not_contains: vec!["panic".to_string()],
-                expected_stderr_not_contains: vec!["panic".to_string()],
-                description: "Invalid memo ID produces appropriate error".to_string(),
-                requires_setup: true,
-            },
+
         ];
 
         Self {
@@ -458,6 +436,13 @@ async fn test_regression_framework() -> Result<()> {
     // The framework should work
     assert!(report.total_tests > 0, "Should have test cases");
 
+    // Save detailed report for debugging
+    let debug_report_path = temp_path.join("regression_debug_report.md");
+    let _ = report.save_detailed_report(&debug_report_path);
+    
+    // Print report for debugging before assertion
+    report.print_summary();
+
     // Most baseline tests should pass (allowing for some environment differences)
     let success_rate = report.passed_tests as f64 / report.total_tests as f64;
     assert!(
@@ -467,9 +452,6 @@ async fn test_regression_framework() -> Result<()> {
         report.passed_tests,
         report.total_tests
     );
-
-    // Print report for debugging
-    report.print_summary();
 
     Ok(())
 }

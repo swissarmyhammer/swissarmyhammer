@@ -286,6 +286,48 @@ Examples:
         #[command(subcommand)]
         subcommand: FileCommands,
     },
+    /// Issue management commands (requires Git repository)
+    #[cfg(not(feature = "dynamic-cli"))]
+    #[command(long_about = "
+Manage work items and track issues in markdown files stored in the Git repository.
+Provides comprehensive issue lifecycle management with Git branch integration.
+
+⚠️ REQUIREMENTS: Must be run from within a Git repository.
+Issues are stored in .swissarmyhammer/issues/ directory at the Git repository root.
+
+Basic usage:
+  swissarmyhammer issue create <name> <content>     # Create new issue
+  swissarmyhammer issue list                        # List all issues  
+  swissarmyhammer issue show <name>                 # Show issue details
+  swissarmyhammer issue work <name>                 # Start working on issue
+  swissarmyhammer issue complete <name>             # Mark issue as complete
+
+Issue lifecycle:
+  create                                            # Create new issue file
+  list                                              # List with status filtering
+  show                                              # View issue content and metadata
+  work                                              # Switch to work branch
+  complete                                          # Mark as completed
+  merge                                             # Merge work branch back
+
+Git integration:
+  work <name>                                       # Creates branch issue/<name>
+  merge <name>                                      # Merges and optionally deletes branch
+  current                                           # Show current branch issue
+  status                                            # Check completion status
+
+Examples:
+  swissarmyhammer issue create bug_fix \"# Fix login error\"
+  swissarmyhammer issue list --show-completed --format json  
+  swissarmyhammer issue show current               # Show issue for current branch
+  swissarmyhammer issue work FEATURE_001           # Switch to issue branch
+  swissarmyhammer issue complete FEATURE_001       # Mark as done
+  swissarmyhammer issue merge FEATURE_001 --delete-branch
+")]
+    Issue {
+        #[command(subcommand)]
+        subcommand: IssueCommands,
+    },
     /// Semantic search commands (requires Git repository)
     #[command(long_about = "
 Manage semantic search functionality for indexing and searching source code files using vector embeddings.
@@ -605,40 +647,6 @@ Examples:
     Migrate {
         #[command(subcommand)]
         subcommand: MigrateCommands,
-    },
-    /// Manage issues for tracking work items
-    #[command(long_about = "
-Comprehensive issue management system for tracking work items, bugs, features, and tasks.
-Issues are stored as markdown files in .swissarmyhammer/issues directory for version control.
-
-Basic usage:
-  swissarmyhammer issue create <name> --content <content>  # Create new issue
-  swissarmyhammer issue list                               # List all issues  
-  swissarmyhammer issue show <name>                        # Show issue details
-  swissarmyhammer issue work <name>                        # Start working on issue
-  swissarmyhammer issue mark-complete <name>               # Mark issue as complete
-
-Issue workflow:
-  1. create     - Create new issues with auto-assigned numbers
-  2. list       - List all available issues with filtering options
-  3. show       - Display details of a specific issue
-  4. work       - Switch to or create work branch for an issue
-  5. update     - Modify existing issue content
-  6. mark-complete - Mark issues as completed and archive them
-  7. merge      - Merge completed issue work back to source branch
-  8. all-complete - Check if all pending issues are completed
-
-Examples:
-  swissarmyhammer issue create bug-fix --content \"Fix login validation\"
-  swissarmyhammer issue create feature-auth  # Interactive content input
-  swissarmyhammer issue list --format json
-  swissarmyhammer issue show current         # Show current branch issue
-  swissarmyhammer issue work FEATURE_001_auth
-  swissarmyhammer issue mark-complete current
-")]
-    Issue {
-        #[command(subcommand)]
-        subcommand: IssueCommands,
     },
 }
 
@@ -1449,52 +1457,46 @@ Examples:
     Verify,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
-pub enum ShellOutputFormat {
-    Human,
-    Json,
-    Yaml,
-}
-
+#[cfg(not(feature = "dynamic-cli"))]
 #[derive(Subcommand, Debug)]
 pub enum IssueCommands {
     /// Create a new issue
     Create {
-        /// Issue name (optional)
+        /// Issue name
         name: Option<String>,
         /// Issue content
-        #[arg(short, long)]
+        #[arg(long)]
         content: Option<String>,
     },
     /// List all issues
     List {
-        /// Show completed issues
-        #[arg(short, long)]
-        completed: bool,
-        /// Show active issues only
-        #[arg(short, long)]
-        active: bool,
         /// Output format
-        #[arg(short, long, value_enum, default_value = "table")]
-        format: OutputFormat,
+        #[arg(long, value_enum, default_value = "table")]
+        format: Option<OutputFormat>,
+        /// Show completed issues
+        #[arg(long = "completed")]
+        show_completed: bool,
+        /// Show active issues
+        #[arg(long, default_value = "true")]
+        show_active: bool,
     },
     /// Show issue details
     Show {
         /// Issue name
         name: String,
         /// Show raw content
-        #[arg(short, long)]
+        #[arg(long)]
         raw: bool,
     },
-    /// Update an issue
+    /// Update issue content
     Update {
         /// Issue name
         name: String,
         /// New content
-        #[arg(short, long)]
+        #[arg(long)]
         content: String,
         /// Append to existing content
-        #[arg(short, long)]
+        #[arg(long)]
         append: bool,
     },
     /// Mark issue as complete
@@ -1502,26 +1504,34 @@ pub enum IssueCommands {
         /// Issue name
         name: String,
     },
-    /// Start working on an issue
+    /// Start working on issue
     Work {
         /// Issue name
         name: String,
     },
-    /// Merge completed issue
+    /// Merge issue branch
     Merge {
         /// Issue name
         name: String,
-        /// Keep branch after merge
-        #[arg(short, long)]
-        keep_branch: bool,
+        /// Delete branch after merge
+        #[arg(long)]
+        delete_branch: bool,
     },
     /// Show current issue
     Current,
+    /// Show next issue
+    Next,
     /// Show project status
     Status,
-    /// Show the next issue to work on
-    Next,
 }
+
+#[derive(ValueEnum, Clone, Debug)]
+pub enum ShellOutputFormat {
+    Human,
+    Json,
+    Yaml,
+}
+
 
 impl Cli {
     #[cfg(not(feature = "dynamic-cli"))]
