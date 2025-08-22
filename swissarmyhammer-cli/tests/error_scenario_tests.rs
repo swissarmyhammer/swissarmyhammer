@@ -192,7 +192,7 @@ async fn _test_invalid_memo_operations_disabled() -> Result<()> {
     Ok(())
 }
 
-/// Test search error conditions (fast version - no ML model operations)
+/// Test search command migration - search commands moved to dynamic CLI
 #[tokio::test]
 async fn test_search_error_conditions() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
@@ -201,50 +201,41 @@ async fn test_search_error_conditions() -> Result<()> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(&temp_path)?;
 
-    // Test help command works for search - this is fast and doesn't trigger ML model downloads
+    // With static CLI (default), search commands should not be available
+    // This tests the successful migration of search commands to dynamic CLI
     let help_result = run_sah_command_in_process(&["search", "--help"]).await?;
-    assert_eq!(help_result.exit_code, 0, "Search help should succeed");
+    assert_eq!(
+        help_result.exit_code, 2,
+        "Search command should not exist in static CLI mode (exit code 2 = command not found)"
+    );
     assert!(
-        help_result.stdout.contains("search") && help_result.stdout.contains("index"),
-        "Search help should contain subcommands: {}",
-        help_result.stdout
+        help_result.stderr.contains("unrecognized subcommand")
+            || help_result.stderr.contains("invalid")
+            || help_result
+                .stderr
+                .contains("error: unrecognized subcommand 'search'"),
+        "Error message should indicate search command is not available: {}",
+        help_result.stderr
     );
 
-    // Test search index help - also fast
-    let index_help_result = run_sah_command_in_process(&["search", "index", "--help"]).await?;
-    assert_eq!(
-        index_help_result.exit_code, 0,
-        "Search index help should succeed"
-    );
+    // Test that main help doesn't contain standalone "search" command in static mode
+    // Check that there's no line that starts with "  search " (the exact format for commands)
+    let main_help_result = run_sah_command_in_process(&["--help"]).await?;
+    assert_eq!(main_help_result.exit_code, 0, "Main help should succeed");
     assert!(
-        index_help_result.stdout.contains("patterns") && index_help_result.stdout.contains("force"),
-        "Search index help should contain expected options: {}",
-        index_help_result.stdout
+        !main_help_result
+            .stdout
+            .lines()
+            .any(|line| line.trim().starts_with("search ")),
+        "Main help should not contain search commands in static CLI mode (web-search is OK): {}",
+        main_help_result.stdout
     );
 
-    // Test search query help - also fast
-    let query_help_result = run_sah_command_in_process(&["search", "query", "--help"]).await?;
+    // Verify other commands still work (sanity check that CLI isn't completely broken)
+    let validate_help_result = run_sah_command_in_process(&["validate", "--help"]).await?;
     assert_eq!(
-        query_help_result.exit_code, 0,
-        "Search query help should succeed"
-    );
-    assert!(
-        query_help_result.stdout.contains("query") && query_help_result.stdout.contains("limit"),
-        "Search query help should contain expected options: {}",
-        query_help_result.stdout
-    );
-
-    // Test invalid search command - should fail with proper error
-    let invalid_result = run_sah_command_in_process(&["search", "invalid_subcommand"]).await?;
-    assert_eq!(
-        invalid_result.exit_code, 2,
-        "Invalid search subcommand should return clap usage error code"
-    );
-    assert!(
-        invalid_result.stderr.contains("unrecognized subcommand")
-            || invalid_result.stderr.contains("invalid"),
-        "Invalid search subcommand should show proper error: {}",
-        invalid_result.stderr
+        validate_help_result.exit_code, 0,
+        "Validate help should still work"
     );
 
     // Restore original directory

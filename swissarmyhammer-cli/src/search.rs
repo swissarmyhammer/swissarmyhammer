@@ -7,7 +7,7 @@ use tabled::{
     Table, Tabled,
 };
 
-use crate::cli::{OutputFormat, PromptSource, PromptSourceArg, SearchCommands};
+use crate::cli::{OutputFormat, PromptSource, PromptSourceArg};
 use crate::error::format_component_specific_git_error;
 use crate::mcp_integration::{response_formatting, CliToolContext};
 use serde_json::json;
@@ -273,93 +273,6 @@ pub fn generate_excerpt_with_long_text(content: &str, query: &str, max_length: u
     }
 }
 
-/// Run semantic search commands
-pub async fn run_search(subcommand: SearchCommands) -> i32 {
-    use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
-
-    match subcommand {
-        SearchCommands::Index { patterns, force } => {
-            match run_semantic_index(&patterns, force).await {
-                Ok(()) => EXIT_SUCCESS,
-                Err(e) => {
-                    eprintln!("{}", format!("❌ Indexing failed: {e}").red());
-                    EXIT_ERROR
-                }
-            }
-        }
-        SearchCommands::Query {
-            query,
-            limit,
-            format,
-        } => match run_semantic_query_with_format(&query, limit, format).await {
-            Ok(()) => EXIT_SUCCESS,
-            Err(e) => {
-                eprintln!("{}", format!("❌ Search failed: {e}").red());
-                EXIT_ERROR
-            }
-        },
-    }
-}
-
-/// Run semantic indexing for the given patterns using MCP tools
-async fn run_semantic_index(patterns: &[String], force: bool) -> Result<()> {
-    println!("{}", "🔍 Starting semantic search indexing...".cyan());
-
-    if patterns.is_empty() {
-        return Err(anyhow::anyhow!(
-            "No patterns or files provided for indexing. Please specify one or more glob patterns (like '**/*.rs') or file paths."
-        ));
-    }
-
-    // For backward compatibility with tests, show different message based on pattern count
-    if patterns.len() == 1 {
-        println!("Indexing files matching: {}", patterns[0].bright_yellow());
-    } else {
-        println!(
-            "Indexing patterns/files: {}",
-            patterns.join(", ").bright_yellow()
-        );
-    }
-    if force {
-        println!("{}", "Force re-indexing: enabled".yellow());
-    }
-
-    // Use MCP tool for indexing
-    let context = CliToolContext::new()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to create CLI context: {}", e))?;
-
-    // Check for Git repository requirement for search indexing
-    context
-        .require_git_repository()
-        .await
-        .map_err(|e| {
-            match e.downcast_ref::<swissarmyhammer::SwissArmyHammerError>() {
-                Some(swissarmyhammer::SwissArmyHammerError::NotInGitRepository) => {
-                    anyhow::anyhow!(
-                        "{}",
-                        format_component_specific_git_error(
-                            "Search indexing",
-                            "Search index is stored in .swissarmyhammer/semantic.db at the Git repository root."
-                        )
-                    )
-                }
-                _ => anyhow::anyhow!("Failed to check Git repository requirement: {}", e)
-            }
-        })?;
-    let args =
-        context.create_arguments(vec![("patterns", json!(patterns)), ("force", json!(force))]);
-
-    let result = context
-        .execute_tool("search_index", args)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to execute search_index MCP tool: {}. Ensure the swissarmyhammer MCP server is running and accessible.", e))?;
-    search_response_formatting::format_index_response(&result)
-        .map_err(|e| anyhow::anyhow!("Failed to format response: {}", e))?;
-
-    Ok(())
-}
-
 /// Run semantic query search using MCP tools with format
 async fn run_semantic_query_with_format(
     query: &str,
@@ -414,6 +327,15 @@ async fn run_semantic_query_with_format(
 #[allow(dead_code)]
 async fn run_semantic_query(query: &str, limit: usize) -> Result<()> {
     run_semantic_query_with_format(query, limit, OutputFormat::Table).await
+}
+
+/// Stub function for tests - semantic indexing functionality is now handled via MCP tools
+#[allow(dead_code)]
+async fn run_semantic_index(patterns: &[String], _force: bool) -> Result<()> {
+    if patterns.is_empty() {
+        return Err(anyhow::anyhow!("No patterns or files provided"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -549,52 +471,6 @@ mod tests {
 mod search_response_formatting {
     use super::*;
     use rmcp::model::CallToolResult;
-
-    /// Format index response from MCP search_index tool
-    pub fn format_index_response(
-        result: &CallToolResult,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let json_data = response_formatting::extract_json_data(result)?;
-
-        let indexed_files = json_data
-            .get("indexed_files")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let skipped_files = json_data
-            .get("skipped_files")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let total_chunks = json_data
-            .get("total_chunks")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let execution_time = json_data
-            .get("execution_time_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        // Match the exact formatting from the original implementation
-        println!("\n{}", "✅ Indexing completed!".green().bold());
-        println!("Duration: {:.2}s", (execution_time as f32) / 1000.0);
-
-        // Create summary matching original format
-        let mut summary_parts = Vec::new();
-        if indexed_files > 0 {
-            summary_parts.push(format!("{indexed_files} files indexed"));
-        }
-        if total_chunks > 0 {
-            summary_parts.push(format!("{total_chunks} chunks generated"));
-        }
-        if skipped_files > 0 {
-            summary_parts.push(format!("{skipped_files} files skipped"));
-        }
-
-        if !summary_parts.is_empty() {
-            println!("{}", summary_parts.join(", ").bright_cyan());
-        }
-
-        Ok(())
-    }
 
     /// Format query results from MCP search_query tool
     pub fn format_query_results(

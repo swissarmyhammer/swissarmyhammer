@@ -289,38 +289,7 @@ Examples:
         #[command(subcommand)]
         subcommand: IssueCommands,
     },
-    /// Semantic search commands (requires Git repository)
-    #[command(long_about = "
-Manage semantic search functionality for indexing and searching source code files using vector embeddings.
 
-⚠️ REQUIREMENTS: Must be run from within a Git repository.
-Search index is stored in .swissarmyhammer/semantic.db at the Git repository root.
-Uses mistral.rs for embeddings, DuckDB for vector storage, and TreeSitter for parsing.
-
-Basic usage:
-  swissarmyhammer search index <patterns...>   # Index files for semantic search
-  swissarmyhammer search query <query>          # Query indexed files semantically
-
-Indexing:
-  <patterns...>                                 # Glob patterns or files to index (supports multiple)
-  --force                                       # Force re-indexing of all files
-
-Querying:
-  --limit 10                                    # Number of results to return
-  --format table                               # Output format (table, json, yaml)
-
-Examples:
-  swissarmyhammer search index \"**/*.rs\"       # Index all Rust files (quoted glob)
-  swissarmyhammer search index **/*.rs          # Index all Rust files (shell-expanded)
-  swissarmyhammer search index \"src/**/*.py\" --force  # Force re-index Python files
-  swissarmyhammer search index file1.rs file2.rs file3.rs  # Index specific files
-  swissarmyhammer search query \"error handling\"       # Search for error handling code
-  swissarmyhammer search query \"async function\" --limit 5 --format json
-")]
-    Search {
-        #[command(subcommand)]
-        subcommand: SearchCommands,
-    },
     /// Plan a specific specification file
     #[command(long_about = "
 Execute planning workflow for a specific specification file.
@@ -964,29 +933,6 @@ for better discoverability and clearer intent.
         /// Quiet mode - only show errors
         #[arg(short, long)]
         quiet: bool,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum SearchCommands {
-    /// Index files for semantic search
-    Index {
-        /// Glob patterns or files to index (supports both "**/*.rs" and expanded file lists)
-        patterns: Vec<String>,
-        /// Force re-indexing of all files
-        #[arg(short, long)]
-        force: bool,
-    },
-    /// Query indexed files semantically
-    Query {
-        /// Search query
-        query: String,
-        /// Number of results to return
-        #[arg(short, long, default_value = "10")]
-        limit: usize,
-        /// Output format
-        #[arg(short, long, value_enum, default_value = "table")]
-        format: OutputFormat,
     },
 }
 
@@ -1942,108 +1888,6 @@ mod tests {
         assert!(cli.debug);
         assert!(cli.verbose);
         assert!(!cli.quiet);
-    }
-
-    #[test]
-    fn test_search_index_single_pattern() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "search", "index", "**/*.rs"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Index { patterns, force } = subcommand {
-                assert_eq!(patterns, vec!["**/*.rs".to_string()]);
-                assert!(!force);
-            } else {
-                unreachable!("Expected Index subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
-    #[test]
-    fn test_search_index_multiple_patterns() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "search",
-            "index",
-            "src/**/*.rs",
-            "tests/**/*.rs",
-            "benches/**/*.rs",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Index { patterns, force } = subcommand {
-                assert_eq!(
-                    patterns,
-                    vec![
-                        "src/**/*.rs".to_string(),
-                        "tests/**/*.rs".to_string(),
-                        "benches/**/*.rs".to_string()
-                    ]
-                );
-                assert!(!force);
-            } else {
-                unreachable!("Expected Index subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
-    #[test]
-    fn test_search_index_with_force_flag() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "search", "index", "**/*.rs", "--force"]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Index { patterns, force } = subcommand {
-                assert_eq!(patterns, vec!["**/*.rs".to_string()]);
-                assert!(force);
-            } else {
-                unreachable!("Expected Index subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
-    }
-
-    #[test]
-    fn test_search_query_command() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "search",
-            "query",
-            "error handling",
-            "--limit",
-            "5",
-            "--format",
-            "json",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Search { subcommand }) = cli.command {
-            if let SearchCommands::Query {
-                query,
-                limit,
-                format,
-            } = subcommand
-            {
-                assert_eq!(query, "error handling");
-                assert_eq!(limit, 5);
-                assert!(matches!(format, OutputFormat::Json));
-            } else {
-                unreachable!("Expected Query subcommand");
-            }
-        } else {
-            unreachable!("Expected Search command");
-        }
     }
 
     #[test]

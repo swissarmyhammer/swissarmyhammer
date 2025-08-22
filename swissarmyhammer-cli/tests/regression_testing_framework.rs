@@ -58,7 +58,6 @@ impl RegressionTestSuite {
                     "Commands".to_string(),
                     "Options".to_string(),
                     "issue".to_string(),
-                    "search".to_string(),
                 ],
                 expected_stderr_contains: vec![],
                 expected_stdout_not_contains: vec![
@@ -98,15 +97,15 @@ impl RegressionTestSuite {
                 description: "Issue help shows all major subcommands".to_string(),
                 requires_setup: false,
             },
-            // Search command help
+            // Search command migration verification
             ExpectedOutput {
                 command: vec!["search".to_string(), "--help".to_string()],
-                expected_exit_code: 0,
-                expected_stdout_contains: vec!["index".to_string(), "query".to_string()],
-                expected_stderr_contains: vec![],
-                expected_stdout_not_contains: vec!["Error".to_string()],
-                expected_stderr_not_contains: vec!["Error".to_string()],
-                description: "Search help shows major subcommands".to_string(),
+                expected_exit_code: 2,
+                expected_stdout_contains: vec![],
+                expected_stderr_contains: vec!["unrecognized subcommand".to_string()],
+                expected_stdout_not_contains: vec!["index".to_string(), "query".to_string()],
+                expected_stderr_not_contains: vec![],
+                description: "Search commands migrated to dynamic CLI".to_string(),
                 requires_setup: false,
             },
             // Error cases (consistent error behavior)

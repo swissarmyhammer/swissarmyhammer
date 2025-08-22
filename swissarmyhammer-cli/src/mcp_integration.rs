@@ -205,27 +205,18 @@ impl CliToolContext {
 
 /// Utilities for formatting MCP responses for CLI display
 pub mod response_formatting {
-    use colored::*;
     use rmcp::model::{CallToolResult, RawContent};
 
-    /// Extract and format success message from MCP response
+    /// Format successful tool result for display
+    #[allow(dead_code)]
     pub fn format_success_response(result: &CallToolResult) -> String {
-        if result.is_error.unwrap_or(false) {
-            format_error_response(result)
-        } else {
-            extract_text_content(result)
-                .unwrap_or_else(|| "Operation completed successfully".to_string())
-                .green()
-                .to_string()
-        }
+        extract_text_content(result).unwrap_or_else(|| "Operation successful".to_string())
     }
 
-    /// Extract and format error message from MCP response
+    /// Format error tool result for display
+    #[allow(dead_code)]
     pub fn format_error_response(result: &CallToolResult) -> String {
-        extract_text_content(result)
-            .unwrap_or_else(|| "An unknown error occurred".to_string())
-            .red()
-            .to_string()
+        extract_text_content(result).unwrap_or_else(|| "Operation failed".to_string())
     }
 
     /// Extract text content from CallToolResult

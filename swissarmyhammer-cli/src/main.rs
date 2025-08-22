@@ -465,10 +465,7 @@ async fn run_with_static_cli() {
             tracing::info!("Running issue command");
             run_issue(subcommand).await
         }
-        Some(Commands::Search { subcommand }) => {
-            tracing::info!("Running search command");
-            run_search(subcommand).await
-        }
+
         Some(Commands::Plan { plan_filename }) => {
             tracing::info!("Running plan command");
             run_plan(plan_filename).await
@@ -620,13 +617,6 @@ async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
             EXIT_WARNING
         }
     }
-}
-
-#[cfg(not(feature = "dynamic-cli"))]
-async fn run_search(subcommand: cli::SearchCommands) -> i32 {
-    use search;
-
-    search::run_search(subcommand).await
 }
 
 /// Runs the validate command to check prompt files and workflows for syntax and best practices.
