@@ -167,11 +167,33 @@ impl ConfigurationLoader {
     ///
     /// Searches for sah.toml starting from current directory and walking up
     /// to find the repository root (indicated by .git directory or filesystem root)
+    /// Returns None if not within a git repository.
     pub fn load_from_repo_root(&self) -> Result<Option<Configuration>, ConfigurationError> {
         let current_dir = std::env::current_dir().map_err(ConfigurationError::Io)?;
-
         let mut search_dir = current_dir.as_path();
 
+        // First, find the repository root
+        let mut repo_root = None;
+        let mut check_dir = search_dir;
+        loop {
+            if check_dir.join(".git").exists() {
+                repo_root = Some(check_dir);
+                break;
+            }
+            match check_dir.parent() {
+                Some(parent) => check_dir = parent,
+                None => break, // Reached filesystem root
+            }
+        }
+
+        // If not in a repository, return None
+        let repo_root = match repo_root {
+            Some(root) => root,
+            None => return Ok(None),
+        };
+
+        // Now search for sah.toml from current directory up to repository root
+        search_dir = current_dir.as_path();
         loop {
             let sah_toml_path = search_dir.join("sah.toml");
 
@@ -179,15 +201,15 @@ impl ConfigurationLoader {
                 return Ok(Some(self.load_from_file(&sah_toml_path)?));
             }
 
-            // Check if we've reached a git repository root
-            if search_dir.join(".git").exists() {
+            // Stop when we reach the repository root
+            if search_dir == repo_root {
                 break;
             }
 
             // Move to parent directory
             match search_dir.parent() {
                 Some(parent) => search_dir = parent,
-                None => break, // Reached filesystem root
+                None => break, // Reached filesystem root (shouldn't happen)
             }
         }
 
@@ -964,6 +986,46 @@ log_level = "debug"
         // Use isolated test home to avoid interfering with other tests
         let _guard = IsolatedTestHome::new();
 
+        // Save original env var values for cleanup
+        let original_validation = env::var("SAH_SHELL_SECURITY_ENABLE_VALIDATION").ok();
+        let original_max_size = env::var("SAH_SHELL_OUTPUT_MAX_SIZE").ok();
+        let original_timeout = env::var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT").ok();
+        let original_logging = env::var("SAH_SHELL_AUDIT_ENABLE_LOGGING").ok();
+
+        // Ensure cleanup happens even if test panics
+        struct EnvCleanup {
+            validation: Option<String>,
+            max_size: Option<String>,
+            timeout: Option<String>,
+            logging: Option<String>,
+        }
+        impl Drop for EnvCleanup {
+            fn drop(&mut self) {
+                match &self.validation {
+                    Some(val) => env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", val),
+                    None => env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION"),
+                }
+                match &self.max_size {
+                    Some(val) => env::set_var("SAH_SHELL_OUTPUT_MAX_SIZE", val),
+                    None => env::remove_var("SAH_SHELL_OUTPUT_MAX_SIZE"),
+                }
+                match &self.timeout {
+                    Some(val) => env::set_var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT", val),
+                    None => env::remove_var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT"),
+                }
+                match &self.logging {
+                    Some(val) => env::set_var("SAH_SHELL_AUDIT_ENABLE_LOGGING", val),
+                    None => env::remove_var("SAH_SHELL_AUDIT_ENABLE_LOGGING"),
+                }
+            }
+        }
+        let _cleanup = EnvCleanup {
+            validation: original_validation,
+            max_size: original_max_size,
+            timeout: original_timeout,
+            logging: original_logging,
+        };
+
         // Set test environment variables
         env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", "false");
         env::set_var("SAH_SHELL_OUTPUT_MAX_SIZE", "5MB");
@@ -979,11 +1041,7 @@ log_level = "debug"
         assert_eq!(config.execution.default_timeout, 120);
         assert!(config.audit.enable_audit_logging);
 
-        // Clean up environment variables
-        env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
-        env::remove_var("SAH_SHELL_OUTPUT_MAX_SIZE");
-        env::remove_var("SAH_SHELL_EXECUTION_DEFAULT_TIMEOUT");
-        env::remove_var("SAH_SHELL_AUDIT_ENABLE_LOGGING");
+        // Cleanup will happen automatically via Drop
 
         Ok(())
     }
@@ -1125,6 +1183,39 @@ truncation_strategy = "invalid_strategy"
         // Use isolated test environment to avoid interfering with other tests
         let _guard = IsolatedTestEnvironment::new().unwrap();
 
+        // Save original env var values
+        let original_validation = env::var("SAH_SHELL_SECURITY_ENABLE_VALIDATION").ok();
+        let original_log_level = env::var("SAH_SHELL_AUDIT_LOG_LEVEL").ok();
+        let original_max_size = env::var("SAH_SHELL_OUTPUT_MAX_SIZE").ok();
+
+        // Ensure cleanup happens even if test panics
+        struct EnvCleanup {
+            validation: Option<String>,
+            log_level: Option<String>,
+            max_size: Option<String>,
+        }
+        impl Drop for EnvCleanup {
+            fn drop(&mut self) {
+                match &self.validation {
+                    Some(val) => env::set_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION", val),
+                    None => env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION"),
+                }
+                match &self.log_level {
+                    Some(val) => env::set_var("SAH_SHELL_AUDIT_LOG_LEVEL", val),
+                    None => env::remove_var("SAH_SHELL_AUDIT_LOG_LEVEL"),
+                }
+                match &self.max_size {
+                    Some(val) => env::set_var("SAH_SHELL_OUTPUT_MAX_SIZE", val),
+                    None => env::remove_var("SAH_SHELL_OUTPUT_MAX_SIZE"),
+                }
+            }
+        }
+        let _cleanup = EnvCleanup {
+            validation: original_validation,
+            log_level: original_log_level,
+            max_size: original_max_size,
+        };
+
         // Clean up any existing environment variables first
         env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
         env::remove_var("SAH_SHELL_AUDIT_LOG_LEVEL");
@@ -1148,10 +1239,7 @@ truncation_strategy = "invalid_strategy"
         let result = loader.apply_shell_env_overrides(ShellToolConfig::default());
         assert!(result.is_err());
 
-        // Clean up
-        env::remove_var("SAH_SHELL_SECURITY_ENABLE_VALIDATION");
-        env::remove_var("SAH_SHELL_AUDIT_LOG_LEVEL");
-        env::remove_var("SAH_SHELL_OUTPUT_MAX_SIZE");
+        // Cleanup will happen automatically via Drop
 
         Ok(())
     }

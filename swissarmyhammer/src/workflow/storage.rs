@@ -1103,7 +1103,6 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_resolver_user_workflows() {
         use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
@@ -1151,7 +1150,6 @@ stateDiagram-v2
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_resolver_local_workflows() {
         use std::fs;
         use tempfile::TempDir;
@@ -1222,7 +1220,6 @@ stateDiagram-v2
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_resolver_precedence() {
         use std::fs;
 

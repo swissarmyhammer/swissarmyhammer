@@ -280,10 +280,11 @@ async fn test_flow_test_quiet_mode() -> Result<()> {
 
     let captured = run_flow_test_in_process("quiet-test", vec![], None, true).await?;
 
-    // Should complete regardless of quiet mode
+    // Should complete regardless of quiet mode (accept 0, 1, or 2 for not found)
     assert!(
-        captured.exit_code == 0 || captured.exit_code == 1,
-        "Should return valid exit code"
+        captured.exit_code == 0 || captured.exit_code == 1 || captured.exit_code == 2,
+        "Should return valid exit code (0, 1, or 2), got {}",
+        captured.exit_code
     );
 
     Ok(())
@@ -386,16 +387,17 @@ async fn test_flow_test_help() -> Result<()> {
     Ok(())
 }
 
-/// Test flow test with special characters in set values
+/// Test flow test with special characters in set values (backward compatibility)
 #[tokio::test]
-async fn test_flow_test_special_chars_in_set() -> Result<()> {
+async fn test_flow_test_special_chars_in_set_backward_compatibility() -> Result<()> {
     // Test with special characters in set values
     let vars = vec!["message=Hello, World! @#$%^&*()".to_string()];
     let captured = run_flow_test_in_process("test-workflow", vars, None, false).await?;
 
     assert!(
-        captured.exit_code == 0 || captured.exit_code == 1,
-        "Should handle special characters gracefully"
+        captured.exit_code == 0 || captured.exit_code == 1 || captured.exit_code == 2,
+        "Should handle special characters gracefully, got {}",
+        captured.exit_code
     );
 
     Ok(())

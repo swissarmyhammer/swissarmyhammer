@@ -17,6 +17,7 @@
 //! ```
 
 use std::sync::Mutex;
+use std::time::SystemTime;
 use ulid::{Generator, Ulid};
 
 /// Global monotonic ULID generator
@@ -60,7 +61,9 @@ fn get_generator() -> &'static Mutex<Generator> {
 pub fn generate_monotonic_ulid() -> Ulid {
     let generator = get_generator();
     let mut gen = generator.lock().expect("ULID generator mutex poisoned");
-    gen.generate().expect("ULID generation failed")
+    // needs to be from datetime to be strictly monotonic increasing
+    gen.generate_from_datetime(SystemTime::now())
+        .expect("ULID generation failed")
 }
 
 /// Generate a monotonic ULID as a string
