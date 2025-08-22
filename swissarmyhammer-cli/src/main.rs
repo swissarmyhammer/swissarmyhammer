@@ -11,6 +11,10 @@ mod doctor;
 mod dynamic_cli;
 mod error;
 mod exit_codes;
+#[cfg(feature = "dynamic-cli")]
+mod schema_conversion;
+#[cfg(feature = "dynamic-cli")]
+mod schema_validation;
 #[cfg(not(feature = "dynamic-cli"))]
 mod file;
 #[cfg(not(feature = "dynamic-cli"))]
@@ -39,9 +43,7 @@ use clap::CommandFactory;
 use cli::IssueCommands;
 #[cfg(not(feature = "dynamic-cli"))]
 use cli::{Cli, Commands};
-#[cfg(not(feature = "dynamic-cli"))]
-use exit_codes::EXIT_WARNING;
-use exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
+use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 #[cfg(not(feature = "dynamic-cli"))]
 use logging::FileWriterGuard;
 #[cfg(not(feature = "dynamic-cli"))]
@@ -125,6 +127,73 @@ async fn run_with_dynamic_cli() {
 }
 
 #[cfg(feature = "dynamic-cli")]
+async fn handle_tool_validation(
+    cli_tool_context: Arc<CliToolContext>,
+    verbose: bool,
+) -> i32 {
+    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let cli_builder = CliBuilder::new(tool_registry.clone());
+    
+    println!("🔍 Validating MCP tool schemas for CLI compatibility...\n");
+    
+    let validation_stats = cli_builder.get_validation_stats();
+    let validation_errors = cli_builder.validate_all_tools();
+    
+    // Always show validation summary
+    println!("📊 Validation Summary:");
+    println!("   {}", validation_stats.summary());
+    println!();
+    
+    if validation_stats.is_all_valid() {
+        println!("✅ All tools passed validation!");
+        if verbose {
+            let categories = tool_registry.get_cli_categories();
+            println!("\n📋 Validated CLI categories ({}):", categories.len());
+            for category in categories {
+                let tools = tool_registry.get_tools_for_category(&category);
+                println!("   {} - {} tools", category, tools.len());
+                if verbose {
+                    for tool in tools {
+                        println!("     ├── {} ({})", tool.cli_name(), tool.name());
+                    }
+                }
+            }
+        }
+        return EXIT_SUCCESS;
+    }
+    
+    // Show validation errors
+    println!("❌ Validation Issues Found:");
+    
+    if verbose {
+        for (i, error) in validation_errors.iter().enumerate() {
+            println!("{}. {}", i + 1, error);
+            if let Some(suggestion) = error.suggestion() {
+                println!("   💡 {}", suggestion);
+            }
+            println!();
+        }
+    } else {
+        let warnings = cli_builder.get_validation_warnings();
+        for (i, warning) in warnings.iter().enumerate().take(10) {
+            println!("{}. {}", i + 1, warning);
+        }
+        if warnings.len() > 10 {
+            println!("   ... and {} more issues", warnings.len() - 10);
+            println!("   Use --verbose for complete details");
+        }
+    }
+    
+    println!("🔧 To fix these issues:");
+    println!("   • Review tool schema definitions");
+    println!("   • Ensure all CLI tools have proper categories");
+    println!("   • Use supported parameter types (string, integer, number, boolean, array)");
+    println!("   • Add required schema fields like 'properties'");
+    
+    EXIT_WARNING
+}
+
+#[cfg(feature = "dynamic-cli")]
 async fn handle_dynamic_matches(
     matches: clap::ArgMatches,
     cli_tool_context: Arc<CliToolContext>,
@@ -133,9 +202,15 @@ async fn handle_dynamic_matches(
     let verbose = matches.get_flag("verbose");
     let debug = matches.get_flag("debug");
     let quiet = matches.get_flag("quiet");
+    let validate_tools = matches.get_flag("validate-tools");
 
     // Initialize logging similar to static CLI
     configure_logging(verbose, debug, quiet, false).await;
+
+    // Handle --validate-tools flag
+    if validate_tools {
+        return handle_tool_validation(cli_tool_context, verbose).await;
+    }
 
     // Show detailed validation report in verbose mode
     if verbose {

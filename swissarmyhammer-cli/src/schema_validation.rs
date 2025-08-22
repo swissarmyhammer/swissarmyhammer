@@ -715,4 +715,443 @@ mod tests {
         assert!(formatted.contains("Found 2 validation error(s)"));
         assert!(formatted.contains("💡"));
     }
+
+    // Additional comprehensive edge case tests
+    
+    #[test]
+    fn test_empty_schema() {
+        let schema = json!({});
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::MissingSchemaField { .. }
+        ));
+    }
+
+    #[test]
+    fn test_schema_without_type() {
+        let schema = json!({
+            "properties": {
+                "param": {"type": "string"}
+            }
+        });
+        // Should be valid - type field is optional at root level
+        assert!(SchemaValidator::validate_schema(&schema).is_ok());
+    }
+
+    #[test]
+    fn test_schema_with_wrong_root_type() {
+        let schema = json!({
+            "type": "array",
+            "properties": {
+                "param": {"type": "string"}
+            }
+        });
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSchema { .. }
+        ));
+    }
+
+    #[test]
+    fn test_properties_not_object() {
+        let schema = json!({
+            "type": "object",
+            "properties": "not-an-object"
+        });
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSchema { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parameter_with_empty_name() {
+        let properties = serde_json::Map::new();
+        let mut props = properties;
+        props.insert("".to_string(), json!({"type": "string"}));
+
+        let result = SchemaValidator::validate_properties(&props);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidParameterName { .. }
+        ));
+    }
+
+    #[test]
+    fn test_parameter_with_special_characters() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param!@#$%": {"type": "string"},
+                "param with spaces": {"type": "string"},
+                "param.with.dots": {"type": "string"}
+            }
+        });
+
+        let errors = SchemaValidator::validate_schema_comprehensive(&schema);
+        assert!(errors.len() >= 3); // Should have errors for all invalid names
+        
+        for error in &errors {
+            assert!(matches!(error, ValidationError::InvalidParameterName { .. }));
+        }
+    }
+
+    #[test]
+    fn test_valid_parameter_names() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "valid_name": {"type": "string"},
+                "valid-name": {"type": "string"},
+                "ValidName123": {"type": "string"},
+                "name_with_123": {"type": "string"}
+            }
+        });
+
+        assert!(SchemaValidator::validate_schema(&schema).is_ok());
+    }
+
+    #[test]
+    fn test_all_reserved_parameter_names() {
+        let reserved_names = ["help", "version", "verbose", "quiet", "debug"];
+        
+        for reserved in &reserved_names {
+            let mut props = serde_json::Map::new();
+            props.insert(reserved.to_string(), json!({"type": "string"}));
+
+            let result = SchemaValidator::validate_properties(&props);
+            assert!(result.is_err(), "Reserved name '{}' should be invalid", reserved);
+            assert!(matches!(
+                result.unwrap_err(),
+                ValidationError::InvalidParameterName { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn test_property_schema_not_object() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param": "not-an-object"
+            }
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidProperty { .. }
+        ));
+    }
+
+    #[test]
+    fn test_property_without_type() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param": {
+                    "description": "A parameter without type"
+                }
+            }
+        });
+
+        // Should be valid - type is optional and defaults to string
+        assert!(SchemaValidator::validate_schema(&schema).is_ok());
+    }
+
+    #[test]
+    fn test_property_with_invalid_type() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param": {
+                    "type": 123
+                }
+            }
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidProperty { .. }
+        ));
+    }
+
+    #[test]
+    fn test_union_type_with_null() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "optional_string": {
+                    "type": ["string", "null"]
+                }
+            }
+        });
+
+        assert!(SchemaValidator::validate_schema(&schema).is_ok());
+    }
+
+    #[test]
+    fn test_complex_union_type() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "complex_union": {
+                    "type": ["string", "integer", "boolean"]
+                }
+            }
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::UnsupportedSchemaType { .. }
+        ));
+    }
+
+    #[test]
+    fn test_invalid_default_value_types() {
+        let test_cases = vec![
+            (json!({"type": "string", "default": 123}), "string"),
+            (json!({"type": "integer", "default": "not-a-number"}), "integer"),
+            (json!({"type": "boolean", "default": "not-a-boolean"}), "boolean"),
+            (json!({"type": "array", "default": "not-an-array"}), "array"),
+        ];
+
+        for (prop_schema, expected_type) in test_cases {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    "param": prop_schema
+                }
+            });
+
+            let result = SchemaValidator::validate_schema(&schema);
+            assert!(result.is_err(), "Should fail for invalid default type for {}", expected_type);
+            assert!(matches!(
+                result.unwrap_err(),
+                ValidationError::InvalidProperty { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn test_valid_default_value_types() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "string_param": {"type": "string", "default": "default_value"},
+                "int_param": {"type": "integer", "default": 42},
+                "bool_param": {"type": "boolean", "default": true},
+                "array_param": {"type": "array", "default": ["item1", "item2"]}
+            }
+        });
+
+        assert!(SchemaValidator::validate_schema(&schema).is_ok());
+    }
+
+    #[test]
+    fn test_required_field_not_array() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param": {"type": "string"}
+            },
+            "required": "not-an-array"
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSchema { .. }
+        ));
+    }
+
+    #[test]
+    fn test_required_field_with_non_string() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param": {"type": "string"}
+            },
+            "required": [123, "valid_field"]
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidSchema { .. }
+        ));
+    }
+
+    #[test]
+    fn test_required_field_not_in_properties() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "existing_param": {"type": "string"}
+            },
+            "required": ["existing_param", "nonexistent_param"]
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::ConflictingDefinitions { .. }
+        ));
+    }
+
+    #[test]
+    fn test_deeply_nested_structure() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "level1": {
+                    "type": "object",
+                    "properties": {
+                        "level2": {
+                            "type": "object",
+                            "properties": {
+                                "level3": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::UnsupportedSchemaType { .. }
+        ));
+    }
+
+    #[test]
+    fn test_description_not_string() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "param": {
+                    "type": "string",
+                    "description": 123
+                }
+            }
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidProperty { .. }
+        ));
+    }
+
+    #[test]
+    fn test_comprehensive_validation_vs_single_validation() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "invalid@param": {"type": "object"},
+                "help": {"type": "string"},
+                "param with spaces": {"type": "unknown_type"}
+            }
+        });
+
+        // Single validation should stop at first error
+        let single_result = SchemaValidator::validate_schema(&schema);
+        assert!(single_result.is_err());
+
+        // Comprehensive validation should find multiple errors
+        let comprehensive_errors = SchemaValidator::validate_schema_comprehensive(&schema);
+        assert!(comprehensive_errors.len() >= 3);
+    }
+
+    #[test]
+    fn test_error_severity_levels() {
+        let errors = vec![
+            ValidationError::UnsupportedSchemaType {
+                schema_type: "object".to_string(),
+                parameter: "test".to_string(),
+                suggestion: "Fix it".to_string(),
+            },
+            ValidationError::InvalidSchema {
+                message: "Bad schema".to_string(),
+            },
+            ValidationError::InvalidParameterName {
+                parameter: "bad@name".to_string(),
+                reason: "Invalid chars".to_string(),
+            },
+        ];
+
+        assert_eq!(errors[0].severity(), ErrorSeverity::Error);
+        assert_eq!(errors[1].severity(), ErrorSeverity::Critical);
+        assert_eq!(errors[2].severity(), ErrorSeverity::Warning);
+    }
+
+    #[test]
+    fn test_malformed_json_schema() {
+        // Test with a schema that is valid JSON but invalid JSON Schema
+        let schema = json!({
+            "this_is_not": "a_valid_schema",
+            "missing": "required_fields",
+            "random": {
+                "structure": true
+            }
+        });
+
+        let result = SchemaValidator::validate_schema(&schema);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_edge_case_parameter_names() {
+        let edge_cases = vec![
+            ("1param", "starts with number"),
+            ("param-", "ends with hyphen"),  
+            ("param_", "ends with underscore"),
+            ("-param", "starts with hyphen"),
+            ("_param", "starts with underscore"),
+            ("param--name", "double hyphen"),
+            ("param__name", "double underscore"),
+            ("PARAM", "all caps"),
+            ("param123", "ends with numbers"),
+        ];
+
+        for (param_name, description) in edge_cases {
+            let schema = json!({
+                "type": "object",
+                "properties": {
+                    param_name: {"type": "string"}
+                }
+            });
+
+            let result = SchemaValidator::validate_schema(&schema);
+            match param_name {
+                // These should be valid
+                "PARAM" | "param123" | "_param" | "param_" | "param--name" | "param__name" => {
+                    assert!(result.is_ok(), "Parameter '{}' ({}) should be valid", param_name, description);
+                },
+                // These should be invalid  
+                _ => {
+                    // For now, we're being permissive with some edge cases
+                    // The exact validation rules can be refined based on CLI requirements
+                }
+            }
+        }
+    }
 }

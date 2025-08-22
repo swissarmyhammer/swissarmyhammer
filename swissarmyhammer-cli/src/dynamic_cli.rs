@@ -4,7 +4,7 @@
 //! eliminating the need for redundant CLI command enums and ensuring consistency
 //! between MCP and CLI interfaces.
 
-use swissarmyhammer_cli::schema_validation::{SchemaValidator, ValidationError};
+use crate::schema_validation::{SchemaValidator, ValidationError};
 use clap::{Arg, ArgAction, Command};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -266,6 +266,12 @@ This CLI includes both static commands and dynamic commands generated from MCP t
                     .short('q')
                     .long("quiet")
                     .help("Suppress all output except errors")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("validate-tools")
+                    .long("validate-tools")
+                    .help("Validate all tool schemas and exit")
                     .action(ArgAction::SetTrue),
             );
 

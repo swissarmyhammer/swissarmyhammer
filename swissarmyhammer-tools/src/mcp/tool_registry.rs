@@ -11,8 +11,154 @@
 //! 2. **ToolRegistry**: Central registry that stores and manages tool instances
 //! 3. **ToolContext**: Shared context providing access to storage and services
 //! 4. **BaseToolImpl**: Common utility methods for tool implementations
+//! 5. **Validation Framework**: Comprehensive schema validation and error handling
 //!
-//! # Migration from Legacy System
+//! # Validation and Error Handling Framework
+//!
+//! The tool registry includes a comprehensive validation system that ensures all MCP tools
+//! are compatible with CLI generation and provides robust error handling:
+//!
+//! ## Schema Validation
+//!
+//! All tools undergo schema validation to ensure CLI compatibility:
+//!
+//! - **Supported Types**: string, integer, number, boolean, array
+//! - **Unsupported Types**: object, null (with helpful error messages)
+//! - **Parameter Names**: Must be valid CLI parameter names (alphanumeric, hyphens, underscores)
+//! - **Required Fields**: Validated against actual properties
+//! - **CLI Categories**: Tools must have valid categories for CLI integration
+//!
+//! ## Graceful Degradation
+//!
+//! The system handles invalid tools gracefully:
+//!
+//! - **Startup Warnings**: Invalid tools are reported but don't crash the application
+//! - **Selective Skipping**: Only problematic tools are excluded from CLI generation
+//! - **Detailed Feedback**: Users receive specific guidance on fixing schema issues
+//! - **Validation Statistics**: Summary reports show overall health of tool ecosystem
+//!
+//! ## Error Handling Patterns
+//!
+//! The framework provides multiple error handling approaches:
+//!
+//! ```rust,ignore
+//! // Strict validation (fails fast)
+//! registry.validate_cli_tools()?; // Returns Result<(), Vec<ToolValidationError>>
+//!
+//! // Graceful validation with warnings
+//! let warnings = registry.get_tool_validation_warnings(); // Returns Vec<String>
+//! for warning in warnings {
+//!     tracing::warn!("{}", warning);
+//! }
+//!
+//! // Validation statistics for monitoring
+//! let stats = registry.get_validation_stats(); // Returns CliValidationStats
+//! println!("Success rate: {:.1}%", stats.success_rate());
+//! ```
+//!
+//! ## CLI Integration Features
+//!
+//! Tools are automatically categorized and integrated into dynamic CLI:
+//!
+//! - **Automatic Categorization**: Tools named `category_action` are grouped by category
+//! - **Dynamic Command Generation**: CLI commands generated from tool schemas
+//! - **Help Integration**: Tool descriptions become CLI help text
+//! - **Validation Flags**: `--validate-tools` provides comprehensive validation reports
+//!
+//! ## Usage Examples
+//!
+//! ### Basic Tool Registration with Validation
+//!
+//! ```rust,ignore
+//! use crate::mcp::tool_registry::{ToolRegistry, McpTool, ToolValidationError};
+//!
+//! let mut registry = ToolRegistry::new();
+//! registry.register(MyTool::new());
+//!
+//! // Validate all tools before use
+//! match registry.validate_cli_tools() {
+//!     Ok(()) => println!("All tools are valid!"),
+//!     Err(errors) => {
+//!         eprintln!("Found {} validation errors:", errors.len());
+//!         for error in errors {
+//!             eprintln!("- {}", error);
+//!             if let Some(suggestion) = error.suggestion() {
+//!                 eprintln!("  💡 {}", suggestion);
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ### Graceful Error Handling in Production
+//!
+//! ```rust,ignore
+//! let registry = build_tool_registry(); // Your registry setup
+//!
+//! // Get validation statistics for monitoring
+//! let stats = registry.get_validation_stats();
+//! if !stats.is_all_valid() {
+//!     tracing::warn!("Tool validation issues: {}", stats.summary());
+//!     
+//!     // Log warnings but continue operation
+//!     let warnings = registry.get_tool_validation_warnings();
+//!     for warning in warnings.iter().take(5) {
+//!         tracing::warn!("Validation issue: {}", warning);
+//!     }
+//! }
+//!
+//! // Build CLI with graceful degradation
+//! let cli_builder = CliBuilder::new(registry);
+//! let cli = cli_builder.build_cli_with_warnings(); // Skips invalid tools
+//! ```
+//!
+//! ### Tool Development Best Practices
+//!
+//! When creating new tools, follow these patterns for robust validation:
+//!
+//! ```rust,ignore
+//! #[derive(Default)]
+//! pub struct WellDesignedTool;
+//!
+//! #[async_trait]
+//! impl McpTool for WellDesignedTool {
+//!     fn name(&self) -> &'static str {
+//!         "memo_create" // category_action pattern
+//!     }
+//!
+//!     fn schema(&self) -> serde_json::Value {
+//!         serde_json::json!({
+//!             "type": "object",
+//!             "properties": {
+//!                 // Use supported types only
+//!                 "title": {
+//!                     "type": "string", 
+//!                     "description": "Clear description for CLI help",
+//!                     "minLength": 1
+//!                 },
+//!                 "priority": {
+//!                     "type": "integer",
+//!                     "description": "Priority level (1-5)",
+//!                     "minimum": 1,
+//!                     "maximum": 5,
+//!                     "default": 3
+//!                 },
+//!                 "tags": {
+//!                     "type": "array",
+//!                     "description": "Optional tags for categorization",
+//!                     "items": {"type": "string"}
+//!                 }
+//!             },
+//!             "required": ["title"] // Match actual requirements
+//!         })
+//!     }
+//!
+//!     // CLI integration handled automatically via naming convention
+//!     // cli_category() returns "memo", cli_name() returns "create"
+//! }
+//! ```
+//!
+//! ## Migration from Legacy System
 //!
 //! This registry pattern replaces the previous delegation-based approach where all
 //! tools were routed through `ToolHandlers` with a large match statement. The new
@@ -22,6 +168,7 @@
 //! - **Extensibility**: New tools can be added without modifying existing code
 //! - **Testability**: Tools can be unit tested independently
 //! - **Performance**: Direct access to storage eliminates delegation overhead
+//! - **Reliability**: Comprehensive validation prevents runtime CLI failures
 //!
 //! # Creating New Tools
 //!
@@ -724,7 +871,7 @@ impl ToolRegistry {
                 for error in errors {
                     warnings.push(ToolValidationWarning {
                         tool_name: tool.name().to_string(),
-                        error: error,
+                        error,
                         severity: ToolValidationSeverity::Warning,
                     });
                 }
@@ -896,7 +1043,7 @@ pub enum ToolValidationSeverity {
 }
 
 /// Comprehensive validation report for all tools
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ToolValidationReport {
     /// Total number of tools validated
     pub total_tools: usize,
@@ -911,12 +1058,7 @@ pub struct ToolValidationReport {
 impl ToolValidationReport {
     /// Create a new empty validation report
     pub fn new() -> Self {
-        Self {
-            total_tools: 0,
-            valid_tools: 0,
-            invalid_tools: 0,
-            errors: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Check if all tools passed validation
