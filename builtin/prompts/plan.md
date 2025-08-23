@@ -19,8 +19,6 @@ Process all specifications in the ./specification directory.
 
 Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order. Use the issue_create tool to make each issue.
 
-{% render "principals" %}
-{% render "coding_standards" %}
 
 ## Guidelines
 
