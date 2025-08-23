@@ -3,9 +3,6 @@ title: "review code"
 description: "Improved the current code changes"
 ---
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Rules
 
 DO NOT code now, the goal is just to create `./CODE_REVIEW.md` todo items.
