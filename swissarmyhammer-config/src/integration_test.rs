@@ -5,18 +5,15 @@ mod tests {
     use crate::{ConfigProvider, TemplateContext};
     use serial_test::serial;
     use std::fs;
-    use tempfile::TempDir;
+    use swissarmyhammer_test_utils::IsolatedTestEnvironment;
 
     #[test]
     #[serial]
     fn test_basic_functionality() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
-            std::env::temp_dir() // Fallback to system temp directory
-        });
-
+        let _guard = IsolatedTestEnvironment::new().unwrap();
+        
         // Create a basic config file
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = _guard.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
 
         fs::write(
@@ -32,12 +29,10 @@ port = 5432
         )
         .unwrap();
 
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_guard.temp_dir()).unwrap();
 
         let provider = ConfigProvider::new();
         let context = provider.load_template_context().unwrap();
-
-        std::env::set_current_dir(original_dir).unwrap();
 
         // Verify basic values are loaded
         assert_eq!(
@@ -145,12 +140,9 @@ port = 5432
     #[test]
     #[serial]
     fn test_multiple_config_formats_integration() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
-            std::env::temp_dir() // Fallback to system temp directory
-        });
-
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let _guard = IsolatedTestEnvironment::new().unwrap();
+        
+        let sah_dir = _guard.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
 
         // Create configs in different formats
@@ -189,12 +181,10 @@ database:
         )
         .unwrap();
 
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_guard.temp_dir()).unwrap();
 
         let provider = ConfigProvider::new();
         let context = provider.load_template_context().unwrap();
-
-        std::env::set_current_dir(original_dir).unwrap();
 
         // Should have values from all formats
         assert!(context.get("toml_specific").is_some());
@@ -220,12 +210,9 @@ database:
     #[test]
     #[serial]
     fn test_end_to_end_configuration_with_env_substitution() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
-            std::env::temp_dir() // Fallback to system temp directory
-        });
-
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let _guard = IsolatedTestEnvironment::new().unwrap();
+        
+        let sah_dir = _guard.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
 
         // Set up environment variables for substitution
@@ -253,7 +240,7 @@ file = "/var/log/app.log"
         )
         .unwrap();
 
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_guard.temp_dir()).unwrap();
 
         // Also set environment variables that should override config
         std::env::set_var("SAH_APP_NAME", "Env Override App");
@@ -262,7 +249,7 @@ file = "/var/log/app.log"
         let provider = ConfigProvider::new();
         let context = provider.load_template_context().unwrap();
 
-        std::env::set_current_dir(original_dir).unwrap();
+
 
         // Cleanup environment variables
         std::env::remove_var("DB_HOST");
@@ -331,12 +318,9 @@ file = "/var/log/app.log"
     #[test]
     #[serial]
     fn test_error_handling_integration() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
-            std::env::temp_dir() // Fallback to system temp directory
-        });
+        let _guard = IsolatedTestEnvironment::new().unwrap();
 
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+        let sah_dir = _guard.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
 
         // Create config with missing environment variable (no default)
@@ -349,7 +333,7 @@ database_url = "${MISSING_DATABASE_URL}"
         )
         .unwrap();
 
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_guard.temp_dir()).unwrap();
 
         let provider = ConfigProvider::new();
 
@@ -365,7 +349,7 @@ database_url = "${MISSING_DATABASE_URL}"
         // Test strict mode (should fail due to missing environment variable)
         let result = provider.load_template_context_strict();
 
-        std::env::set_current_dir(original_dir).unwrap();
+
 
         assert!(result.is_err());
     }
@@ -373,12 +357,10 @@ database_url = "${MISSING_DATABASE_URL}"
     #[test]
     #[serial]
     fn test_complex_nested_configuration() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
-            std::env::temp_dir() // Fallback to system temp directory
-        });
+        let _guard = IsolatedTestEnvironment::new().unwrap();
 
-        let sah_dir = temp_dir.path().join(".swissarmyhammer");
+
+        let sah_dir = _guard.temp_dir().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
 
         // Create complex nested configuration
@@ -414,7 +396,7 @@ beta_api = true
         )
         .unwrap();
 
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_guard.temp_dir()).unwrap();
 
         // Set environment variables for nested override
         std::env::set_var("SAH_SERVER__PORT", "9090");
@@ -425,7 +407,7 @@ beta_api = true
         let provider = ConfigProvider::new();
         let context = provider.load_template_context().unwrap();
 
-        std::env::set_current_dir(original_dir).unwrap();
+
 
         // Cleanup
         std::env::remove_var("SAH_SERVER__PORT");
