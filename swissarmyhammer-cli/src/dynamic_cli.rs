@@ -232,7 +232,7 @@ impl CliBuilder {
         }
     }
 
-    /// Build the complete CLI with both static and dynamic commands
+    /// Build the complete CLI with dynamic commands generated from MCP tools
     pub fn build_cli(&self) -> Command {
         let mut cli = Command::new("swissarmyhammer")
             .version(env!("CARGO_PKG_VERSION"))
@@ -243,7 +243,8 @@ swissarmyhammer is an MCP (Model Context Protocol) server that manages
 prompts as markdown files. It supports file watching, template substitution,
 and seamless integration with Claude Code.
 
-This CLI includes both static commands and dynamic commands generated from MCP tools.
+This CLI dynamically generates all MCP tool commands, eliminating code duplication
+and ensuring perfect consistency between MCP and CLI interfaces.
 ",
             )
             // Add verbose/debug/quiet flags from parent CLI
@@ -275,7 +276,7 @@ This CLI includes both static commands and dynamic commands generated from MCP t
                     .action(ArgAction::SetTrue),
             );
 
-        // Add static serve command
+        // Add core serve command (non-MCP command)
         cli = cli.subcommand(
             Command::new("serve")
                 .about("Run as MCP server (default when invoked via stdio)")

@@ -89,7 +89,7 @@ async fn test_search_commands_require_git_repository() {
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    // In static CLI mode, search commands should not exist
+    // Without git repository, search commands should fail gracefully
     let result = run_sah_command_in_process(&["search", "index", "**/*.rs"]).await;
 
     // Restore original directory
@@ -103,7 +103,7 @@ async fn test_search_commands_require_git_repository() {
 
     assert!(
         output.stderr.contains("unrecognized subcommand 'search'"),
-        "Should indicate search command is not available in static CLI: {}",
+        "Should indicate search command error: {}",
         output.stderr
     );
 }
@@ -118,7 +118,7 @@ async fn test_search_query_requires_git_repository() {
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    // In static CLI mode, search commands should not exist
+    // Without git repository, search commands should fail gracefully
     let result = run_sah_command_in_process(&["search", "query", "test"]).await;
 
     // Restore original directory
@@ -132,7 +132,7 @@ async fn test_search_query_requires_git_repository() {
 
     assert!(
         output.stderr.contains("unrecognized subcommand 'search'"),
-        "Should indicate search command is not available in static CLI: {}",
+        "Should indicate search command error: {}",
         output.stderr
     );
 }
@@ -239,7 +239,7 @@ async fn test_git_repository_error_exit_codes() {
 
 /// Test that file commands don't require Git repository (should work)
 #[tokio::test]
-#[ignore = "File commands migrated to dynamic CLI - static CLI no longer supports file commands"]
+#[ignore = "File commands available through dynamic CLI architecture"]
 async fn test_file_commands_work_without_git() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 

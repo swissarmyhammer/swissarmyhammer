@@ -66,7 +66,7 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
                         });
                     }
                     _ => {
-                        // Return actual parse errors as failed execution for static commands
+                        // Return actual parse errors as failed execution for CLI commands
                         return Ok(CapturedOutput {
                             stdout: String::new(),
                             stderr: error_str,
