@@ -11,7 +11,9 @@ mod tests {
     #[serial]
     fn test_basic_functionality() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         // Create a basic config file
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
@@ -144,7 +146,9 @@ port = 5432
     #[serial]
     fn test_multiple_config_formats_integration() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
@@ -217,7 +221,9 @@ database:
     #[serial]
     fn test_end_to_end_configuration_with_env_substitution() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
@@ -326,7 +332,9 @@ file = "/var/log/app.log"
     #[serial]
     fn test_error_handling_integration() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();
@@ -366,7 +374,9 @@ database_url = "${MISSING_DATABASE_URL}"
     #[serial]
     fn test_complex_nested_configuration() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         let sah_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir_all(&sah_dir).unwrap();

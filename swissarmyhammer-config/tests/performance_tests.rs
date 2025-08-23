@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestEnvironment, ConfigScope};
+use common::{ConfigScope, TestEnvironment};
 use serial_test::serial;
 use std::time::{Duration, Instant};
 use swissarmyhammer_config::{ConfigFormat, TemplateRenderer};
@@ -180,8 +180,11 @@ fn test_environment_variable_override_performance() {
     let mut env = TestEnvironment::new().unwrap();
 
     // Create base configuration
-    env.write_project_config(&TestEnvironment::create_complex_nested_config(), ConfigFormat::Toml)
-        .unwrap();
+    env.write_project_config(
+        &TestEnvironment::create_complex_nested_config(),
+        ConfigFormat::Toml,
+    )
+    .unwrap();
 
     // Set many environment variables
     let env_vars: Vec<(String, String)> = (0..50)
@@ -303,8 +306,11 @@ fn test_template_rendering_performance() {
     let mut env = TestEnvironment::new().unwrap();
 
     // Set up configuration for template rendering
-    env.write_project_config(&TestEnvironment::create_sample_toml_config(), ConfigFormat::Toml)
-        .unwrap();
+    env.write_project_config(
+        &TestEnvironment::create_sample_toml_config(),
+        ConfigFormat::Toml,
+    )
+    .unwrap();
 
     env.set_env_vars([
         ("SAH_RENDER_VAR", "performance_test"),
@@ -336,7 +342,9 @@ Services: {% for service in services %}{{ service.name }}:{{ service.port }} {% 
     // Measure complex template rendering performance
     let start = Instant::now();
     for _ in 0..PERFORMANCE_ITERATIONS {
-        let _result = renderer.render_with_config(complex_template.trim(), None).unwrap();
+        let _result = renderer
+            .render_with_config(complex_template.trim(), None)
+            .unwrap();
     }
     let complex_duration = start.elapsed();
     let complex_avg = complex_duration / PERFORMANCE_ITERATIONS as u32;
@@ -376,8 +384,11 @@ fn test_concurrent_configuration_loading_performance() {
     let env = Arc::new(TestEnvironment::new().unwrap());
 
     // Create a moderately complex configuration
-    env.write_project_config(&TestEnvironment::create_complex_nested_config(), ConfigFormat::Toml)
-        .unwrap();
+    env.write_project_config(
+        &TestEnvironment::create_complex_nested_config(),
+        ConfigFormat::Toml,
+    )
+    .unwrap();
 
     const THREAD_COUNT: usize = 4;
     const ITERATIONS_PER_THREAD: usize = 25;
@@ -440,7 +451,7 @@ fn test_memory_usage_performance() {
 
     // Create a configuration with many repetitive sections
     let mut memory_test_config = String::new();
-    
+
     for i in 0..100 {
         memory_test_config.push_str(&format!(
             r#"
@@ -453,7 +464,12 @@ priority = {}
 tags = ["tag1", "tag2", "tag3", "tag4", "tag5"]
 metadata = {{ created_at = "2024-01-01T00:00:00Z", version = "1.0.0" }}
 "#,
-            i, i, i, i, i % 2 == 0, i % 10
+            i,
+            i,
+            i,
+            i,
+            i % 2 == 0,
+            i % 10
         ));
     }
 
@@ -462,7 +478,7 @@ metadata = {{ created_at = "2024-01-01T00:00:00Z", version = "1.0.0" }}
 
     // Load configuration multiple times and measure consistency
     let mut load_times = Vec::new();
-    
+
     for _ in 0..20 {
         let start = Instant::now();
         let _context = env.load_template_context().unwrap();
@@ -516,25 +532,48 @@ fn test_configuration_file_discovery_performance() {
 
     for (name_part, format) in &configs {
         let config_content = match format {
-            ConfigFormat::Toml => format!("test_key_{} = \"toml_value\"", name_part.replace('.', "_")),
+            ConfigFormat::Toml => {
+                format!("test_key_{} = \"toml_value\"", name_part.replace('.', "_"))
+            }
             ConfigFormat::Yaml => format!("test_key_{}: yaml_value", name_part.replace('.', "_")),
-            ConfigFormat::Json => format!("{{\"test_key_{}\": \"json_value\"}}", name_part.replace('.', "_")),
+            ConfigFormat::Json => format!(
+                "{{\"test_key_{}\": \"json_value\"}}",
+                name_part.replace('.', "_")
+            ),
         };
 
-        env.write_config(&config_content, *format, ConfigScope::Project, &name_part.split('.').next().unwrap())
-            .unwrap();
+        env.write_config(
+            &config_content,
+            *format,
+            ConfigScope::Project,
+            &name_part.split('.').next().unwrap(),
+        )
+        .unwrap();
     }
 
     // Also create global configs
     for (name_part, format) in &configs {
         let config_content = match format {
-            ConfigFormat::Toml => format!("global_key_{} = \"toml_global\"", name_part.replace('.', "_")),
-            ConfigFormat::Yaml => format!("global_key_{}: yaml_global", name_part.replace('.', "_")),
-            ConfigFormat::Json => format!("{{\"global_key_{}\": \"json_global\"}}", name_part.replace('.', "_")),
+            ConfigFormat::Toml => format!(
+                "global_key_{} = \"toml_global\"",
+                name_part.replace('.', "_")
+            ),
+            ConfigFormat::Yaml => {
+                format!("global_key_{}: yaml_global", name_part.replace('.', "_"))
+            }
+            ConfigFormat::Json => format!(
+                "{{\"global_key_{}\": \"json_global\"}}",
+                name_part.replace('.', "_")
+            ),
         };
 
-        env.write_config(&config_content, *format, ConfigScope::Global, &name_part.split('.').next().unwrap())
-            .unwrap();
+        env.write_config(
+            &config_content,
+            *format,
+            ConfigScope::Global,
+            &name_part.split('.').next().unwrap(),
+        )
+        .unwrap();
     }
 
     // Measure file discovery performance

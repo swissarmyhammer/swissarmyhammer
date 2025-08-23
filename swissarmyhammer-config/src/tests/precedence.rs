@@ -9,7 +9,9 @@ use tempfile::TempDir;
 #[serial]
 fn test_environment_overrides_files() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -66,7 +68,9 @@ database_host = "file-db.example.com"
 #[serial]
 fn test_project_overrides_global() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -117,7 +121,9 @@ shared_setting = "project_value"
 #[serial]
 fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -163,7 +169,9 @@ fn test_swissarmyhammer_prefix_overrides_sah_prefix() {
 #[serial]
 fn test_file_format_precedence_within_same_source() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -218,7 +226,9 @@ yaml_only: from_yaml
 #[serial]
 fn test_full_precedence_chain() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -295,7 +305,9 @@ fn test_defaults_are_lowest_priority() {
 #[serial]
 fn test_config_file_overrides_defaults() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -345,7 +357,9 @@ custom_config_key = "from_config"
 #[serial]
 fn test_environment_overrides_defaults_and_files() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -401,7 +415,9 @@ custom_key = "from_file"
 #[serial]
 fn test_nested_environment_variables() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -468,7 +484,9 @@ fn test_nested_environment_variables() {
 #[serial]
 fn test_complete_precedence_order() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     // Create home directory simulation for global config
     let home_dir = temp_dir.path().join("home");

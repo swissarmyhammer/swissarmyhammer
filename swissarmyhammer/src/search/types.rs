@@ -925,22 +925,34 @@ mod tests {
 
     #[test]
     fn test_semantic_config_home_fallback() {
-        use std::panic;
-
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
+        // Safely get original directory, but handle case where it might not exist
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
+
+        // Guard to restore directory
+        struct DirGuard {
+            original: std::path::PathBuf,
+        }
+
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original);
+            }
+        }
+
+        let _guard = DirGuard {
+            original: original_dir,
+        };
+
         // Change to a directory without .git repository
-        let original_dir = std::env::current_dir().expect("Failed to get current directory");
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        // Use panic::catch_unwind to ensure directory is restored even on panic
-        let config_result = panic::catch_unwind(SemanticConfig::default);
-
-        // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let config = config_result.unwrap();
+        // Get the config without panic handler since we have the guard
+        let config = SemanticConfig::default();
 
         // Should fallback to home directory since no Git repository was found
         assert!(config
@@ -958,7 +970,6 @@ mod tests {
     #[test]
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
-        use std::panic;
 
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
 
@@ -966,17 +977,31 @@ mod tests {
         fs::create_dir(temp_dir.path().join(".git")).unwrap();
         // Note: intentionally NOT creating .swissarmyhammer
 
+        // Safely get original directory, but handle case where it might not exist
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
+
+        // Guard to restore directory
+        struct DirGuard {
+            original: std::path::PathBuf,
+        }
+
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original);
+            }
+        }
+
+        let _guard = DirGuard {
+            original: original_dir,
+        };
+
         // Change to the temp directory to simulate being in a Git repository
-        let original_dir = std::env::current_dir().expect("Failed to get current directory");
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
-        // Use panic::catch_unwind to ensure directory is restored even on panic
-        let config_result = panic::catch_unwind(SemanticConfig::default);
-
-        // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let config = config_result.unwrap();
+        // Get the config without panic handler since we have the guard
+        let config = SemanticConfig::default();
 
         // Should fallback to home directory since Git repository exists but no .swissarmyhammer
         assert!(config

@@ -338,7 +338,6 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     };
                     (output.to_string(), String::new(), EXIT_SUCCESS)
                 }
-
             }
         }
         Some(Commands::Flow { subcommand }) => {

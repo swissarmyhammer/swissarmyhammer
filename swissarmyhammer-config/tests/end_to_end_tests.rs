@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestEnvironment, ConfigScope};
+use common::{ConfigScope, TestEnvironment};
 use serial_test::serial;
 use swissarmyhammer_config::{ConfigFormat, TemplateRenderer};
 
@@ -49,7 +49,7 @@ debug_mode = true
 
     let provider = env.create_provider();
     let renderer = TemplateRenderer::new().unwrap();
-    
+
     // Load the test configuration context
     let context = provider.load_template_context().unwrap();
 
@@ -62,12 +62,14 @@ debug_mode = true
     );
 
     // Test nested configuration templating
-    let db_template = "Database: {{ database.user }}@{{ database.host }}:{{ database.port }}/{{ database.name }}";
+    let db_template =
+        "Database: {{ database.user }}@{{ database.host }}:{{ database.port }}/{{ database.name }}";
     let db_result = renderer.render(db_template, &context).unwrap();
     assert_eq!(db_result, "Database: app_user@db.example.com:5432/appdb");
 
-    // Test environment variable overrides in templates  
-    let deploy_template = "Deploying to {{ deployment.namespace }} with {{ deployment.replicas }} replicas";
+    // Test environment variable overrides in templates
+    let deploy_template =
+        "Deploying to {{ deployment.namespace }} with {{ deployment.replicas }} replicas";
     let deploy_result = renderer.render(deploy_template, &context).unwrap();
     assert_eq!(deploy_result, "Deploying to production with 3 replicas");
 
@@ -88,10 +90,11 @@ Authentication is disabled
     let mut workflow_vars = std::collections::HashMap::new();
     workflow_vars.insert("step".to_string(), serde_json::json!("deployment"));
     workflow_vars.insert("target_env".to_string(), serde_json::json!("staging"));
-    
+
     // Create context with workflow variables (workflow vars should override config)
     let workflow_context = provider.create_context_with_vars(workflow_vars).unwrap();
-    let workflow_template = "Step: {{ step }} | Target: {{ target_env }} | Project: {{ project_name }}";
+    let workflow_template =
+        "Step: {{ step }} | Target: {{ target_env }} | Project: {{ project_name }}";
     let workflow_result = renderer
         .render(workflow_template, &workflow_context)
         .unwrap();
@@ -204,7 +207,8 @@ debug_mode = "${DEBUG:-false}"
 log_level = "${LOG_LEVEL:-info}"
 "#;
 
-    env.write_project_config(config, ConfigFormat::Toml).unwrap();
+    env.write_project_config(config, ConfigFormat::Toml)
+        .unwrap();
 
     let context = env.load_template_context().unwrap();
 
@@ -305,7 +309,8 @@ unicode_string = "Hello 世界 🌍"
 symbols = "~!@#$%^&*()_+-={}[]|\\:;\"'<>,.?/"
 "#;
 
-    env.write_project_config(config, ConfigFormat::Toml).unwrap();
+    env.write_project_config(config, ConfigFormat::Toml)
+        .unwrap();
     let context = env.load_template_context().unwrap();
 
     // Verify all data types are handled correctly

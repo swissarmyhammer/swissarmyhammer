@@ -817,7 +817,11 @@ mod tests {
         let _test_env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let temp_dir = crate::test_utils::create_temp_dir_with_retry();
-        let original_dir = std::env::current_dir().expect("Failed to get current directory");
+
+        // Safely get original directory, but handle case where it might not exist
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         // Ensure we restore directory on panic or normal exit
         struct DirGuard {
@@ -1779,8 +1783,10 @@ mod tests {
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
         let temp_dir = create_test_git_repo().expect("Failed to create test git repo");
 
-        // Save original directory and restore it safely at the end
-        let original_dir = std::env::current_dir().expect("Failed to get current directory");
+        // Safely get original directory, but handle case where it might not exist
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         // Use a closure to ensure directory is restored even if test panics
         let test_result = std::panic::catch_unwind(|| {

@@ -132,12 +132,23 @@ mod tests {
         let mut library = PromptLibrary::new();
 
         // Change to the temp directory to simulate local prompts
-        let original_dir = match std::env::current_dir() {
-            Ok(dir) => dir,
-            Err(_) => {
-                // Current directory is invalid, skip this test
-                return;
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
+
+        // Guard to restore directory
+        struct DirGuard {
+            original: std::path::PathBuf,
+        }
+
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original);
             }
+        }
+
+        let _guard = DirGuard {
+            original: original_dir,
         };
 
         if std::env::set_current_dir(&temp_dir).is_err() {
@@ -146,9 +157,6 @@ mod tests {
         }
 
         resolver.load_all_prompts(&mut library).unwrap();
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
 
         // Check that our test prompt was loaded
         let prompt = library.get("local_prompt").unwrap();

@@ -131,11 +131,14 @@ optional_with_fallback = "${OPTIONAL_VAR:-default_value}"
     // Legacy mode should handle missing vars gracefully (empty string)
     let legacy_result = env.load_template_context();
     assert!(legacy_result.is_ok());
-    
+
     let context = legacy_result.unwrap();
     assert_eq!(context.get_string("project_name").unwrap(), "Test Project");
     assert_eq!(context.get_string("database_url").unwrap(), ""); // Empty for missing var
-    assert_eq!(context.get_string("optional_with_fallback").unwrap(), "default_value");
+    assert_eq!(
+        context.get_string("optional_with_fallback").unwrap(),
+        "default_value"
+    );
 
     // Strict mode should fail on missing variables
     let strict_result = env.load_template_context_strict();
@@ -165,7 +168,7 @@ fn test_file_permission_error_handling() {
     // The configuration system should handle permission errors gracefully
     // Note: This test might behave differently depending on the system and user privileges
     let result = env.load_template_context();
-    
+
     // Reset permissions for cleanup
     #[cfg(unix)]
     {
@@ -191,7 +194,7 @@ fn test_corrupted_configuration_file_error_handling() {
 
     // Should handle corrupted file gracefully
     let result = env.load_template_context();
-    
+
     // This might succeed with empty config or fail with parse error
     match result {
         Ok(context) => {
@@ -235,7 +238,7 @@ debug = true
 
     // The system behavior depends on figment's handling of mixed valid/invalid files
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
             // If it succeeds, should have loaded the valid configuration
@@ -244,7 +247,10 @@ debug = true
         }
         Err(error) => {
             // If it fails, should be due to the invalid JSON
-            println!("Failed as expected due to invalid configuration: {:?}", error);
+            println!(
+                "Failed as expected due to invalid configuration: {:?}",
+                error
+            );
         }
     }
 }
@@ -272,7 +278,7 @@ fallback_value = "safe_value"
 
     // Should handle circular references gracefully
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
             // Should either resolve to empty or the literal string
@@ -294,7 +300,7 @@ fn test_extremely_nested_configuration_limits() {
 
     // Create deeply nested configuration to test limits
     let mut deeply_nested_config = String::from("project_name = \"Deep Nesting Test\"\n");
-    
+
     // Create nested sections
     let mut current_section = String::new();
     for i in 0..20 {
@@ -316,7 +322,7 @@ fn test_extremely_nested_configuration_limits() {
 
     // Should handle deep nesting gracefully (within reasonable limits)
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
             assert_eq!(
@@ -356,7 +362,7 @@ control_chars = "\t\n\r"
 
     // Should handle Unicode characters gracefully
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
             assert!(context.get("project_name").is_some());
@@ -377,7 +383,7 @@ fn test_configuration_size_limits() {
 
     // Create very large configuration to test memory limits
     let mut large_config = String::from("project_name = \"Size Test\"\n");
-    
+
     // Add many sections and keys
     for section in 0..100 {
         large_config.push_str(&format!("[section_{}]\n", section));
@@ -391,21 +397,20 @@ fn test_configuration_size_limits() {
 
     // Add some very long string values
     for i in 0..10 {
-        large_config.push_str(&format!(
-            "large_string_{} = \"{}\"\n",
-            i,
-            "x".repeat(10000)
-        ));
+        large_config.push_str(&format!("large_string_{} = \"{}\"\n", i, "x".repeat(10000)));
     }
 
     env.write_project_config(&large_config, ConfigFormat::Toml)
         .unwrap();
 
-    println!("Large configuration size: ~{} lines", large_config.lines().count());
+    println!(
+        "Large configuration size: ~{} lines",
+        large_config.lines().count()
+    );
 
     // Should handle large configuration within reasonable limits
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
             assert_eq!(context.get_string("project_name").unwrap(), "Size Test");
@@ -452,18 +457,21 @@ complex_substitution = "${QUOTE_VAR:-${DOLLAR_VAR:-${UNICODE_VAR:-fallback}}}"
 
     // Should handle edge cases in environment variable substitution
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
-            assert_eq!(context.get_string("project_name").unwrap(), "Edge Case Test");
-            
+            assert_eq!(
+                context.get_string("project_name").unwrap(),
+                "Edge Case Test"
+            );
+
             // Check that various edge cases are handled
             assert_eq!(context.get_string("empty_value").unwrap(), "");
             assert_eq!(context.get_string("whitespace_value").unwrap(), "   ");
             assert!(context.get("newline_value").is_some());
             assert!(context.get("quote_value").is_some());
             assert!(context.get("unicode_value").is_some());
-            
+
             println!("Environment variable edge cases handled successfully");
         }
         Err(error) => {
@@ -501,7 +509,7 @@ shared_key = "project_shared"
 
     // System behavior depends on figment's error handling strategy
     let result = env.load_template_context();
-    
+
     match result {
         Ok(context) => {
             // If it recovers, should have at least global config values
@@ -510,7 +518,10 @@ shared_key = "project_shared"
             println!("Successfully recovered from partial configuration failure");
         }
         Err(error) => {
-            println!("Failed to recover from partial failure (expected): {:?}", error);
+            println!(
+                "Failed to recover from partial failure (expected): {:?}",
+                error
+            );
         }
     }
 }
@@ -542,11 +553,11 @@ bad_boolean = truee
         Err(ConfigError::ParseError { source, path }) => {
             let error_msg = format!("{}", source);
             println!("Error message: {}", error_msg);
-            
+
             // Error message should be informative (not just generic)
             assert!(!error_msg.is_empty());
             assert!(error_msg.len() > 10); // Should be more than just "parse error"
-            
+
             // Should include file path information
             assert!(path.is_some());
             println!("Error file path: {:?}", path);

@@ -13,7 +13,6 @@ use figment::{
 };
 use tracing::{debug, info, trace};
 
-
 /// Configuration provider using figment
 ///
 /// This provider loads configuration from multiple sources with a clear precedence order.
@@ -449,7 +448,10 @@ impl ConfigProvider {
 
         // Test if the file can be parsed by attempting to extract a dummy value
         // This will trigger any parsing errors at the file level
-        let test_result: Result<std::collections::HashMap<String, serde_json::Value>, figment::Error> = figment.extract();
+        let test_result: Result<
+            std::collections::HashMap<String, serde_json::Value>,
+            figment::Error,
+        > = figment.extract();
         if let Err(e) = test_result {
             return Err(ConfigError::parse_error(Some(path.to_path_buf()), e));
         }
@@ -583,7 +585,9 @@ mod tests {
     #[serial]
     fn test_build_figment_no_config_files() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
 
         // Change to temp directory with no .swissarmyhammer folder
         std::env::set_current_dir(temp_dir.path()).unwrap();
@@ -621,7 +625,9 @@ number_key = 42
         .unwrap();
 
         // Change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
@@ -663,7 +669,9 @@ number_key: 42
         .unwrap();
 
         // Change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
@@ -706,7 +714,9 @@ number_key: 42
         .unwrap();
 
         // Change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let provider = ConfigProvider::new();
@@ -758,7 +768,9 @@ yaml_only: yaml_value
         .unwrap();
 
         // Change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Set environment variable that should override file values

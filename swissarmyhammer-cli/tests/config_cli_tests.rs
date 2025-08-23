@@ -175,12 +175,6 @@ async fn test_config_variables_json_format() -> Result<()> {
     Ok(())
 }
 
-
-
-
-
-
-
 #[tokio::test]
 async fn test_config_env_no_file() -> Result<()> {
     let temp_dir = TempDir::new().unwrap();
@@ -256,12 +250,6 @@ async fn test_config_env_json_format() -> Result<()> {
     assert!(result.stdout.contains("[]"));
     Ok(())
 }
-
-
-
-
-
-
 
 #[tokio::test]
 async fn test_config_complex_template_with_nested_access() -> Result<()> {
