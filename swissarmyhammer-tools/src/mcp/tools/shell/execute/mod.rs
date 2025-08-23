@@ -1450,7 +1450,7 @@ impl McpTool for ShellExecuteTool {
 mod tests {
     use super::*;
     use crate::mcp::tool_registry::ToolContext;
-    use std::collections::HashMap;
+
     use std::sync::Arc;
     use swissarmyhammer::common::rate_limiter::MockRateLimiter;
 
