@@ -2,8 +2,8 @@
 
 use crate::cli::PromptSubcommand;
 use crate::error::{CliError, CliResult};
-use swissarmyhammer::{PromptLibrary, PromptResolver, PromptFilter};
 use std::collections::HashMap;
+use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
 
 /// Main entry point for prompt command
 pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
@@ -14,10 +14,8 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             source,
             category,
             search,
-        } => {
-            run_list_command(format, verbose, source, category, search)
-                .map_err(|e| CliError::new(e.to_string(), 1))
-        }
+        } => run_list_command(format, verbose, source, category, search)
+            .map_err(|e| CliError::new(e.to_string(), 1)),
         PromptSubcommand::Test {
             prompt_name,
             file,
@@ -26,13 +24,13 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             copy,
             save,
             debug,
-        } => {
-            run_test_command(prompt_name, file, vars, raw, copy, save, debug).await
-                .map_err(|e| CliError::new(e.to_string(), 1))
-        }
-        PromptSubcommand::Search { .. } => {
-            Err(CliError::new("Search functionality has been removed as part of infrastructure cleanup".to_string(), 1))
-        }
+        } => run_test_command(prompt_name, file, vars, raw, copy, save, debug)
+            .await
+            .map_err(|e| CliError::new(e.to_string(), 1)),
+        PromptSubcommand::Search { .. } => Err(CliError::new(
+            "Search functionality has been removed as part of infrastructure cleanup".to_string(),
+            1,
+        )),
     }
 }
 
@@ -75,9 +73,20 @@ fn run_list_command(
             println!("Available prompts:");
             for prompt in prompts {
                 if verbose {
-                    println!("  {} - {} ({})", prompt.name, 
-                            prompt.metadata.get("title").and_then(|v| v.as_str()).unwrap_or("No title"),
-                            prompt.metadata.get("description").and_then(|v| v.as_str()).unwrap_or("No description"));
+                    println!(
+                        "  {} - {} ({})",
+                        prompt.name,
+                        prompt
+                            .metadata
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("No title"),
+                        prompt
+                            .metadata
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("No description")
+                    );
                 } else {
                     println!("  {}", prompt.name);
                 }
@@ -107,10 +116,10 @@ async fn run_test_command(
     _debug: bool,
 ) -> Result<(), anyhow::Error> {
     let prompt_name = prompt_name.ok_or_else(|| anyhow::anyhow!("Prompt name is required"))?;
-    
+
     // Load all prompts
     let library = PromptLibrary::new();
-    
+
     // Parse variables
     let mut arguments = HashMap::new();
     for var in vars {
@@ -119,11 +128,11 @@ async fn run_test_command(
             arguments.insert(parts[0].to_string(), parts[1].to_string());
         }
     }
-    
+
     // Render the prompt
     let rendered = library.render_prompt(&prompt_name, &arguments)?;
     println!("{}", rendered);
-    
+
     Ok(())
 }
 
