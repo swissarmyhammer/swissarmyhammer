@@ -1644,7 +1644,7 @@ mod tests {
 
         // This test verifies that PromptLoader only successfully loads files
         // that are valid prompts (with proper YAML front matter)
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Create some directories with invalid markdown files
         let test_dirs = ["issues", "doc", "examples"];
@@ -1768,7 +1768,7 @@ This is another prompt.
     fn test_partial_template_without_description() {
         use std::fs;
 
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Create a partial template without front matter (common for partials)
         let partial_path = temp_dir.path().join("_header.liquid.md");

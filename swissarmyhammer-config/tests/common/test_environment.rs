@@ -3,24 +3,22 @@
 #![allow(dead_code)] // Test utilities may not all be used in current tests
 
 use serde_json::json;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use swissarmyhammer_config::{ConfigFormat, ConfigProvider, ConfigResult, TemplateContext};
-use tempfile::TempDir;
+use swissarmyhammer_test_utils::IsolatedTestEnvironment;
 
 /// Comprehensive test environment for integration testing
 ///
 /// Provides isolated test environments with proper cleanup and realistic configuration scenarios
+/// This extends the base IsolatedTestEnvironment with config-specific functionality.
 pub struct TestEnvironment {
-    #[allow(dead_code)] // Used for RAII cleanup
-    temp_dir: TempDir,
+    // Use the shared isolated test environment for HOME isolation
+    isolated_env: IsolatedTestEnvironment,
     project_dir: PathBuf,
     global_config_dir: PathBuf,
     project_config_dir: PathBuf,
     original_dir: PathBuf,
-    original_home: Option<String>,
-    env_vars_to_restore: HashMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,31 +30,28 @@ pub enum ConfigScope {
 impl TestEnvironment {
     /// Create a new isolated test environment
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let temp_dir = TempDir::new()?;
+        // Use the shared isolated test environment for HOME isolation
+        let isolated_env = IsolatedTestEnvironment::new()?;
         let original_dir = std::env::current_dir()?;
-        let original_home = std::env::var("HOME").ok();
 
-        // Create realistic directory structure
-        let project_dir = temp_dir.path().join("test-project");
-        let global_config_dir = temp_dir.path().join("home").join(".swissarmyhammer");
+        // Create realistic directory structure in the isolated home
+        let home_path = isolated_env.home_path();
+        let project_dir = home_path.join("test-project");
+        let global_config_dir = isolated_env.swissarmyhammer_dir();
         let project_config_dir = project_dir.join(".swissarmyhammer");
 
         fs::create_dir_all(&project_dir)?;
-        fs::create_dir_all(&global_config_dir)?;
         fs::create_dir_all(&project_config_dir)?;
 
-        // Set up environment for isolated testing
-        std::env::set_var("HOME", temp_dir.path().join("home"));
+        // Set current directory to the project directory for config-specific tests
         std::env::set_current_dir(&project_dir)?;
 
         Ok(TestEnvironment {
-            temp_dir,
+            isolated_env,
             project_dir,
             global_config_dir,
             project_config_dir,
             original_dir,
-            original_home,
-            env_vars_to_restore: HashMap::new(),
         })
     }
 
@@ -109,15 +104,7 @@ impl TestEnvironment {
         key: K,
         value: V,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let key_str = key.as_ref().to_string();
-        let original_value = std::env::var(&key_str).ok();
-
-        // Store for later restoration
-        self.env_vars_to_restore
-            .insert(key_str.clone(), original_value);
-
-        std::env::set_var(&key_str, value.as_ref());
-        Ok(())
+        (&mut self.isolated_env).set_env_var(key, value)
     }
 
     /// Set multiple environment variables at once
@@ -127,10 +114,7 @@ impl TestEnvironment {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        for (key, value) in vars {
-            self.set_env_var(key, value)?;
-        }
-        Ok(())
+        (&mut self.isolated_env).set_env_vars(vars)
     }
 
     /// Create a ConfigProvider using the test environment
@@ -352,7 +336,7 @@ sample_rate = 0.1
     /// Get the path to the temporary directory
     #[allow(dead_code)]
     pub fn temp_path(&self) -> &Path {
-        self.temp_dir.path()
+        self.isolated_env.temp_dir()
     }
 
     /// Get the path to the project directory
@@ -430,25 +414,11 @@ sample_rate = 0.1
 }
 
 impl Drop for TestEnvironment {
-    /// Clean up the test environment by restoring original directory and environment variables
+    /// Clean up the test environment by restoring original directory
+    /// (HOME and environment variables are handled by the IsolatedTestEnvironment)
     fn drop(&mut self) {
         // Restore original working directory
         let _ = std::env::set_current_dir(&self.original_dir);
-
-        // Restore original HOME environment variable
-        if let Some(home) = &self.original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
-
-        // Restore all environment variables that were modified
-        for (key, original_value) in &self.env_vars_to_restore {
-            match original_value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
     }
 }
 

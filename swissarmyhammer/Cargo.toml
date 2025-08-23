@@ -77,6 +77,9 @@ dirs = { workspace = true }
 # Mermaid parsing
 mermaid-parser = { git = "https://github.com/wballard/mermaid_parser" }
 
+# Test utilities (conditional)
+swissarmyhammer-test-utils = { path = "../swissarmyhammer-test-utils", optional = true }
+
 # CEL expression evaluation
 cel-interpreter = "0.8"
 
@@ -117,7 +120,7 @@ semantic-search = [
     "duckdb",
 ]
 fast-tests = []
-test-utils = []
+test-utils = ["swissarmyhammer-test-utils"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -126,6 +129,7 @@ criterion = { workspace = true }
 
 futures = "0.3"
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+swissarmyhammer-test-utils = { path = "../swissarmyhammer-test-utils" }
 
 [lib]
 name = "swissarmyhammer"

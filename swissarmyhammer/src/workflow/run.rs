@@ -148,7 +148,7 @@ mod tests {
     /// Returns (temp_dir_path, abort_file_path, guard)
     fn setup_isolated_test() -> (std::path::PathBuf, std::path::PathBuf, impl Drop) {
         // Create a temporary directory for this test
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let temp_path = temp_dir.path().to_path_buf();
 
         // Create the abort file path within the temp directory

@@ -1156,7 +1156,7 @@ stateDiagram-v2
 
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Safely get original directory, but handle case where it might not exist
         let original_dir = std::env::current_dir().unwrap_or_else(|_| {
@@ -1233,7 +1233,7 @@ stateDiagram-v2
         // Use isolated test environment to safely manage both HOME and current working directory
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Safely get original directory, but handle case where it might not exist
         let original_dir = std::env::current_dir().unwrap_or_else(|_| {

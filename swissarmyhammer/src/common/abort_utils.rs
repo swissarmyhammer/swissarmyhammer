@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_success() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
         let reason = "Test abort reason";
 
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_creates_directory() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
 
         // Directory shouldn't exist initially
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_existing_directory() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
 
         // Pre-create the directory
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_abort_file_exists() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
 
         // Initially should not exist
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_read_abort_file() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
         let reason = "Test abort reason";
 
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_remove_abort_file() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
 
         // Initially should return false (file doesn't exist)
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_unicode() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
         let reason = "Test abort with émojis 🚫 and ñoñ-ASCII characters 中文";
 
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_create_abort_file_overwrite() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let work_dir = temp_dir.path();
 
         // Create first abort file

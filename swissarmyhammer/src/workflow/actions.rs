@@ -2548,7 +2548,7 @@ mod tests {
         use std::fs;
 
         // Create a unique temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let temp_path = temp_dir.path();
 
         let action = ShellAction::new("pwd".to_string())

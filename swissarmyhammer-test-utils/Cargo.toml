@@ -1,0 +1,10 @@
+[package]
+name = "swissarmyhammer-test-utils"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tempfile.workspace = true

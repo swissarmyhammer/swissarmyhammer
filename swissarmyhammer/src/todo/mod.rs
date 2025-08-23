@@ -368,7 +368,7 @@ mod tests {
         // Test 1: Outside Git repository - should fail
         use std::env;
 
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let original_dir = match env::current_dir() {
             Ok(dir) => dir,
             Err(_) => {

@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_walk_files_with_extensions() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create some test files
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_found_parent() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create nested structure with .git at parent level
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_depth_limit() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create very deep directory structure
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_within_depth_limit() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create directory structure well within MAX_DIRECTORY_DEPTH (5 levels)
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_multiple_git_dirs() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create nested structure with .git at multiple levels
@@ -401,7 +401,7 @@ mod tests {
     fn test_find_git_repository_root_at_filesystem_root() {
         // This test is challenging to create reliably across platforms
         // We'll test the edge case where we reach the filesystem root
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create a single level directory
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_find_git_repository_root_depth_counting() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let base = temp_dir.path();
 
         // Create simple structure to understand depth counting
@@ -462,6 +462,9 @@ mod tests {
 
         // Create Git repository without .swissarmyhammer directory
         create_dir_safe(test_dir.join(".git"));
+        
+        // Remove the .swissarmyhammer directory created by IsolatedTestEnvironment
+        let _ = fs::remove_dir_all(test_dir.join(".swissarmyhammer"));
 
         // Test without changing current directory
         let result = find_swissarmyhammer_directory_from(&test_dir);
@@ -491,6 +494,10 @@ mod tests {
 
         // Create Git repository with .swissarmyhammer as a file instead of directory
         create_dir_safe(test_dir.join(".git"));
+        
+        // Remove the .swissarmyhammer directory created by IsolatedTestEnvironment
+        let _ = fs::remove_dir_all(test_dir.join(".swissarmyhammer"));
+        
         fs::write(test_dir.join(".swissarmyhammer"), "not a directory").unwrap();
 
         // Change to the test directory for this test
@@ -618,6 +625,10 @@ mod tests {
 
         // Create Git repository with .swissarmyhammer as a file instead of directory
         create_dir_safe(test_dir.join(".git"));
+        
+        // Remove the .swissarmyhammer directory created by IsolatedTestEnvironment
+        let _ = fs::remove_dir_all(test_dir.join(".swissarmyhammer"));
+        
         fs::write(test_dir.join(".swissarmyhammer"), "not a directory").unwrap();
 
         // Change to the test directory for this test

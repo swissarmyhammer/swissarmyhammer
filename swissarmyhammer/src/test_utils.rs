@@ -51,6 +51,21 @@ use std::sync::OnceLock;
 
 use tempfile::TempDir;
 
+// Re-export the shared IsolatedTestEnvironment for convenience (only in test builds)
+#[cfg(any(test, feature = "test-utils"))]
+pub use swissarmyhammer_test_utils::{IsolatedTestEnvironment, create_temp_dir, create_temp_dir_with_retry};
+
+// For compatibility with existing code that doesn't use the shared crate
+#[cfg(not(any(test, feature = "test-utils")))]
+pub fn create_temp_dir() -> TempDir {
+    TempDir::new().expect("Failed to create temporary directory")
+}
+
+#[cfg(not(any(test, feature = "test-utils")))]
+pub fn create_temp_dir_with_retry() -> std::io::Result<TempDir> {
+    TempDir::new()
+}
+
 /// Helper struct to ensure process cleanup in tests
 ///
 /// This guard automatically kills and waits for a child process when dropped,
@@ -264,7 +279,7 @@ pub fn create_test_home_guard() -> TestHomeGuard {
 /// }
 /// ```
 pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
-    let temp_dir = create_temp_dir();
+    let temp_dir = TempDir::new().expect("Failed to create temporary directory");
     let home_path = temp_dir.path().to_path_buf();
 
     // Create mock SwissArmyHammer directory structure
@@ -346,150 +361,11 @@ impl Drop for IsolatedTestHome {
     }
 }
 
-/// RAII helper that isolates HOME directory for tests without changing the working directory
-/// This prevents test pollution while allowing parallel test execution
-#[cfg(any(test, feature = "test-utils"))]
-pub struct IsolatedTestEnvironment {
-    _home_guard: IsolatedTestHome,
-    _temp_dir: TempDir,
-}
 
-#[cfg(any(test, feature = "test-utils"))]
-impl IsolatedTestEnvironment {
-    /// Creates a new isolated test environment with temporary HOME directory only.
-    ///
-    /// This creates:
-    /// - A temporary home directory with mock .swissarmyhammer structure
-    /// - A temporary directory that can be used as working directory if needed
-    /// - Does NOT change the current working directory to allow parallel test execution
-    pub fn new() -> std::io::Result<Self> {
-        // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
-        for attempt in 1..=3 {
-            match Self::try_create() {
-                Ok(env) => return Ok(env),
-                Err(_e) if attempt < 3 => {
-                    // Add small delay before retry to reduce contention
-                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        unreachable!()
-    }
 
-    /// Try to create an isolated test environment (single attempt)
-    fn try_create() -> std::io::Result<Self> {
-        let home_guard = IsolatedTestHome::new();
-        let temp_dir = TempDir::new()?;
 
-        // Ensure the temporary directory exists and is accessible
-        let temp_path = temp_dir.path();
-        if !temp_path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Temporary directory does not exist: {:?}", temp_path),
-            ));
-        }
 
-        // Verify we can access the directory
-        match std::fs::read_dir(temp_path) {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("Cannot access temporary directory {:?}: {}", temp_path, e),
-                ));
-            }
-        }
 
-        // NOTE: We do NOT change the current working directory to allow parallel test execution
-
-        Ok(Self {
-            _home_guard: home_guard,
-            _temp_dir: temp_dir,
-        })
-    }
-
-    /// Get the path to the isolated home directory
-    pub fn home_path(&self) -> PathBuf {
-        self._home_guard.home_path()
-    }
-
-    /// Get the path to the .swissarmyhammer directory in the isolated home
-    pub fn swissarmyhammer_dir(&self) -> PathBuf {
-        self._home_guard.swissarmyhammer_dir()
-    }
-
-    /// Get the path to the issues directory in the isolated home
-    pub fn issues_dir(&self) -> PathBuf {
-        self.swissarmyhammer_dir().join("issues")
-    }
-
-    /// Get the path to the completed issues directory in the isolated home
-    pub fn complete_dir(&self) -> PathBuf {
-        self.issues_dir().join("complete")
-    }
-
-    /// Get the path to the temporary working directory
-    ///
-    /// Tests can use this directory for operations that need a writable directory,
-    /// but should pass this path explicitly to functions rather than changing
-    /// the global current working directory.
-    pub fn temp_dir(&self) -> &std::path::Path {
-        self._temp_dir.path()
-    }
-}
-
-/// Create a temporary directory for testing
-///
-/// This is a convenience wrapper around tempfile::TempDir::new() that provides
-/// better error handling and consistent behavior across tests. Includes retry
-/// logic to handle parallel test execution scenarios.
-pub fn create_temp_dir() -> TempDir {
-    create_temp_dir_with_retry()
-}
-
-/// Create a temporary directory with retry logic for parallel test execution
-///
-/// This function attempts to create a temporary directory up to 3 times with
-/// exponential backoff to handle filesystem contention during parallel test execution.
-/// This is the robust replacement for TempDir::new().unwrap() throughout the codebase.
-pub fn create_temp_dir_with_retry() -> TempDir {
-    // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
-    for attempt in 1..=3 {
-        match TempDir::new() {
-            Ok(dir) => return dir,
-            Err(_) if attempt < 3 => {
-                // Add small delay before retry to reduce contention
-                std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
-                continue;
-            }
-            Err(e) => panic!(
-                "Failed to create temporary directory for test after 3 attempts: {}",
-                e
-            ),
-        }
-    }
-    unreachable!()
-}
-
-/// Macro to create a temporary directory with retry logic
-///
-/// This replaces `TempDir::new().unwrap()` calls throughout the codebase
-/// with a robust version that handles parallel test execution.
-///
-/// # Example
-/// ```no_run
-/// # use swissarmyhammer::test_utils::temp_dir_with_retry;
-/// let temp_dir = temp_dir_with_retry!();
-/// ```
-#[macro_export]
-macro_rules! temp_dir_with_retry {
-    () => {
-        $crate::test_utils::create_temp_dir_with_retry()
-    };
-}
 
 /// Create a set of standard test prompts for testing
 ///
@@ -545,7 +421,7 @@ pub fn create_test_prompt_library() -> PromptLibrary {
 /// the standard test prompts. Returns both the TempDir and the path.
 #[cfg(test)]
 pub fn create_temp_prompt_dir() -> (TempDir, PathBuf) {
-    let temp_dir = create_temp_dir();
+    let temp_dir = TempDir::new().expect("Failed to create temporary directory");
     let temp_path = temp_dir.path().to_path_buf();
 
     // Create prompt files
@@ -579,7 +455,7 @@ impl TestFileSystem {
     /// Create a new test file system
     pub fn new() -> Self {
         Self {
-            temp_dir: create_temp_dir(),
+            temp_dir: TempDir::new().expect("Failed to create temporary directory"),
         }
     }
 

@@ -1419,7 +1419,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_storage() -> (FileSystemMemoStorage, TempDir) {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let storage = FileSystemMemoStorage::new(temp_dir.path().join("memos"));
         (storage, temp_dir)
     }
@@ -2148,7 +2148,7 @@ mod tests {
     }
 
     async fn test_directory_creation_impl() -> Result<()> {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let nested_path = temp_dir
             .path()
             .join("deeply")
@@ -2377,7 +2377,7 @@ mod tests {
             use std::fs;
             use std::os::unix::fs::PermissionsExt;
 
-            let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+            let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
             let memos_dir = temp_dir.path().join("readonly_memos");
             fs::create_dir_all(&memos_dir).unwrap();
 
@@ -2538,7 +2538,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_directory_edge_cases() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let empty_memos_dir = temp_dir.path().join("empty_memos");
 
         // Don't create the directory yet
