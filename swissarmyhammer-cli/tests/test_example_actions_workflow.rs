@@ -8,9 +8,13 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 use swissarmyhammer::workflow::{
-    MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowRunStatus,
+    MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowRunStatus, Workflow,
 };
+
+/// Cached workflow to avoid repeated file loading and parsing
+static EXAMPLE_ACTIONS_WORKFLOW: OnceLock<Workflow> = OnceLock::new();
 
 /// Helper function to load the example-actions workflow
 fn load_example_actions_workflow() -> Result<String> {
@@ -22,11 +26,18 @@ fn load_example_actions_workflow() -> Result<String> {
     Ok(content)
 }
 
+/// Get cached parsed workflow
+fn get_example_actions_workflow() -> &'static Workflow {
+    EXAMPLE_ACTIONS_WORKFLOW.get_or_init(|| {
+        let workflow_content = load_example_actions_workflow().unwrap();
+        MermaidParser::parse(&workflow_content, "example-actions").unwrap()
+    })
+}
+
 #[tokio::test]
 async fn test_example_actions_workflow_loads() -> Result<()> {
     // Test that the workflow can be loaded and parsed
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow();
 
     assert_eq!(workflow.name.as_str(), "example-actions");
 
@@ -48,8 +59,7 @@ async fn test_example_actions_workflow_loads() -> Result<()> {
 #[tokio::test]
 async fn test_success_branch_execution() -> Result<()> {
     // Test that the success branch is taken when actions succeed
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
 
@@ -86,8 +96,7 @@ async fn test_success_branch_execution() -> Result<()> {
 #[tokio::test]
 async fn test_failure_branch_execution() -> Result<()> {
     // Test the failure branch by simulating a failure scenario
-    let workflow_content = load_example_actions_workflow()?;
-    let mut workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let mut workflow = get_example_actions_workflow().clone();
 
     // Modify the PromptExample state to use a non-existent prompt to force failure
     if let Some(state) = workflow.states.get_mut(&StateId::new("PromptExample")) {
@@ -188,8 +197,7 @@ async fn test_failure_branch_execution() -> Result<()> {
 #[tokio::test]
 async fn test_branch_decision_condition1() -> Result<()> {
     // Test that Branch1 is selected when example_var contains "Hello"
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
     let mut context = HashMap::new();
@@ -221,8 +229,7 @@ async fn test_branch_decision_condition1() -> Result<()> {
 #[tokio::test]
 async fn test_branch_decision_condition2() -> Result<()> {
     // Test that Branch2 is selected when failure is true
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
 
@@ -260,8 +267,7 @@ async fn test_branch_decision_condition2() -> Result<()> {
 #[tokio::test]
 async fn test_branch_decision_default() -> Result<()> {
     // Test that DefaultBranch is selected when no conditions match
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
     let mut context = HashMap::new();
@@ -293,8 +299,7 @@ async fn test_branch_decision_default() -> Result<()> {
 #[tokio::test]
 async fn test_full_workflow_with_branching() -> Result<()> {
     // Test the complete workflow execution with branching
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
 
@@ -338,8 +343,7 @@ async fn test_full_workflow_with_branching() -> Result<()> {
 #[tokio::test]
 async fn test_all_branches_are_reachable() -> Result<()> {
     // Test that all branches in the workflow can be reached with different contexts
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
 
@@ -421,8 +425,7 @@ async fn test_all_branches_are_reachable() -> Result<()> {
 #[tokio::test]
 async fn test_debug_cel_expressions() -> Result<()> {
     // Debug test to understand CEL expression evaluation
-    let workflow_content = load_example_actions_workflow()?;
-    let workflow = MermaidParser::parse(&workflow_content, "example-actions")?;
+    let workflow = get_example_actions_workflow().clone();
 
     let mut executor = WorkflowExecutor::new();
 
