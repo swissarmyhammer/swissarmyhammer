@@ -26,7 +26,7 @@ fn test_basic_integration() {
         "Integration Test Project"
     );
     assert_eq!(context.get_string("environment").unwrap(), "test");
-    assert_eq!(context.get_bool("debug").unwrap(), true);
+    assert!(context.get_bool("debug").unwrap());
 
     // Verify nested configuration
     if let Some(database) = context.get("database") {
@@ -151,7 +151,7 @@ nested_value = "from_config"
 
     // Environment variables should override file values
     assert_eq!(context.get_string("app_name").unwrap(), "Env Override App");
-    assert_eq!(context.get_bool("debug").unwrap(), true);
+    assert!(context.get_bool("debug").unwrap());
     assert_eq!(context.get_string("database_host").unwrap(), "env-db");
 
     // Environment-only value should be present
@@ -456,7 +456,7 @@ build_command = "cargo build --release"
         context.get_string("project_name").unwrap(),
         "My SwissArmyHammer Project"
     );
-    assert_eq!(context.get_bool("debug").unwrap(), true); // Project overrides global
+    assert!(context.get_bool("debug").unwrap()); // Project overrides global
 
     // Verify global settings are inherited
     assert_eq!(context.get_number("default_timeout").unwrap(), 30.0);
