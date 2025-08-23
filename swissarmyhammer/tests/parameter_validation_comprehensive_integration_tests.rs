@@ -1047,19 +1047,17 @@ mod specification_compliance_tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::OnceLock;
-    use swissarmyhammer::common::ParameterType;
     use swissarmyhammer::common::{
-        discover_workflow_parameters, DefaultParameterResolver, ParameterResolver, Parameter
+        discover_workflow_parameters, DefaultParameterResolver, Parameter, ParameterResolver,
+        ParameterType,
     };
-    
+
     /// Cached greeting workflow parameters to avoid repeated file loading
     static GREETING_WORKFLOW_PARAMS: OnceLock<Vec<Parameter>> = OnceLock::new();
-    
+
     /// Get cached greeting workflow parameters
     fn get_greeting_workflow_params() -> &'static Vec<Parameter> {
-        GREETING_WORKFLOW_PARAMS.get_or_init(|| {
-            discover_workflow_parameters("greeting").unwrap()
-        })
+        GREETING_WORKFLOW_PARAMS.get_or_init(|| discover_workflow_parameters("greeting").unwrap())
     }
 
     /// Test that workflow parameters are defined in frontmatter like prompts
@@ -1124,7 +1122,7 @@ mod specification_compliance_tests {
         let workflow_params = get_greeting_workflow_params();
 
         // Convert to Parameter objects
-        let parameters: Vec<_> = workflow_params.iter().cloned().collect();
+        let parameters: Vec<_> = workflow_params.to_vec();
 
         // Test with missing required parameter (would prompt interactively)
         let cli_args: HashMap<String, String> = [("language".to_string(), "French".to_string())]
@@ -1166,7 +1164,7 @@ mod specification_compliance_tests {
     async fn test_parameter_validation_and_error_handling() {
         let resolver = DefaultParameterResolver::new();
         let workflow_params = get_greeting_workflow_params();
-        let parameters: Vec<_> = workflow_params.iter().cloned().collect();
+        let parameters: Vec<_> = workflow_params.to_vec();
 
         // Test missing required parameter
         let cli_args: HashMap<String, String> = [
@@ -1274,7 +1272,7 @@ mod specification_compliance_tests {
         async fn test_parameter_resolution_performance() {
             let resolver = DefaultParameterResolver::new();
             let workflow_params = get_greeting_workflow_params();
-            let parameters: Vec<_> = workflow_params.iter().cloned().collect();
+            let parameters: Vec<_> = workflow_params.to_vec();
 
             let cli_args: HashMap<String, String> = [
                 ("person_name".to_string(), "Alice".to_string()),

@@ -5,12 +5,9 @@
 
 use anyhow::Result;
 use serde_json::json;
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
-use std::sync::OnceLock;
+use std::{collections::HashMap, fs, path::Path, sync::OnceLock};
 use swissarmyhammer::workflow::{
-    MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowRunStatus, Workflow,
+    MermaidParser, StateId, Workflow, WorkflowExecutor, WorkflowRun, WorkflowRunStatus,
 };
 
 /// Cached workflow to avoid repeated file loading and parsing
@@ -111,12 +108,6 @@ async fn test_failure_branch_execution() -> Result<()> {
     let result = executor.execute_state(&mut run).await;
     assert!(result.is_ok());
 
-    // Debug: Print all context variables
-    println!("Final context variables:");
-    for (key, value) in &run.context {
-        println!("  {key}: {value:?}");
-    }
-
     // The workflow should have is_error=true from the failed Claude prompt
     assert!(run.context.contains_key("is_error"));
     assert_eq!(run.context.get("is_error"), Some(&json!(true)));
@@ -134,45 +125,17 @@ async fn test_failure_branch_execution() -> Result<()> {
     // Clear history to test only the BranchDecision transition
     run.history.clear();
 
-    // Debug: Print context before BranchDecision
-    println!("Context before BranchDecision:");
-    for (key, value) in &run.context {
-        println!("  {key}: {value:?}");
-    }
-    println!("Current state: {}", run.current_state);
-
-    // Debug: Check if BranchDecision is detected as a choice state
-    if let Some(state) = run.workflow.states.get(&StateId::new("BranchDecision")) {
-        println!("BranchDecision state type: {:?}", state.state_type);
-    }
-
     // Debug: Check the actual transition conditions from BranchDecision
-    let transitions: Vec<_> = run
+    let _transitions: Vec<_> = run
         .workflow
         .transitions
         .iter()
         .filter(|t| t.from_state.as_str() == "BranchDecision")
         .collect();
 
-    println!("Transitions from BranchDecision:");
-    for transition in &transitions {
-        println!("  -> {}: {:?}", transition.to_state, transition.condition);
-        let condition_result = executor.evaluate_condition(&transition.condition, &run.context);
-        println!("    Evaluates to: {condition_result:?}");
-    }
-
     // Execute from BranchDecision - should go to Branch2 due to is_error=true
     let result = executor.execute_single_cycle(&mut run).await;
-    println!("execute_single_cycle result: {result:?}");
-    match &result {
-        Ok(transition_performed) => println!("Transition performed: {transition_performed}"),
-        Err(e) => println!("Error: {e}"),
-    }
     assert!(result.is_ok());
-
-    // Debug: Print where we ended up
-    println!("After BranchDecision execution:");
-    println!("Current state: {}", run.current_state);
 
     // Verify we went to Branch2
     let visited_states: Vec<StateId> = run
@@ -180,7 +143,6 @@ async fn test_failure_branch_execution() -> Result<()> {
         .iter()
         .map(|(state_id, _)| state_id.clone())
         .collect();
-    println!("Visited states: {visited_states:?}");
     assert!(visited_states.contains(&StateId::new("Branch2")));
 
     // Verify context variables were set properly
@@ -434,12 +396,6 @@ async fn test_debug_cel_expressions() -> Result<()> {
     let result = executor.execute_state(&mut run).await;
     assert!(result.is_ok());
 
-    // Debug: Print current context
-    println!("Context after workflow execution:");
-    for (key, value) in &run.context {
-        println!("  {key}: {value:?}");
-    }
-
     // Test different values for error_handled
     let test_values = vec![
         ("string_true", json!("true")),
@@ -448,30 +404,20 @@ async fn test_debug_cel_expressions() -> Result<()> {
         ("bool_false", json!(false)),
     ];
 
-    for (label, value) in test_values {
+    for (_label, value) in test_values {
         run.context
             .insert("error_handled".to_string(), value.clone());
         run.context
             .insert("example_var".to_string(), json!("No Hello"));
         run.current_state = StateId::new("BranchDecision");
 
-        println!("\nTesting {label} with error_handled = {value:?}");
-
         // Get the transitions from BranchDecision
-        let transitions: Vec<_> = run
+        let _transitions: Vec<_> = run
             .workflow
             .transitions
             .iter()
             .filter(|t| t.from_state.as_str() == "BranchDecision")
             .collect();
-
-        for transition in transitions {
-            let condition_result = executor.evaluate_condition(&transition.condition, &run.context);
-            println!(
-                "  Transition to {}: condition = {:?}, result = {:?}",
-                transition.to_state, transition.condition, condition_result
-            );
-        }
     }
 
     Ok(())
@@ -500,10 +446,6 @@ async fn test_branch1_liquid_template_rendering() -> Result<()> {
     // Verify the liquid template was rendered correctly
     let expected_message = "Branch 1 selected: Hello from workflow contains Hello";
     assert_eq!(result.as_str().unwrap(), expected_message);
-
-    println!("✅ Liquid template rendering test passed!");
-    println!("Original: Branch 1 selected: {{{{branch_value}}}} contains Hello");
-    println!("Rendered: {}", result.as_str().unwrap());
 
     Ok(())
 }
