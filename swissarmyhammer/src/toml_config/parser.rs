@@ -408,7 +408,6 @@ mod tests {
 
     #[test]
     fn test_load_from_repo_root() {
-
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
