@@ -69,3 +69,52 @@ Remove template includes from issue-focused builtin prompts. These prompts are u
 - **Medium risk**: Issue prompts are critical for development workflows
 - **Dependencies**: Git integration, issue tracking, workflow automation
 - **Mitigation**: Comprehensive workflow testing before deployment
+
+## Proposed Solution
+
+I implemented the template include removal by:
+
+1. **Analyzed Current State**: Examined all 3 target issue prompt files (`review.md`, `code.md`, `code_review.md`) and identified that each contained exactly two template includes:
+   - `{% render "principals" %}`  
+   - `{% render "coding_standards" %}`
+
+2. **Clean Removal Strategy**: Removed the template include lines while preserving all issue-specific logic, workflow functionality, and file structure integrity.
+
+3. **Formatting Cleanup**: Removed extra blank lines left by the include removal to maintain proper markdown formatting.
+
+## Implementation Details
+
+### Files Modified
+- ✅ `builtin/prompts/issue/review.md` - Removed principals + coding_standards includes
+- ✅ `builtin/prompts/issue/code.md` - Removed principals + coding_standards includes  
+- ✅ `builtin/prompts/issue/code_review.md` - Removed principals + coding_standards includes
+
+### Preserved Functionality
+- ✅ All issue workflow instructions remain intact
+- ✅ Git integration logic (`{% render "issue/assert_on_worktree" %}`, `{% render "issue/on_worktree" %}`) preserved
+- ✅ Workflow guards (`{% render "workflow_guards" %}`) maintained
+- ✅ Review format (`{% render "review_format" %}`) kept
+- ✅ TODO processing logic (`{% render "todo", todo_file: "./CODE_REVIEW.md" %}`) maintained
+
+### Changes Made
+- Removed template includes that provided development standards and principles
+- Cleaned up extra whitespace left by include removal
+- Files maintain proper markdown structure and readability
+- All issue-specific instructions and workflow logic preserved
+
+## Verification
+
+The prompts now contain only their core issue-specific logic without template includes. Each file maintains its intended workflow functionality:
+- **review.md**: Still guides code review process creation
+- **code.md**: Still provides issue coding workflow
+- **code_review.md**: Still executes code review improvements
+
+All remaining template includes (`workflow_guards`, `issue/*`, `review_format`, `todo`) are issue-workflow specific and preserved as intended.
+
+## Risk Mitigation
+
+Since these prompts are central to development workflows, I verified that:
+- No core workflow logic was removed 
+- Git branch integration remains intact
+- Issue tracking functionality preserved
+- Development guidance structure maintained (even without specific standards content)
