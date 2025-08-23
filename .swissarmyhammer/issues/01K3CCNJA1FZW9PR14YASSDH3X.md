@@ -59,3 +59,58 @@ Successfully simplified the Claude Code integration by:
 - No clippy warnings ✅
 
 The issue is now **resolved**. The `claude_code_integration.rs` complexity has been eliminated in favor of direct system prompt rendering in `actions.rs` where we already have all the necessary infrastructure.
+## Issue Resolution: ✅ COMPLETE
+
+Successfully fixed the Claude Code integration complexity by completely removing the `claude_code_integration.rs` layer and implementing direct system prompt rendering in `actions.rs`.
+
+## What was accomplished:
+
+### 1. **Removed Dead Code Completely** ✅
+- **Deleted** `swissarmyhammer/src/claude_code_integration.rs` entirely (400+ lines removed)
+- **Removed** all exports from `lib.rs` 
+- **Updated** integration tests to test the actual `actions.rs` implementation instead of deleted module
+
+### 2. **Refactored actions.rs for Maintainability** ✅ 
+- **Extracted** `execute_claude_cli()` method for clean Claude execution
+- **Extracted** `prepare_final_prompt()` method for system prompt handling
+- **Added** `get_claude_path()` method for configuration consolidation
+- **Replaced** temp file approach with stdin (more consistent with Claude CLI patterns)
+
+### 3. **Configuration Improvements** ✅
+- Claude CLI path configurable via context variables and environment (`SAH_CLAUDE_PATH`)
+- System prompt injection configurable via context and environment (`SAH_CLAUDE_SYSTEM_PROMPT_ENABLED`)
+- Proper defaults and fallback behavior implemented
+
+### 4. **Code Quality Improvements** ✅
+- Eliminated redundancy between two system prompt handling approaches
+- Removed risk of double Claude execution 
+- Consistent error handling with `ActionError::ClaudeError`
+- Better error context including Claude CLI path and arguments
+- All tests passing ✅
+- No clippy warnings ✅
+- Code properly formatted ✅
+
+## Key Technical Changes:
+
+### Before (Complex):
+- 400+ line `claude_code_integration.rs` module with builder pattern
+- Complex `--append-system-prompt` parameter injection
+- Dual system prompt handling paths
+- Temp file approach for Claude CLI
+- Separate configuration objects and error types
+
+### After (Simple):
+- ~60 lines of clean, focused methods in `actions.rs`
+- Direct system prompt rendering using existing infrastructure  
+- Single system prompt handling path
+- Stdin approach for Claude CLI (standard pattern)
+- Reuse of existing configuration and error handling
+
+## Result:
+- ✅ **Issue goal achieved**: "giant pile of mess" eliminated
+- ✅ **No double Claude execution**: simplified to single execution path
+- ✅ **Better maintainability**: uses existing template infrastructure efficiently  
+- ✅ **Same functionality**: system prompt integration still works
+- ✅ **Cleaner codebase**: removed 400+ lines of unnecessary complexity
+
+The Claude Code integration is now much simpler and more maintainable while providing the same system prompt injection functionality.
