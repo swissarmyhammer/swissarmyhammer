@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
 use crate::commands;
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum OutputFormat {

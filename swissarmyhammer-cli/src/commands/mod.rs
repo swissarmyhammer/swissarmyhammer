@@ -1,5 +1,5 @@
 //! Command modules for swissarmyhammer CLI
-//! 
+//!
 //! Each command is organized in its own module with:
 //! - Command logic implementation
 //! - Help text from description.md files

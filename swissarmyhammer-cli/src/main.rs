@@ -1,7 +1,6 @@
 use std::process;
 mod cli;
 mod commands;
-mod doctor;
 mod dynamic_cli;
 mod error;
 mod exit_codes;
