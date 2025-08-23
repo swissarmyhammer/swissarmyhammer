@@ -421,6 +421,11 @@ impl IsolatedTestEnvironment {
         self._home_guard.swissarmyhammer_dir()
     }
 
+    /// Get the path to the temporary working directory
+    pub fn temp_dir(&self) -> PathBuf {
+        self._temp_dir.path().to_path_buf()
+    }
+
     /// Get the path to the issues directory in the isolated home
     pub fn issues_dir(&self) -> PathBuf {
         self.swissarmyhammer_dir().join("issues")
@@ -431,14 +436,7 @@ impl IsolatedTestEnvironment {
         self.issues_dir().join("complete")
     }
 
-    /// Get the path to the temporary working directory
-    ///
-    /// Tests can use this directory for operations that need a writable directory,
-    /// but should pass this path explicitly to functions rather than changing
-    /// the global current working directory.
-    pub fn temp_dir(&self) -> &std::path::Path {
-        self._temp_dir.path()
-    }
+
 }
 
 /// Create a temporary directory for testing
