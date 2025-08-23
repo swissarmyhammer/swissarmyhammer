@@ -5,10 +5,21 @@ Refer to /Users/wballard/github/swissarmyhammer/ideas/system_prompt.md
 ## Overview
 Systematically identify and categorize all prompts that contain template includes for `principals`, `coding_standards`, and `tool_use` that need to be removed.
 
-## Current Analysis
-Based on search results, 18 files contain these template includes:
+## Verification Completed ✅
+**File count verified**: 16 builtin prompt files confirmed to need template include removal
+**All files exist**: Each file has been validated to exist in the expected location
+**Template system verified**: .system.md file confirmed with working template includes
 
-### Builtin Prompts to Clean (17 files):
+### Search Results Summary
+- **Total files with `{% render "principals" %}`**: 18 files
+  - 16 builtin prompt files (to be cleaned)
+  - 2 specification files (excluded: `ideas/system_prompt.md`, `specification/complete/plan.md`)
+- **Total files with `{% render "coding_standards" %}`**: 13 files  
+  - 11 builtin prompt files (to be cleaned)
+  - 2 specification files (excluded)
+- **Files with `{% render "tool_use" %}`**: 1 file (`ideas/system_prompt.md` only)
+
+### Builtin Prompts to Clean (16 files confirmed):
 - `builtin/prompts/test.md`
 - `builtin/prompts/coverage.md` 
 - `builtin/prompts/plan.md`
@@ -26,31 +37,31 @@ Based on search results, 18 files contain these template includes:
 - `builtin/prompts/docs/project.md`
 - `builtin/prompts/docs/comments.md`
 
-### Specification Files (2 files - exclude):
+### Specification Files (2 files - excluded):
 - `specification/complete/plan.md` - Documentation, not operational
 - `ideas/system_prompt.md` - The specification itself
 
 ## Implementation Steps
 
-1. **Validate file list**
-   - Verify each file exists and contains the expected template includes
-   - Double-check search results for accuracy
+1. **✅ Validate file list**
+   - Verified each file exists and contains the expected template includes
+   - Double-checked search results for accuracy
 
-2. **Categorize by prompt type**
-   - Review prompts: 6 files (review/*.md)
+2. **✅ Categorize by prompt type**
+   - Review prompts: 5 files (review/*.md)
    - Issue prompts: 3 files (issue/*.md)
    - Doc prompts: 5 files (docs/*.md)
    - Root prompts: 3 files (test.md, coverage.md, plan.md)
 
-3. **Analyze impact of removal**
-   - Review each prompt to understand how template includes are used
-   - Identify any prompts that might break without these includes
-   - Document any special cases or dependencies
+3. **✅ Analyze impact of removal**
+   - Reviewed each prompt to understand how template includes are used
+   - Identified any prompts that might break without these includes
+   - Documented any special cases or dependencies
 
-4. **Create removal strategy**
-   - Plan order of removal (start with safest/simplest)
-   - Identify any prompts that may need content restructuring
-   - Plan testing approach for each category
+4. **✅ Create removal strategy**
+   - Planned order of removal (start with safest/simplest)
+   - Identified any prompts that may need content restructuring
+   - Planned testing approach for each category
 
 ## Success Criteria
 - ✅ Complete and accurate list of affected files verified
@@ -59,10 +70,10 @@ Based on search results, 18 files contain these template includes:
 - ✅ Impact analysis completed for each file
 
 ## Deliverables
-- Validated list of 17 builtin prompt files to modify
-- Categorization by prompt type for systematic removal
-- Impact analysis identifying any special cases
-- Recommended order for template include removal
+- ✅ Validated list of 16 builtin prompt files to modify
+- ✅ Categorization by prompt type for systematic removal
+- ✅ Impact analysis identifying any special cases
+- ✅ Recommended order for template include removal
 
 ## Notes
 - Focus only on builtin/ prompts - specification files are documentation
@@ -151,7 +162,7 @@ Order: `coverage.md`, `plan.md`, `test.md`
 
 ### Implementation Steps
 
-1. **Create test cases** for each prompt category to verify functionality before and after removal
+1. **✅ Create test cases** for each prompt category to verify functionality before and after removal
 2. **Remove includes in phases** starting with documentation prompts
 3. **Validate behavior** after each phase using existing prompts
 4. **Document any functional changes** needed in prompts after include removal
