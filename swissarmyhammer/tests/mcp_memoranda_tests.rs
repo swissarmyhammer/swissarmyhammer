@@ -46,41 +46,42 @@ mod test_utils {
                 // Get the current directory and determine relative paths
                 let current_dir = std::env::current_dir().unwrap_or_default();
                 let current_path = current_dir.to_string_lossy();
-                
+
                 let candidates = if current_path.ends_with("swissarmyhammer") {
                     // Running from swissarmyhammer directory (as tests do)
                     vec![
-                        "../target/debug/sah",         // From swissarmyhammer to project root
-                        "../../target/debug/sah",      // From nested directory
+                        "../target/debug/sah",    // From swissarmyhammer to project root
+                        "../../target/debug/sah", // From nested directory
                         "../swissarmyhammer-cli/target/debug/sah", // From CLI package
-                        "./target/debug/sah",          // Local fallback
+                        "./target/debug/sah",     // Local fallback
                     ]
                 } else {
                     // Running from project root or other location
                     vec![
-                        "./target/debug/sah",          // From project root
-                        "../target/debug/sah",         // From nested directory
+                        "./target/debug/sah",                     // From project root
+                        "../target/debug/sah",                    // From nested directory
                         "./swissarmyhammer-cli/target/debug/sah", // From CLI package
-                        "../../target/debug/sah",      // Deep nested fallback
+                        "../../target/debug/sah",                 // Deep nested fallback
                     ]
                 };
-                
+
                 for path in &candidates {
                     if std::path::Path::new(path).exists() {
                         eprintln!("Found binary at: {}", path);
                         return path.to_string();
                     }
                 }
-                
+
                 // Absolute fallback - construct from current directory
-                let absolute_path = current_dir.parent()
+                let absolute_path = current_dir
+                    .parent()
                     .unwrap_or(&current_dir)
                     .join("target/debug/sah");
-                
+
                 if absolute_path.exists() {
                     return absolute_path.to_string_lossy().to_string();
                 }
-                
+
                 // Final fallback
                 "../target/debug/sah".to_string()
             });
@@ -294,7 +295,7 @@ fn test_mcp_memo_create() {
 
     let create_msg = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memo_create","arguments":{"title":"Test Memo via MCP","content":"This is test content created via MCP"}}}"#;
     writeln!(stdin, "{create_msg}").expect("Failed to write create request");
-    
+
     stdin.flush().expect("Failed to flush stdin");
 
     // Give the server time to process all requests
@@ -317,13 +318,16 @@ fn test_mcp_memo_create() {
     println!("Server exit status: {:?}", output.status);
 
     // Verify we got the initialization response
-    assert!(stdout.contains("protocolVersion"), "Missing initialization response");
-    
+    assert!(
+        stdout.contains("protocolVersion"),
+        "Missing initialization response"
+    );
+
     // Check if the server processed our tool request
     if !stdout.contains("Successfully created memo") {
         println!("stdout does not contain 'Successfully created memo'");
         println!("Looking for any error responses in stdout...");
-        
+
         // Check if there are any JSON-RPC error responses
         for line in stdout.lines() {
             if line.trim().starts_with("{") {
@@ -334,7 +338,7 @@ fn test_mcp_memo_create() {
                 }
             }
         }
-        
+
         // Check stderr for connection issues
         if stderr.contains("connection closed") || stderr.contains("initialize notification") {
             println!("⚠️  MCP connection issue detected - this is a known limitation");
@@ -342,9 +346,12 @@ fn test_mcp_memo_create() {
             println!("Skipping MCP protocol validation for now");
             return; // Skip the rest of the test
         }
-        
+
         // For now, let's just check that we got some response beyond initialization
-        assert!(stdout.lines().count() >= 2, "Server should respond to tool request");
+        assert!(
+            stdout.lines().count() >= 2,
+            "Server should respond to tool request"
+        );
     }
 
     // Server should exit successfully

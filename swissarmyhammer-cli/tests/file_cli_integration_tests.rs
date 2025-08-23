@@ -39,7 +39,13 @@ async fn test_file_read_basic_functionality() -> Result<()> {
 
     create_test_file(&test_file, test_content)?;
 
-    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        test_file.to_str().unwrap(),
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
@@ -64,9 +70,15 @@ async fn test_file_read_with_offset_and_limit() -> Result<()> {
     create_test_file(&test_file, &test_content)?;
 
     // Test with offset - offset 6 means start from line 6
-    let result =
-        run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap(), "--offset", "6"])
-            .await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        test_file.to_str().unwrap(),
+        "--offset",
+        "6",
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
@@ -76,9 +88,15 @@ async fn test_file_read_with_offset_and_limit() -> Result<()> {
     assert!(result.stdout.contains("Line 6"), "Should start from line 6");
 
     // Test with limit
-    let result =
-        run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap(), "--limit", "3"])
-            .await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        test_file.to_str().unwrap(),
+        "--limit",
+        "3",
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
@@ -128,9 +146,15 @@ async fn test_file_write_basic_functionality() -> Result<()> {
     let test_file = temp_dir.path().join("write_test.txt");
     let test_content = "This is new content\nWritten via CLI";
 
-    let result =
-        run_sah_command_in_process(&["file", "write", "--file_path", test_file.to_str().unwrap(), "--content", test_content])
-            .await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "write",
+        "--file_path",
+        test_file.to_str().unwrap(),
+        "--content",
+        test_content,
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(test_file.exists(), "File should be created");
@@ -153,9 +177,15 @@ async fn test_file_write_overwrite_existing() -> Result<()> {
 
     create_test_file(&test_file, initial_content)?;
 
-    let result =
-        run_sah_command_in_process(&["file", "write", "--file_path", test_file.to_str().unwrap(), "--content", new_content])
-            .await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "write",
+        "--file_path",
+        test_file.to_str().unwrap(),
+        "--content",
+        new_content,
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
 
@@ -175,9 +205,15 @@ async fn test_file_write_creates_parent_directories() -> Result<()> {
     let test_file = temp_dir.path().join("nested/deep/path/test.txt");
     let test_content = "Content in nested directory";
 
-    let result =
-        run_sah_command_in_process(&["file", "write", "--file_path", test_file.to_str().unwrap(), "--content", test_content])
-            .await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "write",
+        "--file_path",
+        test_file.to_str().unwrap(),
+        "--content",
+        test_content,
+    ])
+    .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(test_file.exists(), "File should be created");
@@ -537,7 +573,13 @@ async fn test_complete_file_workflow() -> Result<()> {
     assert_eq!(result.exit_code, 0, "Write should succeed");
 
     // Step 2: Read and verify content
-    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        test_file.to_str().unwrap(),
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Read should succeed");
     assert!(
         result.stdout.contains("OLD_VALUE"),
@@ -559,7 +601,13 @@ async fn test_complete_file_workflow() -> Result<()> {
     assert_eq!(result.exit_code, 0, "Edit should succeed");
 
     // Step 4: Read and verify the edit
-    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        test_file.to_str().unwrap(),
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Final read should succeed");
     assert!(
         result.stdout.contains("NEW_VALUE"),
@@ -664,7 +712,13 @@ async fn test_output_formatting_consistency() -> Result<()> {
     create_test_file(&test_file, content)?;
 
     // Test that read command produces readable output
-    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        test_file.to_str().unwrap(),
+    ])
+    .await?;
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(!result.stdout.is_empty(), "Should produce output");
     assert!(
@@ -682,13 +736,20 @@ async fn test_output_formatting_consistency() -> Result<()> {
 #[tokio::test]
 async fn test_invalid_arguments_handling() -> Result<()> {
     // Test read with invalid offset
-    let result =
-        run_sah_command_in_process(&["file", "read", "--absolute_path", "/tmp/test.txt", "--offset", "invalid"])
-            .await?;
+    let result = run_sah_command_in_process(&[
+        "file",
+        "read",
+        "--absolute_path",
+        "/tmp/test.txt",
+        "--offset",
+        "invalid",
+    ])
+    .await?;
     assert_ne!(result.exit_code, 0, "Should fail with invalid offset");
 
     // Test grep with empty pattern
-    let _result = run_sah_command_in_process(&["file", "grep", "--pattern", "", "--path", "/tmp"]).await?;
+    let _result =
+        run_sah_command_in_process(&["file", "grep", "--pattern", "", "--path", "/tmp"]).await?;
     // Should handle empty pattern gracefully (may succeed or fail, but no panic)
 
     Ok(())

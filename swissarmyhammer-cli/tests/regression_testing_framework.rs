@@ -60,10 +60,7 @@ impl RegressionTestSuite {
                     "issue".to_string(),
                 ],
                 expected_stderr_contains: vec![],
-                expected_stdout_not_contains: vec![
-                    "Error".to_string(),
-                    "panic".to_string(),
-                ],
+                expected_stdout_not_contains: vec!["Error".to_string(), "panic".to_string()],
                 expected_stderr_not_contains: vec!["Error".to_string(), "panic".to_string()],
                 description: "Help command shows expected sections and commands".to_string(),
                 requires_setup: false,
@@ -209,7 +206,9 @@ impl RegressionTestSuite {
         }
 
         // For regression testing, always use subprocess to test actual CLI behavior
-        let result = self.execute_command_subprocess(&test_case.command, working_dir).await;
+        let result = self
+            .execute_command_subprocess(&test_case.command, working_dir)
+            .await;
 
         // Restore original directory
         let _ = std::env::set_current_dir(original_dir);
@@ -299,44 +298,43 @@ impl RegressionTestSuite {
             // Fallback: find the sah executable in deps directory
             let base_dir = env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "");
             let deps_dir = format!("{}/target/debug/deps", base_dir);
-            
+
             match std::fs::read_dir(&deps_dir) {
                 Ok(entries) => {
                     let mut sah_exe = None;
-                    for entry in entries {
-                        if let Ok(entry) = entry {
-                            let path = entry.path();
-                            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                                if filename.starts_with("sah-") && !filename.contains('.') {
-                                    // Check if it's executable by trying to get metadata
-                                    if let Ok(metadata) = std::fs::metadata(&path) {
-                                        // On Unix, check if it has execute permissions
-                                        #[cfg(unix)]
-                                        {
-                                            use std::os::unix::fs::PermissionsExt;
-                                            if metadata.permissions().mode() & 0o111 != 0 {
-                                                sah_exe = Some(path);
-                                                break;
-                                            }
-                                        }
-                                        // On Windows, any file in deps is potentially executable
-                                        #[cfg(windows)]
-                                        {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                            if filename.starts_with("sah-") && !filename.contains('.') {
+                                // Check if it's executable by trying to get metadata
+                                if let Ok(metadata) = std::fs::metadata(&path) {
+                                    // On Unix, check if it has execute permissions
+                                    #[cfg(unix)]
+                                    {
+                                        use std::os::unix::fs::PermissionsExt;
+                                        if metadata.permissions().mode() & 0o111 != 0 {
                                             sah_exe = Some(path);
                                             break;
                                         }
+                                    }
+                                    // On Windows, any file in deps is potentially executable
+                                    #[cfg(windows)]
+                                    {
+                                        sah_exe = Some(path);
+                                        break;
                                     }
                                 }
                             }
                         }
                     }
-                    sah_exe.map(|p| p.to_string_lossy().to_string())
+                    sah_exe
+                        .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_else(|| format!("{}/target/debug/sah", base_dir))
                 }
-                Err(_) => format!("{}/target/debug/sah", base_dir)
+                Err(_) => format!("{}/target/debug/sah", base_dir),
             }
         };
-        
+
         let command_future = async {
             eprintln!("DEBUG: Trying to execute binary at: {}", binary_path);
             let output = tokio::process::Command::new(&binary_path)
@@ -356,13 +354,11 @@ impl RegressionTestSuite {
 
         match timeout(Duration::from_secs(60), command_future).await {
             Ok(result) => result,
-            Err(_) => {
-                Ok(CapturedOutput {
-                    stdout: String::new(),
-                    stderr: "Test command timed out after 60 seconds".to_string(),
-                    exit_code: 124,
-                })
-            }
+            Err(_) => Ok(CapturedOutput {
+                stdout: String::new(),
+                stderr: "Test command timed out after 60 seconds".to_string(),
+                exit_code: 124,
+            }),
         }
     }
 }

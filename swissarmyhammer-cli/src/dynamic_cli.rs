@@ -305,7 +305,6 @@ Example:
         cli
     }
 
-
     /// Build CLI with warnings for validation issues (graceful degradation)
     ///
     /// This method builds the CLI but logs warnings for any validation issues,

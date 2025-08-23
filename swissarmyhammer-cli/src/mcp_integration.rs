@@ -169,7 +169,7 @@ impl CliToolContext {
     }
 
     /// Helper to convert CLI arguments to MCP tool arguments
-
+    ///
     /// Get a reference to the tool registry for dynamic CLI generation
     #[cfg(feature = "dynamic-cli")]
     pub fn get_tool_registry(&self) -> &ToolRegistry {
@@ -185,9 +185,7 @@ impl CliToolContext {
     /// Create arguments map from vector of key-value pairs for testing
     #[allow(dead_code)]
     pub fn create_arguments(&self, args: Vec<(&str, Value)>) -> Map<String, Value> {
-        args.into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect()
+        args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }
 }
 
@@ -222,11 +220,9 @@ pub mod response_formatting {
     /// Extract JSON data from CallToolResult
     #[allow(dead_code)]
     pub fn extract_json_data(result: &CallToolResult) -> Result<Value, Box<dyn std::error::Error>> {
-        let text = extract_text_content(result)
-            .ok_or("No text content found in result")?;
+        let text = extract_text_content(result).ok_or("No text content found in result")?;
         Ok(serde_json::from_str(&text)?)
     }
-
 }
 
 #[cfg(test)]

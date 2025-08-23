@@ -192,8 +192,6 @@ async fn _test_invalid_memo_operations_disabled() -> Result<()> {
     Ok(())
 }
 
-
-
 /// Test invalid command line arguments
 #[tokio::test]
 async fn test_invalid_command_arguments() -> Result<()> {

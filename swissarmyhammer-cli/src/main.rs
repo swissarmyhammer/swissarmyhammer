@@ -8,8 +8,8 @@ mod mcp_integration;
 mod schema_conversion;
 mod schema_validation;
 mod signal_handler;
-use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use dynamic_cli::CliBuilder;
+use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
 use mcp_integration::CliToolContext;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ async fn main() {
 
     // Check if this is a serve command early to bypass heavy CLI operations during MCP mode
     let is_serve_command = std::env::args().any(|arg| arg == "serve");
-    
+
     // For serve command, skip all CLI building and validation to avoid startup delays
     if is_serve_command {
         let exit_code = run_server().await;
@@ -154,8 +154,10 @@ async fn handle_dynamic_matches(
     let validate_tools = matches.get_flag("validate-tools");
 
     // Check if this is a serve command for MCP mode logging
-    let is_serve_command = matches.subcommand().is_some_and(|(name, _)| name == "serve");
-    
+    let is_serve_command = matches
+        .subcommand()
+        .is_some_and(|(name, _)| name == "serve");
+
     // Initialize logging similar to static CLI
     configure_logging(verbose, debug, quiet, is_serve_command).await;
 
@@ -242,7 +244,6 @@ async fn run_server() -> i32 {
         }
     }
 }
-
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_dynamic_tool_command(
@@ -414,7 +415,8 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
             eprintln!("Warning: Could not create log directory: {}", e);
         }
 
-        let log_file_name = std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
+        let log_file_name =
+            std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
         let log_file_path = log_dir.join(log_file_name);
         match fs::File::create(&log_file_path) {
             Ok(file) => {

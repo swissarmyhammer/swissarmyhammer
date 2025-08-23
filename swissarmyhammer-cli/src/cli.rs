@@ -243,8 +243,6 @@ Examples:
         workflow_dirs: Vec<String>,
     },
 
-
-
     /// Plan a specific specification file
     #[command(long_about = "
 Execute planning workflow for a specific specification file.
@@ -724,11 +722,7 @@ for better discoverability and clearer intent.
     },
 }
 
-
-
 impl Cli {
-
-
     #[allow(dead_code)]
     pub fn try_parse_from_args<I, T>(args: I) -> Result<Self, clap::Error>
     where
@@ -737,8 +731,6 @@ impl Cli {
     {
         <Self as Parser>::try_parse_from(args)
     }
-
-
 }
 
 #[cfg(test)]

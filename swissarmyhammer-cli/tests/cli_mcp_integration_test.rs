@@ -13,12 +13,13 @@ fn setup_test_environment() -> TempDir {
 
     // Create SwissArmyHammer directory structure
     let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
-    std::fs::create_dir_all(&swissarmyhammer_dir).expect("Failed to create .swissarmyhammer directory");
-    
+    std::fs::create_dir_all(&swissarmyhammer_dir)
+        .expect("Failed to create .swissarmyhammer directory");
+
     // Create issues directory within swissarmyhammer structure
     let issues_dir = swissarmyhammer_dir.join("issues");
     std::fs::create_dir_all(&issues_dir).expect("Failed to create issues directory");
-    
+
     // Create memos directory for memo storage
     let memos_dir = swissarmyhammer_dir.join("memos");
     std::fs::create_dir_all(&memos_dir).expect("Failed to create memos directory");

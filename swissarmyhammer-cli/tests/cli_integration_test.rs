@@ -1130,8 +1130,6 @@ async fn test_root_validate_special_chars_in_paths() -> Result<()> {
     Ok(())
 }
 
-
-
 /// Test validation quiet mode hides warnings from output and summary
 #[tokio::test]
 async fn test_root_validate_quiet_mode_warnings_behavior() -> Result<()> {

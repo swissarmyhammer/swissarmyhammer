@@ -6,7 +6,6 @@
 use std::error::Error;
 use std::fmt;
 
-
 /// CLI error type that includes both error information and suggested exit code
 #[derive(Debug)]
 pub struct CliError {
@@ -58,7 +57,7 @@ impl Error for CliError {
 }
 
 /// Convert a CliResult to an exit code, printing the full error chain if needed
-
+///
 /// Centralized error message formatting functions for Git repository requirements
 /// Format a generic Git repository requirement error message
 fn format_git_repository_requirement_error() -> String {
@@ -157,7 +156,6 @@ impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
 
         let enhancer = ErrorMessageEnhancer::new();
         let enhanced_error = enhancer.enhance_parameter_error(&error);
-
 
         Self {
             message: format_enhanced_parameter_error(&enhanced_error),
@@ -299,8 +297,6 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
 #[cfg(feature = "dynamic-cli")]
 impl From<crate::schema_validation::ValidationError> for CliError {
     fn from(error: crate::schema_validation::ValidationError) -> Self {
-
-
         let mut message = format!("❌ Schema validation failed: {}", error);
 
         if let Some(suggestion) = error.suggestion() {
@@ -323,8 +319,6 @@ impl From<crate::schema_validation::ValidationError> for CliError {
 #[cfg(feature = "dynamic-cli")]
 impl From<crate::schema_conversion::ConversionError> for CliError {
     fn from(error: crate::schema_conversion::ConversionError) -> Self {
-
-
         // Use the existing formatting from schema_conversion module
         let message =
             crate::schema_conversion::SchemaConverter::format_conversion_error(&error, "CLI");

@@ -21,7 +21,10 @@ pub struct CapturedOutput {
 ///
 /// This is the single unified function all tests should use instead of spawning subprocesses
 pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput> {
-    eprintln!("DEBUG: run_sah_command_in_process called with args: {:?}", args);
+    eprintln!(
+        "DEBUG: run_sah_command_in_process called with args: {:?}",
+        args
+    );
     use swissarmyhammer_cli::cli::Cli;
 
     // Create CLI with the provided arguments (skip program name)
@@ -30,11 +33,18 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
         .collect();
 
     // Check if this is a dynamic CLI command that should go directly to subprocess
-    let is_dynamic_command = args.len() > 0 && matches!(args[0], "issue" | "memo" | "shell" | "file" | "search" | "web-search");
-    
+    let is_dynamic_command = !args.is_empty()
+        && matches!(
+            args[0],
+            "issue" | "memo" | "shell" | "file" | "search" | "web-search"
+        );
+
     // For dynamic commands, always use subprocess
     if is_dynamic_command {
-        eprintln!("DEBUG: Dynamic command detected: {}, going directly to subprocess", args[0]);
+        eprintln!(
+            "DEBUG: Dynamic command detected: {}, going directly to subprocess",
+            args[0]
+        );
         let can_run_in_process = false;
         eprintln!("DEBUG: can_run_in_process: {}", can_run_in_process);
     } else {
@@ -79,7 +89,7 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
             None
         );
         eprintln!("DEBUG: can_run_in_process: {}", can_run_in_process);
-        
+
         if can_run_in_process {
             eprintln!("DEBUG: Running command in-process");
             // Execute in-process with stdout/stderr capture
@@ -101,41 +111,51 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
             });
         }
     }
-    
+
     // If we reach here, we need to use subprocess
     eprintln!("DEBUG: Falling back to subprocess execution");
-    
+
     // Fall back to subprocess for commands we can't run in-process with timeout
     use tokio::time::{timeout, Duration};
 
     let command_future = async {
         // Use the correct binary path instead of the test runner binary
         let binary_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
-            if std::path::Path::new(&path).file_name().and_then(|name| name.to_str()) == Some("sah") {
+            if std::path::Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                == Some("sah")
+            {
                 path
             } else {
                 // Fallback to the correct binary location
-                format!("{}/target/debug/sah", env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", ""))
+                format!(
+                    "{}/target/debug/sah",
+                    env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+                )
             }
         } else {
-            // Fallback to the correct binary location  
-            format!("{}/target/debug/sah", env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", ""))
+            // Fallback to the correct binary location
+            format!(
+                "{}/target/debug/sah",
+                env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
+            )
         };
         eprintln!("DEBUG: Using binary path: {}", binary_path);
         let output = tokio::process::Command::new(binary_path)
-                .args(args)
-                .current_dir(std::env::current_dir().unwrap())  // Inherit current working directory
-                .kill_on_drop(true) // Ensure the process is killed if timeout occurs
-                .output()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to execute subprocess: {}", e))?;
+            .args(args)
+            .current_dir(std::env::current_dir().unwrap()) // Inherit current working directory
+            .kill_on_drop(true) // Ensure the process is killed if timeout occurs
+            .output()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to execute subprocess: {}", e))?;
 
-            Ok::<_, anyhow::Error>(CapturedOutput {
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                exit_code: output.status.code().unwrap_or(1),
-            })
-        };
+        Ok::<_, anyhow::Error>(CapturedOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(1),
+        })
+    };
 
     match timeout(Duration::from_secs(60), command_future).await {
         Ok(result) => result,
@@ -353,7 +373,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             eprintln!("DEBUG: Handling prompt command: {:?}", subcommand);
             // Mock implementation that simulates the expected behavior based on test requirements
             use swissarmyhammer_cli::cli::PromptSubcommand;
-            
+
             match subcommand {
                 PromptSubcommand::List { .. } => {
                     let output = "Available prompts:\ncode-review - Code review assistant\nhelp - Help generator\ntest - Test prompt";
@@ -361,17 +381,28 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                 }
                 PromptSubcommand::Search { query, .. } => {
                     if query.is_empty() {
-                        (String::new(), "Error: Empty search query".to_string(), EXIT_ERROR)
+                        (
+                            String::new(),
+                            "Error: Empty search query".to_string(),
+                            EXIT_ERROR,
+                        )
                     } else {
-                        let output = format!("Search results for '{}':\n1. test - Test prompt", query);
+                        let output =
+                            format!("Search results for '{}':\n1. test - Test prompt", query);
                         (output, String::new(), EXIT_SUCCESS)
                     }
                 }
-                PromptSubcommand::Test { prompt_name, vars, .. } => {
+                PromptSubcommand::Test {
+                    prompt_name, vars, ..
+                } => {
                     // Simulate template rendering based on test requirements
                     if let Some(name) = prompt_name {
                         if name == "non_existent_prompt" {
-                            (String::new(), "Error: Prompt 'non_existent_prompt' not found".to_string(), 1)
+                            (
+                                String::new(),
+                                "Error: Prompt 'non_existent_prompt' not found".to_string(),
+                                1,
+                            )
                         } else {
                             // Parse variables
                             let mut variables = std::collections::HashMap::new();
@@ -380,7 +411,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                                     variables.insert(key.to_string(), value.to_string());
                                 }
                             }
-                            
+
                             // Simulate different prompts based on name
                             let output = match name.as_str() {
                                 "empty-test" => {
@@ -388,10 +419,13 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                                     let content = variables.get("content").unwrap_or(&empty_str);
                                     let author = variables.get("author").unwrap_or(&empty_str);
                                     let version = variables.get("version").unwrap_or(&empty_str);
-                                    
+
                                     // Debug print to see what we're generating
                                     eprintln!("DEBUG: variables = {:?}", variables);
-                                    let result = format!("Content: {}\nAuthor: {}\nVersion: {}", content, author, version);
+                                    let result = format!(
+                                        "Content: {}\nAuthor: {}\nVersion: {}",
+                                        content, author, version
+                                    );
                                     eprintln!("DEBUG: output = {}", result);
                                     result
                                 }
@@ -403,12 +437,16 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                                     eprintln!("DEBUG: output = {}", result);
                                     result
                                 }
-                                _ => format!("Testing prompt: {}", name)
+                                _ => format!("Testing prompt: {}", name),
                             };
                             (output, String::new(), EXIT_SUCCESS)
                         }
                     } else {
-                        (String::new(), "Error: No prompt specified".to_string(), EXIT_ERROR)
+                        (
+                            String::new(),
+                            "Error: No prompt specified".to_string(),
+                            EXIT_ERROR,
+                        )
                     }
                 }
             }

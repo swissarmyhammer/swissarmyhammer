@@ -73,7 +73,7 @@ async fn test_issue_commands_require_git_repository() {
     );
     // The stderr contains CLI validation warnings about MCP tools
     assert!(
-        output.stderr.contains("CLI Validation Issues") || output.stderr.len() > 0,
+        output.stderr.contains("CLI Validation Issues") || !output.stderr.is_empty(),
         "Should contain some stderr output: {}",
         output.stderr
     );
@@ -221,9 +221,18 @@ async fn test_git_repository_error_exit_codes() {
     std::env::set_current_dir(original_dir).unwrap();
 
     let output = result.unwrap();
-    eprintln!("DEBUG test_git_repository_error_exit_codes: stdout: {}", output.stdout);
-    eprintln!("DEBUG test_git_repository_error_exit_codes: stderr: {}", output.stderr);
-    eprintln!("DEBUG test_git_repository_error_exit_codes: exit_code: {}", output.exit_code);
+    eprintln!(
+        "DEBUG test_git_repository_error_exit_codes: stdout: {}",
+        output.stdout
+    );
+    eprintln!(
+        "DEBUG test_git_repository_error_exit_codes: stderr: {}",
+        output.stderr
+    );
+    eprintln!(
+        "DEBUG test_git_repository_error_exit_codes: exit_code: {}",
+        output.exit_code
+    );
     // Memo commands currently succeed and show "No memos found." rather than git repo errors
     assert_eq!(output.exit_code, 0, "Memo commands currently succeed");
 }
@@ -297,23 +306,40 @@ async fn test_error_messages_are_actionable() {
     let original_dir = std::env::current_dir().unwrap();
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
-    let result = run_sah_command_in_process(&["issue", "create", "--name", "test", "--content", "Test issue content"]).await;
+    let result = run_sah_command_in_process(&[
+        "issue",
+        "create",
+        "--name",
+        "test",
+        "--content",
+        "Test issue content",
+    ])
+    .await;
 
     // Restore original directory
     std::env::set_current_dir(original_dir).unwrap();
 
     let output = result.unwrap();
-    eprintln!("DEBUG test_error_messages_are_actionable: stdout: {}", output.stdout);
-    eprintln!("DEBUG test_error_messages_are_actionable: stderr: {}", output.stderr);
-    eprintln!("DEBUG test_error_messages_are_actionable: exit_code: {}", output.exit_code);
-    
+    eprintln!(
+        "DEBUG test_error_messages_are_actionable: stdout: {}",
+        output.stdout
+    );
+    eprintln!(
+        "DEBUG test_error_messages_are_actionable: stderr: {}",
+        output.stderr
+    );
+    eprintln!(
+        "DEBUG test_error_messages_are_actionable: exit_code: {}",
+        output.exit_code
+    );
+
     // Issue create commands currently succeed rather than failing with git repo errors
     assert_eq!(output.exit_code, 0, "Issue create currently succeeds");
-    
+
     let stderr = &output.stderr;
     // The stderr contains CLI validation warnings instead of git repo errors
     assert!(
-        stderr.contains("CLI Validation Issues") || stderr.len() > 0,
+        stderr.contains("CLI Validation Issues") || !stderr.is_empty(),
         "Should contain stderr output: {}",
         stderr
     );
