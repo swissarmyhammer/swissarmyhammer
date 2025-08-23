@@ -57,3 +57,75 @@ Remove template includes (`{% render "principals" %}`, `{% render "coding_standa
 - **Low risk**: Root prompts have straightforward template include usage
 - **Mitigation**: Test each prompt after modification
 - **Rollback**: Can easily restore from git if needed
+## Analysis Completed
+
+### Current State Analysis
+
+I have read and analyzed all three target files:
+
+1. **`builtin/prompts/test.md`** - Lines 12-13 contain:
+   - `{% render "principals" %}`
+   - `{% render "coding_standards" %}`
+
+2. **`builtin/prompts/coverage.md`** - Lines 11-12 contain:
+   - `{% render "principals" %}`
+   - `{% render "coding_standards" %}`
+
+3. **`builtin/prompts/plan.md`** - Lines 22-23 contain:
+   - `{% render "principals" %}`
+   - `{% render "coding_standards" %}`
+
+### Template Include Locations
+
+All three files follow the exact same pattern:
+- Template includes appear after the main goal/description section
+- Both principals and coding_standards are rendered in sequence
+- No tool_use template includes found in these root prompts
+- Clean formatting with proper spacing around the includes
+
+## Proposed Solution
+
+I will remove the template include lines from each file:
+
+1. **For each file**: Remove lines containing `{% render "principals" %}` and `{% render "coding_standards" %}`
+2. **Clean formatting**: Ensure proper spacing is maintained after removal
+3. **Test rendering**: Verify each prompt still renders correctly without syntax errors
+
+This is a straightforward text removal operation that should preserve all other prompt functionality while removing the template dependencies.
+## Implementation Completed ✅
+
+### Summary
+
+Successfully removed template includes from all three root builtin prompts:
+
+1. **`builtin/prompts/test.md`** ✅
+   - Removed `{% render "principals" %}` from line 12
+   - Removed `{% render "coding_standards" %}` from line 13
+   - Prompt renders correctly with full content
+
+2. **`builtin/prompts/coverage.md`** ✅  
+   - Removed `{% render "principals" %}` from line 11
+   - Removed `{% render "coding_standards" %}` from line 12
+   - Prompt renders correctly with full content
+
+3. **`builtin/prompts/plan.md`** ✅
+   - Removed `{% render "principals" %}` from line 22
+   - Removed `{% render "coding_standards" %}` from line 23
+   - Prompt renders correctly with full content
+
+### Validation Results
+
+All three prompts tested successfully with `sah prompt test <name>`:
+- **test**: Renders with complete principals and coding standards content
+- **coverage**: Renders with complete principals and coding standards content  
+- **plan**: Renders with complete principals and coding standards content
+
+The content that was previously included via templates is now coming directly from the system prompt, ensuring consistent behavior while removing the template dependencies.
+
+### Technical Notes
+
+- Clean removal with proper formatting preserved
+- No syntax errors or broken references 
+- Full functionality maintained
+- Template content now sourced from system prompt
+- Establishes pattern for remaining prompt cleanup tasks
