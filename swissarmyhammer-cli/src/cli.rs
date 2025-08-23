@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use crate::commands;
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum OutputFormat {
@@ -104,77 +105,20 @@ Example:
 ")]
     Serve,
     /// Diagnose configuration and setup issues
-    #[command(long_about = "
-Runs comprehensive diagnostics to help troubleshoot setup issues.
-The doctor command will check:
-
-- If swissarmyhammer is in your PATH
-- Claude Code MCP configuration
-- Prompt directories and permissions
-- YAML syntax in prompt files
-- File watching capabilities
-
-Exit codes:
-  0 - All checks passed
-  1 - Warnings found
-  2 - Errors found
-
-Example:
-  swissarmyhammer doctor
-  swissarmyhammer doctor --verbose    # Show detailed diagnostics
-  swissarmyhammer doctor --migration  # Check migration status and conflicts
-")]
+    #[command(long_about = commands::doctor::DESCRIPTION)]
     Doctor {
         /// Check migration status and validate directory consolidation readiness
         #[arg(long)]
         migration: bool,
     },
     /// Manage and test prompts
-    #[command(long_about = "
-Manage prompts with support for listing, validating, testing, and searching.
-Prompts are markdown files with YAML front matter that define reusable templates.
-
-Basic usage:
-  swissarmyhammer prompt list                    # List all prompts
-  swissarmyhammer prompt validate                # Validate prompt files
-  swissarmyhammer prompt test <name>             # Test a prompt
-  swissarmyhammer prompt search <query>          # Search prompts
-
-Examples:
-  swissarmyhammer prompt list --source builtin
-  swissarmyhammer prompt validate --quiet
-  swissarmyhammer prompt test code-review --var file=main.rs
-  swissarmyhammer prompt search \"python code\"
-")]
+    #[command(long_about = commands::prompt::DESCRIPTION)]
     Prompt {
         #[command(subcommand)]
         subcommand: PromptSubcommand,
     },
     /// Execute and manage workflows
-    #[command(long_about = "
-Execute and manage workflows with support for starting new runs and resuming existing ones.
-Workflows are defined as state machines that can execute actions and tools including Claude commands.
-
-Basic usage:
-  swissarmyhammer flow run my-workflow           # Start new workflow
-  swissarmyhammer flow resume <run_id>           # Resume paused workflow
-  swissarmyhammer flow list                      # List available workflows
-  swissarmyhammer flow status <run_id>           # Check run status
-  swissarmyhammer flow logs <run_id>             # View execution logs
-
-Workflow execution:
-  --vars key=value                               # Pass initial variables
-  --interactive                                  # Step-by-step execution
-  --dry-run                                      # Show execution plan
-  --timeout 60s                                  # Set execution timeout
-
-Examples:
-  swissarmyhammer flow run code-review --vars file=main.rs
-  swissarmyhammer flow run deploy --dry-run
-  swissarmyhammer flow resume a1b2c3d4 --interactive
-  swissarmyhammer flow list --format json
-  swissarmyhammer flow status a1b2c3d4 --watch
-")]
+    #[command(long_about = commands::flow::DESCRIPTION)]
     Flow {
         #[command(subcommand)]
         subcommand: FlowSubcommand,
@@ -206,29 +150,7 @@ Examples:
         shell: clap_complete::Shell,
     },
     /// Validate prompt files and workflows for syntax and best practices
-    #[command(long_about = "
-Validates BOTH prompt files AND workflows for syntax errors and best practices.
-
-This command comprehensively validates:
-- All prompt files from builtin, user, and local directories
-- All workflow files from standard locations (builtin, user, local)
-
-NOTE: The --workflow-dir parameter is deprecated and will be ignored.
-Workflows are now only loaded from standard locations.
-
-Validation checks:
-- YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
-- Required fields (title, description)
-- Template variables match arguments
-- Liquid template syntax
-- Workflow structure and connectivity
-- Best practice recommendations
-
-Examples:
-  swissarmyhammer validate                 # Validate all prompts and workflows
-  swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
-  swissarmyhammer validate --format json   # JSON output for tooling
-")]
+    #[command(long_about = commands::validate::DESCRIPTION)]
     Validate {
         /// Suppress all output except errors. In quiet mode, warnings are hidden from both output and summary.
         #[arg(short, long)]
@@ -244,63 +166,7 @@ Examples:
     },
 
     /// Plan a specific specification file
-    #[command(long_about = "
-Execute planning workflow for a specific specification file.
-Takes a path to a markdown specification file and generates step-by-step implementation issues.
-
-USAGE:
-  swissarmyhammer plan <PLAN_FILENAME>
-
-The planning workflow will:
-• Read and analyze the specified plan file
-• Review existing issues to avoid conflicts
-• Generate numbered issue files in the ./issues directory  
-• Create incremental, focused implementation steps
-• Use existing memos and codebase context for better planning
-
-FILE REQUIREMENTS:
-The plan file should be:
-• A valid markdown file (.md extension recommended)
-• Readable and contain meaningful content
-• Focused on a specific feature or component
-• Well-structured with clear goals and requirements
-
-OUTPUT:
-Creates numbered issue files in ./issues/ directory with format:
-• PLANNAME_000001_step-description.md
-• PLANNAME_000002_step-description.md
-• etc.
-
-EXAMPLES:
-  # Plan a new feature from specification directory
-  swissarmyhammer plan ./specification/user-authentication.md
-  
-  # Plan using absolute path
-  swissarmyhammer plan /home/user/projects/plans/database-migration.md
-  
-  # Plan a quick enhancement
-  swissarmyhammer plan ./docs/bug-fixes.md
-  
-  # Plan with verbose output for debugging
-  swissarmyhammer --verbose plan ./specification/api-redesign.md
-
-TIPS:
-• Keep plan files focused - break large features into multiple plans
-• Review generated issues before implementation
-• Use descriptive filenames that reflect the planned work
-• Check existing issues directory to understand numbering
-• Plan files work best when they include clear goals and acceptance criteria
-
-TROUBLESHOOTING:
-If planning fails:
-• Verify file exists and is readable: ls -la <plan_file>
-• Check issues directory permissions: ls -ld ./issues
-• Ensure adequate disk space for issue file creation
-• Try with --debug flag for detailed execution information
-• Review file content for proper markdown formatting
-
-For more information, see: swissarmyhammer --help
-")]
+    #[command(long_about = commands::plan::DESCRIPTION)]
     Plan {
         /// Path to the plan file to process
         #[arg(help = "Path to the markdown plan file (relative or absolute)")]
@@ -315,54 +181,7 @@ the specification or requirements to be planned.")]
         plan_filename: String,
     },
     /// Execute the implement workflow for autonomous issue resolution
-    #[command(long_about = "
-Execute the implement workflow to autonomously work through and resolve all pending issues.
-This is a convenience command equivalent to 'sah flow run implement'.
-
-The implement workflow will:
-• Check for pending issues in the ./issues directory
-• Work through each issue systematically  
-• Continue until all issues are resolved
-• Provide status updates throughout the process
-
-USAGE:
-  swissarmyhammer implement
-
-This command provides:
-• Consistency with other top-level workflow commands like 'sah plan'
-• Convenient shortcut for the common implement workflow
-• Autonomous issue resolution without manual intervention
-• Integration with existing workflow infrastructure
-
-EXAMPLES:
-  # Run the implement workflow
-  swissarmyhammer implement
-  
-  # Run with verbose output for debugging
-  swissarmyhammer --verbose implement
-  
-  # Run in quiet mode showing only errors
-  swissarmyhammer --quiet implement
-
-WORKFLOW DETAILS:
-The implement workflow performs the following steps:
-1. Checks if all issues are complete
-2. If not complete, runs the 'do_issue' workflow on the next issue
-3. Repeats until all issues are resolved
-4. Provides completion confirmation
-
-For more control over workflow execution, use:
-  swissarmyhammer flow run implement --interactive
-  swissarmyhammer flow run implement --dry-run
-
-TROUBLESHOOTING:
-If implementation fails:
-• Check that ./issues directory exists and contains valid issues
-• Ensure you have proper permissions to modify issue files
-• Review workflow logs for specific error details
-• Use --verbose flag for detailed execution information
-• Verify the implement workflow exists in builtin workflows
-")]
+    #[command(long_about = commands::implement::DESCRIPTION)]
     Implement,
 }
 
