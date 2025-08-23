@@ -1,5 +1,5 @@
 //! Implement command implementation
-//! 
+//!
 //! Executes the implement workflow for autonomous issue resolution
 
 use crate::cli::FlowSubcommand;
@@ -8,8 +8,6 @@ use crate::flow;
 
 /// Help text for the implement command
 pub const DESCRIPTION: &str = include_str!("description.md");
-
-
 
 /// Handle the implement command
 pub async fn handle_command() -> i32 {

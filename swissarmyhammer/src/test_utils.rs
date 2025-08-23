@@ -435,8 +435,6 @@ impl IsolatedTestEnvironment {
     pub fn complete_dir(&self) -> PathBuf {
         self.issues_dir().join("complete")
     }
-
-
 }
 
 /// Create a temporary directory for testing
