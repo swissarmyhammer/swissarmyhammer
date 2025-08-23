@@ -492,15 +492,23 @@ pub trait McpTool: Send + Sync {
     /// Get brief CLI help text for the command
     ///
     /// Returns a concise description for CLI help output. The default
-    /// implementation uses the first line of the tool's description.
+    /// implementation uses the first non-header line of the tool's description.
     ///
     /// # Returns
     ///
     /// * `Some(&'static str)` - Brief help text for CLI display
     /// * `None` - Use the full description or auto-generate help text
     fn cli_about(&self) -> Option<&'static str> {
-        // Use first line of description as brief about text
+        // Use first non-header line of description as brief about text
         let desc = self.description();
+        for line in desc.lines() {
+            let trimmed = line.trim();
+            // Skip empty lines and markdown headers
+            if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                return Some(line);
+            }
+        }
+        // Fallback to first line if no suitable line found
         desc.lines().next()
     }
 
