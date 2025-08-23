@@ -1129,7 +1129,6 @@ mod parser_tests {
 
     #[test]
     fn test_parser_load_from_repo_root() {
-        use std::panic;
 
         let temp_dir = TempDir::new().unwrap();
 

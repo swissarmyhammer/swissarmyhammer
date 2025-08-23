@@ -279,7 +279,6 @@ mod module_tests {
 
     #[test]
     fn test_load_repo_config_wrapper() {
-        use std::panic;
 
         // This test creates a temporary directory structure and tests repo config loading
         let temp_dir = TempDir::new().unwrap();

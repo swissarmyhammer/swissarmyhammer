@@ -408,7 +408,6 @@ mod tests {
 
     #[test]
     fn test_load_from_repo_root() {
-        use std::panic;
 
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
