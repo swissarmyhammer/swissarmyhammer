@@ -186,12 +186,13 @@ States define the workflow steps and transitions.
 
 #### Prompt Actions
 
-Execute prompts with variables:
+Execute prompts with Claude:
 
 ```markdown
 **Actions:**
-- prompt: code-review language={{project_language}} file={{current_file}}
-- prompt: documentation task="generate API docs" format="markdown"
+- Execute prompt "prompt-name"
+- Execute prompt "prompt-name" with result="variable_name"
+- Execute prompt "prompt-name" with arg1="value1" arg2="value2"
 ```
 
 #### Shell Actions
@@ -200,44 +201,60 @@ Run shell commands:
 
 ```markdown
 **Actions:**
-- shell: `git status`
-- shell: `npm test -- --coverage` (timeout: 120s)
-- shell: `cargo build --release` (parallel)
+- Run `git status`
+- Run `npm test -- --coverage`
+- Run `cargo build --release`
 ```
 
-#### Conditional Actions
+#### Log Actions
 
-Make decisions based on conditions:
+Output messages with different levels:
 
 ```markdown
 **Actions:**
-- conditional: Check if file exists
-  condition: file_exists("package.json")
-  true_action: shell: `npm install`
-  false_action: skip
+- Log "information message"
+- Log warning "warning message"
+- Log error "error message"
 ```
 
-#### Sub-workflow Actions
+#### Set Variable Actions
 
-Call other workflows:
+Set workflow variables:
 
 ```markdown
 **Actions:**
-- workflow: testing-workflow
-  variables:
-    environment: "{{environment}}"
-    strict_mode: true
+- Set variable_name="value"
+- Set result="${previous_result}"
 ```
 
 #### Wait Actions
 
-Add delays or wait for conditions:
+Add delays or wait for user input:
 
 ```markdown
 **Actions:**
-- wait: 5s
-- wait: until file_exists("build/complete.flag")
-- wait: until process_finished("background-job")
+- Wait 5 seconds
+- Wait 2 minutes
+- Wait for user input
+```
+
+#### Sub-workflow Actions
+
+Run other workflows:
+
+```markdown
+**Actions:**
+- Run workflow "workflow-name"
+- Delegate to "workflow-name"
+```
+
+#### Abort Actions
+
+Terminate workflow execution:
+
+```markdown
+**Actions:**
+- Abort "Reason for termination"
 ```
 
 ### Transition Conditions
@@ -291,38 +308,16 @@ Default behavior - actions run one after another:
 - prompt: code-review
 ```
 
-### Parallel Execution
+### Sequential Execution
 
-Mark actions for parallel execution:
-
-```markdown
-**Actions:**
-- shell: `cargo build` (parallel)
-- shell: `npm install` (parallel)
-- shell: `python -m pytest` (parallel)
-- prompt: code-review (wait for above)
-```
-
-### Fork-Join Pattern
+Actions in workflows run sequentially by default. Each action completes before the next one begins.
 
 ```markdown
-### parallel-work
 **Actions:**
-- fork: frontend-build
-  actions:
-    - shell: `npm run build`
-    - shell: `npm run test`
-- fork: backend-build  
-  actions:
-    - shell: `cargo build --release`
-    - shell: `cargo test`
-
-**Transitions:**
-- When all forks complete → deploy
-
-### deploy
-**Actions:**
-- shell: `docker build -t app:latest .`
+- Log "Starting build process"
+- Run `cargo build`
+- Run `cargo test`
+- Log "Build complete"
 ```
 
 ## Built-in Variables
@@ -355,9 +350,9 @@ Define dedicated error handling states:
 **Description**: Handle errors and cleanup
 
 **Actions:**
-- prompt: debug error="{{error.message}}" context="{{state.current}}"
-- shell: `git checkout main` (ignore errors)
-- shell: `rm -rf temp/` (ignore errors)
+- Log error "Error occurred: {{error.message}} in state {{state.current}}"
+- Run `git checkout main`
+- Run `rm -rf temp/`
 
 **Transitions:**
 - If error.recoverable → retry-state
@@ -369,17 +364,11 @@ Define dedicated error handling states:
 ```markdown
 ### flaky-operation
 **Actions:**
-- shell: `network-dependent-command`
+- Run `network-dependent-command`
 
 **Transitions:**
 - On success → next-state
-- On failure (retry < 3) → flaky-operation
-- On failure (retry >= 3) → error
-
-**Retry:**
-- max_attempts: 3
-- delay_ms: 1000
-- backoff: exponential
+- On failure → error
 ```
 
 ### Cleanup Actions
@@ -389,16 +378,16 @@ Define dedicated error handling states:
 **Description**: Cleanup resources
 
 **Actions:**
-- shell: `docker stop $(docker ps -q)` (ignore errors)
-- shell: `rm -rf temp/` (ignore errors)
-- prompt: cleanup-report
-
-**Always Execute**: true  # Run even if workflow is cancelled
+- Run `docker stop $(docker ps -q)`
+- Run `rm -rf temp/`
+- Log "Cleanup completed"
 ```
 
 ## Advanced Features
 
-### Conditional Workflows
+### Advanced Workflow Features
+
+SwissArmyHammer workflows support sophisticated branching and state management through transitions. Complex conditional logic is handled through state transitions rather than within individual actions.
 
 ```markdown
 ---
@@ -408,55 +397,13 @@ initial_state: check-environment
 
 ### check-environment
 **Actions:**
-- conditional: Environment check
-  condition: environment == "prod"
-  true_workflow: production-deploy
-  false_workflow: development-deploy
-```
-
-### Dynamic State Selection
-
-```markdown
-### router
-**Actions:**
-- dynamic: Choose next state based on file type
-  condition: file_extension(target_file)
-  cases:
-    ".rs": rust-build
-    ".js": javascript-build
-    ".py": python-build
-  default: generic-build
-```
-
-### Loop Constructs
-
-```markdown
-### process-files
-**Actions:**
-- loop: Process each file
-  items: "{{file_list}}"
-  state: process-single-file
-  parallel: 2
+- Log "Checking deployment environment"
+- Set environment_checked="true"
 
 **Transitions:**
-- When loop complete → finalize
-```
-
-### Resource Management
-
-```markdown
----
-name: resource-workflow
-resources:
-  - name: database
-    type: docker-container
-    spec: "postgres:13"
-    cleanup: true
-  - name: temp-dir
-    type: directory
-    path: "/tmp/workflow-{{execution.id}}"
-    cleanup: true
----
+- If environment == "prod" → production-deploy
+- If environment == "staging" → staging-deploy
+- Always → development-deploy
 ```
 
 ## Integration Patterns
@@ -466,26 +413,12 @@ resources:
 ```markdown
 ### git-workflow
 **Actions:**
-- shell: `git checkout -b feature/{{issue_name}}`
-- shell: `git add -A`
-- shell: `git commit -m "{{commit_message}}"`
+- Run `git checkout -b feature/{{issue_name}}`
+- Run `git add -A`
+- Run `git commit -m "{{commit_message}}"`
 
 **Transitions:**
 - On success → push-branch
-```
-
-### Issue Management Integration
-
-```markdown
-### issue-workflow
-**Actions:**
-- issue: create
-  name: "bug-{{bug_id}}"
-  content: "{{bug_description}}"
-- issue: work bug-{{bug_id}}
-
-**Transitions:**
-- Always → investigate
 ```
 
 ### CI/CD Integration
@@ -493,13 +426,10 @@ resources:
 ```markdown
 ### ci-workflow
 **Actions:**
-- shell: `docker build -t app:{{git.commit}} .`
-- shell: `docker push app:{{git.commit}}`
-- shell: `kubectl set image deployment/app app=app:{{git.commit}}`
-
-**Environment:**
-- DOCKER_REGISTRY: "{{registry_url}}"
-- KUBE_CONFIG: "{{kube_config_path}}"
+- Run `docker build -t app:{{git.commit}} .`
+- Run `docker push app:{{git.commit}}`
+- Run `kubectl set image deployment/app app=app:{{git.commit}}`
+- Log "Deployment completed for commit {{git.commit}}"
 ```
 
 ## Testing Workflows
@@ -538,24 +468,22 @@ test_mode: true
 
 ### test-setup
 **Actions:**
-- shell: `mkdir -p test-temp`
-- shell: `cp test-data/* test-temp/`
+- Run `mkdir -p test-temp`
+- Run `cp test-data/* test-temp/`
 
 ### run-main-workflow
 **Actions:**
-- workflow: main-workflow
-  variables:
-    working_dir: "test-temp"
+- Run workflow "main-workflow"
     
 ### verify-results
 **Actions:**
-- shell: `test -f test-temp/output.json`
-- conditional: Check output format
-  condition: valid_json("test-temp/output.json")
+- Run `test -f test-temp/output.json`
+- Log "Output file verification complete"
   
 ### cleanup
 **Actions:**
-- shell: `rm -rf test-temp`
+- Run `rm -rf test-temp`
+- Log "Test cleanup completed"
 ```
 
 ## Best Practices
