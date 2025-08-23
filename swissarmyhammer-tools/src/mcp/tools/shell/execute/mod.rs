@@ -31,8 +31,8 @@ struct ShellExecuteRequest {
     /// Optional timeout in seconds (default: 300, max: 1800)
     timeout: Option<u32>,
 
-    /// Optional environment variables to set
-    environment: Option<std::collections::HashMap<String, String>>,
+    /// Optional environment variables as JSON string
+    environment: Option<String>,
 }
 
 /// Result structure for shell command execution
@@ -1204,11 +1204,8 @@ impl McpTool for ShellExecuteTool {
                     "default": 300
                 },
                 "environment": {
-                    "type": "object",
-                    "description": "Additional environment variables to set (optional)",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
+                    "type": "string",
+                    "description": "Additional environment variables as JSON string (optional, e.g., '{\"KEY1\":\"value1\",\"KEY2\":\"value2\"}')"
                 }
             },
             "required": ["command"]
@@ -1281,9 +1278,20 @@ impl McpTool for ShellExecuteTool {
             )?;
         }
 
-        // Validate environment variables if provided with security checks
-        if let Some(ref env_vars) = request.environment {
-            swissarmyhammer::workflow::validate_environment_variables_security(env_vars).map_err(
+        // Parse and validate environment variables if provided
+        let parsed_environment: Option<std::collections::HashMap<String, String>> = if let Some(ref env_str) = request.environment {
+            // Parse JSON string into HashMap
+            let env_vars: std::collections::HashMap<String, String> = serde_json::from_str(env_str)
+                .map_err(|e| {
+                    tracing::warn!("Failed to parse environment variables JSON: {}", e);
+                    McpError::invalid_params(
+                        format!("Invalid JSON format for environment variables: {e}"),
+                        None,
+                    )
+                })?;
+            
+            // Validate environment variables with security checks
+            swissarmyhammer::workflow::validate_environment_variables_security(&env_vars).map_err(
                 |e| {
                     tracing::warn!("Environment variables security validation failed: {}", e);
                     McpError::invalid_params(
@@ -1292,7 +1300,11 @@ impl McpTool for ShellExecuteTool {
                     )
                 },
             )?;
-        }
+            
+            Some(env_vars)
+        } else {
+            None
+        };
 
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);
@@ -1332,7 +1344,7 @@ impl McpTool for ShellExecuteTool {
             request.command.clone(),
             working_directory,
             timeout_seconds,
-            request.environment,
+            parsed_environment,
             &shell_config,
         )
         .await
@@ -1506,8 +1518,7 @@ mod tests {
         let tool = ShellExecuteTool::new();
         let context = create_test_context();
 
-        let mut env = HashMap::new();
-        env.insert("TEST_VAR".to_string(), "test_value".to_string());
+        let env_json = r#"{"TEST_VAR":"test_value"}"#;
 
         let mut args = serde_json::Map::new();
         args.insert(
@@ -1524,7 +1535,7 @@ mod tests {
         );
         args.insert(
             "environment".to_string(),
-            serde_json::to_value(&env).unwrap(),
+            serde_json::Value::String(env_json.to_string()),
         );
 
         let result = tool.execute(args, &context).await;
@@ -1734,8 +1745,7 @@ mod tests {
         let tool = ShellExecuteTool::new();
         let context = create_test_context();
 
-        let mut env = std::collections::HashMap::new();
-        env.insert("TEST_VAR".to_string(), "test_value".to_string());
+        let env_json = r#"{"TEST_VAR":"test_value"}"#;
 
         let mut args = serde_json::Map::new();
         args.insert(
@@ -1744,7 +1754,7 @@ mod tests {
         );
         args.insert(
             "environment".to_string(),
-            serde_json::to_value(&env).unwrap(),
+            serde_json::Value::String(env_json.to_string()),
         );
 
         let result = tool.execute(args, &context).await;
@@ -2064,8 +2074,7 @@ mod tests {
         let context = create_test_context();
 
         // Test invalid environment variable names that should be blocked
-        let mut env = std::collections::HashMap::new();
-        env.insert("123INVALID".to_string(), "value".to_string()); // starts with number
+        let env_json = r#"{"123INVALID":"value"}"#; // starts with number
 
         let mut args = serde_json::Map::new();
         args.insert(
@@ -2074,7 +2083,7 @@ mod tests {
         );
         args.insert(
             "environment".to_string(),
-            serde_json::to_value(&env).unwrap(),
+            serde_json::Value::String(env_json.to_string()),
         );
 
         let result = tool.execute(args, &context).await;
@@ -2099,8 +2108,8 @@ mod tests {
         let context = create_test_context();
 
         // Test environment variable value that's too long
-        let mut env = std::collections::HashMap::new();
-        env.insert("TEST_VAR".to_string(), "x".repeat(2000)); // exceeds limit
+        let long_value = "x".repeat(2000);
+        let env_json = format!(r#"{{"TEST_VAR":"{}"}}"#, long_value); // exceeds limit
 
         let mut args = serde_json::Map::new();
         args.insert(
@@ -2109,7 +2118,7 @@ mod tests {
         );
         args.insert(
             "environment".to_string(),
-            serde_json::to_value(&env).unwrap(),
+            serde_json::Value::String(env_json),
         );
 
         let result = tool.execute(args, &context).await;
