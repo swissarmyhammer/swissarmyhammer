@@ -7,9 +7,6 @@ description: Code up an issue
 
 You job is to resolve an issue by coding a solution.
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Rules
 
 {% render "workflow_guards" %}

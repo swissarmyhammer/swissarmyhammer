@@ -7,9 +7,6 @@ description: Code up the code review
 
 You job is to code up the needed changes in the code review.
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Rules
 
 {% render "workflow_guards" %}
