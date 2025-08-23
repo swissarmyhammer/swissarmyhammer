@@ -132,8 +132,7 @@ Turn a specific specification file into a multiple step plan.
 
 Generate a multiple step plan in the `./issues` folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order.
 
-{% render "principals" %}
-{% render "coding_standards" %}
+**Note**: System prompt with coding standards and principals is now automatically injected via Claude Code integration.
 
 ## Guidelines
 
