@@ -1,5 +1,6 @@
 use std::process;
 mod cli;
+mod commands;
 mod doctor;
 mod dynamic_cli;
 mod error;
@@ -400,24 +401,13 @@ fn extract_clap_value(
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
-    use crate::doctor::Doctor;
-
     let migration = matches.get_flag("migration");
-    let mut doctor = Doctor::new();
-
-    match doctor.run_diagnostics_with_options(migration) {
-        Ok(exit_code) => exit_code,
-        Err(e) => {
-            eprintln!("Doctor command failed: {}", e);
-            EXIT_ERROR
-        }
-    }
+    commands::doctor::handle_command(migration).await
 }
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
     use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
-    use crate::prompt;
 
     let subcommand = match matches.subcommand() {
         Some(("list", sub_matches)) => {
@@ -518,19 +508,12 @@ async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
         }
     };
 
-    match prompt::run_prompt_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            eprintln!("Prompt command failed: {}", e);
-            e.exit_code
-        }
-    }
+    commands::prompt::handle_command(subcommand).await
 }
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
     use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
-    use crate::flow;
 
     let subcommand = match matches.subcommand() {
         Some(("run", sub_matches)) => {
@@ -682,19 +665,12 @@ async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
         }
     };
 
-    match flow::run_flow_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            eprintln!("Flow command failed: {}", e);
-            EXIT_ERROR
-        }
-    }
+    commands::flow::handle_command(subcommand).await
 }
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
     use crate::cli::ValidateFormat;
-    use crate::validate;
 
     let quiet = matches.get_flag("quiet");
     let format = match matches.get_one::<String>("format").map(|s| s.as_str()) {
@@ -706,46 +682,18 @@ async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
         .map(|vals| vals.cloned().collect())
         .unwrap_or_default();
 
-    match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs) {
-        Ok(exit_code) => exit_code,
-        Err(e) => {
-            eprintln!("Validate command failed: {}", e);
-            EXIT_ERROR
-        }
-    }
+    commands::validate::handle_command(quiet, format, workflow_dirs)
 }
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_plan_command(matches: &clap::ArgMatches) -> i32 {
-    use crate::plan;
-
     let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
-    plan::run_plan(plan_filename).await
+    commands::plan::handle_command(plan_filename).await
 }
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_implement_command() -> i32 {
-    use crate::cli::FlowSubcommand;
-    use crate::flow;
-
-    // Execute the implement workflow - equivalent to 'flow run implement'
-    let subcommand = FlowSubcommand::Run {
-        workflow: "implement".to_string(),
-        vars: vec![],
-        interactive: false,
-        dry_run: false,
-        test: false,
-        timeout: None,
-        quiet: false,
-    };
-
-    match flow::run_flow_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            eprintln!("Implement command failed: {}", e);
-            EXIT_ERROR
-        }
-    }
+    commands::implement::handle_command().await
 }
 
 #[cfg(feature = "dynamic-cli")]

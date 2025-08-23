@@ -1112,6 +1112,7 @@ mod parser_tests {
     fn test_parser_load_from_repo_root() {
         use std::panic;
 
+        let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
 
         // Create .git directory to simulate repository root
