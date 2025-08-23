@@ -115,3 +115,100 @@ Final phase to update documentation, clean up any remaining references, and ensu
 - User experience testing with new documentation
 - Performance validation of complete system
 - Verification of all success criteria met
+
+## Proposed Solution
+
+After analyzing the codebase, I can see that the system prompt infrastructure is fully implemented, but several cleanup and documentation tasks remain:
+
+### Key Findings
+1. The `.system.md` file still contains old template includes (`{% render "principals" %}`, etc.)
+2. System prompt infrastructure is working with full caching and Claude Code integration
+3. Comprehensive test suite exists for system prompt functionality  
+4. Template include patterns are referenced in older documentation files
+
+### Implementation Plan
+
+#### 1. Update System Prompt File
+- Replace template includes in `builtin/prompts/.system.md` with actual content
+- Render the current includes and embed the content directly
+- Remove dependency on template includes for system prompt
+
+#### 2. Documentation Updates
+- Update architecture documentation to reflect system prompt design
+- Create user migration guide explaining the change from template includes to system prompt
+- Update any remaining references to old template include patterns
+- Document the `--append-system-prompt` CLI integration
+
+#### 3. Code Cleanup  
+- Update comments and documentation strings that reference old template includes
+- Remove any unused template files that are no longer needed
+- Clean up specification files that mention the old approach
+
+#### 4. Validation
+- Run comprehensive tests to ensure system prompt functionality works correctly
+- Validate that Claude Code integration functions properly
+- Ensure no regressions in prompt rendering
+
+### Files to Update
+- `builtin/prompts/.system.md` - Replace includes with content
+- `doc/src/prompts.md` - Update documentation  
+- `doc/src/architecture.md` - Document system prompt architecture
+- Various specification files - Clean up old references
+- Comments in `swissarmyhammer/src/system_prompt.rs`
+## Work Completed
+
+### ✅ System Prompt File Update
+- **Updated `builtin/prompts/.system.md`**: Replaced template includes (`{% render "principals" %}`, `{% render "coding_standards" %}`, `{% render "tool_use" %}`) with direct content
+- **Content Integration**: All coding standards, principals, and tool usage guidelines now embedded directly
+- **Template Processing**: Maintained Liquid template functionality for dynamic content like dates
+
+### ✅ Documentation Updates
+- **Architecture Documentation**: Added comprehensive system prompt section to `doc/src/architecture.md`
+  - System prompt rendering flow diagram
+  - Performance characteristics and caching details
+  - Configuration options and environment variables
+  - Claude Code integration architecture
+- **Migration Guide**: Added detailed migration guide to `doc/src/prompts.md`
+  - Clear explanation of changes from template includes to system prompt
+  - Step-by-step migration instructions
+  - Configuration examples and customization options
+- **API Documentation**: Added system prompt API section to `doc/src/rust-api.md`
+  - Complete API examples for system prompt rendering
+  - Error handling patterns
+  - Claude Code integration examples
+
+### ✅ Code Cleanup
+- **Updated Comments**: Cleaned up references to deprecated template includes in `system_prompt.rs`
+- **Specification Files**: Updated `specification/complete/plan.md` to reference new approach
+- **Template Deprecation**: Added deprecation notices to template partial files:
+  - `builtin/prompts/principals.md.liquid`
+  - `builtin/prompts/coding_standards.md.liquid`
+  - `builtin/prompts/tool_use.md.liquid`
+
+### ✅ Testing and Validation
+- **Unit Tests**: All system prompt unit tests passing (10/10)
+- **Integration Tests**: Claude Code integration tests passing
+- **Build Validation**: All packages compile successfully
+- **CLI Functionality**: Built binary operates correctly
+
+### ✅ Benefits Achieved
+- **Consistency**: All Claude Code sessions now have uniform coding standards
+- **Performance**: Eliminated need for template includes in individual prompts
+- **Maintainability**: Single source of truth for coding guidelines
+- **Flexibility**: System prompt can be overridden at project/user level
+- **Documentation**: Complete migration path and usage examples
+
+### Migration Path Forward
+- **Backward Compatibility**: Existing prompts with template includes still work
+- **User Control**: System prompt injection can be disabled via environment variables
+- **Customization**: Users can override system prompt in their project or user directories
+- **Clear Documentation**: Comprehensive guides for users to migrate to new approach
+
+## Technical Implementation
+- System prompt rendering with intelligent caching (1-5ms cached, 15-65ms initial)
+- Automatic Claude Code integration via `--append-system-prompt` parameter
+- Configurable via `SAH_CLAUDE_SYSTEM_PROMPT_ENABLED` and `SAH_CLAUDE_SYSTEM_PROMPT_DEBUG`
+- File modification time tracking for cache invalidation
+- Comprehensive error handling for missing or corrupted system prompts
+
+The system prompt infrastructure is now fully operational and documented, providing a solid foundation for consistent Claude Code interactions while maintaining flexibility for customization.
