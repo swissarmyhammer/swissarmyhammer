@@ -86,7 +86,7 @@ fn test_file_discovery_cross_platform() {
 
     for (filename, test_value) in &config_variants {
         let name_part = filename.split('.').next().unwrap();
-        let format = match filename.split('.').last().unwrap() {
+        let format = match filename.split('.').next_back().unwrap() {
             "toml" => ConfigFormat::Toml,
             "yaml" => ConfigFormat::Yaml,
             "json" => ConfigFormat::Json,
@@ -294,7 +294,7 @@ fn test_line_ending_handling() {
         context.get_string("project_name").unwrap(),
         "Line Ending Test"
     );
-    assert_eq!(context.get_bool("debug").unwrap(), true);
+    assert!(context.get_bool("debug").unwrap());
     assert_eq!(context.get_string("log_level").unwrap(), "info");
 
     println!(
@@ -424,7 +424,7 @@ test_passed = true
     let context = env.load_template_context().unwrap();
 
     assert_eq!(context.get_string("project_name").unwrap(), "Temp Dir Test");
-    assert_eq!(context.get_bool("test_passed").unwrap(), true);
+    assert!(context.get_bool("test_passed").unwrap());
 
     println!(
         "Temporary directory handling test passed on platform: {}, temp dir: {:?}",
@@ -456,7 +456,7 @@ project_name = "Platform Defaults Test"
 
     // Defaults should be consistent across platforms
     assert_eq!(context.get_string("environment").unwrap(), "development");
-    assert_eq!(context.get_bool("debug").unwrap(), false);
+    assert!(!context.get_bool("debug").unwrap());
 
     println!(
         "Platform defaults test passed on platform: {} with consistent defaults",
@@ -497,7 +497,7 @@ platform_test = true
                     context.get_string("project_name").unwrap(),
                     "Concurrent Access Test"
                 );
-                assert_eq!(context.get_bool("thread_safe").unwrap(), true);
+                assert!(context.get_bool("thread_safe").unwrap());
 
                 // Small delay to encourage race conditions
                 std::thread::sleep(std::time::Duration::from_millis(1));

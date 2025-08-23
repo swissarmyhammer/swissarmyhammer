@@ -350,7 +350,7 @@ chinese_text = "你好世界"
 arabic_text = "مرحبا بالعالم"
 emoji_key_🔑 = "emoji_value_🎉"
 special_chars = "~!@#$%^&*()_+-={}[]|\\:;\"'<>,.?/"
-zero_width_space = "​text​with​zero​width​spaces"
+zero_width_space = "\u{200B}text\u{200B}with\u{200B}zero\u{200B}width\u{200B}spaces"
 control_chars = "\t\n\r"
 
 [unicode_section_тест]

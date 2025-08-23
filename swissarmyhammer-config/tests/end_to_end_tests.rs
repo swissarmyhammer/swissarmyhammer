@@ -476,11 +476,9 @@ retention_days = {}
         "Enterprise Application"
     );
 
-    if let Some(services) = context.get("services") {
+    if let Some(serde_json::Value::Object(services_map)) = context.get("services") {
         // Should have all 25 services
-        if let serde_json::Value::Object(services_map) = services {
-            assert_eq!(services_map.len(), 25);
-        }
+        assert_eq!(services_map.len(), 25);
     }
 
     if let Some(database) = context.get("database") {
@@ -633,7 +631,7 @@ max_connections = 10
 
     let initial_context = env.load_template_context().unwrap();
     assert_eq!(initial_context.get_string("version").unwrap(), "1.0.0");
-    assert_eq!(initial_context.get_bool("feature_enabled").unwrap(), false);
+    assert!(!initial_context.get_bool("feature_enabled").unwrap());
     assert_eq!(initial_context.get_number("max_connections").unwrap(), 10.0);
 
     // Simulate configuration change (hot reload)
@@ -651,7 +649,7 @@ new_feature = "enabled"
     // Load configuration again (simulating hot reload)
     let updated_context = env.load_template_context().unwrap();
     assert_eq!(updated_context.get_string("version").unwrap(), "1.1.0");
-    assert_eq!(updated_context.get_bool("feature_enabled").unwrap(), true);
+    assert!(updated_context.get_bool("feature_enabled").unwrap());
     assert_eq!(updated_context.get_number("max_connections").unwrap(), 20.0);
     assert_eq!(
         updated_context.get_string("new_feature").unwrap(),

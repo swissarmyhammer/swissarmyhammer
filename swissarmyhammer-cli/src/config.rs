@@ -7,7 +7,6 @@ use anyhow::Result;
 use colored::*;
 use serde_json::json;
 
-
 use swissarmyhammer_config::{ConfigProvider, TemplateContext};
 
 use crate::cli::{ConfigCommands, OutputFormat};
@@ -24,7 +23,8 @@ pub async fn handle_config_command(command: ConfigCommands) -> Result<()> {
 /// Display current configuration
 async fn show_config(format: OutputFormat) -> Result<()> {
     let provider = ConfigProvider::new();
-    let template_context = provider.load_template_context()
+    let template_context = provider
+        .load_template_context()
         .map_err(|e| anyhow::anyhow!("Failed to load repository configuration: {}", e))?;
 
     if template_context.is_empty() {
@@ -36,7 +36,9 @@ async fn show_config(format: OutputFormat) -> Result<()> {
                     "{}",
                     "No sah.toml configuration file found in repository".yellow()
                 );
-                println!("Create a sah.toml file in the repository root to configure project variables.");
+                println!(
+                    "Create a sah.toml file in the repository root to configure project variables."
+                );
             }
         }
     } else {
@@ -49,7 +51,8 @@ async fn show_config(format: OutputFormat) -> Result<()> {
 /// Show configuration variables
 async fn show_variables(format: OutputFormat, verbose: bool) -> Result<()> {
     let provider = ConfigProvider::new();
-    let template_context = provider.load_template_context()
+    let template_context = provider
+        .load_template_context()
         .map_err(|e| anyhow::anyhow!("Failed to load repository configuration: {}", e))?;
 
     if template_context.is_empty() {
@@ -71,7 +74,8 @@ async fn show_variables(format: OutputFormat, verbose: bool) -> Result<()> {
 /// Show environment variable usage
 async fn show_env_vars(missing: bool, format: OutputFormat) -> Result<()> {
     let provider = ConfigProvider::new();
-    let template_context = provider.load_template_context()
+    let template_context = provider
+        .load_template_context()
         .map_err(|e| anyhow::anyhow!("Failed to load repository configuration: {}", e))?;
 
     if template_context.is_empty() {
@@ -171,7 +175,7 @@ fn display_variables(config: &TemplateContext, format: OutputFormat, verbose: bo
 /// Display environment variables found in configuration
 fn display_env_vars(config: &TemplateContext, missing: bool, format: OutputFormat) -> Result<()> {
     let env_vars = extract_env_vars(config);
-    
+
     let filtered_vars: Vec<_> = env_vars
         .into_iter()
         .filter(|(_, _, current_value)| !missing || current_value.is_none())
@@ -208,14 +212,14 @@ fn display_env_vars(config: &TemplateContext, missing: bool, format: OutputForma
             } else {
                 println!("{}", "Environment Variables Used:".bold());
             }
-            
+
             for (name, default, current) in &filtered_vars {
                 let status = if current.is_some() {
                     "✓".green()
                 } else {
                     "✗".red()
                 };
-                
+
                 print!("  {} {}", status, name.cyan());
                 if let Some(def) = default {
                     print!(" (default: {})", def.dimmed());
@@ -226,12 +230,15 @@ fn display_env_vars(config: &TemplateContext, missing: bool, format: OutputForma
                     println!(" = {}", "NOT SET".red());
                 }
             }
-            
+
             if filtered_vars.is_empty() {
                 if missing {
                     println!("  {}", "All environment variables are set!".green());
                 } else {
-                    println!("  {}", "No environment variables used in configuration".dimmed());
+                    println!(
+                        "  {}",
+                        "No environment variables used in configuration".dimmed()
+                    );
                 }
             }
         }
@@ -242,11 +249,11 @@ fn display_env_vars(config: &TemplateContext, missing: bool, format: OutputForma
 /// Extract environment variable references from configuration values
 fn extract_env_vars(config: &TemplateContext) -> Vec<(String, Option<String>, Option<String>)> {
     let mut env_vars = Vec::new();
-    
+
     for value in config.vars().values() {
         extract_env_vars_from_value(value, &mut env_vars);
     }
-    
+
     env_vars
 }
 
@@ -259,13 +266,17 @@ fn extract_env_vars_from_value(
         serde_json::Value::String(s) => {
             // Look for ${VAR} or ${VAR:-default} patterns
             let env_var_regex = regex::Regex::new(r"\$\{([^}]+)\}").unwrap();
-            
+
             for cap in env_var_regex.captures_iter(s) {
                 let full_match = &cap[1];
-                
+
                 if let Some((var_name, default)) = full_match.split_once(":-") {
                     let current_value = std::env::var(var_name).ok();
-                    env_vars.push((var_name.to_string(), Some(default.to_string()), current_value));
+                    env_vars.push((
+                        var_name.to_string(),
+                        Some(default.to_string()),
+                        current_value,
+                    ));
                 } else {
                     let current_value = std::env::var(full_match).ok();
                     env_vars.push((full_match.to_string(), None, current_value));
@@ -291,7 +302,7 @@ fn json_value_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Number(n) if n.is_i64() => "integer",
-        serde_json::Value::Number(_) => "float", 
+        serde_json::Value::Number(_) => "float",
         serde_json::Value::Bool(_) => "boolean",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "table",
@@ -348,7 +359,7 @@ mod tests {
         let mut env_vars = Vec::new();
         let value = serde_json::json!("${TEST_VAR}");
         extract_env_vars_from_value(&value, &mut env_vars);
-        
+
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars[0].0, "TEST_VAR");
         assert_eq!(env_vars[0].1, None); // no default
@@ -359,7 +370,7 @@ mod tests {
         let mut env_vars = Vec::new();
         let value = serde_json::json!("${TEST_VAR:-default_value}");
         extract_env_vars_from_value(&value, &mut env_vars);
-        
+
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars[0].0, "TEST_VAR");
         assert_eq!(env_vars[0].1, Some("default_value".to_string()));

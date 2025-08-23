@@ -66,8 +66,6 @@ pub mod tests;
 /// Template renderer with TemplateContext integration
 pub mod renderer;
 
-
-
 /// Integration tests
 #[cfg(test)]
 pub mod integration_test;

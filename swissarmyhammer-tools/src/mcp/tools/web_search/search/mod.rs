@@ -41,7 +41,8 @@ impl WebSearchTool {
     /// Helper function to load configuration from the natural API
     fn load_config_from_template_context() -> Option<serde_json::Value> {
         let provider = ConfigProvider::new();
-        provider.load_template_context()
+        provider
+            .load_template_context()
             .ok()
             .and_then(|context| context.get("web_search").cloned())
     }
@@ -49,77 +50,97 @@ impl WebSearchTool {
     /// Loads configuration for content fetching
     fn load_content_fetch_config() -> ContentFetchConfig {
         let mut config = ContentFetchConfig::default();
-        
+
         if let Some(web_search_config) = Self::load_config_from_template_context() {
             // Try to extract content fetching configuration
             if let Some(content_fetching) = web_search_config.get("content_fetching") {
                 // Concurrent processing settings
-                if let Some(max_concurrent) = content_fetching.get("max_concurrent_fetches")
-                    .and_then(|v| v.as_u64()) {
+                if let Some(max_concurrent) = content_fetching
+                    .get("max_concurrent_fetches")
+                    .and_then(|v| v.as_u64())
+                {
                     if max_concurrent > 0 {
                         config.max_concurrent_fetches = max_concurrent as usize;
                     }
                 }
 
                 // Timeout settings
-                if let Some(timeout) = content_fetching.get("content_fetch_timeout")
-                    .and_then(|v| v.as_u64()) {
+                if let Some(timeout) = content_fetching
+                    .get("content_fetch_timeout")
+                    .and_then(|v| v.as_u64())
+                {
                     if timeout > 0 {
                         config.fetch_timeout = Duration::from_secs(timeout);
                     }
                 }
 
                 // Content size limit
-                if let Some(size_str) = content_fetching.get("max_content_size")
-                    .and_then(|v| v.as_str()) {
+                if let Some(size_str) = content_fetching
+                    .get("max_content_size")
+                    .and_then(|v| v.as_str())
+                {
                     if let Ok(size) = Self::parse_size_string(size_str) {
                         config.max_content_size = size;
                     }
                 }
 
                 // Rate limiting settings
-                if let Some(delay) = content_fetching.get("default_domain_delay")
-                    .and_then(|v| v.as_u64()) {
+                if let Some(delay) = content_fetching
+                    .get("default_domain_delay")
+                    .and_then(|v| v.as_u64())
+                {
                     if delay > 0 {
                         config.default_domain_delay = Duration::from_millis(delay);
                     }
                 }
 
                 // Content quality settings
-                if let Some(min_length) = content_fetching.get("min_content_length")
-                    .and_then(|v| v.as_u64()) {
+                if let Some(min_length) = content_fetching
+                    .get("min_content_length")
+                    .and_then(|v| v.as_u64())
+                {
                     if min_length > 0 {
                         config.quality_config.min_content_length = min_length as usize;
                     }
                 }
 
-                if let Some(max_length) = content_fetching.get("max_content_length")
-                    .and_then(|v| v.as_u64()) {
+                if let Some(max_length) = content_fetching
+                    .get("max_content_length")
+                    .and_then(|v| v.as_u64())
+                {
                     if max_length > 0 {
                         config.quality_config.max_content_length = max_length as usize;
                     }
                 }
 
                 // Processing settings
-                if let Some(max_summary) = content_fetching.get("max_summary_length")
-                    .and_then(|v| v.as_u64()) {
+                if let Some(max_summary) = content_fetching
+                    .get("max_summary_length")
+                    .and_then(|v| v.as_u64())
+                {
                     if max_summary > 0 {
                         config.processing_config.max_summary_length = max_summary as usize;
                     }
                 }
 
-                if let Some(extract_code) = content_fetching.get("extract_code_blocks")
-                    .and_then(|v| v.as_bool()) {
+                if let Some(extract_code) = content_fetching
+                    .get("extract_code_blocks")
+                    .and_then(|v| v.as_bool())
+                {
                     config.processing_config.extract_code_blocks = extract_code;
                 }
 
-                if let Some(generate_summaries) = content_fetching.get("generate_summaries")
-                    .and_then(|v| v.as_bool()) {
+                if let Some(generate_summaries) = content_fetching
+                    .get("generate_summaries")
+                    .and_then(|v| v.as_bool())
+                {
                     config.processing_config.generate_summaries = generate_summaries;
                 }
 
-                if let Some(extract_metadata) = content_fetching.get("extract_metadata")
-                    .and_then(|v| v.as_bool()) {
+                if let Some(extract_metadata) = content_fetching
+                    .get("extract_metadata")
+                    .and_then(|v| v.as_bool())
+                {
                     config.processing_config.extract_metadata = extract_metadata;
                 }
             }
@@ -131,7 +152,7 @@ impl WebSearchTool {
     /// Loads configuration for DuckDuckGo scoring algorithm
     fn load_scoring_config() -> ScoringConfig {
         let mut config = ScoringConfig::default();
-        
+
         if let Some(web_search_config) = Self::load_config_from_template_context() {
             if let Some(scoring) = web_search_config.get("scoring") {
                 // Scoring algorithm configuration
@@ -139,7 +160,9 @@ impl WebSearchTool {
                     config.base_score = base_score;
                 }
 
-                if let Some(position_penalty) = scoring.get("position_penalty").and_then(|v| v.as_f64()) {
+                if let Some(position_penalty) =
+                    scoring.get("position_penalty").and_then(|v| v.as_f64())
+                {
                     config.position_penalty = position_penalty;
                 }
 
@@ -147,13 +170,13 @@ impl WebSearchTool {
                     config.min_score = min_score;
                 }
 
-                if let Some(exponential_decay) = scoring.get("exponential_decay")
-                    .and_then(|v| v.as_bool()) {
+                if let Some(exponential_decay) =
+                    scoring.get("exponential_decay").and_then(|v| v.as_bool())
+                {
                     config.exponential_decay = exponential_decay;
                 }
 
-                if let Some(decay_rate) = scoring.get("decay_rate")
-                    .and_then(|v| v.as_f64()) {
+                if let Some(decay_rate) = scoring.get("decay_rate").and_then(|v| v.as_f64()) {
                     config.decay_rate = decay_rate;
                 }
             }
