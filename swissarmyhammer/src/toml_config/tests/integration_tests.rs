@@ -420,7 +420,7 @@ fn test_file_discovery_from_different_directories() {
         panic!("Should find config from deep directory");
     }
 
-    // Test from tests directory  
+    // Test from tests directory
     let config_result = run_test(&tests_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
