@@ -11,9 +11,17 @@ use tempfile::TempDir;
 fn setup_test_environment() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Create issues directory
-    let issues_dir = temp_dir.path().join("issues");
+    // Create SwissArmyHammer directory structure
+    let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
+    std::fs::create_dir_all(&swissarmyhammer_dir).expect("Failed to create .swissarmyhammer directory");
+    
+    // Create issues directory within swissarmyhammer structure
+    let issues_dir = swissarmyhammer_dir.join("issues");
     std::fs::create_dir_all(&issues_dir).expect("Failed to create issues directory");
+    
+    // Create memos directory for memo storage
+    let memos_dir = swissarmyhammer_dir.join("memos");
+    std::fs::create_dir_all(&memos_dir).expect("Failed to create memos directory");
 
     // Initialize git repository in temp directory to avoid branch conflicts
     std::process::Command::new("git")
@@ -185,6 +193,8 @@ async fn test_issue_workflow_integration() {
         "Failed to create issue: {:?}",
         create_result.err()
     );
+
+    let _create_call_result = create_result.unwrap();
 
     // 2. Try to get the next issue using enhanced issue_show (should include our created issue)
     let next_args = context.create_arguments(vec![("name", json!("next"))]);

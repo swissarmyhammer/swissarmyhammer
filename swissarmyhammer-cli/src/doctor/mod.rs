@@ -37,33 +37,9 @@ pub mod checks;
 pub mod types;
 pub mod utils;
 
-/// System check category keywords
-#[cfg(not(feature = "dynamic-cli"))]
-const SYSTEM_CHECK_KEYWORDS: &[&str] = &["PATH", "permissions", "Binary", "Installation"];
-#[cfg(not(feature = "dynamic-cli"))]
-const CONFIG_CHECK_KEYWORDS: &[&str] = &["Claude", "config"];
-#[cfg(not(feature = "dynamic-cli"))]
-const PROMPT_CHECK_KEYWORDS: &[&str] = &["prompt", "YAML"];
-#[cfg(not(feature = "dynamic-cli"))]
-const WORKFLOW_CHECK_KEYWORDS: &[&str] = &["Workflow", "workflow"];
-#[cfg(not(feature = "dynamic-cli"))]
-const MIGRATION_CHECK_KEYWORDS: &[&str] = &["Migration", "migration", "directory consolidation"];
 
-/// Grouping of checks by category for organized display
-#[cfg(not(feature = "dynamic-cli"))]
-#[derive(Debug)]
-pub struct CheckGroups<'a> {
-    /// System-level checks (installation, PATH, permissions)
-    pub system_checks: Vec<&'a Check>,
-    /// Configuration checks (Claude Code, MCP setup)
-    pub config_checks: Vec<&'a Check>,
-    /// Prompt-related checks (directories, YAML parsing)
-    pub prompt_checks: Vec<&'a Check>,
-    /// Workflow system checks (directories, parsing, storage)
-    pub workflow_checks: Vec<&'a Check>,
-    /// Migration validation checks (directory consolidation, conflicts)
-    pub migration_checks: Vec<&'a Check>,
-}
+
+
 
 /// Count of checks by status for summary display
 #[derive(Debug)]
@@ -305,62 +281,7 @@ impl Doctor {
         self.print_summary(use_color);
     }
 
-    /// Group checks into categories
-    #[cfg(not(feature = "dynamic-cli"))]
-    fn group_checks_by_category(&self) -> CheckGroups<'_> {
-        CheckGroups {
-            system_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    SYSTEM_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            config_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    CONFIG_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            prompt_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    PROMPT_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .filter(|c| {
-                    !WORKFLOW_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            workflow_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    WORKFLOW_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            migration_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    MIGRATION_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-        }
-    }
+
 
     /// Print a category of checks
     fn print_check_category(&self, checks: &[&Check], category_name: &str, use_color: bool) {

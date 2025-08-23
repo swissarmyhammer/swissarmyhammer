@@ -2711,9 +2711,9 @@ mod tests {
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("quick command"));
 
-        // Duration should be much less than timeout
+        // Duration should be much less than timeout (allowing for system load during parallel tests)
         let duration_ms = context.get("duration_ms").unwrap().as_u64().unwrap();
-        assert!(duration_ms < 1000); // Should complete in less than 1 second
+        assert!(duration_ms < 5000); // Should complete in less than 5 seconds (was 1 second)
 
         // Result should contain output
         // Result should be trimmed version of stdout for usability

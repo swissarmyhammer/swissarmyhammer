@@ -2,8 +2,7 @@
 
 use crate::cli::PromptSubcommand;
 use crate::error::{CliError, CliResult};
-#[cfg(not(feature = "dynamic-cli"))]
-use crate::{list, search, test};
+use crate::{list, test};
 
 /// Main entry point for prompt command
 pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
@@ -52,35 +51,9 @@ pub async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
                 CliError::new(e.to_string(), 1)
             })
         }
-        PromptSubcommand::Search {
-            query,
-            r#in,
-            regex,
-            fuzzy,
-            case_sensitive,
-            source,
-            has_arg,
-            no_args,
-            full,
-            format,
-            highlight,
-            limit,
-        } => search::run_search_command(
-            query,
-            r#in,
-            regex,
-            fuzzy,
-            case_sensitive,
-            source,
-            has_arg,
-            no_args,
-            full,
-            format,
-            highlight,
-            limit,
-        )
-        .map(|_| ())
-        .map_err(|e| CliError::new(e.to_string(), 1)),
+        PromptSubcommand::Search { .. } => {
+            Err(CliError::new("Search functionality has been removed as part of infrastructure cleanup".to_string(), 1))
+        }
     }
 }
 
@@ -123,9 +96,9 @@ mod tests {
             limit: None,
         };
 
-        // Run the command
+        // Run the command - should return an error since search was removed
         let result = run_prompt_command(subcommand).await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 
     #[tokio::test]

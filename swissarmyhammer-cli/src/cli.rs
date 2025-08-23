@@ -1,8 +1,4 @@
 use clap::{Parser, Subcommand, ValueEnum};
-#[cfg(not(feature = "dynamic-cli"))]
-use is_terminal::IsTerminal;
-#[cfg(not(feature = "dynamic-cli"))]
-use std::io;
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum OutputFormat {
@@ -247,48 +243,7 @@ Examples:
         workflow_dirs: Vec<String>,
     },
 
-    /// Issue management commands (requires Git repository)
-    #[cfg(not(feature = "dynamic-cli"))]
-    #[command(long_about = "
-Manage work items and track issues in markdown files stored in the Git repository.
-Provides comprehensive issue lifecycle management with Git branch integration.
 
-⚠️ REQUIREMENTS: Must be run from within a Git repository.
-Issues are stored in .swissarmyhammer/issues/ directory at the Git repository root.
-
-Basic usage:
-  swissarmyhammer issue create <name> <content>     # Create new issue
-  swissarmyhammer issue list                        # List all issues  
-  swissarmyhammer issue show <name>                 # Show issue details
-  swissarmyhammer issue work <name>                 # Start working on issue
-  swissarmyhammer issue complete <name>             # Mark issue as complete
-
-Issue lifecycle:
-  create                                            # Create new issue file
-  list                                              # List with status filtering
-  show                                              # View issue content and metadata
-  work                                              # Switch to work branch
-  complete                                          # Mark as completed
-  merge                                             # Merge work branch back
-
-Git integration:
-  work <name>                                       # Creates branch issue/<name>
-  merge <name>                                      # Merges and optionally deletes branch
-  current                                           # Show current branch issue
-  status                                            # Check completion status
-
-Examples:
-  swissarmyhammer issue create bug_fix \"# Fix login error\"
-  swissarmyhammer issue list --show-completed --format json  
-  swissarmyhammer issue show current               # Show issue for current branch
-  swissarmyhammer issue work FEATURE_001           # Switch to issue branch
-  swissarmyhammer issue complete FEATURE_001       # Mark as done
-  swissarmyhammer issue merge FEATURE_001 --delete-branch
-")]
-    Issue {
-        #[command(subcommand)]
-        subcommand: IssueCommands,
-    },
 
     /// Plan a specific specification file
     #[command(long_about = "
@@ -769,79 +724,10 @@ for better discoverability and clearer intent.
     },
 }
 
-#[cfg(not(feature = "dynamic-cli"))]
-#[derive(Subcommand, Debug)]
-pub enum IssueCommands {
-    /// Create a new issue
-    Create {
-        /// Issue name
-        name: Option<String>,
-        /// Issue content
-        #[arg(long)]
-        content: Option<String>,
-    },
-    /// List all issues
-    List {
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: Option<OutputFormat>,
-        /// Show completed issues
-        #[arg(long = "completed")]
-        show_completed: bool,
-        /// Show active issues
-        #[arg(long, default_value = "true")]
-        show_active: bool,
-    },
-    /// Show issue details
-    Show {
-        /// Issue name
-        name: String,
-        /// Show raw content
-        #[arg(long)]
-        raw: bool,
-    },
-    /// Update issue content
-    Update {
-        /// Issue name
-        name: String,
-        /// New content
-        #[arg(long)]
-        content: String,
-        /// Append to existing content
-        #[arg(long)]
-        append: bool,
-    },
-    /// Mark issue as complete
-    Complete {
-        /// Issue name
-        name: String,
-    },
-    /// Start working on issue
-    Work {
-        /// Issue name
-        name: String,
-    },
-    /// Merge issue branch
-    Merge {
-        /// Issue name
-        name: String,
-        /// Delete branch after merge
-        #[arg(long)]
-        delete_branch: bool,
-    },
-    /// Show current issue
-    Current,
-    /// Show next issue
-    Next,
-    /// Show project status
-    Status,
-}
+
 
 impl Cli {
-    #[cfg(not(feature = "dynamic-cli"))]
-    pub fn parse_args() -> Self {
-        Self::parse()
-    }
+
 
     #[allow(dead_code)]
     pub fn try_parse_from_args<I, T>(args: I) -> Result<Self, clap::Error>
@@ -852,15 +738,7 @@ impl Cli {
         <Self as Parser>::try_parse_from(args)
     }
 
-    #[cfg(not(feature = "dynamic-cli"))]
-    pub fn is_tty() -> bool {
-        io::stdout().is_terminal()
-    }
 
-    #[cfg(not(feature = "dynamic-cli"))]
-    pub fn should_use_color() -> bool {
-        Self::is_tty() && std::env::var("NO_COLOR").is_err()
-    }
 }
 
 #[cfg(test)]

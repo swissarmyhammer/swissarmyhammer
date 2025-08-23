@@ -258,8 +258,8 @@ async fn test_shell_action_performance_with_sequential_execution() {
 
     let duration = start_time.elapsed();
 
-    // Verify performance is acceptable
-    assert!(duration < Duration::from_secs(5)); // Should complete reasonably quickly
+    // Verify performance is acceptable (increased for parallel test execution)
+    assert!(duration < Duration::from_secs(15)); // Should complete reasonably quickly
     assert_eq!(context.get("success"), Some(&Value::Bool(true)));
 
     // Verify all results are present

@@ -792,27 +792,24 @@ mod tests {
     fn test_git_operations_new_not_in_git_repo() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = std::env::current_dir().unwrap();
-
-        // Ensure we restore directory on panic or normal exit
-        struct DirGuard {
-            original_dir: std::path::PathBuf,
-        }
-
-        impl Drop for DirGuard {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.original_dir);
+        
+        // Instead of changing current directory (which can fail due to test isolation issues),
+        // test the non-git scenario using with_work_dir method
+        let result = GitOperations::with_work_dir(temp_dir.path().to_path_buf());
+        assert!(result.is_err(), "GitOperations should fail when not in a git repository");
+        
+        // Also test that the error is specifically about not being in a git repo
+        match result {
+            Err(e) => {
+                let error_str = e.to_string().to_lowercase();
+                assert!(
+                    error_str.contains("git") || error_str.contains("repository") || error_str.contains("not a git"),
+                    "Expected git-related error, got: {}",
+                    e
+                );
             }
+            Ok(_) => panic!("Expected error but got success"),
         }
-
-        let _guard = DirGuard { original_dir };
-
-        // Change to non-git directory
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Test creating GitOperations should fail
-        let result = GitOperations::new();
-        assert!(result.is_err());
     }
 
     #[test]

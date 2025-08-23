@@ -10,6 +10,7 @@ use thiserror::Error;
 
 /// Errors that can occur during schema validation
 #[derive(Debug, Error, Clone)]
+#[allow(dead_code)]
 pub enum ValidationError {
     #[error("Unsupported schema type '{schema_type}' for parameter '{parameter}'. {suggestion}")]
     UnsupportedSchemaType {
@@ -68,6 +69,7 @@ impl ValidationError {
     }
 
     /// Get the severity level of the validation error
+    #[allow(dead_code)]
     pub fn severity(&self) -> ErrorSeverity {
         match self {
             ValidationError::UnsupportedSchemaType { .. } => ErrorSeverity::Error,
@@ -83,6 +85,7 @@ impl ValidationError {
 
 /// Severity levels for validation errors
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum ErrorSeverity {
     Warning,
     Error,
@@ -90,8 +93,10 @@ pub enum ErrorSeverity {
 }
 
 /// Schema validator for comprehensive JSON schema validation
+#[allow(dead_code)]
 pub struct SchemaValidator;
 
+#[allow(dead_code)]
 impl SchemaValidator {
     /// Validate a complete JSON schema for CLI compatibility
     ///

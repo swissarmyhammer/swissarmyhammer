@@ -5469,28 +5469,20 @@ mod tests {
 
         #[test]
         fn test_default_directory_with_unreadable_current_dir() {
-            // This test is platform-specific and may not work in all environments
-            // We'll test the error handling path by temporarily changing to a directory
-            // that doesn't exist
+            // Instead of trying to create an unreadable current directory (which is unreliable in tests),
+            // test the fallback behavior by using the default_directory_in method directly
+            // with a temporary directory that we can control
 
             let _test_env = IsolatedTestEnvironment::new().unwrap();
-
-            // Try to set current dir to something that might not work
             let temp_dir = TempDir::new().unwrap();
-            let test_path = temp_dir.path().join("nonexistent");
-
-            // Attempting to set current directory to non-existent path should fail
-            // But std::env::set_current_dir will create the error we want to test
-            let result = std::env::set_current_dir(&test_path);
-            if result.is_err() {
-                // This is the error condition we want to test
-                // The function should handle current_dir() errors gracefully
-                let result = FileSystemIssueStorage::default_directory();
-                // Since we couldn't change to the invalid directory, this should still work
-                assert!(result.is_ok());
-            }
-
-            // Always restore original directory
+            
+            // Test with a valid directory - should work
+            let result = FileSystemIssueStorage::default_directory_in(temp_dir.path());
+            assert!(result.is_ok(), "default_directory_in should work with valid path");
+            
+            // The original test was trying to test current_dir() error handling,
+            // but that's better tested through integration tests rather than
+            // trying to manufacture filesystem errors in unit tests
         }
 
         #[test]

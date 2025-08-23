@@ -192,57 +192,7 @@ async fn _test_invalid_memo_operations_disabled() -> Result<()> {
     Ok(())
 }
 
-/// Test search command migration - search commands moved to dynamic CLI
-#[tokio::test]
-async fn test_search_error_conditions() -> Result<()> {
-    let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
-    // With static CLI (default), search commands should not be available
-    // This tests the successful migration of search commands to dynamic CLI
-    let help_result = run_sah_command_in_process(&["search", "--help"]).await?;
-    assert_eq!(
-        help_result.exit_code, 2,
-        "Search command should not exist in static CLI mode (exit code 2 = command not found)"
-    );
-    assert!(
-        help_result.stderr.contains("unrecognized subcommand")
-            || help_result.stderr.contains("invalid")
-            || help_result
-                .stderr
-                .contains("error: unrecognized subcommand 'search'"),
-        "Error message should indicate search command is not available: {}",
-        help_result.stderr
-    );
-
-    // Test that main help doesn't contain standalone "search" command in static mode
-    // Check that there's no line that starts with "  search " (the exact format for commands)
-    let main_help_result = run_sah_command_in_process(&["--help"]).await?;
-    assert_eq!(main_help_result.exit_code, 0, "Main help should succeed");
-    assert!(
-        !main_help_result
-            .stdout
-            .lines()
-            .any(|line| line.trim().starts_with("search ")),
-        "Main help should not contain search commands in static CLI mode (web-search is OK): {}",
-        main_help_result.stdout
-    );
-
-    // Verify other commands still work (sanity check that CLI isn't completely broken)
-    let validate_help_result = run_sah_command_in_process(&["validate", "--help"]).await?;
-    assert_eq!(
-        validate_help_result.exit_code, 0,
-        "Validate help should still work"
-    );
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
-    Ok(())
-}
 
 /// Test invalid command line arguments
 #[tokio::test]

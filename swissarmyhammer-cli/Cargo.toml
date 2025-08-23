@@ -17,7 +17,7 @@ name = "sah"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["dynamic-cli"]
 dynamic-cli = []
 file-cli-tests-disabled = []
 
@@ -33,15 +33,12 @@ clap_complete = { workspace = true }
 colored = { workspace = true }
 is-terminal = { workspace = true }
 dirs = { workspace = true }
-rust-embed = { workspace = true }
-tabled = { workspace = true }
 dialoguer = { workspace = true }
 arboard = { workspace = true }
 atty = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
-tokio-util = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -61,41 +58,16 @@ rmcp = { workspace = true }
 
 # File operations
 walkdir = { workspace = true }
-notify = { workspace = true }
 tempfile = { workspace = true }
 
-# Archive support
-tar = { workspace = true }
-flate2 = { workspace = true }
-zip = { workspace = true }
-
-# Network
-reqwest = { workspace = true }
-url = { workspace = true }
-
-# Git support
-git2 = { workspace = true }
-
 # Utils
-fs_extra = { workspace = true }
-indicatif = { workspace = true }
-sha2 = { workspace = true }
-futures-util = { workspace = true }
-chrono = { workspace = true }
-textwrap = { workspace = true }
-csv = { workspace = true }
-rand = { workspace = true }
 regex = { workspace = true }
-fuzzy-matcher = { workspace = true }
 once_cell = { workspace = true }
-liquid = { workspace = true }
 
 [dev-dependencies]
 swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
-assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
-async-trait = "0.1"
 
 nix = { version = "0.27", features = ["signal"] }
 criterion = { version = "0.5", features = ["html_reports"] }

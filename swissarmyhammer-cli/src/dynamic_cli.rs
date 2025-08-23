@@ -275,6 +275,27 @@ This CLI includes both static commands and dynamic commands generated from MCP t
                     .action(ArgAction::SetTrue),
             );
 
+        // Add static serve command
+        cli = cli.subcommand(
+            Command::new("serve")
+                .about("Run as MCP server (default when invoked via stdio)")
+                .long_about(
+                    "
+Runs swissarmyhammer as an MCP server. This is the default mode when
+invoked via stdio (e.g., by Claude Code). The server will:
+
+- Load all prompts from builtin, user, and local directories
+- Watch for file changes and reload prompts automatically
+- Expose prompts via the MCP protocol
+- Support template substitution with {{variables}}
+
+Example:
+  swissarmyhammer serve
+  # Or configure in Claude Code's MCP settings
+                ",
+                ),
+        );
+
         // Add dynamic MCP tool commands using pre-computed data
         for (category_name, category_data) in &self.category_commands {
             cli =
@@ -284,25 +305,6 @@ This CLI includes both static commands and dynamic commands generated from MCP t
         cli
     }
 
-    /// Build CLI with comprehensive validation and error reporting
-    ///
-    /// This method performs full validation of all tools before building the CLI
-    /// and returns detailed error information if validation fails.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Command)` - Successfully built CLI with all tools validated
-    /// * `Err(Vec<ValidationError>)` - CLI build failed due to validation errors
-    pub fn build_cli_with_validation(&self) -> Result<Command, Vec<ValidationError>> {
-        // Validate all CLI tools first
-        let validation_errors = self.validate_all_tools();
-
-        if !validation_errors.is_empty() {
-            return Err(validation_errors);
-        }
-
-        Ok(self.build_cli())
-    }
 
     /// Build CLI with warnings for validation issues (graceful degradation)
     ///

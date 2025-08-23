@@ -241,11 +241,16 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
     let create_result = run_sah_command_in_process(&[
         "issue",
         "create",
+        "--name",
         "e2e_lifecycle_test",
         "--content",
         "# E2E Lifecycle Test\n\nThis issue tests the complete lifecycle workflow.",
     ])
     .await?;
+
+    eprintln!("DEBUG: create_result.exit_code = {}", create_result.exit_code);
+    eprintln!("DEBUG: create_result.stdout = {}", create_result.stdout);
+    eprintln!("DEBUG: create_result.stderr = {}", create_result.stderr);
 
     assert_eq!(create_result.exit_code, 0, "Issue creation should succeed");
     assert!(
@@ -270,7 +275,12 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 3: Show the issue details
-    let show_result = run_sah_command_in_process(&["issue", "show", "e2e_lifecycle_test"]).await?;
+    let show_result = run_sah_command_in_process(&["issue", "show", "--name", "e2e_lifecycle_test"]).await?;
+    
+    eprintln!("DEBUG: show_result.exit_code = {}", show_result.exit_code);
+    eprintln!("DEBUG: show_result.stdout = {}", show_result.stdout);
+    eprintln!("DEBUG: show_result.stderr = {}", show_result.stderr);
+    
     assert_eq!(show_result.exit_code, 0, "Issue show should succeed");
     assert!(
         show_result.stdout.contains("E2E Lifecycle Test")
@@ -283,6 +293,7 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
     let update_result = run_sah_command_in_process(&[
         "issue",
         "update",
+        "--name",
         "e2e_lifecycle_test",
         "--content",
         "Updated content for e2e testing",
@@ -293,7 +304,7 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
 
     // Step 5: Verify the update
     let updated_show_result =
-        run_sah_command_in_process(&["issue", "show", "e2e_lifecycle_test"]).await?;
+        run_sah_command_in_process(&["issue", "show", "--name", "e2e_lifecycle_test"]).await?;
     assert_eq!(
         updated_show_result.exit_code, 0,
         "Updated issue show should succeed"
@@ -305,11 +316,11 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
     );
 
     // Step 6: Work on the issue (creates git branch)
-    let work_result = run_sah_command_in_process(&["issue", "work", "e2e_lifecycle_test"]).await?;
+    let work_result = run_sah_command_in_process(&["issue", "work", "--name", "e2e_lifecycle_test"]).await?;
     assert_eq!(work_result.exit_code, 0, "Issue work should succeed");
 
     // Step 7: Check current issue
-    let current_result = run_sah_command_in_process(&["issue", "current"]).await?;
+    let current_result = run_sah_command_in_process(&["issue", "show", "--name", "current"]).await?;
     assert_eq!(current_result.exit_code, 0, "Issue current should succeed");
     assert!(
         current_result.stdout.contains("e2e_lifecycle_test"),
@@ -319,7 +330,7 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
 
     // Step 8: Complete the issue
     let complete_result =
-        run_sah_command_in_process(&["issue", "complete", "e2e_lifecycle_test"]).await?;
+        run_sah_command_in_process(&["issue", "complete", "--name", "e2e_lifecycle_test"]).await?;
     assert_eq!(
         complete_result.exit_code, 0,
         "Issue complete should succeed"
@@ -327,11 +338,16 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
 
     // Step 9: Merge the issue
     let merge_result =
-        run_sah_command_in_process(&["issue", "merge", "e2e_lifecycle_test"]).await?;
+        run_sah_command_in_process(&["issue", "merge", "--name", "e2e_lifecycle_test"]).await?;
     assert_eq!(merge_result.exit_code, 0, "Issue merge should succeed");
 
     // Step 10: Verify issue is completed
-    let final_list_result = run_sah_command_in_process(&["issue", "list", "--completed"]).await?;
+    let final_list_result = run_sah_command_in_process(&["issue", "list", "--show_completed"]).await?;
+    
+    eprintln!("DEBUG: final_list_result.exit_code = {}", final_list_result.exit_code);
+    eprintln!("DEBUG: final_list_result.stdout = {}", final_list_result.stdout);
+    eprintln!("DEBUG: final_list_result.stderr = {}", final_list_result.stderr);
+    
     assert_eq!(
         final_list_result.exit_code, 0,
         "Issue list --completed should succeed"

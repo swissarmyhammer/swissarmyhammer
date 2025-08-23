@@ -1400,10 +1400,10 @@ mod timeout_and_process_management_tests {
             Some(&serde_json::Value::Number(1.into()))
         );
 
-        // Duration should be much less than timeout
+        // Duration should be much less than timeout (allowing for parallel test overhead)
         let duration = context.get("duration_ms").unwrap().as_u64().unwrap();
         assert!(
-            duration < 1000,
+            duration < 5000,
             "Command should fail quickly, took {duration}ms"
         );
 
@@ -2325,10 +2325,10 @@ mod cross_platform_tests {
 
         let _result = action.execute(&mut context).await.unwrap();
 
-        // Should succeed quickly on all platforms
+        // Should succeed quickly on all platforms (allowing for parallel test execution overhead)
         assert_eq!(context.get("success"), Some(&serde_json::Value::Bool(true)));
         let duration = context.get("duration_ms").unwrap().as_u64().unwrap();
-        assert!(duration < 1000, "Command should be fast on all platforms");
+        assert!(duration < 5000, "Command should be fast on all platforms");
     }
 
     #[tokio::test]

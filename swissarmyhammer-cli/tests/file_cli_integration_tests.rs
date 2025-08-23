@@ -39,7 +39,7 @@ async fn test_file_read_basic_functionality() -> Result<()> {
 
     create_test_file(&test_file, test_content)?;
 
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(
@@ -65,7 +65,7 @@ async fn test_file_read_with_offset_and_limit() -> Result<()> {
 
     // Test with offset - offset 6 means start from line 6
     let result =
-        run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap(), "--offset", "6"])
+        run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap(), "--offset", "6"])
             .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
@@ -77,7 +77,7 @@ async fn test_file_read_with_offset_and_limit() -> Result<()> {
 
     // Test with limit
     let result =
-        run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap(), "--limit", "3"])
+        run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap(), "--limit", "3"])
             .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
@@ -102,6 +102,7 @@ async fn test_file_read_nonexistent_file() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "read",
+        "--absolute_path",
         "/tmp/nonexistent_file_that_should_not_exist.txt",
     ])
     .await?;
@@ -128,7 +129,7 @@ async fn test_file_write_basic_functionality() -> Result<()> {
     let test_content = "This is new content\nWritten via CLI";
 
     let result =
-        run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), test_content])
+        run_sah_command_in_process(&["file", "write", "--file_path", test_file.to_str().unwrap(), "--content", test_content])
             .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
@@ -153,7 +154,7 @@ async fn test_file_write_overwrite_existing() -> Result<()> {
     create_test_file(&test_file, initial_content)?;
 
     let result =
-        run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), new_content])
+        run_sah_command_in_process(&["file", "write", "--file_path", test_file.to_str().unwrap(), "--content", new_content])
             .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
@@ -175,7 +176,7 @@ async fn test_file_write_creates_parent_directories() -> Result<()> {
     let test_content = "Content in nested directory";
 
     let result =
-        run_sah_command_in_process(&["file", "write", test_file.to_str().unwrap(), test_content])
+        run_sah_command_in_process(&["file", "write", "--file_path", test_file.to_str().unwrap(), "--content", test_content])
             .await?;
 
     assert_eq!(result.exit_code, 0, "Command should succeed");
@@ -206,8 +207,11 @@ async fn test_file_edit_basic_replacement() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "edit",
+        "--file_path",
         test_file.to_str().unwrap(),
+        "--old_string",
         "old_value",
+        "--new_string",
         "new_value",
     ])
     .await?;
@@ -238,10 +242,13 @@ async fn test_file_edit_replace_all() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "edit",
+        "--file_path",
         test_file.to_str().unwrap(),
+        "--old_string",
         "TARGET",
+        "--new_string",
         "RESULT",
-        "--replace-all",
+        "--replace_all",
     ])
     .await?;
 
@@ -272,8 +279,11 @@ async fn test_file_edit_string_not_found() -> Result<()> {
     let _result = run_sah_command_in_process(&[
         "file",
         "edit",
+        "--file_path",
         test_file.to_str().unwrap(),
+        "--old_string",
         "nonexistent_string",
+        "--new_string",
         "replacement",
     ])
     .await?;
@@ -314,6 +324,7 @@ async fn test_file_glob_basic_patterns() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "glob",
+        "--pattern",
         "*.txt",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -331,6 +342,7 @@ async fn test_file_glob_basic_patterns() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "glob",
+        "--pattern",
         "**/*.txt",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -362,10 +374,11 @@ async fn test_file_glob_case_sensitivity() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "glob",
+        "--pattern",
         "*.txt", // lowercase pattern
         "--path",
         temp_dir.path().to_str().unwrap(),
-        "--case-sensitive",
+        "--case_sensitive",
     ])
     .await?;
 
@@ -410,6 +423,7 @@ async fn test_file_grep_basic_search() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "grep",
+        "--pattern",
         "TARGET_STRING",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -446,6 +460,7 @@ async fn test_file_grep_regex_patterns() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "grep",
+        "--pattern",
         r"function\s+\w+",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -478,6 +493,7 @@ async fn test_file_grep_file_type_filtering() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "grep",
+        "--pattern",
         "search_target",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -512,14 +528,16 @@ async fn test_complete_file_workflow() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "write",
+        "--file_path",
         test_file.to_str().unwrap(),
+        "--content",
         initial_content,
     ])
     .await?;
     assert_eq!(result.exit_code, 0, "Write should succeed");
 
     // Step 2: Read and verify content
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
     assert_eq!(result.exit_code, 0, "Read should succeed");
     assert!(
         result.stdout.contains("OLD_VALUE"),
@@ -530,15 +548,18 @@ async fn test_complete_file_workflow() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "edit",
+        "--file_path",
         test_file.to_str().unwrap(),
+        "--old_string",
         "OLD_VALUE",
+        "--new_string",
         "NEW_VALUE",
     ])
     .await?;
     assert_eq!(result.exit_code, 0, "Edit should succeed");
 
     // Step 4: Read and verify the edit
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
     assert_eq!(result.exit_code, 0, "Final read should succeed");
     assert!(
         result.stdout.contains("NEW_VALUE"),
@@ -589,6 +610,7 @@ async fn test_file_discovery_and_search_workflow() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "glob",
+        "--pattern",
         "**/*.rs",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -603,6 +625,7 @@ async fn test_file_discovery_and_search_workflow() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "grep",
+        "--pattern",
         "TARGET",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -615,6 +638,7 @@ async fn test_file_discovery_and_search_workflow() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "grep",
+        "--pattern",
         "TARGET",
         "--path",
         temp_dir.path().to_str().unwrap(),
@@ -640,7 +664,7 @@ async fn test_output_formatting_consistency() -> Result<()> {
     create_test_file(&test_file, content)?;
 
     // Test that read command produces readable output
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process(&["file", "read", "--absolute_path", test_file.to_str().unwrap()]).await?;
     assert_eq!(result.exit_code, 0, "Command should succeed");
     assert!(!result.stdout.is_empty(), "Should produce output");
     assert!(
@@ -659,12 +683,12 @@ async fn test_output_formatting_consistency() -> Result<()> {
 async fn test_invalid_arguments_handling() -> Result<()> {
     // Test read with invalid offset
     let result =
-        run_sah_command_in_process(&["file", "read", "/tmp/test.txt", "--offset", "invalid"])
+        run_sah_command_in_process(&["file", "read", "--absolute_path", "/tmp/test.txt", "--offset", "invalid"])
             .await?;
     assert_ne!(result.exit_code, 0, "Should fail with invalid offset");
 
     // Test grep with empty pattern
-    let _result = run_sah_command_in_process(&["file", "grep", "", "--path", "/tmp"]).await?;
+    let _result = run_sah_command_in_process(&["file", "grep", "--pattern", "", "--path", "/tmp"]).await?;
     // Should handle empty pattern gracefully (may succeed or fail, but no panic)
 
     Ok(())
@@ -676,6 +700,7 @@ async fn test_permission_error_handling() -> Result<()> {
     let result = run_sah_command_in_process(&[
         "file",
         "read",
+        "--absolute_path",
         "/etc/master.passwd", // Requires root permissions on macOS
     ])
     .await?;

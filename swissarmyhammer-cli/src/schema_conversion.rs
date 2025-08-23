@@ -16,6 +16,7 @@ use thiserror::Error;
 
 /// Errors that can occur during schema conversion
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum ConversionError {
     #[error("Missing required argument: {field}")]
     MissingRequired { field: String },
@@ -49,8 +50,10 @@ pub enum ConversionError {
 
 /// Schema converter for bidirectional JSON Schema ↔ Clap conversion
 #[derive(Default)]
+#[allow(dead_code)]
 pub struct SchemaConverter;
 
+#[allow(dead_code)]
 impl SchemaConverter {
     /// Convert Clap ArgMatches back to JSON arguments using a JSON schema
     ///
