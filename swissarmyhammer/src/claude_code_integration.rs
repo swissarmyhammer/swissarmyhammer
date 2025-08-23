@@ -359,8 +359,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_system_prompt_param_disabled() {
-        let mut config = ClaudeCodeConfig::default();
-        config.enable_system_prompt_injection = false;
+        let config = ClaudeCodeConfig {
+            enable_system_prompt_injection: false,
+            ..Default::default()
+        };
 
         let result = prepare_system_prompt_param(&config).await;
         assert!(result.is_ok());

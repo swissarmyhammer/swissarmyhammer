@@ -11,7 +11,7 @@ use tempfile::TempDir;
 use tokio::test;
 
 /// Test that the system prompt can be rendered successfully
-#[test]
+#[tokio::test]
 async fn test_system_prompt_rendering_with_builtin_content() {
     // Clear cache for clean test
     clear_cache();
@@ -41,7 +41,7 @@ async fn test_system_prompt_rendering_with_builtin_content() {
 }
 
 /// Test system prompt caching behavior
-#[test]
+#[tokio::test]
 async fn test_system_prompt_caching_behavior() {
     clear_cache();
     
@@ -69,7 +69,7 @@ async fn test_system_prompt_caching_behavior() {
 }
 
 /// Test Claude Code configuration
-#[test]
+#[tokio::test]
 async fn test_claude_code_config_setup() {
     let default_config = ClaudeCodeConfig::default();
     assert!(default_config.enable_system_prompt_injection, "System prompt injection should be enabled by default");
@@ -88,7 +88,7 @@ async fn test_claude_code_config_setup() {
 }
 
 /// Test Claude Code integration with disabled system prompt
-#[test]
+#[tokio::test]
 async fn test_claude_code_with_disabled_system_prompt() {
     let config = ClaudeCodeConfig {
         enable_system_prompt_injection: false,
@@ -114,7 +114,7 @@ async fn test_claude_code_with_disabled_system_prompt() {
 }
 
 /// Test error handling for non-existent Claude CLI
-#[test]
+#[tokio::test]
 async fn test_claude_code_error_handling() {
     let config = ClaudeCodeConfig {
         enable_system_prompt_injection: false,
@@ -143,7 +143,7 @@ async fn test_claude_code_error_handling() {
 }
 
 /// Test system prompt content quality
-#[test]
+#[tokio::test]
 async fn test_system_prompt_content_quality() {
     clear_cache();
     
@@ -179,7 +179,7 @@ async fn test_system_prompt_content_quality() {
 }
 
 /// Integration test for the complete system prompt workflow
-#[test]
+#[tokio::test]
 async fn test_complete_system_prompt_workflow() {
     println!("Starting complete system prompt workflow test");
     
@@ -224,7 +224,7 @@ async fn test_complete_system_prompt_workflow() {
 }
 
 /// Performance test for system prompt rendering
-#[test]
+#[tokio::test]
 async fn test_system_prompt_performance() {
     clear_cache();
     
@@ -252,7 +252,7 @@ async fn test_system_prompt_performance() {
 }
 
 /// Test CLI integration with system prompt
-#[test]
+#[tokio::test]
 async fn test_cli_system_prompt_integration() {
     // This test verifies that the CLI can handle system prompt operations
     
