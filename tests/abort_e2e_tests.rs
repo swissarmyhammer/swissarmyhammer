@@ -9,14 +9,14 @@ use serde_json::json;
 use std::path::Path;
 use std::process::{Command as StdCommand, Stdio};
 use std::time::Duration;
-use tempfile::TempDir;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use tokio::time::sleep;
 
 /// Test helper to create a temporary test environment
-fn create_test_environment() -> Result<TempDir> {
-    let temp_dir = TempDir::new()?;
-    std::env::set_current_dir(temp_dir.path())?;
-    Ok(temp_dir)
+fn create_test_environment() -> Result<IsolatedTestEnvironment> {
+    let guard = IsolatedTestEnvironment::new()?;
+    std::env::set_current_dir(guard.temp_dir())?;
+    Ok(guard)
 }
 
 /// Helper to clean up abort file
@@ -85,7 +85,7 @@ transitions:
 
 #[tokio::test]
 async fn test_complete_abort_flow_mcp_tool_to_cli_exit() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     // Step 1: Create a test workflow
@@ -128,7 +128,7 @@ async fn test_complete_abort_flow_mcp_tool_to_cli_exit() -> Result<()> {
 
 #[tokio::test]
 async fn test_abort_in_nested_workflow_scenario() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     // Create main workflow that calls sub-workflow
@@ -218,7 +218,7 @@ transitions:
 
 #[tokio::test]
 async fn test_abort_cleanup_between_workflow_runs() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     let workflow_file = create_test_workflow("Cleanup Test", "start")?;
@@ -260,7 +260,7 @@ async fn test_abort_cleanup_between_workflow_runs() -> Result<()> {
 
 #[tokio::test] 
 async fn test_concurrent_workflow_executions_with_abort() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     let workflow_file = create_test_workflow("Concurrent Test", "start")?;
@@ -315,7 +315,7 @@ async fn test_concurrent_workflow_executions_with_abort() -> Result<()> {
 
 #[tokio::test]
 async fn test_abort_with_various_workflow_complexities() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     // Test 1: Simple workflow
@@ -405,7 +405,7 @@ transitions:
 
 #[tokio::test]
 async fn test_performance_impact_of_abort_checking() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     let fast_workflow = r#"---
@@ -479,7 +479,7 @@ transitions:
 
 #[tokio::test]
 async fn test_abort_system_resilience() -> Result<()> {
-    let _temp_dir = create_test_environment()?;
+    let _guard = create_test_environment()?;
     cleanup_abort_file();
 
     let workflow_file = create_test_workflow("Resilience Test", "start")?;

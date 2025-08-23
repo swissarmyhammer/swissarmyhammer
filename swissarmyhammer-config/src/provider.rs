@@ -11,6 +11,7 @@ use figment::{
     providers::{Env, Format, Json, Toml, Yaml},
     Figment,
 };
+use std::path::PathBuf;
 use tracing::{debug, info, trace};
 
 /// Configuration provider using figment
@@ -36,7 +37,7 @@ impl ConfigProvider {
         let figment = self.build_figment()?;
         let raw_config = figment
             .extract::<RawConfig>()
-            .map_err(|e| ConfigError::parse_error(None, e))?;
+            .map_err(|e| self.extract_path_from_error(&e))?;
 
         debug!("Loaded {} configuration values", raw_config.values.len());
 
@@ -83,7 +84,7 @@ impl ConfigProvider {
         let figment = self.build_figment()?;
         let raw_config = figment
             .extract::<RawConfig>()
-            .map_err(|e| ConfigError::parse_error(None, e))?;
+            .map_err(|e| self.extract_path_from_error(&e))?;
 
         debug!("Loaded {} configuration values", raw_config.values.len());
 
@@ -137,7 +138,7 @@ impl ConfigProvider {
         let figment = self.build_figment()?;
         let raw_config = figment
             .extract::<RawConfig>()
-            .map_err(|e| ConfigError::parse_error(None, e))?;
+            .map_err(|e| self.extract_path_from_error(&e))?;
 
         debug!("Loaded {} configuration values", raw_config.values.len());
 
@@ -453,6 +454,30 @@ impl ConfigProvider {
         Ok(figment)
     }
 
+    /// Extract file path information from figment error for better error reporting
+    fn extract_path_from_error(&self, error: &figment::Error) -> ConfigError {
+        // Try to extract file path from the error message
+        let error_msg = format!("{}", error);
+        let path = self.extract_file_path_from_message(&error_msg);
+        
+        ConfigError::parse_error(path, error.clone())
+    }
+
+    /// Extract file path from figment error message
+    fn extract_file_path_from_message(&self, error_msg: &str) -> Option<PathBuf> {
+        // Figment includes file path in error messages like "in .swissarmyhammer/sah.toml TOML file"
+        // Look for patterns like "in <path> TOML file", "in <path> YAML file", "in <path> JSON file"
+        use regex::Regex;
+        
+        let re = Regex::new(r"in ([^\s]+\.(?:toml|yaml|yml|json)) (?:TOML|YAML|JSON) file").ok()?;
+        if let Some(captures) = re.captures(error_msg) {
+            if let Some(path_match) = captures.get(1) {
+                return Some(PathBuf::from(path_match.as_str()));
+            }
+        }
+        
+        None
+    }
 
 }
 

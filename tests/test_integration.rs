@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-use tempfile::TempDir;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 #[test]
 fn test_command_help() {
@@ -45,8 +45,8 @@ fn test_command_with_invalid_arguments() {
 #[test]
 fn test_command_with_both_name_and_file() {
     // Create a temporary file
-    let temp_dir = TempDir::new().unwrap();
-    let temp_file = temp_dir.path().join("test.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_file = _guard.temp_dir().join("test.md");
     fs::write(&temp_file, "# Test\nHello").unwrap();
 
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
@@ -84,8 +84,8 @@ fn test_command_with_builtin_prompt_non_interactive() {
 #[test]
 fn test_command_with_simple_file() {
     // Create a temporary file with a simple prompt
-    let temp_dir = TempDir::new().unwrap();
-    let temp_file = temp_dir.path().join("simple.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_file = _guard.temp_dir().join("simple.md");
     fs::write(
         &temp_file,
         r#"---
@@ -132,8 +132,8 @@ fn test_command_with_debug_flag() {
 
 #[test]
 fn test_command_with_save_flag() {
-    let temp_dir = TempDir::new().unwrap();
-    let output_file = temp_dir.path().join("output.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let output_file = _guard.temp_dir().join("output.md");
 
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("test")
@@ -155,8 +155,8 @@ fn test_command_with_save_flag() {
 #[test]
 fn test_command_with_liquid_features() {
     // Create a temporary file with Liquid template features
-    let temp_dir = TempDir::new().unwrap();
-    let temp_file = temp_dir.path().join("liquid.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_file = _guard.temp_dir().join("liquid.md");
     fs::write(
         &temp_file,
         r#"---
@@ -197,8 +197,8 @@ arguments:
 #[test]
 fn test_command_with_environment_variables() {
     // Create a temporary file that uses environment variables
-    let temp_dir = TempDir::new().unwrap();
-    let temp_file = temp_dir.path().join("env.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_file = _guard.temp_dir().join("env.md");
     fs::write(
         &temp_file,
         r#"---
@@ -225,8 +225,8 @@ Test variable: {{ env.TEST_VAR | default: "not_set" }}"#,
 #[test]
 fn test_command_with_missing_required_argument() {
     // Create a temporary file with required argument
-    let temp_dir = TempDir::new().unwrap();
-    let temp_file = temp_dir.path().join("required.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_file = _guard.temp_dir().join("required.md");
     fs::write(
         &temp_file,
         r#"---
@@ -388,8 +388,8 @@ fn test_statistics_calculator_with_math() {
 #[test]
 fn test_liquid_backward_compatibility() {
     // Test that old {{variable}} syntax still works
-    let temp_dir = TempDir::new().unwrap();
-    let temp_file = temp_dir.path().join("old_syntax.md");
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_file = _guard.temp_dir().join("old_syntax.md");
     fs::write(
         &temp_file,
         r#"---
@@ -426,8 +426,8 @@ But {{undefined}} should remain as-is."#,
 #[test]
 fn test_validation_excludes_root_level_documentation_files() {
     // Create a temporary directory with files that should be excluded from validation
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _guard.temp_dir();
 
     // Create files that should be excluded from validation
     fs::write(
@@ -486,8 +486,8 @@ Hello {{input}}!"#,
 #[test]
 fn test_validation_processes_prompt_files() {
     // Create a temporary directory with a prompt file that has validation errors
-    let temp_dir = TempDir::new().unwrap();
-    let temp_path = temp_dir.path();
+    let _guard = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _guard.temp_dir();
 
     // Create files that should be excluded (no errors expected)
     fs::write(

@@ -104,7 +104,7 @@ impl TestEnvironment {
         key: K,
         value: V,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        (&mut self.isolated_env).set_env_var(key, value)
+        self.isolated_env.set_env_var(key, value)
     }
 
     /// Set multiple environment variables at once
@@ -114,7 +114,7 @@ impl TestEnvironment {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        (&mut self.isolated_env).set_env_vars(vars)
+        self.isolated_env.set_env_vars(vars)
     }
 
     /// Create a ConfigProvider using the test environment

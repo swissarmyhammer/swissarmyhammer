@@ -1,1 +1,0 @@
-there are many tests that use a plain TempDir instead of the mandated IsolatedTestEnvironment. Fix them
