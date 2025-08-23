@@ -7,6 +7,25 @@ use crate::toml_config::{load_repo_config, parse_config_string, ConfigValue};
 use std::fs;
 use tempfile::TempDir;
 
+// Directory guard to ensure we always restore the original directory
+struct DirGuard {
+    original_dir: std::path::PathBuf,
+}
+
+impl DirGuard {
+    fn new(original_dir: &std::path::Path) -> Self {
+        Self {
+            original_dir: original_dir.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for DirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.original_dir);
+    }
+}
+
 /// Test end-to-end configuration loading from filesystem
 #[test]
 fn test_end_to_end_config_loading() {
@@ -360,16 +379,13 @@ fn test_file_discovery_from_different_directories() {
 
     // Helper function to run test and ensure directory cleanup
     let run_test = |test_dir: &std::path::Path| {
-        panic::catch_unwind(|| {
-            std::env::set_current_dir(test_dir).unwrap();
-            load_repo_config()
-        })
+        let _guard = DirGuard::new(&original_dir);
+        std::env::set_current_dir(test_dir).unwrap();
+        load_repo_config()
     };
 
     // Test from repository root
-    let result = run_test(repo_root);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = run_test(repo_root);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -381,9 +397,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from src directory
-    let result = run_test(&src_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = run_test(&src_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -395,9 +409,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from deeply nested directory
-    let result = run_test(&deep_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = run_test(&deep_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -408,10 +420,8 @@ fn test_file_discovery_from_different_directories() {
         panic!("Should find config from deep directory");
     }
 
-    // Test from tests directory
-    let result = run_test(&tests_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    // Test from tests directory  
+    let config_result = run_test(&tests_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -423,9 +433,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from integration tests directory
-    let result = run_test(&integration_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = run_test(&integration_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -438,9 +446,7 @@ fn test_file_discovery_from_different_directories() {
 
     // Test from directory without .git (should return None)
     let non_repo_dir = TempDir::new().unwrap();
-    let result = run_test(non_repo_dir.path());
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = run_test(non_repo_dir.path());
     assert!(config_result.is_ok());
     assert!(config_result.unwrap().is_none());
 

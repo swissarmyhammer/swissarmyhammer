@@ -188,6 +188,25 @@ mod module_tests {
     use std::fs;
     use tempfile::TempDir;
 
+    // Directory guard to ensure we always restore the original directory
+    struct DirGuard {
+        original_dir: std::path::PathBuf,
+    }
+
+    impl DirGuard {
+        fn new(original_dir: &std::path::Path) -> Self {
+            Self {
+                original_dir: original_dir.to_path_buf(),
+            }
+        }
+    }
+
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original_dir);
+        }
+    }
+
     #[test]
     fn test_load_config() {
         let temp_dir = TempDir::new().unwrap();
@@ -275,15 +294,11 @@ mod module_tests {
         fs::create_dir(&sub_dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&sub_dir).unwrap();
-
-        // Use panic::catch_unwind to ensure directory is restored even on panic
-        let result = panic::catch_unwind(load_repo_config_wrapper);
-
-        // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let config_result = result.unwrap();
+        let config_result = {
+            let _guard = DirGuard::new(&original_dir);
+            std::env::set_current_dir(&sub_dir).unwrap();
+            load_repo_config_wrapper()
+        };
         assert!(config_result.is_ok());
         let config = config_result.unwrap();
         assert!(config.is_some());
