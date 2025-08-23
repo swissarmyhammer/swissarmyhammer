@@ -66,8 +66,7 @@ pub mod tests;
 /// Template renderer with TemplateContext integration
 pub mod renderer;
 
-/// Legacy compatibility layer for existing template integration
-pub mod compat;
+
 
 /// Integration tests
 #[cfg(test)]

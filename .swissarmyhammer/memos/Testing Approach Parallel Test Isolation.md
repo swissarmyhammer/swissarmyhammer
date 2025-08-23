@@ -7,7 +7,8 @@ AVOID AT ALL COSTS #[serial] tests.
 ### `IsolatedTestEnvironement`
 
 **ALWAYS** use `IsolatedTestEnvironment::new()` for workflow tests to isolate current working and home
-**Per-Test Isolation**: Each test should create its own temporary directory and use it as HOME, rather than modifying the global HOME environment variable.
+    If you think you need a TempDir in a test, you actually need an IsolatedTestEnvironment instead
+    If you think you need to modify the HOME environment variable in a test, you actually need an IsolatedTestEnvironment instead
 
 ```rust
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;

@@ -1,0 +1,1 @@
+TestEnvironment in swissarmyhammer-config is a near duplicate of a similar IsolatedTestEnvironment in swissarmyhammer, extract this into a new create that just provides the IsolatedTestEnvironment and refactor away the duplication
