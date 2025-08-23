@@ -3,7 +3,7 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
-use crate::claude_code_integration::{ClaudeCodeConfig, ClaudeCodeInvocation};
+use crate::system_prompt::render_system_prompt;
 use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
@@ -399,14 +399,13 @@ impl PromptAction {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-        // Execute the rendered prompt with Claude using centralized integration
+        // Execute the rendered prompt with Claude directly
         tracing::debug!(
-            "Executing prompt '{}' with Claude Code integration",
+            "Executing prompt '{}' with Claude Code",
             self.prompt_name
         );
 
-        // Create configuration for Claude Code integration
-        // Check context and environment variables for configuration
+        // Check if system prompt injection is enabled
         let enable_system_prompt = context
             .get("claude_system_prompt_enabled")
             .and_then(|v| v.as_bool())
@@ -417,29 +416,32 @@ impl PromptAction {
             })
             .unwrap_or(true); // Default to enabled
 
-        let system_prompt_debug = context
-            .get("claude_system_prompt_debug")
-            .and_then(|v| v.as_bool())
-            .or_else(|| {
-                std::env::var("SAH_CLAUDE_SYSTEM_PROMPT_DEBUG")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-            })
-            .unwrap_or(false); // Default to disabled
+        // Render and combine with system prompt if enabled
+        let final_prompt = if enable_system_prompt {
+            match render_system_prompt() {
+                Ok(system_prompt) => {
+                    tracing::debug!("System prompt rendered successfully ({} chars)", system_prompt.len());
+                    format!("{}\n\n{}", system_prompt, rendered_prompt)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to render system prompt, continuing without it: {}", e);
+                    rendered_prompt
+                }
+            }
+        } else {
+            tracing::debug!("System prompt injection disabled");
+            rendered_prompt
+        };
 
+        // Find Claude CLI path
         let claude_path = context
             .get("claude_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok());
+            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok())
+            .unwrap_or_else(|| "claude".to_string());
 
-        let config = ClaudeCodeConfig {
-            enable_system_prompt_injection: enable_system_prompt,
-            system_prompt_debug,
-            claude_path,
-        };
-        // For now, we'll write the prompt to a temporary file and have Claude read it
-        // This is a simplified approach - we may enhance this later for streaming
+        // Write the combined prompt to a temporary file
         use std::io::Write;
         use tempfile::NamedTempFile;
 
@@ -447,23 +449,26 @@ impl PromptAction {
             .map_err(|e| ActionError::ClaudeError(format!("Failed to create temp file: {e}")))?;
 
         temp_file
-            .write_all(rendered_prompt.as_bytes())
+            .write_all(final_prompt.as_bytes())
             .map_err(|e| ActionError::ClaudeError(format!("Failed to write to temp file: {e}")))?;
 
         let temp_path = temp_file.path().to_string_lossy().to_string();
 
-        // Execute Claude Code with the temp file as input and system prompt integration
-        let output = ClaudeCodeInvocation::new()
-            .args(vec![
+        // Execute Claude Code directly with the combined prompt
+        use tokio::process::Command;
+        
+        let output = Command::new(&claude_path)
+            .args([
                 "--dangerously-skip-permissions",
                 "--print",
                 &temp_path,
             ])
-            .config(config)
-            .quiet(quiet)
-            .execute()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
             .await
-            .map_err(|e| ActionError::ClaudeError(e.to_string()))?;
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
 
         // Check if Claude execution was successful
         if !output.status.success() {
