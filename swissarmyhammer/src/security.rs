@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_security_safe_path() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let root = temp_dir.path();
         let safe_file = root.join("test.txt");
         fs::write(&safe_file, "test").unwrap();
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_security_parent_dir() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let root = temp_dir.path();
 
         // Test with relative path containing parent directory
@@ -334,11 +334,11 @@ mod tests {
 
     #[test]
     fn test_validate_path_security_absolute_path() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let root = temp_dir.path();
 
         // Create a file outside the temp directory
-        let other_temp = crate::test_utils::create_temp_dir_with_retry();
+        let other_temp = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let outside_file = other_temp.path().join("outside.txt");
         fs::write(&outside_file, "test").unwrap();
 
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_calculate_path_depth() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let root = temp_dir.path();
 
         // Create nested directories

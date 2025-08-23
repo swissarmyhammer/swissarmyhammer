@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_prompt_resolver_loads_local_prompts() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Create a .git directory to make it look like a Git repository
         let git_dir = temp_dir.path().join(".git");

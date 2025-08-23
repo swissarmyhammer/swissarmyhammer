@@ -2,7 +2,7 @@ use super::*;
 use tempfile::TempDir;
 
 fn create_test_markdown_storage() -> (MarkdownMemoStorage, TempDir) {
-    let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+    let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
     let storage = MarkdownMemoStorage::new(temp_dir.path().join("memos"));
     (storage, temp_dir)
 }

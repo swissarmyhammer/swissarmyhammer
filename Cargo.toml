@@ -1,5 +1,5 @@
 [workspace]
-members = ["swissarmyhammer", "swissarmyhammer-cli", "swissarmyhammer-tools", "swissarmyhammer-config"]
+members = ["swissarmyhammer", "swissarmyhammer-cli", "swissarmyhammer-tools", "swissarmyhammer-config", "swissarmyhammer-test-utils"]
 resolver = "2"
 
 [workspace.package]

@@ -816,7 +816,7 @@ mod tests {
     fn test_git_operations_new_not_in_git_repo() {
         let _test_env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Safely get original directory, but handle case where it might not exist
         let original_dir = std::env::current_dir().unwrap_or_else(|_| {
@@ -846,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_git_operations_with_work_dir_not_git_repo() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Test creating GitOperations with non-git directory should fail
         let result = GitOperations::with_work_dir(temp_dir.path().to_path_buf());

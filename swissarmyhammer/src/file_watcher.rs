@@ -342,7 +342,7 @@ mod tests {
         use std::fs;
 
         // Create a temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
 
@@ -402,7 +402,7 @@ mod tests {
         use std::fs;
 
         // Create a temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
 
@@ -442,7 +442,7 @@ mod tests {
         use std::fs;
 
         // Create a temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.md"), "test").unwrap();
@@ -477,7 +477,7 @@ mod tests {
         let _guard = IsolatedTestEnvironment::new().unwrap();
 
         // Create a temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.yml"), "name: test").unwrap();
@@ -578,7 +578,7 @@ mod tests {
         use std::fs;
 
         // Create a temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.md"), "test prompt").unwrap();
@@ -602,7 +602,7 @@ mod tests {
         use std::fs;
 
         // Create a temporary directory for testing
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let test_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.yaml"), "name: test").unwrap();

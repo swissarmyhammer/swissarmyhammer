@@ -20,3 +20,4 @@ regex = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = "3.0"
+swissarmyhammer-test-utils = { path = "../swissarmyhammer-test-utils" }

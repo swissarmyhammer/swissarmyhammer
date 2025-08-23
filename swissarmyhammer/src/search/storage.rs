@@ -1257,7 +1257,7 @@ mod tests {
 
     fn create_test_config() -> (SemanticConfig, TestDatabaseGuard) {
         // Create a temporary directory for the test database
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let db_path = temp_dir.path().join("test_semantic.db");
 
         let config = SemanticConfig {

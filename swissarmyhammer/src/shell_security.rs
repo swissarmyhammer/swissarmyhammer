@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_directory_access_validation() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let allowed_path = temp_dir.path();
         let forbidden_path = std::env::temp_dir();
 
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_audit_event_creation() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let env_vars = HashMap::new();
 
         let event = ShellAuditEvent::new("echo test".to_string(), Some(temp_dir.path()), &env_vars);

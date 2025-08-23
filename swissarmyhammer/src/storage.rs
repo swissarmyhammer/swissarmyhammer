@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_storage_creation() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let storage = FileSystemStorage::new(temp_dir.path()).unwrap();
         assert!(temp_dir.path().exists());
         assert_eq!(storage.list().unwrap().len(), 0);
@@ -538,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_storage_nonexistent_directory() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let nonexistent_path = temp_dir.path().join("nonexistent");
 
         let _storage = FileSystemStorage::new(&nonexistent_path).unwrap();
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_storage_get_nonexistent() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let storage = FileSystemStorage::new(temp_dir.path()).unwrap();
 
         let result = storage.get("nonexistent");
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_storage_remove_nonexistent() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let mut storage = FileSystemStorage::new(temp_dir.path()).unwrap();
 
         let result = storage.remove("nonexistent");
@@ -788,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_storage_invalid_yaml_file() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Create an invalid YAML file manually
         let invalid_file = temp_dir.path().join("invalid.yaml");
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_storage_non_yaml_files() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
 
         // Create a non-YAML file
         let text_file = temp_dir.path().join("readme.txt");
@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     fn test_prompt_path_generation() {
-        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry().expect("Failed to create temp directory");
         let storage = FileSystemStorage::new(temp_dir.path()).unwrap();
 
         let path = storage.prompt_path("test-prompt");
