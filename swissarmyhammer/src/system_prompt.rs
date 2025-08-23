@@ -278,7 +278,7 @@ impl Default for SystemPromptRenderer {
 /// Render the system prompt with all template processing resolved
 ///
 /// This function provides a convenient way to render the `.system.md` file with all template
-/// content fully processed. The result is cached for performance, with automatic cache 
+/// content fully processed. The result is cached for performance, with automatic cache
 /// invalidation when the system prompt file changes.
 ///
 /// # Examples
