@@ -20,7 +20,7 @@ pub struct ShellToolConfig {
     /// Timeout for command execution in seconds.
     pub timeout: u64,
     /// Maximum size of command output in bytes.
-    pub max_output_size: usize, 
+    pub max_output_size: usize,
     /// Output-related configuration settings.
     pub output: ShellOutputConfig,
     /// Execution-related configuration settings.
@@ -95,11 +95,13 @@ pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
     let (numeric_part, unit) = if let Some(pos) = size_str.find(|c: char| c.is_alphabetic()) {
         (&size_str[..pos], &size_str[pos..])
     } else {
-        return size_str.parse::<usize>()
+        return size_str
+            .parse::<usize>()
             .map_err(|_| format!("Invalid numeric value: {size_str}"));
     };
 
-    let base_size: usize = numeric_part.parse()
+    let base_size: usize = numeric_part
+        .parse()
         .map_err(|_| format!("Invalid numeric value: {numeric_part}"))?;
 
     let multiplier = match unit {
@@ -110,7 +112,8 @@ pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
         _ => return Err(format!("Unknown size unit: {unit}")),
     };
 
-    base_size.checked_mul(multiplier)
+    base_size
+        .checked_mul(multiplier)
         .ok_or_else(|| "Size value too large".to_string())
 }
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -1335,10 +1338,12 @@ impl McpTool for ShellExecuteTool {
 
         // Load shell configuration
         let provider = ConfigProvider::new();
-        let shell_config = provider.load_template_context()
+        let shell_config = provider
+            .load_template_context()
             .map(|context| {
                 // Try to extract shell configuration, fall back to defaults
-                context.get("shell")
+                context
+                    .get("shell")
                     .and_then(|v| serde_json::from_value::<ShellToolConfig>(v.clone()).ok())
                     .unwrap_or_default()
             })

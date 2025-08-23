@@ -452,16 +452,14 @@ fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
         Ok(template_context) => {
             // Try to extract shell security policy from config
             match template_context.get("shell_security") {
-                Some(value) => {
-                    match serde_json::from_value(value.clone()) {
-                        Ok(policy) => Ok(Some(policy)),
-                        Err(e) => {
-                            let error_msg = format!("Invalid shell security policy configuration: {e}. Security configuration must be valid to prevent security vulnerabilities.");
-                            error!(target: "shell_security", "Failed to deserialize shell security policy: {}", e);
-                            Err(SwissArmyHammerError::Other(error_msg))
-                        }
+                Some(value) => match serde_json::from_value(value.clone()) {
+                    Ok(policy) => Ok(Some(policy)),
+                    Err(e) => {
+                        let error_msg = format!("Invalid shell security policy configuration: {e}. Security configuration must be valid to prevent security vulnerabilities.");
+                        error!(target: "shell_security", "Failed to deserialize shell security policy: {}", e);
+                        Err(SwissArmyHammerError::Other(error_msg))
                     }
-                }
+                },
                 None => Ok(None), // No shell_security section is fine
             }
         }
@@ -477,8 +475,6 @@ fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
         }
     }
 }
-
-
 
 /// Log a shell command execution for audit purposes
 pub fn log_shell_execution(

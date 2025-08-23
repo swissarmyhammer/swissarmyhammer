@@ -180,8 +180,6 @@ pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationRe
 /// sah.toml configuration types and functionality (new system)
 pub use swissarmyhammer_config::{ConfigError as NewConfigError, ConfigProvider, TemplateContext};
 
-
-
 /// New core data structures for sah.toml configuration  
 pub use toml_core::{
     load_config as load_toml_core_config, load_repo_config as load_toml_core_repo_config,
@@ -256,8 +254,6 @@ pub mod prelude {
     pub use swissarmyhammer_config::{
         ConfigError as NewConfigError, ConfigProvider, TemplateContext,
     };
-
-
 
     // New core TOML configuration data structures for convenient access
     pub use crate::toml_core::{
