@@ -192,7 +192,10 @@ async fn prepare_system_prompt_param(
         }
         Err(err) => {
             // Other errors are warnings but don't block execution
-            warn!("Failed to render system prompt: {} - continuing without system prompt", err);
+            warn!(
+                "Failed to render system prompt: {} - continuing without system prompt",
+                err
+            );
             if config.system_prompt_debug {
                 return Err(ClaudeCodeError::SystemPromptFailed(err.to_string()));
             }
@@ -260,7 +263,10 @@ pub async fn execute_claude_code_with_system_prompt(
     // Add system prompt parameter if available
     if let Some(ref prompt_content) = system_prompt_param {
         cmd.arg("--append-system-prompt").arg(prompt_content);
-        debug!("Added system prompt parameter ({} chars)", prompt_content.len());
+        debug!(
+            "Added system prompt parameter ({} chars)",
+            prompt_content.len()
+        );
     }
 
     // Add additional parameters
@@ -273,11 +279,7 @@ pub async fn execute_claude_code_with_system_prompt(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    debug!(
-        "Executing command: {} {}",
-        claude_path,
-        args.join(" ")
-    );
+    debug!("Executing command: {} {}", claude_path, args.join(" "));
 
     // Execute the command
     let output = cmd.output().await?;
@@ -286,7 +288,7 @@ pub async fn execute_claude_code_with_system_prompt(
     if !output.status.success() {
         let exit_code = output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        
+
         return Err(ClaudeCodeError::ExecutionFailed { exit_code, stderr });
     }
 
@@ -349,7 +351,7 @@ mod tests {
         let result = find_claude_path(Some("/non/existent/path"));
         // Should try PATH and other locations since config path doesn't exist
         match result {
-            Ok(_) => (), // Claude found in PATH or common locations
+            Ok(_) => (),                                // Claude found in PATH or common locations
             Err(ClaudeCodeError::ClaudeNotFound) => (), // Expected if Claude not installed
             Err(e) => panic!("Unexpected error: {}", e),
         }
@@ -368,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_system_prompt_param_enabled() {
         let config = ClaudeCodeConfig::default();
-        
+
         // This test will pass if system prompt exists, or fail gracefully if not
         let result = prepare_system_prompt_param(&config).await;
         match result {
