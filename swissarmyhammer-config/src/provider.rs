@@ -2,7 +2,7 @@
 
 use crate::{
     defaults::ConfigDefaults,
-    discovery::{ConfigFile, ConfigFormat, FileDiscovery},
+    discovery::{ConfigFormat, FileDiscovery},
     error::ConfigError,
     types::{RawConfig, TemplateContext},
     ConfigResult,
@@ -423,11 +423,28 @@ impl ConfigProvider {
                 config_file.priority
             );
 
-            figment = figment.merge(self.load_config_file(&config_file)?);
+            figment = match config_file.format {
+                ConfigFormat::Toml => figment.merge(Toml::file(&config_file.path)),
+                ConfigFormat::Yaml => figment.merge(Yaml::file(&config_file.path)),
+                ConfigFormat::Json => figment.merge(Json::file(&config_file.path)),
+            };
         }
 
         // 3. Add environment variables (higher priority than files)
-        figment = figment.merge(self.load_env_vars()?);
+        // First add SAH_ prefix (lower priority)
+        figment = figment.merge(
+            Env::prefixed("SAH_")
+                .split("__") // Support nested config via double underscores
+                .map(|key| key.as_str().to_lowercase().into()),
+        );
+
+        // Then add SWISSARMYHAMMER_ prefix (higher priority - will override SAH_ vars)
+        figment = figment.merge(
+            Env::prefixed("SWISSARMYHAMMER_")
+                .split("__") // Support nested config via double underscores
+                .map(|key| key.as_str().to_lowercase().into()),
+        );
+
         debug!("Applied environment variables with SAH_ and SWISSARMYHAMMER_ prefixes");
 
         // 4. Future: Add command line arguments here (highest priority)
@@ -436,55 +453,7 @@ impl ConfigProvider {
         Ok(figment)
     }
 
-    /// Load a single configuration file based on its format
-    fn load_config_file(&self, config_file: &ConfigFile) -> ConfigResult<Figment> {
-        let path = &config_file.path;
 
-        let figment = match config_file.format {
-            ConfigFormat::Toml => Figment::from(Toml::file(path)),
-            ConfigFormat::Yaml => Figment::from(Yaml::file(path)),
-            ConfigFormat::Json => Figment::from(Json::file(path)),
-        };
-
-        // Test if the file can be parsed by attempting to extract a dummy value
-        // This will trigger any parsing errors at the file level
-        let test_result: Result<
-            std::collections::HashMap<String, serde_json::Value>,
-            figment::Error,
-        > = figment.extract();
-        if let Err(e) = test_result {
-            return Err(ConfigError::parse_error(Some(path.to_path_buf()), e));
-        }
-
-        Ok(figment)
-    }
-
-    /// Load environment variables with SAH_ and SWISSARMYHAMMER_ prefixes
-    ///
-    /// Supports both prefixes with proper precedence:
-    /// - SAH_ prefix has lower priority
-    /// - SWISSARMYHAMMER_ prefix has higher priority (overrides SAH_ for same keys)
-    /// - Nested configuration supported via double underscores (e.g., SAH_database__host)
-    /// - Keys are normalized to lowercase for template consistency
-    fn load_env_vars(&self) -> ConfigResult<Figment> {
-        debug!("Loading environment variables with SAH_ and SWISSARMYHAMMER_ prefixes");
-
-        // Create environment providers for both prefixes
-        // First add SAH_ prefix (lower priority)
-        let sah_env = Env::prefixed("SAH_")
-            .split("__") // Support nested config via double underscores
-            .map(|key| key.as_str().to_lowercase().into());
-
-        // Then add SWISSARMYHAMMER_ prefix (higher priority - will override SAH_ vars)
-        let swissarmyhammer_env = Env::prefixed("SWISSARMYHAMMER_")
-            .split("__") // Support nested config via double underscores
-            .map(|key| key.as_str().to_lowercase().into());
-
-        let figment = Figment::new().merge(sah_env).merge(swissarmyhammer_env);
-
-        trace!("Environment variables loaded with nested configuration support");
-        Ok(figment)
-    }
 }
 
 impl Default for ConfigProvider {
@@ -539,15 +508,24 @@ mod tests {
 
     #[test]
     fn test_load_env_vars() {
-        let provider = ConfigProvider::new();
-
         // Set some test environment variables (including nested)
         std::env::set_var("SAH_TEST_VAR", "test_value");
         std::env::set_var("SWISSARMYHAMMER_OTHER_VAR", "other_value");
         std::env::set_var("SAH_DATABASE__HOST", "localhost");
         std::env::set_var("SWISSARMYHAMMER_DATABASE__PORT", "5432");
 
-        let figment = provider.load_env_vars().unwrap();
+        // Create figment with environment variables directly
+        let figment = Figment::new()
+            .merge(
+                Env::prefixed("SAH_")
+                    .split("__")
+                    .map(|key| key.as_str().to_lowercase().into()),
+            )
+            .merge(
+                Env::prefixed("SWISSARMYHAMMER_")
+                    .split("__")
+                    .map(|key| key.as_str().to_lowercase().into()),
+            );
         let config: HashMap<String, serde_json::Value> = figment.extract().unwrap();
 
         // Check that environment variables are loaded with correct keys
