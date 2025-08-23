@@ -237,8 +237,14 @@ fn test_discovery_priority_ordering() {
 fn test_edge_cases() {
     let temp_dir = TempDir::new().unwrap();
 
-    // Test with empty discovery
-    let empty_discovery = FileDiscovery::with_directories(None, None);
+    // Test with empty discovery (create empty temp directories to avoid fallbacks)
+    let empty_project_dir = temp_dir.path().join("empty_project");
+    let empty_global_dir = temp_dir.path().join("empty_global");
+    fs::create_dir_all(&empty_project_dir).unwrap();
+    fs::create_dir_all(&empty_global_dir).unwrap();
+
+    let empty_discovery =
+        FileDiscovery::with_directories(Some(empty_project_dir), Some(empty_global_dir));
     assert!(empty_discovery.discover_all().is_empty());
 
     // Test with directory that exists but has no config files

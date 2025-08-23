@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{TestEnvironment, ConfigScope};
+use common::{ConfigScope, TestEnvironment};
 use serial_test::serial;
 
 use swissarmyhammer_config::ConfigFormat;
@@ -63,7 +63,10 @@ windows_deploy = "C:\\apps\\myapp"
         assert!(build_paths.get("source_directory").is_some());
     }
 
-    println!("Path handling test passed on platform: {}", std::env::consts::OS);
+    println!(
+        "Path handling test passed on platform: {}",
+        std::env::consts::OS
+    );
 }
 
 #[test]
@@ -96,13 +99,8 @@ fn test_file_discovery_cross_platform() {
             ConfigFormat::Json => format!("{{\"test_key\": \"{}\"}}", test_value),
         };
 
-        env.write_config(
-            &content,
-            format,
-            ConfigScope::Project,
-            name_part,
-        )
-        .unwrap();
+        env.write_config(&content, format, ConfigScope::Project, name_part)
+            .unwrap();
     }
 
     let context = env.load_template_context().unwrap();
@@ -136,15 +134,18 @@ fn test_environment_variable_handling_cross_platform() {
     // Windows-style environment variables (if applicable)
     #[cfg(windows)]
     {
-        env.set_env_var("WINDOWS_PATH", "C:\\Windows\\System32;C:\\Windows").unwrap();
-        env.set_env_var("PROGRAM_FILES", "C:\\Program Files").unwrap();
+        env.set_env_var("WINDOWS_PATH", "C:\\Windows\\System32;C:\\Windows")
+            .unwrap();
+        env.set_env_var("PROGRAM_FILES", "C:\\Program Files")
+            .unwrap();
     }
 
     // Unix-style environment variables
     #[cfg(unix)]
     {
         env.set_env_var("HOME_DIR", "/home/user").unwrap();
-        env.set_env_var("LD_LIBRARY_PATH", "/usr/lib:/usr/local/lib").unwrap();
+        env.set_env_var("LD_LIBRARY_PATH", "/usr/lib:/usr/local/lib")
+            .unwrap();
     }
 
     let platform_config = r#"
@@ -167,18 +168,22 @@ missing_with_fallback = "${MISSING_VAR:-fallback_value}"
     // Add platform-specific configuration
     #[cfg(windows)]
     {
-        final_config.push_str(r#"
+        final_config.push_str(
+            r#"
 windows_path = "${WINDOWS_PATH}"
 program_files = "${PROGRAM_FILES}"
-"#);
+"#,
+        );
     }
 
     #[cfg(unix)]
     {
-        final_config.push_str(r#"
+        final_config.push_str(
+            r#"
 home_dir = "${HOME_DIR}"
 library_path = "${LD_LIBRARY_PATH}"
-"#);
+"#,
+        );
     }
 
     env.write_project_config(&final_config, ConfigFormat::Toml)
@@ -189,8 +194,14 @@ library_path = "${LD_LIBRARY_PATH}"
     // Verify basic environment variable substitution works
     assert_eq!(context.get_string("simple").unwrap(), "simple_value");
     assert_eq!(context.get_string("case_test").unwrap(), "case_value");
-    assert_eq!(context.get_string("spaces_test").unwrap(), "value with spaces");
-    assert_eq!(context.get_string("unicode_test").unwrap(), "Unicode: 🚀 ∑ ∏ ∆");
+    assert_eq!(
+        context.get_string("spaces_test").unwrap(),
+        "value with spaces"
+    );
+    assert_eq!(
+        context.get_string("unicode_test").unwrap(),
+        "Unicode: 🚀 ∑ ∏ ∆"
+    );
     assert_eq!(context.get_string("empty_test").unwrap(), "");
     assert_eq!(
         context.get_string("missing_with_fallback").unwrap(),
@@ -265,12 +276,13 @@ mixed = "Mixed: Hello 你好 مرحبا Привет 🌍"
 }
 
 #[test]
-#[serial] 
+#[serial]
 fn test_line_ending_handling() {
     let env = TestEnvironment::new().unwrap();
 
     // Create configuration with different line endings
-    let config_with_different_endings = "project_name = \"Line Ending Test\"\r\ndebug = true\nlog_level = \"info\"\r\n";
+    let config_with_different_endings =
+        "project_name = \"Line Ending Test\"\r\ndebug = true\nlog_level = \"info\"\r\n";
 
     env.write_project_config(config_with_different_endings, ConfigFormat::Toml)
         .unwrap();
@@ -278,7 +290,10 @@ fn test_line_ending_handling() {
     let context = env.load_template_context().unwrap();
 
     // Should handle mixed line endings gracefully
-    assert_eq!(context.get_string("project_name").unwrap(), "Line Ending Test");
+    assert_eq!(
+        context.get_string("project_name").unwrap(),
+        "Line Ending Test"
+    );
     assert_eq!(context.get_bool("debug").unwrap(), true);
     assert_eq!(context.get_string("log_level").unwrap(), "info");
 
@@ -325,9 +340,7 @@ mixed_var = "${SAH_Mixed_Case:-not_found}"
 
     // At least one should work (depending on platform case sensitivity)
     assert!(
-        lower_result != "not_found" 
-        || upper_result != "not_found" 
-        || mixed_result != "not_found"
+        lower_result != "not_found" || upper_result != "not_found" || mixed_result != "not_found"
     );
 }
 
@@ -338,7 +351,7 @@ fn test_home_directory_resolution() {
 
     // The TestEnvironment sets up a fake HOME directory
     // Test that the configuration system can find global configs there
-    
+
     env.write_global_config(
         r#"
 project_name = "Global Config Test"
@@ -361,14 +374,17 @@ project_setting = "from_project"
     let context = env.load_template_context().unwrap();
 
     // Project should override global
-    assert_eq!(context.get_string("project_name").unwrap(), "Project Override");
-    
+    assert_eq!(
+        context.get_string("project_name").unwrap(),
+        "Project Override"
+    );
+
     // Global-only setting should be present
     assert_eq!(
         context.get_string("global_setting").unwrap(),
         "from_home_directory"
     );
-    
+
     // Project-only setting should be present
     assert_eq!(
         context.get_string("project_setting").unwrap(),
@@ -403,7 +419,8 @@ project_name = "Temp Dir Test"
 test_passed = true
 "#;
 
-    env.write_project_config(config, ConfigFormat::Toml).unwrap();
+    env.write_project_config(config, ConfigFormat::Toml)
+        .unwrap();
     let context = env.load_template_context().unwrap();
 
     assert_eq!(context.get_string("project_name").unwrap(), "Temp Dir Test");
@@ -461,7 +478,8 @@ thread_safe = true
 platform_test = true
 "#;
 
-    env.write_project_config(config, ConfigFormat::Toml).unwrap();
+    env.write_project_config(config, ConfigFormat::Toml)
+        .unwrap();
 
     const THREAD_COUNT: usize = 4;
     let mut handles = Vec::new();
@@ -474,13 +492,13 @@ platform_test = true
             // Each thread loads configuration multiple times
             for _iteration in 0..10 {
                 let context = env_clone.load_template_context().unwrap();
-                
+
                 assert_eq!(
                     context.get_string("project_name").unwrap(),
                     "Concurrent Access Test"
                 );
                 assert_eq!(context.get_bool("thread_safe").unwrap(), true);
-                
+
                 // Small delay to encourage race conditions
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
@@ -516,26 +534,25 @@ fn test_configuration_paths_normalization() {
     // Test that configuration paths work regardless of trailing separators
     let path_variants = [
         env.project_config_path().to_path_buf(),
-        env.project_config_path().join(""),  // With trailing separator
+        env.project_config_path().join(""), // With trailing separator
     ];
 
     for (i, config_dir) in path_variants.iter().enumerate() {
         if config_dir.exists() {
             let config_file = config_dir.join("sah.toml");
-            
+
             let config_content = format!(
                 r#"
 project_name = "Path Test {}"
 path_variant = {}
-"#, 
-                i, 
-                i
+"#,
+                i, i
             );
 
             std::fs::write(&config_file, config_content).unwrap();
 
             let context = env.load_template_context().unwrap();
-            
+
             assert_eq!(
                 context.get_string("project_name").unwrap(),
                 format!("Path Test {}", i)

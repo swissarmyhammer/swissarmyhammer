@@ -45,7 +45,9 @@ fn test_config_provider_with_environment_variables() {
 #[serial]
 fn test_config_provider_with_project_files() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     // Create a project structure
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
@@ -132,7 +134,9 @@ features:
 #[serial]
 fn test_config_provider_json_format() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -194,7 +198,9 @@ fn test_config_provider_json_format() {
 #[serial]
 fn test_config_provider_no_caching() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();

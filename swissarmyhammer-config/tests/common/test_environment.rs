@@ -8,7 +8,7 @@ use swissarmyhammer_config::{ConfigFormat, ConfigProvider, ConfigResult, Templat
 use tempfile::TempDir;
 
 /// Comprehensive test environment for integration testing
-/// 
+///
 /// Provides isolated test environments with proper cleanup and realistic configuration scenarios
 pub struct TestEnvironment {
     #[allow(dead_code)] // Used for RAII cleanup
@@ -82,8 +82,8 @@ impl TestEnvironment {
         Ok(config_path)
     }
 
-
     /// Write a global configuration file (convenience method)
+    #[allow(dead_code)]
     pub fn write_global_config<S: AsRef<str>>(
         &self,
         content: S,
@@ -101,8 +101,6 @@ impl TestEnvironment {
         self.write_config(content, format, ConfigScope::Project, "sah")
     }
 
-
-
     /// Set an environment variable and remember original value for restoration
     pub fn set_env_var<K: AsRef<str>, V: AsRef<str>>(
         &mut self,
@@ -113,7 +111,8 @@ impl TestEnvironment {
         let original_value = std::env::var(&key_str).ok();
 
         // Store for later restoration
-        self.env_vars_to_restore.insert(key_str.clone(), original_value);
+        self.env_vars_to_restore
+            .insert(key_str.clone(), original_value);
 
         std::env::set_var(&key_str, value.as_ref());
         Ok(())
@@ -144,6 +143,7 @@ impl TestEnvironment {
     }
 
     /// Load template context with strict error handling
+    #[allow(dead_code)]
     pub fn load_template_context_strict(&self) -> ConfigResult<TemplateContext> {
         let provider = self.create_provider();
         provider.load_template_context_strict()
@@ -193,6 +193,7 @@ enabled = false
     }
 
     /// Create sample YAML configuration data
+    #[allow(dead_code)]
     pub fn create_sample_yaml_config() -> String {
         r#"
 # SwissArmyHammer YAML Test Configuration
@@ -237,6 +238,7 @@ environments:
     }
 
     /// Create sample JSON configuration data
+    #[allow(dead_code)]
     pub fn create_sample_json_config() -> String {
         serde_json::to_string_pretty(&json!({
             "project_name": "JSON Integration Test",
@@ -257,7 +259,7 @@ environments:
                         "timeout": 30
                     },
                     {
-                        "name": "write", 
+                        "name": "write",
                         "size": 2,
                         "timeout": 10
                     }
@@ -283,6 +285,7 @@ environments:
     }
 
     /// Create complex nested configuration for precedence testing
+    #[allow(dead_code)]
     pub fn create_complex_nested_config() -> String {
         r#"
 [server]
@@ -344,11 +347,8 @@ sample_rate = 0.1
         .to_string()
     }
 
-
-
-
-
     /// Get the path to the temporary directory
+    #[allow(dead_code)]
     pub fn temp_path(&self) -> &Path {
         self.temp_dir.path()
     }
@@ -366,6 +366,64 @@ sample_rate = 0.1
     /// Get the path to the project config directory
     pub fn project_config_path(&self) -> &Path {
         &self.project_config_dir
+    }
+
+    /// Write a configuration file with a custom filename
+    #[allow(dead_code)]
+    pub fn write_config_with_filename<S: AsRef<str>>(
+        &self,
+        content: S,
+        _format: ConfigFormat,
+        scope: ConfigScope,
+        filename: &str,
+    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let config_dir = match scope {
+            ConfigScope::Global => &self.global_config_dir,
+            ConfigScope::Project => &self.project_config_dir,
+        };
+
+        let config_path = config_dir.join(filename);
+        fs::write(&config_path, content.as_ref())?;
+        Ok(config_path)
+    }
+
+    /// Clean up a configuration file with a custom filename
+    #[allow(dead_code)]
+    pub fn cleanup_config_with_filename(
+        &self,
+        scope: ConfigScope,
+        filename: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let config_dir = match scope {
+            ConfigScope::Global => &self.global_config_dir,
+            ConfigScope::Project => &self.project_config_dir,
+        };
+
+        let config_path = config_dir.join(filename);
+        if config_path.exists() {
+            fs::remove_file(config_path)?;
+        }
+        Ok(())
+    }
+
+    /// Test configuration compatibility by loading and validating a config string
+    #[allow(dead_code)]
+    pub fn test_config_compatibility<S: AsRef<str>>(
+        &self,
+        config_content: S,
+        format: ConfigFormat,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        // Write temporary config
+        let temp_path = self.write_project_config(config_content, format)?;
+
+        // Load and validate
+        let context = self.load_template_context()?;
+        let json_value = context.to_json();
+
+        // Clean up temp file
+        fs::remove_file(temp_path)?;
+
+        Ok(json_value)
     }
 }
 
@@ -407,12 +465,12 @@ mod tests {
     #[test]
     fn test_config_file_creation() {
         let env = TestEnvironment::new().unwrap();
-        
+
         let config_content = TestEnvironment::create_sample_toml_config();
         let path = env
             .write_project_config(&config_content, ConfigFormat::Toml)
             .unwrap();
-        
+
         assert!(path.exists());
         let written_content = fs::read_to_string(path).unwrap();
         assert!(written_content.contains("Integration Test Project"));
@@ -421,10 +479,10 @@ mod tests {
     #[test]
     fn test_environment_variables() {
         let mut env = TestEnvironment::new().unwrap();
-        
+
         env.set_env_var("TEST_VAR", "test_value").unwrap();
         assert_eq!(std::env::var("TEST_VAR").unwrap(), "test_value");
-        
+
         // Variable should be restored when TestEnvironment is dropped
     }
 }

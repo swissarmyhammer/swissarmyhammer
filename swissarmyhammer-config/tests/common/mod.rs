@@ -2,4 +2,5 @@
 
 pub mod test_environment;
 
-pub use test_environment::{TestEnvironment, ConfigScope};
+#[allow(unused_imports)]
+pub use test_environment::{ConfigScope, TestEnvironment};

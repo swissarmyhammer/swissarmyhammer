@@ -1156,6 +1156,30 @@ stateDiagram-v2
 
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+
+        // Safely get original directory, but handle case where it might not exist
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
+
+        // Guard to restore directory
+        struct DirGuard {
+            original: std::path::PathBuf,
+        }
+
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original);
+            }
+        }
+
+        let _guard = DirGuard {
+            original: original_dir,
+        };
+
+        // Change to temp directory for test
+        std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Create a .git directory to make it look like a Git repository
         fs::create_dir_all(".git").expect("Failed to create .git directory");
@@ -1209,6 +1233,30 @@ stateDiagram-v2
         // Use isolated test environment to safely manage both HOME and current working directory
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+        let temp_dir = crate::test_utils::create_temp_dir_with_retry();
+
+        // Safely get original directory, but handle case where it might not exist
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+            std::env::temp_dir() // Fallback to system temp directory
+        });
+
+        // Guard to restore directory
+        struct DirGuard {
+            original: std::path::PathBuf,
+        }
+
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.original);
+            }
+        }
+
+        let _guard = DirGuard {
+            original: original_dir,
+        };
+
+        // Change to temp directory for test
+        std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Create a .git directory in current working directory to simulate a Git repository
         fs::create_dir_all(".git").expect("Failed to create .git directory");

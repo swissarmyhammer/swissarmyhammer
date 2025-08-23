@@ -442,10 +442,18 @@ mod tests {
 
     #[test]
     fn test_discover_all_empty() {
-        // Create a discovery with no directories
+        // Create temporary directories to ensure test isolation
+        let temp_dir = TempDir::new().unwrap();
+        let empty_project_dir = temp_dir.path().join("empty_project");
+        let empty_global_dir = temp_dir.path().join("empty_global");
+
+        std::fs::create_dir_all(&empty_project_dir).unwrap();
+        std::fs::create_dir_all(&empty_global_dir).unwrap();
+
+        // Create a discovery with empty directories
         let discovery = FileDiscovery {
-            project_dir: None,
-            global_dir: None,
+            project_dir: Some(empty_project_dir),
+            global_dir: Some(empty_global_dir),
         };
 
         let files = discovery.discover_all();

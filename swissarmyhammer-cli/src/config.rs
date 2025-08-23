@@ -7,11 +7,9 @@ use anyhow::Result;
 use colored::*;
 use serde_json::json;
 
-
 use swissarmyhammer_config::compat::{load_repo_config_for_cli, ConfigValue, Configuration};
 
 use crate::cli::{ConfigCommands, OutputFormat};
-
 
 /// Handle all config-related commands
 pub async fn handle_config_command(command: ConfigCommands) -> Result<()> {
@@ -71,8 +69,6 @@ async fn show_variables(format: OutputFormat, verbose: bool) -> Result<()> {
 
     Ok(())
 }
-
-
 
 /// Show environment variable usage
 async fn show_env_vars(missing: bool, format: OutputFormat) -> Result<()> {
@@ -403,7 +399,6 @@ async fn show_variables_captured(format: OutputFormat, verbose: bool) -> Result<
         }
     }
 }
-
 
 /// Captured version of show_env_vars
 async fn show_env_vars_captured(_missing: bool, _format: OutputFormat) -> Result<String> {

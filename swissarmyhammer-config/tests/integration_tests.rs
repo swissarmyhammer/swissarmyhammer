@@ -13,7 +13,7 @@ use swissarmyhammer_config::{ConfigFormat, TemplateContext};
 #[serial]
 fn test_basic_integration() {
     let env = TestEnvironment::new().unwrap();
-    
+
     let config_content = TestEnvironment::create_sample_toml_config();
     env.write_project_config(&config_content, ConfigFormat::Toml)
         .unwrap();
@@ -30,7 +30,10 @@ fn test_basic_integration() {
 
     // Verify nested configuration
     if let Some(database) = context.get("database") {
-        assert_eq!(database["host"], serde_json::Value::String("localhost".to_string()));
+        assert_eq!(
+            database["host"],
+            serde_json::Value::String("localhost".to_string())
+        );
         assert_eq!(database["port"], serde_json::Value::Number(5432.into()));
     }
 }
@@ -109,16 +112,10 @@ shared_setting = "from_project"
     );
 
     // Global-only value should still be present
-    assert_eq!(
-        context.get_string("global_only").unwrap(),
-        "global_value"
-    );
+    assert_eq!(context.get_string("global_only").unwrap(), "global_value");
 
     // Project-only value should be present
-    assert_eq!(
-        context.get_string("project_only").unwrap(),
-        "project_value"
-    );
+    assert_eq!(context.get_string("project_only").unwrap(), "project_value");
 
     // Global environment should still be present since not overridden
     assert_eq!(context.get_string("environment").unwrap(), "global");
@@ -223,7 +220,7 @@ fn test_nested_environment_variables_integration() {
 
 // TODO: Fix this test - there's an issue with environment variable substitution
 #[test]
-#[serial] 
+#[serial]
 fn test_environment_variable_substitution_integration() {
     let mut env = TestEnvironment::new().unwrap();
 
@@ -256,11 +253,11 @@ fallback_config = "${MISSING_VAR:-default_fallback}"
         // Either the substitution worked or we got the raw value - both are valid at this stage
         println!("project_name: {}", project_name);
     }
-    
+
     if let Some(environment) = context.get_string("environment") {
         println!("environment: {}", environment);
     }
-    
+
     if let Some(api_key) = context.get_string("api_key") {
         println!("api_key: {}", api_key);
     }
@@ -327,10 +324,7 @@ will_be_overridden = "project_override"
 
     // Layer-specific values should be preserved
     assert_eq!(context.get_string("global_only").unwrap(), "global_value");
-    assert_eq!(
-        context.get_string("project_only").unwrap(),
-        "project_value"
-    );
+    assert_eq!(context.get_string("project_only").unwrap(), "project_value");
 }
 
 #[test]
@@ -452,7 +446,10 @@ build_command = "cargo build --release"
         ("SAH_DATABASE__HOST", "prod-db.company.com"),
         ("SAH_DATABASE__PORT", "5432"),
         ("SAH_FEATURES__ENABLE_MCP", "true"), // Override project config
-        ("SAH_CUSTOM_ACTIONS__DEPLOY_COMMAND", "helm upgrade myapp ./chart"),
+        (
+            "SAH_CUSTOM_ACTIONS__DEPLOY_COMMAND",
+            "helm upgrade myapp ./chart",
+        ),
     ])
     .unwrap();
 
@@ -503,7 +500,7 @@ fn test_configuration_loading_performance() {
 
     // Create a reasonably large configuration
     let mut large_config = TestEnvironment::create_complex_nested_config();
-    
+
     // Add more sections to make it larger
     for i in 0..50 {
         large_config.push_str(&format!(
@@ -523,11 +520,11 @@ key_c = {}
     // Measure performance of configuration loading
     let start = Instant::now();
     let iterations = 100;
-    
+
     for _ in 0..iterations {
         let _context = env.load_template_context().unwrap();
     }
-    
+
     let duration = start.elapsed();
     let avg_duration = duration / iterations;
 
@@ -565,7 +562,8 @@ source_dir = "./src"
 test_dir = "./tests"
 "#;
 
-    env.write_project_config(config, ConfigFormat::Toml).unwrap();
+    env.write_project_config(config, ConfigFormat::Toml)
+        .unwrap();
     let context = env.load_template_context().unwrap();
 
     // All path configurations should be loaded successfully
@@ -582,5 +580,3 @@ test_dir = "./tests"
         assert!(build.get("test_dir").is_some());
     }
 }
-
-

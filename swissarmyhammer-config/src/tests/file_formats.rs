@@ -9,7 +9,9 @@ use tempfile::TempDir;
 #[serial]
 fn test_toml_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -102,7 +104,9 @@ mcp = false
 #[serial]
 fn test_yaml_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -209,7 +213,9 @@ features:
 #[serial]
 fn test_json_format_comprehensive() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();
@@ -337,7 +343,9 @@ fn test_json_format_comprehensive() {
 #[serial]
 fn test_format_precedence_same_file() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = std::env::current_dir().unwrap();
+    let original_dir = std::env::current_dir().unwrap_or_else(|_| {
+        std::env::temp_dir() // Fallback to system temp directory
+    });
 
     let sah_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&sah_dir).unwrap();

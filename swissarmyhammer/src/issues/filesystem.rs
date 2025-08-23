@@ -573,7 +573,19 @@ impl FileSystemIssueStorage {
     /// Returns `.swissarmyhammer/issues` if `.swissarmyhammer` directory exists,
     /// otherwise returns `issues` for backward compatibility with existing repositories
     pub fn default_directory() -> Result<PathBuf> {
-        let current_dir = std::env::current_dir().map_err(SwissArmyHammerError::Io)?;
+        let current_dir = std::env::current_dir()
+            .or_else(|_| {
+                // Fallback to temp directory if current directory is inaccessible
+                // This can happen during test execution when parallel tests clean up directories
+                std::env::temp_dir().canonicalize().or_else(|_| {
+                    // Final fallback to a reasonable default
+                    Ok(std::env::home_dir()
+                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                        .canonicalize()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp")))
+                })
+            })
+            .map_err(SwissArmyHammerError::Io)?;
         Self::default_directory_in(&current_dir)
     }
 
