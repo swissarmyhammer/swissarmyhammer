@@ -1,5 +1,7 @@
 //! Test environment utilities for comprehensive integration testing
 
+#![allow(dead_code)] // Test utilities may not all be used in current tests
+
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;

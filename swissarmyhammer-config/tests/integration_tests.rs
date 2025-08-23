@@ -218,7 +218,6 @@ fn test_nested_environment_variables_integration() {
     }
 }
 
-// TODO: Fix this test - there's an issue with environment variable substitution
 #[test]
 #[serial]
 fn test_environment_variable_substitution_integration() {
@@ -247,20 +246,17 @@ fallback_config = "${MISSING_VAR:-default_fallback}"
 
     // Environment variable substitution test - verify the key values are properly substituted
 
-    // Check that environment variable substitution works
-    // For now, let's be more flexible about what we expect since the implementation may differ
-    if let Some(project_name) = context.get_string("project_name") {
-        // Either the substitution worked or we got the raw value - both are valid at this stage
-        println!("project_name: {}", project_name);
-    }
-
-    if let Some(environment) = context.get_string("environment") {
-        println!("environment: {}", environment);
-    }
-
-    if let Some(api_key) = context.get_string("api_key") {
-        println!("api_key: {}", api_key);
-    }
+    // Verify environment variable substitution worked correctly
+    assert_eq!(
+        context.get_string("project_name").unwrap(),
+        "Substituted Project"
+    );
+    assert_eq!(context.get_string("environment").unwrap(), "production");
+    assert_eq!(context.get_string("api_key").unwrap(), "api_key_abc123");
+    assert_eq!(
+        context.get_string("fallback_config").unwrap(),
+        "default_fallback"
+    );
 
     // At minimum, the context should not be empty
     assert!(!context.is_empty(), "Context should not be empty");

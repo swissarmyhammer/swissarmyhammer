@@ -96,8 +96,8 @@ api_settings:
     ); // Project overrides global
     assert_eq!(context.get_string("environment").unwrap(), "development"); // Env var overrides config
     assert_eq!(context.get_number("timeout").unwrap(), 30.0); // Global value inherited
-    assert_eq!(context.get_bool("debug").unwrap(), false); // Env var overrides project YAML
-                                                           // Check env substitution works
+    assert!(!context.get_bool("debug").unwrap()); // Env var overrides project YAML
+                                                  // Check env substitution works
     if let Some(api_settings) = context.get("api_settings") {
         assert_eq!(
             api_settings["key"],
@@ -185,8 +185,8 @@ fn test_file_discovery_specification() {
         .unwrap();
 
     let context = env.load_template_context().unwrap();
-    assert_eq!(context.get_bool("global_marker").unwrap(), true);
-    assert_eq!(context.get_bool("project_marker").unwrap(), true);
+    assert!(context.get_bool("global_marker").unwrap());
+    assert!(context.get_bool("project_marker").unwrap());
 
     println!("✅ File discovery specification test passed");
 }
@@ -320,7 +320,7 @@ env_vars = ["NODE_ENV=production", "DEBUG=false"]
     for (i, config_content) in existing_config_patterns.iter().enumerate() {
         let context = env
             .test_config_compatibility(config_content, ConfigFormat::Toml)
-            .expect(&format!("Failed to load existing config pattern {}", i + 1));
+            .unwrap_or_else(|e| panic!("Failed to load existing config pattern {}: {}", i + 1, e));
 
         // Each config should load successfully and preserve its structure
         assert!(context.as_object().is_some());
