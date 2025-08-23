@@ -430,8 +430,8 @@ impl PromptAction {
         let claude_path = context
             .get("claude_path")
             .and_then(|v| v.as_str())
-            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok().as_deref())
-            .map(|s| s.to_string());
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok());
 
         let config = ClaudeCodeConfig {
             enable_system_prompt_injection: enable_system_prompt,
@@ -440,15 +440,16 @@ impl PromptAction {
         };
         // For now, we'll write the prompt to a temporary file and have Claude read it
         // This is a simplified approach - we may enhance this later for streaming
-        use tempfile::NamedTempFile;
         use std::io::Write;
+        use tempfile::NamedTempFile;
 
         let mut temp_file = NamedTempFile::new()
             .map_err(|e| ActionError::ClaudeError(format!("Failed to create temp file: {e}")))?;
-        
-        temp_file.write_all(rendered_prompt.as_bytes())
+
+        temp_file
+            .write_all(rendered_prompt.as_bytes())
             .map_err(|e| ActionError::ClaudeError(format!("Failed to write to temp file: {e}")))?;
-        
+
         let temp_path = temp_file.path().to_string_lossy().to_string();
 
         // Execute Claude Code with the temp file as input and system prompt integration
@@ -456,7 +457,7 @@ impl PromptAction {
             .args(vec![
                 "--dangerously-skip-permissions",
                 "--print",
-                &temp_path
+                &temp_path,
             ])
             .config(config)
             .quiet(quiet)
@@ -476,7 +477,7 @@ impl PromptAction {
 
         // Extract response from stdout
         let response_text = String::from_utf8_lossy(&output.stdout).to_string();
-        
+
         tracing::debug!(
             "Claude Code execution completed successfully for prompt '{}'",
             self.prompt_name
@@ -1419,7 +1420,7 @@ impl Action for SubWorkflowAction {
 }
 
 /// Format Claude output JSON line as YAML for better readability
-#[cfg_attr(test, allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) fn format_claude_output_as_yaml(line: &str) -> String {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -1440,6 +1441,7 @@ pub(crate) fn format_claude_output_as_yaml(line: &str) -> String {
 }
 
 /// Process JSON values to prepare for YAML formatting
+#[allow(dead_code)]
 fn process_json_for_yaml(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -1455,11 +1457,13 @@ fn process_json_for_yaml(value: &Value) -> Value {
 }
 
 /// Format a JSON value as YAML with proper multiline handling
+#[allow(dead_code)]
 fn format_as_yaml(value: &Value) -> String {
     format_value_as_yaml(value, 0)
 }
 
 /// Recursively format a JSON value as YAML with indentation
+#[allow(dead_code)]
 fn format_value_as_yaml(value: &Value, indent_level: usize) -> String {
     let indent = "  ".repeat(indent_level);
 
@@ -1552,6 +1556,7 @@ fn format_value_as_yaml(value: &Value, indent_level: usize) -> String {
 }
 
 /// Check if a string needs to be quoted in YAML
+#[allow(dead_code)]
 fn needs_yaml_quotes(s: &str) -> bool {
     // YAML reserved words or special cases that need quotes
     matches!(
@@ -1584,6 +1589,7 @@ fn needs_yaml_quotes(s: &str) -> bool {
 }
 
 /// Detect if a string contains source code and return the detected language
+#[allow(dead_code)]
 fn detect_source_code_language(content: &str) -> Option<&'static str> {
     // Common code patterns and their associated languages
     let patterns = [
@@ -1639,6 +1645,7 @@ fn detect_source_code_language(content: &str) -> Option<&'static str> {
 }
 
 /// Apply syntax highlighting to source code
+#[allow(dead_code)]
 fn highlight_source_code(content: &str, language: &str) -> String {
     // Load syntax and theme sets
     let syntax_set = SyntaxSet::load_defaults_newlines();

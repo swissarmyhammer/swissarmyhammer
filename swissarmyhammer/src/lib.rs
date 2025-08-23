@@ -163,8 +163,8 @@ pub use system_prompt::{
 
 /// Claude Code CLI integration functionality
 pub use claude_code_integration::{
-    execute_claude_code_with_system_prompt, invoke_claude_code, ClaudeCodeConfig,
-    ClaudeCodeError, ClaudeCodeInvocation,
+    execute_claude_code_with_system_prompt, invoke_claude_code, ClaudeCodeConfig, ClaudeCodeError,
+    ClaudeCodeInvocation,
 };
 
 /// Workflow system for state-based execution
