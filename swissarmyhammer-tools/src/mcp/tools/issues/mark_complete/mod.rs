@@ -33,6 +33,10 @@ impl McpTool for MarkCompleteIssueTool {
             .expect("Tool description should be available")
     }
 
+    fn cli_name(&self) -> &'static str {
+        "complete"
+    }
+
     fn schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

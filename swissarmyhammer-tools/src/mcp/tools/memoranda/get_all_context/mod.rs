@@ -38,6 +38,10 @@ impl McpTool for GetAllContextMemoTool {
         })
     }
 
+    fn cli_name(&self) -> &'static str {
+        "context"
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

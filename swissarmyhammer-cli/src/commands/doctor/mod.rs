@@ -1,4 +1,6 @@
-//! Doctor module for SwissArmyHammer diagnostic tools
+//! Doctor command implementation
+//!
+//! Diagnoses configuration and setup issues for swissarmyhammer
 //!
 //! This module provides comprehensive system diagnostics for SwissArmyHammer installations,
 //! checking various aspects of the system configuration to ensure optimal operation.
@@ -12,21 +14,8 @@
 //! - Workflow system diagnostics
 //! - Disk space monitoring
 //! - File permission checks
-//!
-//! # Usage
-//!
-//! ```no_run
-//! use swissarmyhammer_cli::doctor::Doctor;
-//!
-//! let mut doctor = Doctor::new();
-//! let exit_code = doctor.run_diagnostics_with_options(false)?;
-//! ```
-//!
-//! The doctor returns exit codes:
-//! - 0: All checks passed
-//! - 1: Some warnings detected
-//! - 2: Errors detected
 
+use crate::exit_codes::EXIT_ERROR;
 use anyhow::Result;
 use colored::*;
 
@@ -37,27 +26,8 @@ pub mod checks;
 pub mod types;
 pub mod utils;
 
-/// System check category keywords
-const SYSTEM_CHECK_KEYWORDS: &[&str] = &["PATH", "permissions", "Binary", "Installation"];
-const CONFIG_CHECK_KEYWORDS: &[&str] = &["Claude", "config"];
-const PROMPT_CHECK_KEYWORDS: &[&str] = &["prompt", "YAML"];
-const WORKFLOW_CHECK_KEYWORDS: &[&str] = &["Workflow", "workflow"];
-const MIGRATION_CHECK_KEYWORDS: &[&str] = &["Migration", "migration", "directory consolidation"];
-
-/// Grouping of checks by category for organized display
-#[derive(Debug)]
-pub struct CheckGroups<'a> {
-    /// System-level checks (installation, PATH, permissions)
-    pub system_checks: Vec<&'a Check>,
-    /// Configuration checks (Claude Code, MCP setup)
-    pub config_checks: Vec<&'a Check>,
-    /// Prompt-related checks (directories, YAML parsing)
-    pub prompt_checks: Vec<&'a Check>,
-    /// Workflow system checks (directories, parsing, storage)
-    pub workflow_checks: Vec<&'a Check>,
-    /// Migration validation checks (directory consolidation, conflicts)
-    pub migration_checks: Vec<&'a Check>,
-}
+/// Help text for the doctor command
+pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Count of checks by status for summary display
 #[derive(Debug)]
@@ -68,6 +38,15 @@ pub struct CheckCounts {
     pub warning_count: usize,
     /// Number of checks with errors
     pub error_count: usize,
+}
+
+/// Groups of checks organized by category
+struct CheckGroups<'a> {
+    pub system_checks: Vec<&'a Check>,
+    pub config_checks: Vec<&'a Check>,
+    pub prompt_checks: Vec<&'a Check>,
+    pub workflow_checks: Vec<&'a Check>,
+    pub migration_checks: Vec<&'a Check>,
 }
 
 /// Main diagnostic tool for SwissArmyHammer system health checks
@@ -84,14 +63,6 @@ impl Doctor {
         Self { checks: Vec::new() }
     }
 
-    /// Run all diagnostic checks
-    ///
-    /// Performs a comprehensive set of diagnostics including:
-    /// - Installation verification
-    /// - Claude Code configuration
-    /// - Prompt directory validation
-    /// - Workflow system checks
-    ///
     /// Run diagnostic checks with specific options
     ///
     /// # Arguments
@@ -299,59 +270,47 @@ impl Doctor {
         self.print_summary(use_color);
     }
 
-    /// Group checks into categories
+    /// Group checks by category
     fn group_checks_by_category(&self) -> CheckGroups<'_> {
+        let mut system_checks = Vec::new();
+        let mut config_checks = Vec::new();
+        let mut prompt_checks = Vec::new();
+        let mut workflow_checks = Vec::new();
+        let mut migration_checks = Vec::new();
+
+        for check in &self.checks {
+            if check.name.contains("Installation")
+                || check.name.contains("PATH")
+                || check.name.contains("Permission")
+                || check.name.contains("Binary")
+            {
+                system_checks.push(check);
+            } else if check.name.contains("Claude")
+                || check.name.contains("Config")
+                || check.name.contains("MCP")
+            {
+                config_checks.push(check);
+            } else if check.name.contains("Prompt")
+                || check.name.contains("YAML")
+                || check.name.contains("Template")
+            {
+                prompt_checks.push(check);
+            } else if check.name.contains("Workflow") || check.name.contains("workflow") {
+                workflow_checks.push(check);
+            } else if check.name.contains("Migration") || check.name.contains("migration") {
+                migration_checks.push(check);
+            } else {
+                // Default to system checks
+                system_checks.push(check);
+            }
+        }
+
         CheckGroups {
-            system_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    SYSTEM_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            config_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    CONFIG_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            prompt_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    PROMPT_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .filter(|c| {
-                    !WORKFLOW_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            workflow_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    WORKFLOW_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
-            migration_checks: self
-                .checks
-                .iter()
-                .filter(|c| {
-                    MIGRATION_CHECK_KEYWORDS
-                        .iter()
-                        .any(|&keyword| c.name.contains(keyword))
-                })
-                .collect(),
+            system_checks,
+            config_checks,
+            prompt_checks,
+            workflow_checks,
+            migration_checks,
         }
     }
 
@@ -498,6 +457,19 @@ fn print_check(check: &Check, use_color: bool) {
         }
     } else {
         println!();
+    }
+}
+
+/// Handle the doctor command
+pub async fn handle_command(migration: bool) -> i32 {
+    let mut doctor = Doctor::new();
+
+    match doctor.run_diagnostics_with_options(migration) {
+        Ok(exit_code) => exit_code,
+        Err(e) => {
+            eprintln!("Doctor command failed: {}", e);
+            EXIT_ERROR
+        }
     }
 }
 

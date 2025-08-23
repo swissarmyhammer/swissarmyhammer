@@ -6,26 +6,25 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
-
-/// CLI-specific result type that preserves error information
-pub type CliResult<T> = Result<T, CliError>;
-
 /// CLI error type that includes both error information and suggested exit code
 #[derive(Debug)]
 pub struct CliError {
     pub message: String,
-    pub exit_code: i32,
     pub source: Option<Box<dyn Error + Send + Sync>>,
+    #[allow(dead_code)]
+    pub exit_code: i32,
 }
+
+/// Result type alias for CLI operations
+pub type CliResult<T> = Result<T, CliError>;
 
 impl CliError {
     /// Create a new CLI error with a message and exit code
-    pub fn new(message: impl Into<String>, exit_code: i32) -> Self {
+    pub fn new(message: String, exit_code: i32) -> Self {
         Self {
-            message: message.into(),
-            exit_code,
+            message,
             source: None,
+            exit_code,
         }
     }
 
@@ -35,12 +34,13 @@ impl CliError {
         let error_msg = error.to_string();
         Self {
             message: error_msg,
-            exit_code: EXIT_ERROR,
             source: Some(Box::new(error)),
+            exit_code: 1,
         }
     }
 
     /// Get the full error chain as a formatted string
+    #[allow(dead_code)]
     pub fn full_chain(&self) -> String {
         let mut result = self.message.clone();
 
@@ -69,16 +69,7 @@ impl Error for CliError {
 }
 
 /// Convert a CliResult to an exit code, printing the full error chain if needed
-pub fn handle_cli_result<T>(result: CliResult<T>) -> i32 {
-    match result {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Error: {}", e.full_chain());
-            e.exit_code
-        }
-    }
-}
-
+///
 /// Centralized error message formatting functions for Git repository requirements
 /// Format a generic Git repository requirement error message
 fn format_git_repository_requirement_error() -> String {
@@ -152,6 +143,7 @@ fn format_git_repository_not_found_error(path: &str) -> String {
 }
 
 /// Format component-specific Git repository requirement error
+#[allow(dead_code)]
 pub fn format_component_specific_git_error(component: &str, explanation: &str) -> String {
     format!(
         "❌ {component} require a Git repository\n\n\
@@ -172,29 +164,15 @@ pub fn format_component_specific_git_error(component: &str, explanation: &str) -
 /// Convert parameter errors to CLI errors with enhanced context
 impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
     fn from(error: swissarmyhammer::common::parameters::ParameterError) -> Self {
-        use swissarmyhammer::common::parameters::{ErrorMessageEnhancer, ParameterError};
+        use swissarmyhammer::common::parameters::ErrorMessageEnhancer;
 
         let enhancer = ErrorMessageEnhancer::new();
         let enhanced_error = enhancer.enhance_parameter_error(&error);
 
-        let exit_code = match &enhanced_error {
-            ParameterError::MaxAttemptsExceeded { .. } => EXIT_ERROR,
-            ParameterError::ValidationFailedWithContext { recoverable, .. }
-            | ParameterError::PatternMismatchEnhanced { recoverable, .. }
-            | ParameterError::InvalidChoiceEnhanced { recoverable, .. } => {
-                if *recoverable {
-                    EXIT_WARNING
-                } else {
-                    EXIT_ERROR
-                }
-            }
-            _ => EXIT_ERROR,
-        };
-
         Self {
             message: format_enhanced_parameter_error(&enhanced_error),
-            exit_code,
             source: Some(Box::new(error)),
+            exit_code: 1,
         }
     }
 }
@@ -300,29 +278,67 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
         match err {
             swissarmyhammer::SwissArmyHammerError::NotInGitRepository => CliError {
                 message: format_git_repository_requirement_error(),
-                exit_code: EXIT_ERROR,
                 source: Some(Box::new(err)),
+                exit_code: 1,
             },
             swissarmyhammer::SwissArmyHammerError::DirectoryCreation(ref details) => CliError {
                 message: format_directory_creation_error(details),
-                exit_code: EXIT_ERROR,
                 source: Some(Box::new(err)),
+                exit_code: 1,
             },
             swissarmyhammer::SwissArmyHammerError::DirectoryAccess(ref details) => CliError {
                 message: format_directory_access_error(details),
-                exit_code: EXIT_ERROR,
                 source: Some(Box::new(err)),
+                exit_code: 1,
             },
             swissarmyhammer::SwissArmyHammerError::GitRepositoryNotFound { ref path } => CliError {
                 message: format_git_repository_not_found_error(path),
-                exit_code: EXIT_ERROR,
                 source: Some(Box::new(err)),
+                exit_code: 1,
             },
             _ => CliError {
                 message: err.to_string(),
-                exit_code: EXIT_ERROR,
                 source: Some(Box::new(err)),
+                exit_code: 1,
             },
+        }
+    }
+}
+
+/// Convert schema validation errors to CLI errors with appropriate exit codes
+#[cfg(feature = "dynamic-cli")]
+impl From<crate::schema_validation::ValidationError> for CliError {
+    fn from(error: crate::schema_validation::ValidationError) -> Self {
+        let mut message = format!("❌ Schema validation failed: {}", error);
+
+        if let Some(suggestion) = error.suggestion() {
+            message.push_str(&format!("\n\n💡 {}", suggestion));
+        }
+
+        message.push_str(
+            "\n\n🔧 This indicates a tool schema definition issue that should be reported.",
+        );
+
+        Self {
+            message,
+            source: Some(Box::new(error)),
+            exit_code: 1,
+        }
+    }
+}
+
+/// Convert schema conversion errors to CLI errors with appropriate exit codes
+#[cfg(feature = "dynamic-cli")]
+impl From<crate::schema_conversion::ConversionError> for CliError {
+    fn from(error: crate::schema_conversion::ConversionError) -> Self {
+        // Use the existing formatting from schema_conversion module
+        let message =
+            crate::schema_conversion::SchemaConverter::format_conversion_error(&error, "CLI");
+
+        Self {
+            message,
+            source: Some(Box::new(error)),
+            exit_code: 1,
         }
     }
 }
@@ -334,8 +350,8 @@ impl From<rmcp::Error> for CliError {
         // Regular MCP error handling - use EXIT_WARNING for standard MCP errors
         Self {
             message: format!("MCP error: {error_msg}"),
-            exit_code: EXIT_WARNING,
             source: Some(Box::new(error)),
+            exit_code: 1,
         }
     }
 }

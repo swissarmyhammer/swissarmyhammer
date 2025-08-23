@@ -157,7 +157,16 @@ impl ConfigParser {
     /// Returns None if not within a git repository.
     pub fn load_from_repo_root(&self) -> Result<Option<Configuration>, ConfigError> {
         let current_dir = std::env::current_dir()?;
-        let mut search_dir = current_dir.as_path();
+        self.load_from_repo_root_with_start_dir(current_dir.as_path())
+    }
+
+    /// Load configuration from repository root starting from a specific directory
+    /// This method allows tests to specify a starting directory without changing global state
+    pub fn load_from_repo_root_with_start_dir(
+        &self,
+        start_dir: &Path,
+    ) -> Result<Option<Configuration>, ConfigError> {
+        let mut search_dir = start_dir;
 
         // First, find the repository root
         let mut repo_root = None;
@@ -179,8 +188,8 @@ impl ConfigParser {
             None => return Ok(None),
         };
 
-        // Now search for sah.toml from current directory up to repository root
-        search_dir = current_dir.as_path();
+        // Now search for sah.toml from start directory up to repository root
+        search_dir = start_dir;
         loop {
             let config_path = search_dir.join("sah.toml");
 
@@ -389,8 +398,6 @@ mod tests {
 
     #[test]
     fn test_load_from_repo_root() {
-        use std::panic;
-
         let temp_dir = TempDir::new().unwrap();
         let git_dir = temp_dir.path().join(".git");
         fs::create_dir(&git_dir).unwrap();
@@ -398,24 +405,13 @@ mod tests {
         let config_path = temp_dir.path().join("sah.toml");
         fs::write(&config_path, "name = \"repo_test\"").unwrap();
 
-        // Change to subdirectory
+        // Create subdirectory to test from
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        // Temporarily change directory for test with proper RAII cleanup
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&sub_dir).unwrap();
-
-        // Use panic::catch_unwind to ensure directory is restored even on panic
-        let result = panic::catch_unwind(|| {
-            let parser = ConfigParser::new();
-            parser.load_from_repo_root()
-        });
-
-        // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let config_result = result.unwrap();
+        // Test loading from subdirectory without changing global current directory
+        let parser = ConfigParser::new();
+        let config_result = parser.load_from_repo_root_with_start_dir(&sub_dir);
 
         assert!(config_result.is_ok());
         let config = config_result.unwrap();

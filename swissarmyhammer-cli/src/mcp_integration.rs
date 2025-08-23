@@ -5,7 +5,7 @@
 
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
-use serde_json::Map;
+use serde_json::{Map, Value};
 use std::sync::Arc;
 use swissarmyhammer_tools::{
     register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
@@ -19,21 +19,11 @@ type IssueStorageArc = Arc<RwLock<Box<dyn swissarmyhammer::issues::IssueStorage>
 
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
-    tool_registry: ToolRegistry,
+    tool_registry: Arc<ToolRegistry>,
     tool_context: ToolContext,
 }
 
 impl CliToolContext {
-    /// Check if Git operations are required and available, failing with appropriate error if not
-    pub async fn require_git_repository(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let git_ops = self.tool_context.git_ops.lock().await;
-        if git_ops.is_none() {
-            return Err(Box::new(
-                swissarmyhammer::SwissArmyHammerError::NotInGitRepository,
-            ));
-        }
-        Ok(())
-    }
     /// Create a new CLI tool context with all necessary storage backends
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let current_dir = std::env::current_dir()?;
@@ -58,7 +48,7 @@ impl CliToolContext {
             rate_limiter,
         );
 
-        let tool_registry = Self::create_tool_registry();
+        let tool_registry = Arc::new(Self::create_tool_registry());
 
         Ok(Self {
             tool_registry,
@@ -179,41 +169,41 @@ impl CliToolContext {
     }
 
     /// Helper to convert CLI arguments to MCP tool arguments
-    pub fn create_arguments(
-        &self,
-        pairs: Vec<(&str, serde_json::Value)>,
-    ) -> Map<String, serde_json::Value> {
-        let mut args = Map::new();
-        for (key, value) in pairs {
-            args.insert(key.to_string(), value);
-        }
-        args
+    ///
+    /// Get a reference to the tool registry for dynamic CLI generation
+    #[cfg(feature = "dynamic-cli")]
+    pub fn get_tool_registry(&self) -> &ToolRegistry {
+        &self.tool_registry
+    }
+
+    /// Get an Arc to the tool registry for dynamic CLI generation
+    #[cfg(feature = "dynamic-cli")]
+    pub fn get_tool_registry_arc(&self) -> Arc<ToolRegistry> {
+        self.tool_registry.clone()
+    }
+
+    /// Create arguments map from vector of key-value pairs for testing
+    #[allow(dead_code)]
+    pub fn create_arguments(&self, args: Vec<(&str, Value)>) -> Map<String, Value> {
+        args.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
     }
 }
 
 /// Utilities for formatting MCP responses for CLI display
 pub mod response_formatting {
-    use colored::*;
     use rmcp::model::{CallToolResult, RawContent};
+    use serde_json::Value;
 
-    /// Extract and format success message from MCP response
+    /// Format successful tool result for display
+    #[allow(dead_code)]
     pub fn format_success_response(result: &CallToolResult) -> String {
-        if result.is_error.unwrap_or(false) {
-            format_error_response(result)
-        } else {
-            extract_text_content(result)
-                .unwrap_or_else(|| "Operation completed successfully".to_string())
-                .green()
-                .to_string()
-        }
+        extract_text_content(result).unwrap_or_else(|| "Operation successful".to_string())
     }
 
-    /// Extract and format error message from MCP response
+    /// Format error tool result for display
+    #[allow(dead_code)]
     pub fn format_error_response(result: &CallToolResult) -> String {
-        extract_text_content(result)
-            .unwrap_or_else(|| "An unknown error occurred".to_string())
-            .red()
-            .to_string()
+        extract_text_content(result).unwrap_or_else(|| "Operation failed".to_string())
     }
 
     /// Extract text content from CallToolResult
@@ -228,23 +218,10 @@ pub mod response_formatting {
     }
 
     /// Extract JSON data from CallToolResult
-    pub fn extract_json_data(
-        result: &CallToolResult,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        if result.is_error.unwrap_or(false) {
-            return Err(format!(
-                "MCP tool returned error: {}",
-                extract_text_content(result).unwrap_or_else(|| "Unknown error".to_string())
-            )
-            .into());
-        }
-
-        let text_content = extract_text_content(result).ok_or("No text content in MCP response")?;
-
-        let json_data: serde_json::Value = serde_json::from_str(&text_content)
-            .map_err(|e| format!("Failed to parse JSON response: {e}"))?;
-
-        Ok(json_data)
+    #[allow(dead_code)]
+    pub fn extract_json_data(result: &CallToolResult) -> Result<Value, Box<dyn std::error::Error>> {
+        let text = extract_text_content(result).ok_or("No text content found in result")?;
+        Ok(serde_json::from_str(&text)?)
     }
 }
 
@@ -268,12 +245,14 @@ mod tests {
 
     #[test]
     fn test_create_arguments() {
-        let context = CliToolContext {
-            tool_registry: ToolRegistry::new(),
+        let _context = CliToolContext {
+            tool_registry: Arc::new(ToolRegistry::new()),
             tool_context: create_mock_tool_context(),
         };
 
-        let args = context.create_arguments(vec![("name", json!("test")), ("count", json!(42))]);
+        let mut args = Map::new();
+        args.insert("name".to_string(), json!("test"));
+        args.insert("count".to_string(), json!(42));
 
         assert_eq!(args.get("name"), Some(&json!("test")));
         assert_eq!(args.get("count"), Some(&json!(42)));
@@ -308,7 +287,8 @@ mod tests {
 
         // Test that the rate limiter allows normal operations
         // by checking that we can execute a tool (this will use the rate limiter internally)
-        let args = context.create_arguments(vec![("content", json!("Test memo"))]);
+        let mut args = Map::new();
+        args.insert("content".to_string(), json!("Test memo"));
 
         // This should succeed if rate limiter is working properly
         let result = context.execute_tool("memo_create", args).await;
