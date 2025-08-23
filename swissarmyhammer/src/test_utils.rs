@@ -56,11 +56,61 @@ use tempfile::TempDir;
 pub use swissarmyhammer_test_utils::{IsolatedTestEnvironment, create_temp_dir, create_temp_dir_with_retry};
 
 // For compatibility with existing code that doesn't use the shared crate
+/// Creates a temporary directory for testing purposes
+///
+/// This is a compatibility function that provides the same interface as the shared
+/// test utilities crate, but with a simplified implementation for non-test builds.
+/// 
+/// # Returns
+/// 
+/// A `TempDir` instance that will be automatically cleaned up when dropped.
+///
+/// # Panics
+/// 
+/// Panics if the temporary directory cannot be created.
+///
+/// # Example
+/// 
+/// ```no_run
+/// use swissarmyhammer::test_utils::create_temp_dir;
+/// 
+/// let temp_dir = create_temp_dir();
+/// let temp_path = temp_dir.path();
+/// // Use temp_path for testing
+/// ```
 #[cfg(not(any(test, feature = "test-utils")))]
 pub fn create_temp_dir() -> TempDir {
     TempDir::new().expect("Failed to create temporary directory")
 }
 
+/// Creates a temporary directory with retry logic for testing purposes
+///
+/// This is a compatibility function that provides the same interface as the shared
+/// test utilities crate, but with a simplified implementation for non-test builds.
+/// Unlike the full implementation, this version does not include retry logic.
+/// 
+/// # Returns
+/// 
+/// A `Result<TempDir, std::io::Error>` where success contains a temporary directory
+/// that will be automatically cleaned up when dropped.
+///
+/// # Errors
+/// 
+/// Returns an `std::io::Error` if the temporary directory cannot be created.
+///
+/// # Example
+/// 
+/// ```no_run
+/// use swissarmyhammer::test_utils::create_temp_dir_with_retry;
+/// 
+/// match create_temp_dir_with_retry() {
+///     Ok(temp_dir) => {
+///         let temp_path = temp_dir.path();
+///         // Use temp_path for testing
+///     }
+///     Err(e) => eprintln!("Failed to create temp dir: {}", e),
+/// }
+/// ```
 #[cfg(not(any(test, feature = "test-utils")))]
 pub fn create_temp_dir_with_retry() -> std::io::Result<TempDir> {
     TempDir::new()
