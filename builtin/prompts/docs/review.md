@@ -8,7 +8,7 @@ description: "Improved the documentation for the project"
 
 Improve the documentation quality.
 
-{% render "principals" %}
+
 {% render "documentation" %}
 
 ## Process

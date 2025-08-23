@@ -8,7 +8,7 @@ description: Add comprehensive comments and documentation to code
 
 Create high quality documentation comments in source.
 
-{% render "principals" %}
+
 {% render "documentation" %}
 
 {% render code %}

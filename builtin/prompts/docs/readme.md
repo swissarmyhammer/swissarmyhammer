@@ -8,7 +8,7 @@ description: Create comprehensive README documentation for a project
 
 Create a high quality README.md.
 
-{% render "principals" %}
+
 {% render "documentation" %}
 
 ## README Structure
