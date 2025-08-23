@@ -3,6 +3,7 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
+use crate::claude_code_integration::{ClaudeCodeConfig, ClaudeCodeInvocation};
 use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
@@ -19,7 +20,6 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::{PromptLibrary, PromptResolver};
@@ -399,201 +399,108 @@ impl PromptAction {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-        // Execute the rendered prompt with Claude
-        // Find claude in PATH or use common locations
-        let claude_path = which::which("claude")
-            .or_else(|_| {
-                // Check common installation paths
-                let home = std::env::var("HOME").unwrap_or_default();
-                let possible_paths = vec![
-                    format!("{}/.claude/local/claude", home),
-                    "/usr/local/bin/claude".to_string(),
-                    "/opt/claude/claude".to_string(),
-                ];
-
-                for path in possible_paths {
-                    if std::path::Path::new(&path).exists() {
-                        return Ok(std::path::PathBuf::from(path));
-                    }
-                }
-
-                Err(which::Error::CannotFindBinaryPath)
-            })
-            .map_err(|e| {
-                ActionError::ClaudeError(format!(
-                    "Claude CLI not found. Make sure 'claude' is installed and available in your PATH. Error: {e}"
-                ))
-            })?;
-        let mut cmd = Command::new(&claude_path);
-
-        // Claude CLI arguments
-        cmd.arg("--dangerously-skip-permissions")
-            .arg("--print")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose");
-
-        // Set up the command to pipe prompt via stdin
-        cmd.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
+        // Execute the rendered prompt with Claude using centralized integration
         tracing::debug!(
-            "Executing prompt '{}' with Claude at: {}",
-            self.prompt_name,
-            claude_path.display()
+            "Executing prompt '{}' with Claude Code integration",
+            self.prompt_name
         );
 
-        // Spawn the Claude process
-        let mut child = cmd.spawn().map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to spawn Claude command: {e}"))
-        })?;
+        // Create configuration for Claude Code integration
+        // Check context and environment variables for configuration
+        let enable_system_prompt = context
+            .get("claude_system_prompt_enabled")
+            .and_then(|v| v.as_bool())
+            .or_else(|| {
+                std::env::var("SAH_CLAUDE_SYSTEM_PROMPT_ENABLED")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
+            .unwrap_or(true); // Default to enabled
 
-        // Write the prompt to Claude's stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin
-                .write_all(rendered_prompt.as_bytes())
-                .await
-                .map_err(|e| {
-                    ActionError::ClaudeError(format!("Failed to write prompt to Claude: {e}"))
-                })?;
-            stdin.shutdown().await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to close Claude stdin: {e}"))
-            })?;
+        let system_prompt_debug = context
+            .get("claude_system_prompt_debug")
+            .and_then(|v| v.as_bool())
+            .or_else(|| {
+                std::env::var("SAH_CLAUDE_SYSTEM_PROMPT_DEBUG")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
+            .unwrap_or(false); // Default to disabled
+
+        let claude_path = context
+            .get("claude_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok());
+
+        let config = ClaudeCodeConfig {
+            enable_system_prompt_injection: enable_system_prompt,
+            system_prompt_debug,
+            claude_path,
+        };
+        // For now, we'll write the prompt to a temporary file and have Claude read it
+        // This is a simplified approach - we may enhance this later for streaming
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new()
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to create temp file: {e}")))?;
+
+        temp_file
+            .write_all(rendered_prompt.as_bytes())
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to write to temp file: {e}")))?;
+
+        let temp_path = temp_file.path().to_string_lossy().to_string();
+
+        // Execute Claude Code with the temp file as input and system prompt integration
+        let output = ClaudeCodeInvocation::new()
+            .args(vec![
+                "--dangerously-skip-permissions",
+                "--print",
+                &temp_path,
+            ])
+            .config(config)
+            .quiet(quiet)
+            .execute()
+            .await
+            .map_err(|e| ActionError::ClaudeError(e.to_string()))?;
+
+        // Check if Claude execution was successful
+        if !output.status.success() {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ActionError::ClaudeError(format!(
+                "Claude execution failed with exit code {}: {}",
+                exit_code, stderr
+            )));
         }
 
-        // Get stdout for streaming
-        let stdout = child.stdout.take().ok_or_else(|| {
-            ActionError::ClaudeError("Failed to capture Claude stdout".to_string())
-        })?;
+        // Extract response from stdout
+        let response_text = String::from_utf8_lossy(&output.stdout).to_string();
 
-        // Read stdout line by line for streaming JSON
-        use tokio::io::{AsyncBufReadExt, BufReader};
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
+        tracing::debug!(
+            "Claude Code execution completed successfully for prompt '{}'",
+            self.prompt_name
+        );
 
-        let mut response_text = String::new();
-        let mut _got_result = false;
-
-        // Get timeout from context or use default
-        let line_timeout = context
-            .get("_timeout_secs")
-            .and_then(|v| v.as_u64())
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| Duration::from_secs(60 * 60));
-
-        tracing::debug!("Using line timeout: {:?}", line_timeout);
-
-        // Read lines with timeout
-        loop {
-            match timeout(line_timeout, lines.next_line()).await {
-                Ok(Ok(Some(line))) => {
-                    // Format JSON as YAML for better readability
-                    let formatted_output = format_claude_output_as_yaml(&line);
-                    if formatted_output != line {
-                        // If it was formatted as YAML, log it with proper structure
-                        tracing::debug!("Claude output line:\n{}", formatted_output);
-                    } else {
-                        // If not JSON, log as is
-                        tracing::debug!("Claude output line: {}", line);
-                    }
-
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-
-                    if let Ok(json) = serde_json::from_str::<Value>(&line) {
-                        // Look for the final result
-                        if let Some(result) = json.get("result").and_then(|r| r.as_str()) {
-                            response_text = result.to_string();
-                            _got_result = true;
-                            break;
-                        }
-                        // Also check for assistant messages with text content
-                        if json.get("type").and_then(|t| t.as_str()) == Some("assistant") {
-                            if let Some(message) = json.get("message").and_then(|m| m.as_object()) {
-                                if let Some(content_array) =
-                                    message.get("content").and_then(|c| c.as_array())
-                                {
-                                    for content_item in content_array {
-                                        if let Some(text) =
-                                            content_item.get("text").and_then(|t| t.as_str())
-                                        {
-                                            response_text.push_str(text);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(Ok(None)) => {
-                    // End of stream
-                    break;
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("Error reading Claude output: {}", e);
-                    break;
-                }
-                Err(_) => {
-                    // Timeout - kill the process and return error
-                    tracing::error!("Timeout reading Claude output after {:?}", line_timeout);
-                    tracing::error!("Response so far: {} characters", response_text.len());
-                    let _ = child.kill().await;
-                    // If we have some response, use it rather than erroring
-                    if !response_text.is_empty() {
-                        break;
-                    }
-                    return Err(ActionError::Timeout {
-                        timeout: line_timeout,
-                    });
-                }
-            }
-        }
-
-        // Wait for process to complete with a short timeout
-        let wait_result = timeout(Duration::from_secs(5), child.wait()).await;
-        let status = match wait_result {
-            Ok(Ok(status)) => status,
-            Ok(Err(e)) => {
-                return Err(ActionError::ClaudeError(format!(
-                    "Failed to wait for Claude: {e}"
-                )))
-            }
-            Err(_) => {
-                // Process didn't exit cleanly, kill it
-                let _ = child.kill().await;
-                return Err(ActionError::ClaudeError(
-                    "Claude process failed to exit cleanly".to_string(),
-                ));
-            }
+        // Process the response
+        let response_text = if response_text.trim().is_empty() {
+            tracing::warn!("Empty response from Claude Code");
+            "No response from Claude".to_string()
+        } else {
+            response_text.trim().to_string()
         };
 
-        if !status.success() {
-            return Err(ActionError::ClaudeError(
-                "Claude execution failed".to_string(),
-            ));
-        }
-
-        let response_text = response_text.trim();
-
-        if response_text.is_empty() {
-            tracing::warn!("No response received from Claude");
-        } else {
+        // Log the response for debugging if not in quiet mode
+        if !quiet && !response_text.is_empty() {
             tracing::debug!(
                 "Claude response received: {} characters",
                 response_text.len()
             );
-        }
 
-        // Note: String-based abort detection removed - abort handling now done via file-based mechanism
-
-        // Display the output as YAML
-        if !quiet && !response_text.is_empty() {
-            // Build the YAML output as a single string
+            // Create YAML-formatted output for better readability
             let mut yaml_output = String::new();
-            yaml_output.push_str("\n---\n");
+            yaml_output.push_str("---\n");
             yaml_output.push_str(&format!("prompt: {}\n", self.prompt_name));
             yaml_output.push_str("claude_response: |\n");
             for line in response_text.lines() {
@@ -604,7 +511,7 @@ impl PromptAction {
             // Log YAML output
             tracing::info!("{}", yaml_output);
         }
-
+        // Create a response value
         // Create a response value
         let response = Value::String(response_text.to_string());
 
@@ -1513,7 +1420,7 @@ impl Action for SubWorkflowAction {
 }
 
 /// Format Claude output JSON line as YAML for better readability
-#[cfg_attr(test, allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) fn format_claude_output_as_yaml(line: &str) -> String {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -1534,6 +1441,7 @@ pub(crate) fn format_claude_output_as_yaml(line: &str) -> String {
 }
 
 /// Process JSON values to prepare for YAML formatting
+#[allow(dead_code)]
 fn process_json_for_yaml(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -1549,11 +1457,13 @@ fn process_json_for_yaml(value: &Value) -> Value {
 }
 
 /// Format a JSON value as YAML with proper multiline handling
+#[allow(dead_code)]
 fn format_as_yaml(value: &Value) -> String {
     format_value_as_yaml(value, 0)
 }
 
 /// Recursively format a JSON value as YAML with indentation
+#[allow(dead_code)]
 fn format_value_as_yaml(value: &Value, indent_level: usize) -> String {
     let indent = "  ".repeat(indent_level);
 
@@ -1646,6 +1556,7 @@ fn format_value_as_yaml(value: &Value, indent_level: usize) -> String {
 }
 
 /// Check if a string needs to be quoted in YAML
+#[allow(dead_code)]
 fn needs_yaml_quotes(s: &str) -> bool {
     // YAML reserved words or special cases that need quotes
     matches!(
@@ -1678,6 +1589,7 @@ fn needs_yaml_quotes(s: &str) -> bool {
 }
 
 /// Detect if a string contains source code and return the detected language
+#[allow(dead_code)]
 fn detect_source_code_language(content: &str) -> Option<&'static str> {
     // Common code patterns and their associated languages
     let patterns = [
@@ -1733,6 +1645,7 @@ fn detect_source_code_language(content: &str) -> Option<&'static str> {
 }
 
 /// Apply syntax highlighting to source code
+#[allow(dead_code)]
 fn highlight_source_code(content: &str, language: &str) -> String {
     // Load syntax and theme sets
     let syntax_set = SyntaxSet::load_defaults_newlines();
