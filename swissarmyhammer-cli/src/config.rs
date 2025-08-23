@@ -243,7 +243,7 @@ fn display_env_vars(config: &TemplateContext, missing: bool, format: OutputForma
 fn extract_env_vars(config: &TemplateContext) -> Vec<(String, Option<String>, Option<String>)> {
     let mut env_vars = Vec::new();
     
-    for (_, value) in config.vars() {
+    for value in config.vars().values() {
         extract_env_vars_from_value(value, &mut env_vars);
     }
     
