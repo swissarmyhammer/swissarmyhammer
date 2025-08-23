@@ -1,11 +1,11 @@
 //! System prompt rendering infrastructure
 //!
 //! This module provides the core infrastructure to render the `.system.md` file with all template
-//! includes resolved, preparing it for integration with Claude Code's `--append-system-prompt` parameter.
+//! processing resolved, preparing it for integration with Claude Code's `--append-system-prompt` parameter.
 //!
 //! ## Features
 //!
-//! - **Template Resolution**: Render `.system.md` with all template includes (`{% render "principals" %}`)
+//! - **Template Resolution**: Render `.system.md` with comprehensive coding standards and guidelines
 //! - **Caching Strategy**: Cache rendered system prompt to avoid repeated processing
 //! - **Error Handling**: Comprehensive error handling for template rendering failures
 //! - **Configuration Integration**: Full integration with sah.toml configuration variables
@@ -16,7 +16,7 @@
 //! use swissarmyhammer::system_prompt::render_system_prompt;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Render the system prompt with all includes resolved
+//! // Render the system prompt with all template processing resolved
 //! let rendered_prompt = render_system_prompt()?;
 //! println!("{}", rendered_prompt);
 //! # Ok(())
@@ -275,11 +275,11 @@ impl Default for SystemPromptRenderer {
     }
 }
 
-/// Render the system prompt with all template includes resolved
+/// Render the system prompt with all template processing resolved
 ///
 /// This function provides a convenient way to render the `.system.md` file with all template
-/// includes like `{% render "principals" %}` fully resolved. The result is cached for
-/// performance, with automatic cache invalidation when template files change.
+/// content fully processed. The result is cached for performance, with automatic cache
+/// invalidation when the system prompt file changes.
 ///
 /// # Examples
 ///

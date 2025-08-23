@@ -237,6 +237,68 @@ Main content here...
 {% include "common/footer.md" %}
 ```
 
+### System Prompt Migration Guide
+
+**Important:** SwissArmyHammer has moved from template includes to a centralized system prompt approach for Claude Code integration.
+
+#### What Changed
+
+**Previously** (deprecated approach):
+- Prompts contained template includes like `{% render "principals" %}`, `{% render "coding_standards" %}`, `{% render "tool_use" %}`
+- Each prompt needed to explicitly include these standard sections
+- Inconsistent application of coding standards and guidelines
+
+**Currently** (new approach):
+- System prompt (`.system.md`) is automatically injected into all Claude Code sessions
+- Contains comprehensive coding standards, principals, and tool usage guidelines
+- Consistent experience across all interactions without manual includes
+
+#### Migration Steps
+
+1. **Remove Template Includes**: If your prompts contain these includes, they're no longer needed:
+   ```liquid
+   <!-- Remove these from your prompts -->
+   {% render "principals" %}
+   {% render "coding_standards" %}  
+   {% render "tool_use" %}
+   ```
+
+2. **System Prompt Location**: The system prompt is located at:
+   - Built-in: `builtin/prompts/.system.md` (automatically loaded)
+   - Project: `.swissarmyhammer/prompts/.system.md` (project-specific override)
+   - User: `~/.swissarmyhammer/prompts/.system.md` (user-specific override)
+
+3. **Customization**: To customize system prompt content:
+   ```bash
+   # Copy system prompt to your project or user directory
+   cp builtin/prompts/.system.md .swissarmyhammer/prompts/.system.md
+   
+   # Edit as needed
+   editor .swissarmyhammer/prompts/.system.md
+   ```
+
+4. **Configuration**: System prompt injection can be controlled via environment variables:
+   ```bash
+   # Disable system prompt injection
+   export SAH_CLAUDE_SYSTEM_PROMPT_ENABLED=false
+   
+   # Enable debug logging
+   export SAH_CLAUDE_SYSTEM_PROMPT_DEBUG=true
+   ```
+
+#### Benefits of New Approach
+
+- **Consistency**: All Claude Code sessions have the same foundation
+- **Performance**: No need to render includes in every prompt
+- **Maintainability**: Single source of truth for coding standards
+- **Flexibility**: Can be overridden at project or user level
+
+#### Backward Compatibility
+
+- Existing prompts with template includes will continue to work
+- However, the includes may not render the most up-to-date content
+- We recommend migrating to the new system prompt approach
+
 #### Assign Variables
 
 ```liquid
