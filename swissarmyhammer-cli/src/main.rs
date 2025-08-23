@@ -1,13 +1,19 @@
 use std::process;
 mod cli;
+mod doctor;
 mod dynamic_cli;
 mod error;
 mod exit_codes;
+mod flow;
 mod logging;
 mod mcp_integration;
+mod parameter_cli;
+mod plan;
+mod prompt;
 mod schema_conversion;
 mod schema_validation;
 mod signal_handler;
+mod validate;
 use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
@@ -193,6 +199,12 @@ async fn handle_dynamic_matches(
             tracing::debug!("Starting MCP server");
             run_server().await
         }
+        Some(("doctor", sub_matches)) => handle_doctor_command(sub_matches).await,
+        Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches).await,
+        Some(("flow", sub_matches)) => handle_flow_command(sub_matches).await,
+        Some(("validate", sub_matches)) => handle_validate_command(sub_matches).await,
+        Some(("plan", sub_matches)) => handle_plan_command(sub_matches).await,
+        Some(("implement", _sub_matches)) => handle_implement_command().await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
             Some((tool_name, tool_matches)) => {
                 handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
@@ -382,6 +394,356 @@ fn extract_clap_value(
             matches
                 .get_one::<String>(prop_name)
                 .map(|s| serde_json::Value::String(s.clone()))
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::doctor::Doctor;
+
+    let migration = matches.get_flag("migration");
+    let mut doctor = Doctor::new();
+
+    match doctor.run_diagnostics_with_options(migration) {
+        Ok(exit_code) => exit_code,
+        Err(e) => {
+            eprintln!("Doctor command failed: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
+    use crate::prompt;
+
+    let subcommand = match matches.subcommand() {
+        Some(("list", sub_matches)) => {
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let verbose = sub_matches.get_flag("verbose");
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
+            let category = sub_matches.get_one::<String>("category").cloned();
+            let search = sub_matches.get_one::<String>("search").cloned();
+
+            PromptSubcommand::List {
+                format,
+                verbose,
+                source,
+                category,
+                search,
+            }
+        }
+        Some(("test", sub_matches)) => {
+            let prompt_name = sub_matches.get_one::<String>("prompt_name").cloned();
+            let file = sub_matches.get_one::<String>("file").cloned();
+            let vars = sub_matches
+                .get_many::<String>("vars")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let raw = sub_matches.get_flag("raw");
+            let copy = sub_matches.get_flag("copy");
+            let save = sub_matches.get_one::<String>("save").cloned();
+            let debug = sub_matches.get_flag("debug");
+
+            PromptSubcommand::Test {
+                prompt_name,
+                file,
+                vars,
+                raw,
+                copy,
+                save,
+                debug,
+            }
+        }
+        Some(("search", sub_matches)) => {
+            let query = sub_matches.get_one::<String>("query").cloned().unwrap();
+            let r#in = sub_matches
+                .get_many::<String>("in")
+                .map(|vals| vals.cloned().collect());
+            let regex = sub_matches.get_flag("regex");
+            let fuzzy = sub_matches.get_flag("fuzzy");
+            let case_sensitive = sub_matches.get_flag("case-sensitive");
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
+            let has_arg = sub_matches.get_one::<String>("has-arg").cloned();
+            let no_args = sub_matches.get_flag("no-args");
+            let full = sub_matches.get_flag("full");
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let highlight = sub_matches.get_flag("highlight");
+            let limit = sub_matches.get_one::<usize>("limit").copied();
+
+            PromptSubcommand::Search {
+                query,
+                r#in,
+                regex,
+                fuzzy,
+                case_sensitive,
+                source,
+                has_arg,
+                no_args,
+                full,
+                format,
+                highlight,
+                limit,
+            }
+        }
+        _ => {
+            eprintln!("No prompt subcommand specified");
+            return EXIT_ERROR;
+        }
+    };
+
+    match prompt::run_prompt_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            eprintln!("Prompt command failed: {}", e);
+            e.exit_code
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
+    use crate::flow;
+
+    let subcommand = match matches.subcommand() {
+        Some(("run", sub_matches)) => {
+            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
+            let vars = sub_matches
+                .get_many::<String>("vars")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let interactive = sub_matches.get_flag("interactive");
+            let dry_run = sub_matches.get_flag("dry-run");
+            let test = sub_matches.get_flag("test");
+            let timeout = sub_matches.get_one::<String>("timeout").cloned();
+            let quiet = sub_matches.get_flag("quiet");
+
+            FlowSubcommand::Run {
+                workflow,
+                vars,
+                interactive,
+                dry_run,
+                test,
+                timeout,
+                quiet,
+            }
+        }
+        Some(("resume", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let interactive = sub_matches.get_flag("interactive");
+            let timeout = sub_matches.get_one::<String>("timeout").cloned();
+            let quiet = sub_matches.get_flag("quiet");
+
+            FlowSubcommand::Resume {
+                run_id,
+                interactive,
+                timeout,
+                quiet,
+            }
+        }
+        Some(("list", sub_matches)) => {
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let verbose = sub_matches.get_flag("verbose");
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
+
+            FlowSubcommand::List {
+                format,
+                verbose,
+                source,
+            }
+        }
+        Some(("status", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let watch = sub_matches.get_flag("watch");
+
+            FlowSubcommand::Status {
+                run_id,
+                format,
+                watch,
+            }
+        }
+        Some(("logs", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let follow = sub_matches.get_flag("follow");
+            let tail = sub_matches.get_one::<usize>("tail").copied();
+            let level = sub_matches.get_one::<String>("level").cloned();
+
+            FlowSubcommand::Logs {
+                run_id,
+                follow,
+                tail,
+                level,
+            }
+        }
+        Some(("metrics", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned();
+            let workflow = sub_matches.get_one::<String>("workflow").cloned();
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let global = sub_matches.get_flag("global");
+
+            FlowSubcommand::Metrics {
+                run_id,
+                workflow,
+                format,
+                global,
+            }
+        }
+        Some(("visualize", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("html") => VisualizationFormat::Html,
+                Some("json") => VisualizationFormat::Json,
+                Some("dot") => VisualizationFormat::Dot,
+                _ => VisualizationFormat::Mermaid,
+            };
+            let output = sub_matches.get_one::<String>("output").cloned();
+            let timing = sub_matches.get_flag("timing");
+            let counts = sub_matches.get_flag("counts");
+            let path_only = sub_matches.get_flag("path-only");
+
+            FlowSubcommand::Visualize {
+                run_id,
+                format,
+                output,
+                timing,
+                counts,
+                path_only,
+            }
+        }
+        Some(("test", sub_matches)) => {
+            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
+            let vars = sub_matches
+                .get_many::<String>("vars")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let interactive = sub_matches.get_flag("interactive");
+            let timeout = sub_matches.get_one::<String>("timeout").cloned();
+            let quiet = sub_matches.get_flag("quiet");
+
+            FlowSubcommand::Test {
+                workflow,
+                vars,
+                interactive,
+                timeout,
+                quiet,
+            }
+        }
+        _ => {
+            eprintln!("No flow subcommand specified");
+            return EXIT_ERROR;
+        }
+    };
+
+    match flow::run_flow_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            eprintln!("Flow command failed: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::cli::ValidateFormat;
+    use crate::validate;
+
+    let quiet = matches.get_flag("quiet");
+    let format = match matches.get_one::<String>("format").map(|s| s.as_str()) {
+        Some("json") => ValidateFormat::Json,
+        _ => ValidateFormat::Text,
+    };
+    let workflow_dirs = matches
+        .get_many::<String>("workflow-dirs")
+        .map(|vals| vals.cloned().collect())
+        .unwrap_or_default();
+
+    match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs) {
+        Ok(exit_code) => exit_code,
+        Err(e) => {
+            eprintln!("Validate command failed: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_plan_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::plan;
+
+    let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
+    plan::run_plan(plan_filename).await
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_implement_command() -> i32 {
+    use crate::cli::FlowSubcommand;
+    use crate::flow;
+
+    // Execute the implement workflow - equivalent to 'flow run implement'
+    let subcommand = FlowSubcommand::Run {
+        workflow: "implement".to_string(),
+        vars: vec![],
+        interactive: false,
+        dry_run: false,
+        test: false,
+        timeout: None,
+        quiet: false,
+    };
+
+    match flow::run_flow_command(subcommand).await {
+        Ok(_) => EXIT_SUCCESS,
+        Err(e) => {
+            eprintln!("Implement command failed: {}", e);
+            EXIT_ERROR
         }
     }
 }

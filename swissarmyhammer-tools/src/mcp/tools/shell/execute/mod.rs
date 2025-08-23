@@ -1279,32 +1279,32 @@ impl McpTool for ShellExecuteTool {
         }
 
         // Parse and validate environment variables if provided
-        let parsed_environment: Option<std::collections::HashMap<String, String>> = if let Some(ref env_str) = request.environment {
-            // Parse JSON string into HashMap
-            let env_vars: std::collections::HashMap<String, String> = serde_json::from_str(env_str)
-                .map_err(|e| {
-                    tracing::warn!("Failed to parse environment variables JSON: {}", e);
-                    McpError::invalid_params(
-                        format!("Invalid JSON format for environment variables: {e}"),
-                        None,
-                    )
-                })?;
-            
-            // Validate environment variables with security checks
-            swissarmyhammer::workflow::validate_environment_variables_security(&env_vars).map_err(
-                |e| {
-                    tracing::warn!("Environment variables security validation failed: {}", e);
-                    McpError::invalid_params(
-                        format!("Environment variables security check failed: {e}"),
-                        None,
-                    )
-                },
-            )?;
-            
-            Some(env_vars)
-        } else {
-            None
-        };
+        let parsed_environment: Option<std::collections::HashMap<String, String>> =
+            if let Some(ref env_str) = request.environment {
+                // Parse JSON string into HashMap
+                let env_vars: std::collections::HashMap<String, String> =
+                    serde_json::from_str(env_str).map_err(|e| {
+                        tracing::warn!("Failed to parse environment variables JSON: {}", e);
+                        McpError::invalid_params(
+                            format!("Invalid JSON format for environment variables: {e}"),
+                            None,
+                        )
+                    })?;
+
+                // Validate environment variables with security checks
+                swissarmyhammer::workflow::validate_environment_variables_security(&env_vars)
+                    .map_err(|e| {
+                        tracing::warn!("Environment variables security validation failed: {}", e);
+                        McpError::invalid_params(
+                            format!("Environment variables security check failed: {e}"),
+                            None,
+                        )
+                    })?;
+
+                Some(env_vars)
+            } else {
+                None
+            };
 
         // Execute the shell command using our core execution function
         let working_directory = request.working_directory.map(PathBuf::from);

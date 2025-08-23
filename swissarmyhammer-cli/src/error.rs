@@ -15,7 +15,19 @@ pub struct CliError {
     pub exit_code: i32,
 }
 
+/// Result type alias for CLI operations
+pub type CliResult<T> = Result<T, CliError>;
+
 impl CliError {
+    /// Create a new CLI error with a message and exit code
+    pub fn new(message: String, exit_code: i32) -> Self {
+        Self {
+            message,
+            source: None,
+            exit_code,
+        }
+    }
+
     /// Create a CLI error from a SwissArmyHammer error
     #[allow(dead_code)]
     pub fn from_swissarmyhammer_error(error: swissarmyhammer::SwissArmyHammerError) -> Self {
