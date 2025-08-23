@@ -54,6 +54,9 @@ pub mod template;
 /// System prompt rendering infrastructure
 pub mod system_prompt;
 
+/// Claude Code CLI integration with system prompt injection
+pub mod claude_code_integration;
+
 /// Storage abstractions and implementations
 pub mod storage;
 
@@ -158,6 +161,12 @@ pub use system_prompt::{
     SystemPromptRenderer,
 };
 
+/// Claude Code CLI integration functionality
+pub use claude_code_integration::{
+    execute_claude_code_with_system_prompt, invoke_claude_code, ClaudeCodeConfig,
+    ClaudeCodeError, ClaudeCodeInvocation,
+};
+
 /// Workflow system for state-based execution
 pub use workflow::{
     State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
@@ -236,6 +245,12 @@ pub mod prelude {
     pub use crate::system_prompt::{
         clear_cache as clear_system_prompt_cache, render_system_prompt, SystemPromptError,
         SystemPromptRenderer,
+    };
+
+    // Claude Code CLI integration for convenient access
+    pub use crate::claude_code_integration::{
+        execute_claude_code_with_system_prompt, invoke_claude_code, ClaudeCodeConfig,
+        ClaudeCodeError, ClaudeCodeInvocation,
     };
 
     pub use crate::prompt_search::{SearchEngine, SearchResult};
