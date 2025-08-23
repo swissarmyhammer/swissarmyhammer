@@ -100,3 +100,150 @@ pub enum SystemPromptError {
 - Maintain consistency with current template processing patterns
 - Ensure no breaking changes to existing prompt functionality
 - Consider future extensibility for system prompt customization
+## Proposed Solution
+
+Based on analysis of the existing template system, I will implement the system prompt rendering infrastructure as follows:
+
+### Architecture Overview
+- Build on existing `template.rs` infrastructure with `PromptLibrary` and `PromptPartialSource`
+- Create dedicated `system_prompt.rs` module in `swissarmyhammer/src/`
+- Use existing Liquid template engine with partial support for includes like `{% render "principals" %}`
+
+### Implementation Components
+
+1. **System Prompt Renderer (`system_prompt.rs`)**
+   ```rust
+   pub struct SystemPromptRenderer {
+       template_engine: TemplateEngine,
+       prompt_library: Arc<PromptLibrary>,
+       cache: Option<(String, SystemTime)>,
+   }
+   
+   pub fn render_system_prompt() -> Result<String, SystemPromptError>
+   ```
+
+2. **Integration with Existing Template System**
+   - Use `Template::with_partials()` for handling `{% render "principals" %}` includes
+   - Leverage `PromptPartialSource` for resolving partial templates
+   - Use `render_with_config()` for full variable substitution
+
+3. **Caching Strategy**
+   - In-memory cache with file modification time checking
+   - Cache key based on `.system.md` and all referenced partials modification times
+   - Cache invalidation when any template file changes
+
+4. **Error Handling**
+   ```rust
+   #[derive(Debug, thiserror::Error)]
+   pub enum SystemPromptError {
+       #[error("System prompt file not found: {0}")]
+       FileNotFound(String),
+       #[error("Template rendering failed: {0}")]
+       RenderingFailed(String),
+       #[error("Partial template not found: {0}")]
+       PartialNotFound(String),
+       #[error("IO error: {0}")]
+       IoError(#[from] std::io::Error),
+   }
+   ```
+
+### Implementation Steps
+
+1. **Create system_prompt.rs module** with core types and renderer struct
+2. **Implement render_system_prompt()** function using existing template infrastructure  
+3. **Add caching logic** with modification time-based invalidation
+4. **Comprehensive error handling** for all failure scenarios
+5. **Unit tests** covering rendering, caching, and error cases
+
+### Integration Points
+- The rendered system prompt will be available via `SystemPromptRenderer::render_system_prompt()`
+- Ready for CLI integration with `--append-system-prompt` parameter
+- Maintains consistency with existing prompt rendering patterns
+## Implementation Status: ✅ COMPLETED
+
+The system prompt rendering infrastructure has been successfully implemented and tested. All requirements have been met:
+
+### ✅ Completed Features
+
+**1. System Prompt Renderer (`system_prompt.rs`)**
+- ✅ Created dedicated module with comprehensive functionality
+- ✅ `SystemPromptRenderer` struct with initialization from multiple prompt sources
+- ✅ `render_system_prompt()` public function for easy access
+- ✅ Integrated with existing `TemplateEngine` and `PromptLibrary` infrastructure
+
+**2. Template Resolution**
+- ✅ Full support for `{% render "partial_name" %}` includes
+- ✅ Resolves `principals`, `coding_standards`, `tool_use` partials successfully
+- ✅ Handles various file extensions (.md, .markdown, .liquid, .md.liquid)
+- ✅ Flexible whitespace handling in template syntax
+- ✅ Integration with configuration variables via `render_with_config()`
+
+**3. Caching Strategy** 
+- ✅ In-memory cache with file modification time tracking
+- ✅ Automatic cache invalidation when template files change
+- ✅ Tracks modification times of all referenced partials
+- ✅ Thread-safe caching with mutex protection
+
+**4. Comprehensive Error Handling**
+- ✅ `SystemPromptError` enum with specific error types
+- ✅ `FileNotFound`, `RenderingFailed`, `PartialNotFound`, `IoError` variants
+- ✅ Conversion from `SwissArmyHammerError` for seamless integration
+- ✅ Clear error messages with context information
+
+**5. API Integration Ready**
+- ✅ Public `render_system_prompt()` function returns `Result<String, SystemPromptError>`
+- ✅ Exported in `lib.rs` main module and prelude for easy access
+- ✅ `clear_cache()` utility function for testing and cache management
+- ✅ Ready for CLI integration with `--append-system-prompt` parameter
+
+**6. Comprehensive Testing**
+- ✅ 8 unit tests covering all major functionality
+- ✅ Regex pattern testing for partial extraction
+- ✅ Error handling validation
+- ✅ Cache management testing
+- ✅ File modification time tracking
+- ✅ All tests pass successfully
+
+### 🏗️ Technical Implementation Details
+
+**File Locations:**
+- Main implementation: `swissarmyhammer/src/system_prompt.rs`
+- Module integration: `swissarmyhammer/src/lib.rs` (lines 49, 148-149, 234-237)
+
+**Key Components:**
+```rust
+// Public API
+pub fn render_system_prompt() -> Result<String, SystemPromptError>
+pub fn clear_cache()
+
+// Core types
+pub struct SystemPromptRenderer
+pub enum SystemPromptError
+
+// Cache management with file modification tracking
+static SYSTEM_PROMPT_CACHE: Mutex<Option<CacheEntry>>
+```
+
+**Search Paths for `.system.md`:**
+1. `builtin/prompts/.system.md` (✅ exists)
+2. `.swissarmyhammer/prompts/.system.md` 
+3. `prompts/.system.md`
+4. `.system.md`
+
+**Template Partials:**
+- ✅ `principals` → `builtin/prompts/principals.md.liquid`
+- ✅ `coding_standards` → `builtin/prompts/coding_standards.md.liquid`
+- ✅ `tool_use` → `builtin/prompts/tool_use.md.liquid`
+
+### 🎯 Ready for Next Step
+
+The implementation is ready for integration with issue system_prompt_000009 (CLI integration). The rendered system prompt can be accessed via:
+
+```rust
+use swissarmyhammer::system_prompt::render_system_prompt;
+
+let system_prompt = render_system_prompt()?;
+// Use with --append-system-prompt flag
+```
+
+All success criteria have been achieved with comprehensive testing and robust error handling.
