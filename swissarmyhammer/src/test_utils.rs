@@ -455,7 +455,10 @@ pub fn create_temp_dir() -> TempDir {
                 std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
                 continue;
             }
-            Err(e) => panic!("Failed to create temporary directory for test after {} attempts: {}", attempt, e),
+            Err(e) => panic!(
+                "Failed to create temporary directory for test after {} attempts: {}",
+                attempt, e
+            ),
         }
     }
     unreachable!()

@@ -241,7 +241,10 @@ pub fn format_conversion_error(error: ConversionError, tool_name: &str) -> Strin
                 tool_name, message
             )
         }
-        ConversionError::UnsupportedSchemaType { schema_type, parameter } => {
+        ConversionError::UnsupportedSchemaType {
+            schema_type,
+            parameter,
+        } => {
             format!(
                 "Tool '{}' uses unsupported argument type '{}' for parameter '{}'. This tool may not be compatible with CLI execution.",
                 tool_name, schema_type, parameter

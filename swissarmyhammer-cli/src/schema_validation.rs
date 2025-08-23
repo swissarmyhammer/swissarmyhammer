@@ -113,7 +113,7 @@ impl SchemaValidator {
     /// ```rust
     /// use serde_json::json;
     /// use schema_validation::SchemaValidator;
-    /// 
+    ///
     /// let schema = json!({
     ///     "type": "object",
     ///     "properties": {
@@ -121,7 +121,7 @@ impl SchemaValidator {
     ///     },
     ///     "required": ["name"]
     /// });
-    /// 
+    ///
     /// assert!(SchemaValidator::validate_schema(&schema).is_ok());
     /// ```
     pub fn validate_schema(schema: &Value) -> Result<(), ValidationError> {
@@ -247,7 +247,10 @@ impl SchemaValidator {
     }
 
     /// Validate a single property schema definition
-    fn validate_property_schema(prop_name: &str, prop_schema: &Value) -> Result<(), ValidationError> {
+    fn validate_property_schema(
+        prop_name: &str,
+        prop_schema: &Value,
+    ) -> Result<(), ValidationError> {
         if !prop_schema.is_object() {
             return Err(ValidationError::InvalidProperty {
                 property: prop_name.to_string(),
@@ -374,8 +377,9 @@ impl SchemaValidator {
                         if !properties.contains_key(field_name) {
                             return Err(ValidationError::ConflictingDefinitions {
                                 parameter: field_name.to_string(),
-                                conflict: "Field is marked as required but not defined in properties"
-                                    .to_string(),
+                                conflict:
+                                    "Field is marked as required but not defined in properties"
+                                        .to_string(),
                             });
                         }
                     } else {
@@ -395,7 +399,9 @@ impl SchemaValidator {
     }
 
     /// Validate property consistency across the schema
-    fn validate_property_consistency(properties: &Map<String, Value>) -> Result<(), ValidationError> {
+    fn validate_property_consistency(
+        properties: &Map<String, Value>,
+    ) -> Result<(), ValidationError> {
         let mut seen_names = HashSet::new();
 
         for (prop_name, _) in properties {
@@ -717,7 +723,7 @@ mod tests {
     }
 
     // Additional comprehensive edge case tests
-    
+
     #[test]
     fn test_empty_schema() {
         let schema = json!({});
@@ -797,9 +803,12 @@ mod tests {
 
         let errors = SchemaValidator::validate_schema_comprehensive(&schema);
         assert!(errors.len() >= 3); // Should have errors for all invalid names
-        
+
         for error in &errors {
-            assert!(matches!(error, ValidationError::InvalidParameterName { .. }));
+            assert!(matches!(
+                error,
+                ValidationError::InvalidParameterName { .. }
+            ));
         }
     }
 
@@ -821,13 +830,17 @@ mod tests {
     #[test]
     fn test_all_reserved_parameter_names() {
         let reserved_names = ["help", "version", "verbose", "quiet", "debug"];
-        
+
         for reserved in &reserved_names {
             let mut props = serde_json::Map::new();
             props.insert(reserved.to_string(), json!({"type": "string"}));
 
             let result = SchemaValidator::validate_properties(&props);
-            assert!(result.is_err(), "Reserved name '{}' should be invalid", reserved);
+            assert!(
+                result.is_err(),
+                "Reserved name '{}' should be invalid",
+                reserved
+            );
             assert!(matches!(
                 result.unwrap_err(),
                 ValidationError::InvalidParameterName { .. }
@@ -923,8 +936,14 @@ mod tests {
     fn test_invalid_default_value_types() {
         let test_cases = vec![
             (json!({"type": "string", "default": 123}), "string"),
-            (json!({"type": "integer", "default": "not-a-number"}), "integer"),
-            (json!({"type": "boolean", "default": "not-a-boolean"}), "boolean"),
+            (
+                json!({"type": "integer", "default": "not-a-number"}),
+                "integer",
+            ),
+            (
+                json!({"type": "boolean", "default": "not-a-boolean"}),
+                "boolean",
+            ),
             (json!({"type": "array", "default": "not-an-array"}), "array"),
         ];
 
@@ -937,7 +956,11 @@ mod tests {
             });
 
             let result = SchemaValidator::validate_schema(&schema);
-            assert!(result.is_err(), "Should fail for invalid default type for {}", expected_type);
+            assert!(
+                result.is_err(),
+                "Should fail for invalid default type for {}",
+                expected_type
+            );
             assert!(matches!(
                 result.unwrap_err(),
                 ValidationError::InvalidProperty { .. }
@@ -1122,7 +1145,7 @@ mod tests {
     fn test_edge_case_parameter_names() {
         let edge_cases = vec![
             ("1param", "starts with number"),
-            ("param-", "ends with hyphen"),  
+            ("param-", "ends with hyphen"),
             ("param_", "ends with underscore"),
             ("-param", "starts with hyphen"),
             ("_param", "starts with underscore"),
@@ -1144,9 +1167,14 @@ mod tests {
             match param_name {
                 // These should be valid
                 "PARAM" | "param123" | "_param" | "param_" | "param--name" | "param__name" => {
-                    assert!(result.is_ok(), "Parameter '{}' ({}) should be valid", param_name, description);
-                },
-                // These should be invalid  
+                    assert!(
+                        result.is_ok(),
+                        "Parameter '{}' ({}) should be valid",
+                        param_name,
+                        description
+                    );
+                }
+                // These should be invalid
                 _ => {
                     // For now, we're being permissive with some edge cases
                     // The exact validation rules can be refined based on CLI requirements

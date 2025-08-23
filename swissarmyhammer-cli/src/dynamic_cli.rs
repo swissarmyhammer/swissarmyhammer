@@ -296,7 +296,7 @@ This CLI includes both static commands and dynamic commands generated from MCP t
     pub fn build_cli_with_validation(&self) -> Result<Command, Vec<ValidationError>> {
         // Validate all CLI tools first
         let validation_errors = self.validate_all_tools();
-        
+
         if !validation_errors.is_empty() {
             return Err(validation_errors);
         }
@@ -314,9 +314,12 @@ This CLI includes both static commands and dynamic commands generated from MCP t
     /// Always returns a `Command`, but may skip invalid tools with warnings
     pub fn build_cli_with_warnings(&self) -> Command {
         let warnings = self.get_validation_warnings();
-        
+
         if !warnings.is_empty() {
-            tracing::warn!("Found {} tool validation warnings during CLI build:", warnings.len());
+            tracing::warn!(
+                "Found {} tool validation warnings during CLI build:",
+                warnings.len()
+            );
             for (i, warning) in warnings.iter().enumerate() {
                 tracing::warn!("  {}. {}", i + 1, warning);
             }
@@ -395,10 +398,11 @@ This CLI includes both static commands and dynamic commands generated from MCP t
     /// Vec of user-friendly warning messages
     pub fn get_validation_warnings(&self) -> Vec<String> {
         let errors = self.validate_all_tools();
-        
-        errors.into_iter().map(|error| {
-            format!("Tool validation warning: {}", error)
-        }).collect()
+
+        errors
+            .into_iter()
+            .map(|error| format!("Tool validation warning: {}", error))
+            .collect()
     }
 
     /// Get statistics about CLI tool validation
@@ -411,13 +415,13 @@ This CLI includes both static commands and dynamic commands generated from MCP t
     /// `CliValidationStats` with counts and status information
     pub fn get_validation_stats(&self) -> CliValidationStats {
         let mut stats = CliValidationStats::new();
-        
+
         let categories = self.tool_registry.get_cli_categories();
         for category in categories {
             let tools = self.tool_registry.get_tools_for_category(&category);
             for tool in tools {
                 stats.total_tools += 1;
-                
+
                 match self.validate_single_tool(tool) {
                     Ok(()) => {
                         stats.valid_tools += 1;

@@ -11,14 +11,14 @@ mod doctor;
 mod dynamic_cli;
 mod error;
 mod exit_codes;
-#[cfg(feature = "dynamic-cli")]
-mod schema_conversion;
-#[cfg(feature = "dynamic-cli")]
-mod schema_validation;
 #[cfg(not(feature = "dynamic-cli"))]
 mod file;
 #[cfg(not(feature = "dynamic-cli"))]
 mod flow;
+#[cfg(feature = "dynamic-cli")]
+mod schema_conversion;
+#[cfg(feature = "dynamic-cli")]
+mod schema_validation;
 
 #[cfg(not(feature = "dynamic-cli"))]
 mod list;
@@ -84,15 +84,15 @@ async fn run_with_dynamic_cli() {
 
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
-    
+
     // Get validation statistics for startup reporting
     let validation_stats = cli_builder.get_validation_stats();
-    
+
     // Check for validation issues and report them
     if !validation_stats.is_all_valid() {
         // Always show validation summary for issues (not just in verbose mode)
         eprintln!("⚠️  CLI Validation Issues: {}", validation_stats.summary());
-        
+
         // Show detailed warnings if there are validation problems
         let warnings = cli_builder.get_validation_warnings();
         if !warnings.is_empty() {
@@ -107,7 +107,7 @@ async fn run_with_dynamic_cli() {
         }
         eprintln!(); // Add blank line for readability
     }
-    
+
     // Build CLI with warnings for validation issues (graceful degradation)
     // This will skip problematic tools but continue building the CLI
     let dynamic_cli = cli_builder.build_cli_with_warnings();
@@ -127,23 +127,20 @@ async fn run_with_dynamic_cli() {
 }
 
 #[cfg(feature = "dynamic-cli")]
-async fn handle_tool_validation(
-    cli_tool_context: Arc<CliToolContext>,
-    verbose: bool,
-) -> i32 {
+async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: bool) -> i32 {
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry.clone());
-    
+
     println!("🔍 Validating MCP tool schemas for CLI compatibility...\n");
-    
+
     let validation_stats = cli_builder.get_validation_stats();
     let validation_errors = cli_builder.validate_all_tools();
-    
+
     // Always show validation summary
     println!("📊 Validation Summary:");
     println!("   {}", validation_stats.summary());
     println!();
-    
+
     if validation_stats.is_all_valid() {
         println!("✅ All tools passed validation!");
         if verbose {
@@ -161,10 +158,10 @@ async fn handle_tool_validation(
         }
         return EXIT_SUCCESS;
     }
-    
+
     // Show validation errors
     println!("❌ Validation Issues Found:");
-    
+
     if verbose {
         for (i, error) in validation_errors.iter().enumerate() {
             println!("{}. {}", i + 1, error);
@@ -183,13 +180,13 @@ async fn handle_tool_validation(
             println!("   Use --verbose for complete details");
         }
     }
-    
+
     println!("🔧 To fix these issues:");
     println!("   • Review tool schema definitions");
     println!("   • Ensure all CLI tools have proper categories");
     println!("   • Use supported parameter types (string, integer, number, boolean, array)");
     println!("   • Add required schema fields like 'properties'");
-    
+
     EXIT_WARNING
 }
 
@@ -217,11 +214,11 @@ async fn handle_dynamic_matches(
         let tool_registry = cli_tool_context.get_tool_registry_arc();
         let cli_builder = CliBuilder::new(tool_registry);
         let validation_stats = cli_builder.get_validation_stats();
-        
+
         if verbose {
             eprintln!("🔍 CLI Tool Validation Report:");
             eprintln!("   {}", validation_stats.summary());
-            
+
             if !validation_stats.is_all_valid() {
                 eprintln!("   Tools with issues:");
                 let warnings = cli_builder.get_validation_warnings();
@@ -862,8 +859,6 @@ async fn run_plan(plan_filename: String) -> i32 {
     }
 }
 
-
-
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_implement() -> i32 {
     use cli::FlowSubcommand;
@@ -901,12 +896,6 @@ async fn run_implement() -> i32 {
         }
     }
 }
-
-
-
-
-
-
 
 #[cfg(not(feature = "dynamic-cli"))]
 async fn run_issue(subcommand: IssueCommands) -> i32 {

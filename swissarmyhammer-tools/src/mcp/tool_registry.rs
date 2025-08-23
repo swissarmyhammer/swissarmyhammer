@@ -132,7 +132,7 @@
 //!             "properties": {
 //!                 // Use supported types only
 //!                 "title": {
-//!                     "type": "string", 
+//!                     "type": "string",
 //!                     "description": "Clear description for CLI help",
 //!                     "minLength": 1
 //!                 },
@@ -805,9 +805,9 @@ impl ToolRegistry {
         let schema = tool.schema();
 
         // Use the local schema validator defined above
-        
+
         match SchemaValidator::validate_schema(&schema) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(validation_error) => {
                 errors.push(ToolValidationError::SchemaValidation {
                     tool_name: tool_name.to_string(),
@@ -1000,19 +1000,46 @@ impl std::fmt::Display for ToolValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolValidationError::SchemaValidation { tool_name, error } => {
-                write!(f, "Schema validation failed for tool '{}': {}", tool_name, error)
+                write!(
+                    f,
+                    "Schema validation failed for tool '{}': {}",
+                    tool_name, error
+                )
             }
             ToolValidationError::MissingCliCategory { tool_name } => {
-                write!(f, "Tool '{}' is visible in CLI but missing CLI category", tool_name)
+                write!(
+                    f,
+                    "Tool '{}' is visible in CLI but missing CLI category",
+                    tool_name
+                )
             }
-            ToolValidationError::InvalidCliName { tool_name, cli_name, reason } => {
-                write!(f, "Tool '{}' has invalid CLI name '{}': {}", tool_name, cli_name, reason)
+            ToolValidationError::InvalidCliName {
+                tool_name,
+                cli_name,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Tool '{}' has invalid CLI name '{}': {}",
+                    tool_name, cli_name, reason
+                )
             }
             ToolValidationError::InvalidDescription { tool_name, reason } => {
-                write!(f, "Tool '{}' has invalid description: {}", tool_name, reason)
+                write!(
+                    f,
+                    "Tool '{}' has invalid description: {}",
+                    tool_name, reason
+                )
             }
-            ToolValidationError::NameConflict { tool_name, conflicting_tool } => {
-                write!(f, "Tool '{}' conflicts with existing tool '{}'", tool_name, conflicting_tool)
+            ToolValidationError::NameConflict {
+                tool_name,
+                conflicting_tool,
+            } => {
+                write!(
+                    f,
+                    "Tool '{}' conflicts with existing tool '{}'",
+                    tool_name, conflicting_tool
+                )
             }
         }
     }
@@ -1073,10 +1100,7 @@ impl ToolValidationReport {
         } else {
             format!(
                 "❌ {} of {} tools have validation errors ({} valid, {} invalid)",
-                self.invalid_tools,
-                self.total_tools,
-                self.valid_tools,
-                self.invalid_tools
+                self.invalid_tools, self.total_tools, self.valid_tools, self.invalid_tools
             )
         }
     }
@@ -1092,29 +1116,36 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub enum ValidationError {
     /// Schema type is not supported for CLI generation
-    UnsupportedSchemaType { 
+    UnsupportedSchemaType {
         /// The unsupported schema type
-        schema_type: String, 
+        schema_type: String,
         /// The parameter name where the type was found
-        parameter: String 
+        parameter: String,
     },
     /// Schema is invalid or malformed
-    InvalidSchema { 
+    InvalidSchema {
         /// Description of the validation failure
-        message: String 
+        message: String,
     },
     /// Required schema field is missing
-    MissingSchemaField { 
+    MissingSchemaField {
         /// Name of the missing field
-        field: String 
+        field: String,
     },
 }
 
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::UnsupportedSchemaType { schema_type, parameter } => {
-                write!(f, "Unsupported schema type '{}' for parameter '{}'", schema_type, parameter)
+            ValidationError::UnsupportedSchemaType {
+                schema_type,
+                parameter,
+            } => {
+                write!(
+                    f,
+                    "Unsupported schema type '{}' for parameter '{}'",
+                    schema_type, parameter
+                )
             }
             ValidationError::InvalidSchema { message } => {
                 write!(f, "Invalid schema structure: {}", message)
@@ -2003,7 +2034,7 @@ mod tests {
         registry.register(MissingCategoryTool);
 
         let report = registry.validate_all_tools();
-        
+
         assert_eq!(report.total_tools, 3);
         assert_eq!(report.valid_tools, 1);
         assert_eq!(report.invalid_tools, 2);
@@ -2022,7 +2053,7 @@ mod tests {
         registry.register(InvalidSchemaTool);
 
         let warnings = registry.get_tool_validation_warnings();
-        
+
         // Should have warning for InvalidSchemaTool but not for ValidTool
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].tool_name, "invalid_schema_test");
@@ -2046,7 +2077,7 @@ mod tests {
     #[test]
     fn test_individual_tool_validation() {
         let registry = ToolRegistry::new();
-        
+
         // Test valid tool
         let valid_tool = ValidTool;
         let result = registry.validate_tool(&valid_tool);

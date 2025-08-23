@@ -329,10 +329,11 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
 }
 
 /// Convert schema validation errors to CLI errors with appropriate exit codes
+#[cfg(feature = "dynamic-cli")]
 impl From<crate::schema_validation::ValidationError> for CliError {
     fn from(error: crate::schema_validation::ValidationError) -> Self {
         use crate::schema_validation::ErrorSeverity;
-        
+
         let exit_code = match error.severity() {
             ErrorSeverity::Warning => EXIT_WARNING,
             ErrorSeverity::Error => EXIT_ERROR,
@@ -340,12 +341,14 @@ impl From<crate::schema_validation::ValidationError> for CliError {
         };
 
         let mut message = format!("❌ Schema validation failed: {}", error);
-        
+
         if let Some(suggestion) = error.suggestion() {
             message.push_str(&format!("\n\n💡 {}", suggestion));
         }
-        
-        message.push_str("\n\n🔧 This indicates a tool schema definition issue that should be reported.");
+
+        message.push_str(
+            "\n\n🔧 This indicates a tool schema definition issue that should be reported.",
+        );
 
         Self {
             message,
@@ -356,10 +359,11 @@ impl From<crate::schema_validation::ValidationError> for CliError {
 }
 
 /// Convert schema conversion errors to CLI errors with appropriate exit codes
+#[cfg(feature = "dynamic-cli")]
 impl From<crate::schema_conversion::ConversionError> for CliError {
     fn from(error: crate::schema_conversion::ConversionError) -> Self {
         use crate::schema_conversion::ConversionError;
-        
+
         let exit_code = match error {
             ConversionError::MissingRequired { .. } => EXIT_ERROR,
             ConversionError::InvalidType { .. } => EXIT_ERROR,
@@ -370,7 +374,8 @@ impl From<crate::schema_conversion::ConversionError> for CliError {
         };
 
         // Use the existing formatting from schema_conversion module
-        let message = crate::schema_conversion::SchemaConverter::format_conversion_error(&error, "CLI");
+        let message =
+            crate::schema_conversion::SchemaConverter::format_conversion_error(&error, "CLI");
 
         Self {
             message,

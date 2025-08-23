@@ -411,10 +411,6 @@ If implementation fails:
 • Verify the implement workflow exists in builtin workflows
 ")]
     Implement,
-
-
-
-
 }
 
 #[derive(Subcommand, Debug)]
@@ -773,14 +769,6 @@ for better discoverability and clearer intent.
     },
 }
 
-
-
-
-
-
-
-
-
 #[cfg(not(feature = "dynamic-cli"))]
 #[derive(Subcommand, Debug)]
 pub enum IssueCommands {
@@ -848,8 +836,6 @@ pub enum IssueCommands {
     /// Show project status
     Status,
 }
-
-
 
 impl Cli {
     #[cfg(not(feature = "dynamic-cli"))]
