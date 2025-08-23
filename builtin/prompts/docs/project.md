@@ -8,7 +8,7 @@ description: Create comprehensive project documentation in ./doc
 
 Create high quality markdown project documentation for the project in ./doc.
 
-{% render "principals" %}
+
 {% render "documentation" %}
 
 Do not write API or developer documentation at this time.
