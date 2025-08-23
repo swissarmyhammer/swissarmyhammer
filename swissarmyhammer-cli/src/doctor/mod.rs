@@ -37,10 +37,6 @@ pub mod checks;
 pub mod types;
 pub mod utils;
 
-
-
-
-
 /// Count of checks by status for summary display
 #[derive(Debug)]
 pub struct CheckCounts {
@@ -289,8 +285,6 @@ impl Doctor {
         // Print summary
         self.print_summary(use_color);
     }
-
-
 
     /// Group checks by category
     fn group_checks_by_category(&self) -> CheckGroups<'_> {

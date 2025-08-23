@@ -404,7 +404,7 @@ async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
 
     let migration = matches.get_flag("migration");
     let mut doctor = Doctor::new();
-    
+
     match doctor.run_diagnostics_with_options(migration) {
         Ok(exit_code) => exit_code,
         Err(e) => {
@@ -416,7 +416,7 @@ async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
 
 #[cfg(feature = "dynamic-cli")]
 async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
-    use crate::cli::{PromptSubcommand, OutputFormat, PromptSourceArg};
+    use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
     use crate::prompt;
 
     let subcommand = match matches.subcommand() {
@@ -427,13 +427,15 @@ async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
                 _ => OutputFormat::Table,
             };
             let verbose = sub_matches.get_flag("verbose");
-            let source = sub_matches.get_one::<String>("source").map(|s| match s.as_str() {
-                "builtin" => PromptSourceArg::Builtin,
-                "user" => PromptSourceArg::User,
-                "local" => PromptSourceArg::Local,
-                "dynamic" => PromptSourceArg::Dynamic,
-                _ => PromptSourceArg::Dynamic,
-            });
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
             let category = sub_matches.get_one::<String>("category").cloned();
             let search = sub_matches.get_one::<String>("search").cloned();
 
@@ -475,13 +477,15 @@ async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
             let regex = sub_matches.get_flag("regex");
             let fuzzy = sub_matches.get_flag("fuzzy");
             let case_sensitive = sub_matches.get_flag("case-sensitive");
-            let source = sub_matches.get_one::<String>("source").map(|s| match s.as_str() {
-                "builtin" => PromptSourceArg::Builtin,
-                "user" => PromptSourceArg::User,
-                "local" => PromptSourceArg::Local,
-                "dynamic" => PromptSourceArg::Dynamic,
-                _ => PromptSourceArg::Dynamic,
-            });
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
             let has_arg = sub_matches.get_one::<String>("has-arg").cloned();
             let no_args = sub_matches.get_flag("no-args");
             let full = sub_matches.get_flag("full");
@@ -571,13 +575,15 @@ async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
                 _ => OutputFormat::Table,
             };
             let verbose = sub_matches.get_flag("verbose");
-            let source = sub_matches.get_one::<String>("source").map(|s| match s.as_str() {
-                "builtin" => PromptSourceArg::Builtin,
-                "user" => PromptSourceArg::User,
-                "local" => PromptSourceArg::Local,
-                "dynamic" => PromptSourceArg::Dynamic,
-                _ => PromptSourceArg::Dynamic,
-            });
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
 
             FlowSubcommand::List {
                 format,

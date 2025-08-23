@@ -5721,7 +5721,8 @@ mod tests {
             }
 
             let start = std::time::Instant::now();
-            let should_migrate = FileSystemIssueStorage::should_migrate_in_dir(temp_dir.path()).unwrap();
+            let should_migrate =
+                FileSystemIssueStorage::should_migrate_in_dir(temp_dir.path()).unwrap();
             let duration = start.elapsed();
 
             assert!(should_migrate);

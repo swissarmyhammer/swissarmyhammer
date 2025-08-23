@@ -583,7 +583,9 @@ Example:
                 .arg(
                     Arg::new("migration")
                         .long("migration")
-                        .help("Check migration status and validate directory consolidation readiness")
+                        .help(
+                            "Check migration status and validate directory consolidation readiness",
+                        )
                         .action(ArgAction::SetTrue),
                 ),
         );
@@ -591,7 +593,7 @@ Example:
         // Add prompt command with subcommands
         cli = cli.subcommand(Self::build_prompt_command());
 
-        // Add flow command with subcommands  
+        // Add flow command with subcommands
         cli = cli.subcommand(Self::build_flow_command());
 
         // Add validate command
