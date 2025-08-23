@@ -4,7 +4,6 @@
 //! including ConfigValue conversion, Configuration operations, and parser functionality.
 
 use crate::toml_config::{ConfigError, ConfigParser, ConfigValue, Configuration, ValidationLimits};
-use serial_test::serial;
 use std::collections::HashMap;
 use tempfile::TempDir;
 
@@ -15,7 +14,6 @@ mod config_value_tests {
     use serde_json::json;
 
     #[test]
-    #[serial]
     fn test_config_value_string_operations() {
         let value = ConfigValue::String("test_string".to_string());
 
@@ -35,7 +33,6 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_config_value_integer_operations() {
         let value = ConfigValue::Integer(42);
 
@@ -52,7 +49,6 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_config_value_float_operations() {
         let value = ConfigValue::Float(3.15);
 
@@ -70,7 +66,6 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_config_value_boolean_operations() {
         let value_true = ConfigValue::Boolean(true);
         let value_false = ConfigValue::Boolean(false);
@@ -92,7 +87,6 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_config_value_array_operations() {
         let array = vec![
             ConfigValue::String("item1".to_string()),
@@ -118,7 +112,6 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_config_value_table_operations() {
         let mut table = HashMap::new();
         table.insert(
@@ -150,7 +143,6 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_config_value_validation() {
         // Test string length validation
         let long_string = "a".repeat(ValidationLimits::default().max_string_length + 1);
@@ -176,24 +168,26 @@ mod config_value_tests {
     }
 
     #[test]
-    #[serial]
     fn test_environment_variable_substitution() {
-        // Set up test environment variables
-        std::env::set_var("TEST_VAR", "test_value");
-        std::env::set_var("TEST_NUMBER", "123");
+        // Set up test environment variables with unique names to avoid conflicts
+        let test_var_key = format!("TEST_VAR_{}", std::process::id());
+        let test_number_key = format!("TEST_NUMBER_{}", std::process::id());
+        std::env::set_var(&test_var_key, "test_value");
+        std::env::set_var(&test_number_key, "123");
 
         // Test simple substitution
-        let mut value = ConfigValue::String("${TEST_VAR}".to_string());
+        let mut value = ConfigValue::String(format!("${{{}}}", test_var_key));
         value.substitute_env_vars().unwrap();
         assert_eq!(value, ConfigValue::String("test_value".to_string()));
 
         // Test substitution with default
-        let mut value = ConfigValue::String("${NONEXISTENT_VAR:-default_value}".to_string());
+        let nonexistent_key = format!("NONEXISTENT_VAR_{}", std::process::id());
+        let mut value = ConfigValue::String(format!("${{{nonexistent_key}:-default_value}}"));
         value.substitute_env_vars().unwrap();
         assert_eq!(value, ConfigValue::String("default_value".to_string()));
 
         // Test mixed substitution
-        let mut value = ConfigValue::String("prefix_${TEST_VAR}_suffix".to_string());
+        let mut value = ConfigValue::String(format!("prefix_${{{}}}_suffix", test_var_key));
         value.substitute_env_vars().unwrap();
         assert_eq!(
             value,
@@ -202,8 +196,8 @@ mod config_value_tests {
 
         // Test array substitution
         let array = vec![
-            ConfigValue::String("${TEST_VAR}".to_string()),
-            ConfigValue::String("${TEST_NUMBER}".to_string()),
+            ConfigValue::String(format!("${{{}}}", test_var_key)),
+            ConfigValue::String(format!("${{{}}}", test_number_key)),
         ];
         let mut value = ConfigValue::Array(array);
         value.substitute_env_vars().unwrap();
@@ -221,11 +215,11 @@ mod config_value_tests {
         let mut table = HashMap::new();
         table.insert(
             "key1".to_string(),
-            ConfigValue::String("${TEST_VAR}".to_string()),
+            ConfigValue::String(format!("${{{}}}", test_var_key)),
         );
         table.insert(
             "key2".to_string(),
-            ConfigValue::String("${TEST_NUMBER}".to_string()),
+            ConfigValue::String(format!("${{{}}}", test_number_key)),
         );
         let mut value = ConfigValue::Table(table);
         value.substitute_env_vars().unwrap();
@@ -243,15 +237,15 @@ mod config_value_tests {
         }
 
         // Clean up
-        std::env::remove_var("TEST_VAR");
-        std::env::remove_var("TEST_NUMBER");
+        std::env::remove_var(&test_var_key);
+        std::env::remove_var(&test_number_key);
     }
 
     #[test]
-    #[serial]
     fn test_environment_variable_substitution_errors() {
         // Test missing required variable
-        let mut value = ConfigValue::String("${REQUIRED_MISSING_VAR}".to_string());
+        let missing_var_key = format!("REQUIRED_MISSING_VAR_{}", std::process::id());
+        let mut value = ConfigValue::String(format!("${{{}}}", missing_var_key));
         assert!(value.substitute_env_vars().is_err());
 
         // Test invalid syntax
@@ -262,7 +256,6 @@ mod config_value_tests {
 
     proptest! {
         #[test]
-    #[serial]
         fn test_config_value_roundtrip_serialization(
             s in "[a-zA-Z0-9_]{1,100}",
             i in any::<i64>(),
@@ -297,7 +290,6 @@ mod config_value_tests {
         }
 
         #[test]
-    #[serial]
         fn test_config_value_liquid_conversion_consistency(
             s in "[a-zA-Z0-9_\\s]{1,50}",
             i in -1000000i64..1000000i64,
@@ -326,7 +318,6 @@ mod config_value_tests {
         }
 
         #[test]
-    #[serial]
         fn test_environment_variable_pattern_matching(
             var_name in "[A-Z][A-Z0-9_]{0,30}",
             default_value in "[a-zA-Z0-9_]{0,20}"
@@ -356,7 +347,6 @@ mod config_value_tests {
         }
 
         #[test]
-    #[serial]
         fn test_configuration_key_validation(
             key in "[a-zA-Z_][a-zA-Z0-9_]{0,30}".prop_filter("Reserved names should be excluded", |k| {
                 // Exclude Liquid reserved words
@@ -382,7 +372,6 @@ mod config_value_tests {
         }
 
         #[test]
-    #[serial]
         fn test_dot_notation_consistency(
             section1 in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
             section2 in "[a-zA-Z_][a-zA-Z0-9_]{0,10}",
@@ -418,7 +407,6 @@ mod configuration_tests {
     use super::*;
 
     #[test]
-    #[serial]
     fn test_configuration_creation() {
         let config = Configuration::new();
         assert!(config.is_empty());
@@ -427,7 +415,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_basic_operations() {
         let mut config = Configuration::new();
 
@@ -466,7 +453,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_dot_notation_get() {
         let mut config = Configuration::new();
 
@@ -520,7 +506,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_dot_notation_set() {
         let mut config = Configuration::new();
 
@@ -593,7 +578,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_remove() {
         let mut config = Configuration::new();
 
@@ -637,7 +621,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_keys() {
         let mut config = Configuration::new();
 
@@ -662,7 +645,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_merge() {
         let mut config1 = Configuration::new();
         config1.insert(
@@ -736,7 +718,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_liquid_conversion() {
         let mut config = Configuration::new();
 
@@ -808,7 +789,6 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_validation() {
         let mut config = Configuration::new();
 
@@ -836,29 +816,31 @@ mod configuration_tests {
     }
 
     #[test]
-    #[serial]
     fn test_configuration_environment_substitution() {
-        // Set up test environment
-        std::env::set_var("CONFIG_TEST_VAR", "substituted_value");
-        std::env::set_var("CONFIG_NUMBER", "999");
+        // Set up test environment with unique names to avoid conflicts
+        let config_var_key = format!("CONFIG_TEST_VAR_{}", std::process::id());
+        let config_number_key = format!("CONFIG_NUMBER_{}", std::process::id());
+        std::env::set_var(&config_var_key, "substituted_value");
+        std::env::set_var(&config_number_key, "999");
 
         let mut config = Configuration::new();
         config.insert(
             "simple".to_string(),
-            ConfigValue::String("${CONFIG_TEST_VAR}".to_string()),
+            ConfigValue::String(format!("${{{}}}", config_var_key)),
         );
+        let nonexistent_key = format!("NONEXISTENT_{}", std::process::id());
         config.insert(
             "with_default".to_string(),
-            ConfigValue::String("${NONEXISTENT:-default}".to_string()),
+            ConfigValue::String(format!("${{{nonexistent_key}:-default}}")),
         );
         config.insert(
             "number".to_string(),
-            ConfigValue::String("${CONFIG_NUMBER}".to_string()),
+            ConfigValue::String(format!("${{{}}}", config_number_key)),
         );
 
         // Test array with env vars
         let array = vec![
-            ConfigValue::String("${CONFIG_TEST_VAR}".to_string()),
+            ConfigValue::String(format!("${{{}}}", config_var_key)),
             ConfigValue::String("literal".to_string()),
         ];
         config.insert("array_test".to_string(), ConfigValue::Array(array));
@@ -867,7 +849,7 @@ mod configuration_tests {
         let mut table = HashMap::new();
         table.insert(
             "nested_var".to_string(),
-            ConfigValue::String("${CONFIG_TEST_VAR}".to_string()),
+            ConfigValue::String(format!("${{{}}}", config_var_key)),
         );
         config.insert("table_test".to_string(), ConfigValue::Table(table));
 
@@ -910,8 +892,8 @@ mod configuration_tests {
         }
 
         // Clean up
-        std::env::remove_var("CONFIG_TEST_VAR");
-        std::env::remove_var("CONFIG_NUMBER");
+        std::env::remove_var(&config_var_key);
+        std::env::remove_var(&config_number_key);
     }
 }
 
@@ -921,7 +903,6 @@ mod parser_tests {
     use std::fs;
 
     #[test]
-    #[serial]
     fn test_parser_valid_toml() {
         let parser = ConfigParser::new();
 
@@ -1005,7 +986,6 @@ mod parser_tests {
     }
 
     #[test]
-    #[serial]
     fn test_parser_invalid_toml() {
         let parser = ConfigParser::new();
 
@@ -1041,7 +1021,6 @@ mod parser_tests {
     }
 
     #[test]
-    #[serial]
     fn test_parser_file_operations() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("test.toml");
@@ -1082,23 +1061,28 @@ mod parser_tests {
     }
 
     #[test]
-    #[serial]
     fn test_parser_environment_variables() {
-        // Set up test environment
-        std::env::set_var("PARSER_TEST_VAR", "env_value");
-        std::env::set_var("PARSER_TEST_PORT", "9000");
+        // Set up test environment with unique names to avoid conflicts
+        let parser_var_key = format!("PARSER_TEST_VAR_{}", std::process::id());
+        let parser_port_key = format!("PARSER_TEST_PORT_{}", std::process::id());
+        std::env::set_var(&parser_var_key, "env_value");
+        std::env::set_var(&parser_port_key, "9000");
 
         let parser = ConfigParser::new();
 
-        let toml_content = r#"
+        let nonexistent_var_key = format!("NONEXISTENT_VAR_{}", std::process::id());
+        let toml_content = format!(
+            r#"
             name = "EnvTest"
-            database_url = "${PARSER_TEST_VAR}"
-            port = "${PARSER_TEST_PORT}"
-            fallback = "${NONEXISTENT_VAR:-fallback_value}"
-            mixed = "prefix_${PARSER_TEST_VAR}_suffix"
-        "#;
+            database_url = "${{{}}}"
+            port = "${{{}}}"
+            fallback = "${{{}:-fallback_value}}"
+            mixed = "prefix_${{{}}}_suffix"
+        "#,
+            parser_var_key, parser_port_key, nonexistent_var_key, parser_var_key
+        );
 
-        let config = parser.parse_string(toml_content, None).unwrap();
+        let config = parser.parse_string(&toml_content, None).unwrap();
 
         // Note: Parser automatically performs environment variable substitution
         // so we test the final result after substitution
@@ -1120,12 +1104,11 @@ mod parser_tests {
         );
 
         // Clean up
-        std::env::remove_var("PARSER_TEST_VAR");
-        std::env::remove_var("PARSER_TEST_PORT");
+        std::env::remove_var(&parser_var_key);
+        std::env::remove_var(&parser_port_key);
     }
 
     #[test]
-    #[serial]
     fn test_parser_load_from_repo_root() {
         use std::panic;
 
@@ -1174,7 +1157,6 @@ mod parser_tests {
     }
 
     #[test]
-    #[serial]
     fn test_parser_file_not_found() {
         let parser = ConfigParser::new();
         let result = parser.parse_file(std::path::Path::new("nonexistent.toml"));

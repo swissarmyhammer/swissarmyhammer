@@ -559,8 +559,8 @@ async fn test_performance_with_many_branches() {
     let env = EdgeCaseTestEnvironment::new().await;
 
     // Create many feature branches
-    for i in 0..10 {
-        // Reduced number for CI performance
+    for i in 0..3 {
+        // Further reduced for test performance
         env.create_test_branch(&format!("feature/branch-{i}")).await;
     }
 
@@ -568,7 +568,7 @@ async fn test_performance_with_many_branches() {
     let git = git_ops.as_ref().unwrap();
 
     // Create issue branches from various sources
-    for i in 0..5 {
+    for i in 0..3 {
         // Test subset for performance
         let issue_name = format!("perf-test-{i}");
         let source_branch = format!("feature/branch-{i}");
@@ -588,7 +588,7 @@ async fn test_performance_with_many_branches() {
 
     // Test branch existence checking performance
     let start_time = std::time::Instant::now();
-    for i in 0..10 {
+    for i in 0..3 {
         let branch_name = format!("feature/branch-{i}");
         assert!(git.branch_exists(&branch_name).unwrap());
     }

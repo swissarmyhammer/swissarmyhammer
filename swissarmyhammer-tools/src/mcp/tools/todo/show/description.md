@@ -66,17 +66,3 @@ Success response when no next item available:
   "todo_item": null
 }
 ```
-
-## Usage Patterns
-
-1. **Sequential Processing**: Use `"item": "next"` to work through items in FIFO order
-2. **Specific Review**: Use the ULID to examine a particular item
-3. **Context Preservation**: The context field stores implementation notes and references
-4. **Focus Management**: Single-item responses prevent context switching
-
-## Error Cases
-
-- Todo list file doesn't exist: Returns null for "next", error for specific ULID
-- Specific ULID not found: Returns error with details
-- Invalid todo list name: Validation error
-- File system permission issues: I/O error

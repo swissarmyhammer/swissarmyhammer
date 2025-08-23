@@ -1,15 +1,13 @@
 # Testing Approach: Parallel Test Isolation
 
-## Problem
-The current test setup uses a shared HOME environment variable modification through a global mutex. This causes tests to serialize when run in parallel, defeating the purpose of parallel testing and causing hangs/deadlocks.
+AVOID AT ALL COSTS #[serial] tests.
 
-## Solution
+## Patterns
+
+### `IsolatedTestEnvironement`
+
+**ALWAYS** use `IsolatedTestEnvironment::new()` for workflow tests to isolate current working and home
 **Per-Test Isolation**: Each test should create its own temporary directory and use it as HOME, rather than modifying the global HOME environment variable.
-
-
-## **RECOMMENDED PATTERN: Use IsolatedTestHome RAII Guard**
-
-**ALWAYS use `IsolatedTestEnvironment::new()` for workflow tests to isolate current working and home**
 
 ```rust
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
@@ -40,3 +38,11 @@ The `IsolatedTestEnvironment` RAII guard pattern:
 - Faster test execution
 - More reliable CI/CD
 - Clean RAII pattern with automatic cleanup
+
+### `run_sah_command_in_process`
+
+**ALWAYS** use `run_sah_command_in_process()` for CLI integration testing.
+
+This avoids the cost of building/spawning the cli while unit testing
+
+Be on the lookout for stray Command::cargo_bin("sah") indicating you have missed a test that should use cargo_bin_sah.

@@ -8,6 +8,8 @@ The grep tool provides high-performance text searching with automatic engine sel
 - **Transparent Operation**: Automatically selects the best available engine
 - **Performance Tracking**: Reports which engine was used and execution time
 
+`ripgrep` is used for the matching engine.
+
 ## Parameters
 
 - `pattern` (required): Regular expression pattern to search for in file contents
@@ -17,27 +19,6 @@ The grep tool provides high-performance text searching with automatic engine sel
 - `case_insensitive` (optional): Case-insensitive search (default: false)
 - `context_lines` (optional): Number of context lines around matches (default: 0)
 - `output_mode` (optional): Output format - `content`, `files_with_matches`, or `count` (default: content)
-
-## Enhanced Functionality
-
-### Ripgrep Integration
-- **10-100x faster** search performance on large codebases
-- JSON output parsing for structured results when using ripgrep
-- Advanced file type detection and filtering
-- Parallel processing across multiple CPU cores
-- Built-in .gitignore and ignore pattern support
-
-### Fallback Engine
-- Full regex support with validation and error handling
-- Enhanced binary file detection using content sampling
-- Comprehensive file type matching for all major languages
-- Context line extraction for detailed match information
-
-### Binary File Handling
-- Smart binary file detection by extension and content analysis
-- Automatic exclusion of common binary formats (executables, images, archives)
-- Content-based detection using null byte and UTF-8 validation
-- Prevents search errors and improves performance
 
 ## Use Cases
 
@@ -141,17 +122,3 @@ Returns match and file counts:
 ```
 3 matches in 2 files | Engine: ripgrep 13.0.0 | Time: 28ms
 ```
-
-## Performance Characteristics
-
-### With Ripgrep
-- **Large Codebases**: Handles millions of lines efficiently
-- **Parallel Processing**: Utilizes multiple CPU cores automatically  
-- **Memory Efficient**: Streams results without loading entire files
-- **Smart Filtering**: Respects .gitignore and binary file exclusions
-
-### Fallback Mode
-- **Reliable Operation**: Works on any system with Rust installed
-- **Full Functionality**: Supports all features except advanced ripgrep optimizations
-- **Binary Detection**: Enhanced content-based binary file exclusion
-- **Context Extraction**: Provides context lines around matches

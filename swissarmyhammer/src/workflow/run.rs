@@ -77,16 +77,27 @@ pub struct WorkflowRun {
 impl WorkflowRun {
     /// Create a new workflow run
     pub fn new(workflow: Workflow) -> Self {
+        Self::new_impl(workflow, ".swissarmyhammer/.abort")
+    }
+
+    #[cfg(test)]
+    /// Create a new workflow run with configurable abort file path (test only)
+    pub fn new_with_abort_path(workflow: Workflow, abort_path: &str) -> Self {
+        Self::new_impl(workflow, abort_path)
+    }
+
+    fn new_impl(workflow: Workflow, abort_path: &str) -> Self {
         // Clean up any existing abort file to ensure clean slate
-        match std::fs::remove_file(".swissarmyhammer/.abort") {
+        // Abort detection happens at flow command level before WorkflowRun::new() is called
+        match std::fs::remove_file(abort_path) {
             Ok(()) => {
-                tracing::debug!("Cleaned up existing abort file");
+                tracing::debug!("Cleaned up existing abort file at {}", abort_path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // File doesn't exist, no cleanup needed
             }
             Err(e) => {
-                tracing::warn!("Failed to clean up abort file: {}", e);
+                tracing::warn!("Failed to clean up abort file at {}: {}", abort_path, e);
                 // Continue with workflow initialization
             }
         }
@@ -129,8 +140,37 @@ impl WorkflowRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::IsolatedTestEnvironment;
+
     use crate::workflow::test_helpers::*;
+    use tempfile::TempDir;
+
+    /// Helper function to set up isolated test environment with temporary directory
+    /// Returns (temp_dir_path, abort_file_path, guard)
+    fn setup_isolated_test() -> (std::path::PathBuf, std::path::PathBuf, impl Drop) {
+        // Create a temporary directory for this test
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let temp_path = temp_dir.path().to_path_buf();
+
+        // Create the abort file path within the temp directory
+        let abort_path = temp_path.join(".swissarmyhammer").join(".abort");
+
+        // Return guard to clean up temp dir on drop
+        struct TestEnvironmentGuard {
+            _temp_dir: TempDir,
+        }
+
+        impl Drop for TestEnvironmentGuard {
+            fn drop(&mut self) {
+                // TempDir cleanup is automatic
+            }
+        }
+
+        let guard = TestEnvironmentGuard {
+            _temp_dir: temp_dir,
+        };
+
+        (temp_path, abort_path, guard)
+    }
 
     #[test]
     fn test_workflow_run_id_creation() {
@@ -228,24 +268,19 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_when_file_exists() {
-        use std::path::Path;
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
 
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         // Create an abort file
-        std::fs::write(abort_path_str, "test abort reason").expect("Failed to write abort file");
+        std::fs::write(&abort_path, "test abort reason").expect("Failed to write abort file");
 
         // Verify the file was created
         assert!(
-            Path::new(abort_path_str).exists(),
+            abort_path.exists(),
             "Abort file should exist after creation"
         );
 
@@ -253,32 +288,29 @@ mod tests {
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        // Create a new workflow run - this should clean up the abort file
-        let _run = WorkflowRun::new(workflow);
+        // Create a new workflow run with the isolated abort path - this should clean up the abort file
+        let _run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
 
         // Verify the abort file was cleaned up
         assert!(
-            !Path::new(abort_path_str).exists(),
+            !abort_path.exists(),
             "Abort file should be cleaned up after WorkflowRun::new"
         );
-
-        // _env will automatically restore the original directory when dropped
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_when_file_does_not_exist() {
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
+
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        let abort_path = ".swissarmyhammer/.abort";
-
         // Ensure abort file doesn't exist
-        let _ = std::fs::remove_file(abort_path); // Ignore if it doesn't exist
+        let _ = std::fs::remove_file(&abort_path); // Ignore if it doesn't exist
 
         // Create a new workflow run - should not fail even if file doesn't exist
-        let run = WorkflowRun::new(workflow);
+        let run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
 
         // Verify workflow run was created successfully
         assert_eq!(run.workflow.name.as_str(), "Test Workflow");
@@ -286,8 +318,9 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_continues_on_permission_error() {
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
+
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
@@ -297,7 +330,7 @@ mod tests {
         // The actual error handling is tested in the implementation by using match expressions
 
         // Create a new workflow run
-        let run = WorkflowRun::new(workflow);
+        let run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
 
         // Verify workflow run was created successfully regardless of cleanup result
         assert_eq!(run.workflow.name.as_str(), "Test Workflow");
@@ -307,113 +340,85 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_multiple_workflow_runs_cleanup_abort_file() {
-        use std::path::Path;
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
 
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         // Create a test workflow
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
-        // Create the .swissarmyhammer directory if it doesn't exist
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
-
         // Create first abort file
-        std::fs::write(abort_path_str, "first abort reason").unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, "first abort reason").unwrap();
+        assert!(abort_path.exists());
 
         // Create first workflow run - should clean up abort file
-        let _run1 = WorkflowRun::new(workflow.clone());
-        assert!(!Path::new(abort_path_str).exists());
+        let _run1 =
+            WorkflowRun::new_with_abort_path(workflow.clone(), abort_path.to_str().unwrap());
+        assert!(!abort_path.exists());
 
         // Create second abort file
-        std::fs::write(abort_path_str, "second abort reason").unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, "second abort reason").unwrap();
+        assert!(abort_path.exists());
 
         // Create second workflow run - should also clean up abort file
-        let _run2 = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path_str).exists());
-
-        // _env will automatically restore the original directory when dropped
+        let _run2 = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
+        assert!(!abort_path.exists());
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_with_unicode_content() {
-        use std::path::Path;
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
 
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
         // Create abort file with unicode content
         let unicode_reason = "中文测试 🚫 Aborting with émojis";
-        std::fs::write(abort_path_str, unicode_reason).unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, unicode_reason).unwrap();
+        assert!(abort_path.exists());
 
         // Create workflow run - should clean up abort file regardless of content
-        let _run = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path_str).exists());
-
-        // _env will automatically restore the original directory when dropped
+        let _run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
+        assert!(!abort_path.exists());
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_with_large_content() {
-        use std::path::Path;
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
 
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
         // Create abort file with large content
         let large_reason = "x".repeat(10000);
-        std::fs::write(abort_path_str, &large_reason).unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, &large_reason).unwrap();
+        assert!(abort_path.exists());
 
         // Create workflow run - should clean up large abort file
-        let _run = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path_str).exists());
-
-        // _env will automatically restore the original directory when dropped
+        let _run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
+        assert!(!abort_path.exists());
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_concurrent_workflow_runs() {
-        use std::path::Path;
         use std::sync::Arc;
 
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         let workflow = Arc::new({
             let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
@@ -422,14 +427,20 @@ mod tests {
         });
 
         // Create abort file
-        std::fs::write(abort_path_str, "concurrent test reason").unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, "concurrent test reason").unwrap();
+
+        // Verify abort file exists before creating workflow runs
+        assert!(abort_path.exists());
 
         // Create multiple workflow runs concurrently
+        let abort_path_str = abort_path.to_string_lossy().to_string();
         let handles: Vec<_> = (0..5)
             .map(|_| {
                 let workflow = Arc::clone(&workflow);
-                std::thread::spawn(move || WorkflowRun::new(workflow.as_ref().clone()))
+                let abort_path_clone = abort_path_str.clone();
+                std::thread::spawn(move || {
+                    WorkflowRun::new_with_abort_path(workflow.as_ref().clone(), &abort_path_clone)
+                })
             })
             .collect();
 
@@ -438,105 +449,86 @@ mod tests {
 
         // Allow some time for cleanup and force cleanup if needed
         std::thread::sleep(std::time::Duration::from_millis(50));
-        if Path::new(abort_path_str).exists() {
-            let _ = std::fs::remove_file(abort_path_str); // Force cleanup for test
+        if abort_path.exists() {
+            let _ = std::fs::remove_file(&abort_path); // Force cleanup for test
         }
 
         // Abort file should be cleaned up
-        assert!(!Path::new(abort_path_str).exists());
-
-        // _env will automatically restore the original directory when dropped
+        assert!(!abort_path.exists());
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_empty_file() {
-        use std::path::Path;
-
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
         // Create empty abort file
-        std::fs::write(abort_path_str, "").unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, "").unwrap();
+        assert!(abort_path.exists());
 
         // Create workflow run - should clean up empty abort file
-        let _run = WorkflowRun::new(workflow);
-        assert!(!Path::new(abort_path_str).exists());
-
-        // _env will automatically restore the original directory when dropped
+        let _run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
+        assert!(!abort_path.exists());
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_abort_file_cleanup_with_newlines() {
-        use std::path::Path;
-
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
         // Create abort file with newlines
         let reason_with_newlines = "Line 1\nLine 2\r\nLine 3\n";
-        std::fs::write(abort_path_str, reason_with_newlines).unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, reason_with_newlines).unwrap();
+        assert!(abort_path.exists());
 
         // Create workflow run - should clean up abort file with newlines
-        let _run = WorkflowRun::new(workflow);
+        let _run = WorkflowRun::new_with_abort_path(workflow, abort_path.to_str().unwrap());
 
         // Sometimes cleanup is delayed, let's give it a moment and ensure it's cleaned up
         std::thread::sleep(std::time::Duration::from_millis(10));
-        if Path::new(abort_path_str).exists() {
-            let _ = std::fs::remove_file(abort_path_str); // Force cleanup for test
+        if abort_path.exists() {
+            let _ = std::fs::remove_file(&abort_path); // Force cleanup for test
         }
-        assert!(!Path::new(abort_path_str).exists());
-
-        // _env will automatically restore the original directory when dropped
+        assert!(!abort_path.exists());
     }
 
     #[test]
-    #[serial_test::serial]
     fn test_workflow_initialization_after_cleanup() {
-        use std::path::Path;
-
-        // Use isolated test environment to safely manage directories
-        let _env =
-            IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
-        let abort_path_str = ".swissarmyhammer/.abort";
-
-        // Create the .swissarmyhammer directory
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
-
-        // Create the .swissarmyhammer directory if it doesn't exist
-        std::fs::create_dir_all(".swissarmyhammer").unwrap();
+        let (_temp_dir, abort_path, _test_guard) = setup_isolated_test();
+        // Create the .swissarmyhammer directory in temp dir
+        let sah_dir = _temp_dir.join(".swissarmyhammer");
+        std::fs::create_dir_all(&sah_dir).unwrap();
 
         // Create abort file
-        std::fs::write(abort_path_str, "test reason").unwrap();
-        assert!(Path::new(abort_path_str).exists());
+        std::fs::write(&abort_path, "test reason").unwrap();
+        assert!(abort_path.exists());
 
         let mut workflow = create_workflow("Test Workflow", "A test workflow", "start");
         workflow.add_state(create_state("start", "Start state", false));
 
         // Create workflow run
-        let run = WorkflowRun::new(workflow);
+        let abort_path_str = abort_path.to_str().unwrap();
+
+        let run = WorkflowRun::new_with_abort_path(workflow, abort_path_str);
+        eprintln!("DEBUG: File exists after: {}", abort_path.exists());
 
         // Verify cleanup happened
-        assert!(!Path::new(abort_path_str).exists());
+        if abort_path.exists() {
+            panic!(
+                "Abort file still exists at: {} after calling new_with_abort_path",
+                abort_path.display()
+            );
+        }
 
         // Verify workflow run is properly initialized despite cleanup
         assert_eq!(run.workflow.name.as_str(), "Test Workflow");
@@ -544,7 +536,5 @@ mod tests {
         assert_eq!(run.current_state.as_str(), "start");
         assert_eq!(run.history.len(), 1);
         assert_eq!(run.history[0].0.as_str(), "start");
-
-        // _env will automatically restore the original directory when dropped
     }
 }

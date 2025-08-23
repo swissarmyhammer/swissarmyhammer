@@ -2,6 +2,8 @@
 
 Generate structured code overviews using Tree-sitter parsing for comprehensive code analysis and documentation.
 
+Use this tool to understand the hierarchial structure of the code base, or to extract information about single symbols.
+
 ## Description
 
 The `outline_generate` tool creates hierarchical outlines of source code files, extracting symbols like classes, functions, methods, and other code constructs. It uses Tree-sitter parsing to provide accurate, language-aware analysis that preserves the semantic structure of your code.
@@ -133,52 +135,3 @@ execution_time_ms: 150
 - **Concurrent**: Files are processed in parallel when possible
 - **Scalable**: Handles projects with thousands of files
 
-## Use Cases
-
-### Code Documentation
-Generate comprehensive overviews of codebases for documentation systems, README files, or architectural decision records.
-
-### Code Review
-Quickly understand the structure of changes or new code by generating outlines of modified files.
-
-### Refactoring Planning
-Analyze code structure before major refactoring efforts to understand dependencies and relationships.
-
-### Learning and Exploration
-Explore unfamiliar codebases by generating hierarchical overviews that show the main components and their relationships.
-
-### IDE Integration
-Provide structured data for IDE features like outline views, symbol navigation, or code folding.
-
-### Static Analysis Input
-Generate structured representations for custom static analysis tools or code quality metrics.
-
-## Error Handling
-
-The tool provides comprehensive error handling for common scenarios:
-
-- **Invalid Patterns**: Clear error messages for malformed glob patterns
-- **File Access Errors**: Graceful handling of permission or I/O issues
-- **Parse Errors**: Fallback to basic text processing for unparseable files
-- **Unsupported Formats**: Validation of output format parameters
-
-## Integration Notes
-
-- Results are returned immediately without file system modifications
-- Temporary files and caches are automatically cleaned up
-- The tool respects `.gitignore` patterns to avoid processing unwanted files
-- Processing can be cancelled gracefully without corrupting state
-
-## Future Enhancements
-
-The tool is designed for extensibility and may support additional features in future versions:
-
-- Custom filtering and exclusion patterns
-- Depth-limited outline generation
-- Symbol relationship mapping
-- Cross-reference analysis
-- Export to additional formats (Markdown, HTML, etc.)
-
-🤖 Generated with [Claude Code](https://claude.ai/code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>

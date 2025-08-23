@@ -242,73 +242,76 @@ impl Default for EnvVarProcessor {
 mod tests {
     use super::*;
     use crate::test_utils::IsolatedTestEnvironment;
-    use serial_test::serial;
 
     #[test]
-    #[serial]
     fn test_new_processor() {
         let processor = EnvVarProcessor::new();
         assert!(processor.is_ok());
     }
 
     #[test]
-    #[serial]
     fn test_substitute_with_default() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        // Ensure variable is not set
-        env::remove_var("TEST_VAR_NOT_SET");
+        // Use unique variable name to avoid conflicts
+        let var_name = "TEST_VAR_NOT_SET_DEFAULT_1234";
+        env::remove_var(var_name);
 
-        let result = processor.substitute_variables("Database: ${TEST_VAR_NOT_SET:-localhost}")?;
+        let result =
+            processor.substitute_variables(&format!("Database: ${{{var_name}:-localhost}}"))?;
         assert_eq!(result, "Database: localhost");
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_substitute_with_env_var() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        env::set_var("TEST_DB_HOST", "production.example.com");
+        // Use unique variable name to avoid conflicts
+        let var_name = "TEST_DB_HOST_ENVVAR_5678";
+        env::set_var(var_name, "production.example.com");
 
-        let result = processor.substitute_variables("Database: ${TEST_DB_HOST:-localhost}")?;
+        let result =
+            processor.substitute_variables(&format!("Database: ${{{var_name}:-localhost}}"))?;
         assert_eq!(result, "Database: production.example.com");
 
         // Clean up
-        env::remove_var("TEST_DB_HOST");
+        env::remove_var(var_name);
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_substitute_required_variable_found() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        env::set_var("TEST_REQUIRED_VAR", "required_value");
+        // Use unique variable name to avoid conflicts
+        let var_name = "TEST_REQUIRED_VAR_FOUND_9999";
+        env::set_var(var_name, "required_value");
 
-        let result = processor.substitute_variables("Key: ${TEST_REQUIRED_VAR}")?;
+        let result = processor.substitute_variables(&format!("Key: ${{{var_name}}}"))?;
         assert_eq!(result, "Key: required_value");
 
         // Clean up
-        env::remove_var("TEST_REQUIRED_VAR");
+        env::remove_var(var_name);
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_substitute_required_variable_missing() {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new().unwrap();
 
-        env::remove_var("TEST_MISSING_REQUIRED");
+        // Use unique variable name to avoid conflicts
+        let var_name = "TEST_MISSING_REQUIRED_8888";
+        env::remove_var(var_name);
 
-        let result = processor.substitute_variables("Key: ${TEST_MISSING_REQUIRED}");
+        let result = processor.substitute_variables(&format!("Key: ${{{var_name}}}"));
         assert!(matches!(
             result,
             Err(EnvVarError::RequiredVariableNotFound { .. })
@@ -316,28 +319,32 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_multiple_substitutions() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        env::set_var("DB_HOST", "db.example.com");
-        env::set_var("DB_PORT", "5432");
-        env::remove_var("DB_NAME");
+        // Use unique variable names to avoid conflicts
+        let host_var = "DB_HOST_MULTI_7777";
+        let port_var = "DB_PORT_MULTI_6666";
+        let name_var = "DB_NAME_MULTI_5555";
 
-        let result = processor
-            .substitute_variables("Connection: ${DB_HOST}:${DB_PORT}/${DB_NAME:-myapp}")?;
+        env::set_var(host_var, "db.example.com");
+        env::set_var(port_var, "5432");
+        env::remove_var(name_var);
+
+        let result = processor.substitute_variables(&format!(
+            "Connection: ${{{host_var}}}:${{{port_var}}}/${{{name_var}:-myapp}}"
+        ))?;
         assert_eq!(result, "Connection: db.example.com:5432/myapp");
 
         // Clean up
-        env::remove_var("DB_HOST");
-        env::remove_var("DB_PORT");
+        env::remove_var(host_var);
+        env::remove_var(port_var);
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_no_substitution_needed() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -348,7 +355,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_convert_to_boolean() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -384,7 +390,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_convert_to_integer() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -403,7 +408,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_convert_to_float() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -428,7 +432,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_validate_variable_name() -> Result<(), Box<dyn std::error::Error>> {
         let processor = EnvVarProcessor::new()?;
 
@@ -460,54 +463,56 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_empty_default_value() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        env::remove_var("TEST_EMPTY_DEFAULT");
+        // Use unique variable name to avoid conflicts
+        let var_name = "TEST_EMPTY_DEFAULT_4444";
+        env::remove_var(var_name);
 
-        let result = processor.substitute_variables("Value: ${TEST_EMPTY_DEFAULT:-}")?;
+        let result = processor.substitute_variables(&format!("Value: ${{{var_name}:-}}"))?;
         assert_eq!(result, "Value: ");
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_special_characters_in_default() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        env::remove_var("TEST_SPECIAL_DEFAULT");
+        let var_name = "TEST_SPECIAL_DEFAULT_3333";
+        env::remove_var(var_name);
 
-        let result = processor
-            .substitute_variables("Config: ${TEST_SPECIAL_DEFAULT:-http://localhost:8080/api}")?;
+        let result = processor.substitute_variables(&format!(
+            "Config: ${{{var_name}:-http://localhost:8080/api}}"
+        ))?;
         assert_eq!(result, "Config: http://localhost:8080/api");
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_same_variable_multiple_times() -> Result<(), Box<dyn std::error::Error>> {
         let _guard = IsolatedTestEnvironment::new().unwrap();
         let processor = EnvVarProcessor::new()?;
 
-        env::set_var("TEST_REPEATED_VAR", "repeated_value");
+        // Use unique variable name to avoid conflicts
+        let var_name = "TEST_REPEATED_VAR_2222";
+        env::set_var(var_name, "repeated_value");
 
         let result = processor
-            .substitute_variables("First: ${TEST_REPEATED_VAR}, Second: ${TEST_REPEATED_VAR}")?;
+            .substitute_variables(&format!("First: ${{{var_name}}}, Second: ${{{var_name}}}"))?;
         assert_eq!(result, "First: repeated_value, Second: repeated_value");
 
         // Clean up
-        env::remove_var("TEST_REPEATED_VAR");
+        env::remove_var(var_name);
 
         Ok(())
     }
 
     #[test]
-    #[serial]
     fn test_default_trait() {
         let processor = EnvVarProcessor::default();
         // Just ensure it can be created without error

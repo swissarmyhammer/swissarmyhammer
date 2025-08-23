@@ -119,7 +119,24 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
 ///
 /// * `Option<PathBuf>` - Some(path) if Git repository found with .swissarmyhammer directory, None otherwise
 pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
-    let git_root = find_git_repository_root()?;
+    let current_dir = std::env::current_dir().ok()?;
+    find_swissarmyhammer_directory_from(&current_dir)
+}
+
+/// Find the SwissArmyHammer directory starting from a specific directory
+///
+/// Searches for a Git repository root starting from the given directory
+/// and checks if a .swissarmyhammer directory exists within that root.
+///
+/// # Arguments
+///
+/// * `start_dir` - The directory to start searching from
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if .swissarmyhammer directory found, None otherwise
+pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> {
+    let git_root = find_git_repository_root_from(start_dir)?;
     let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
 
     if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
@@ -144,9 +161,30 @@ pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
 /// * `NotInGitRepository` - If not currently in a Git repository
 /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
 pub fn get_or_create_swissarmyhammer_directory() -> crate::error::Result<PathBuf> {
+    let current_dir =
+        std::env::current_dir().map_err(crate::error::SwissArmyHammerError::directory_creation)?;
+    get_or_create_swissarmyhammer_directory_from(&current_dir)
+}
+
+/// Get or create the .swissarmyhammer directory starting from a specific directory
+///
+/// This function searches for a Git repository root starting from the given directory
+/// and creates the .swissarmyhammer directory within that root.
+///
+/// # Arguments
+///
+/// * `start_dir` - The directory to start searching from
+///
+/// # Returns
+///
+/// * `Result<PathBuf>` - Path to the .swissarmyhammer directory on success
+pub fn get_or_create_swissarmyhammer_directory_from(
+    start_dir: &Path,
+) -> crate::error::Result<PathBuf> {
     use crate::error::SwissArmyHammerError;
 
-    let git_root = find_git_repository_root().ok_or(SwissArmyHammerError::NotInGitRepository)?;
+    let git_root =
+        find_git_repository_root_from(start_dir).ok_or(SwissArmyHammerError::NotInGitRepository)?;
 
     let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
 
@@ -173,10 +211,17 @@ pub fn get_or_create_swissarmyhammer_directory() -> crate::error::Result<PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
-    use std::env;
     use std::fs;
     use tempfile::TempDir;
+
+    // Test helper to create directories safely, ignoring AlreadyExists errors
+    fn create_dir_safe<P: AsRef<std::path::Path>>(path: P) {
+        let _ = fs::create_dir(&path);
+    }
+
+    fn create_dir_all_safe<P: AsRef<std::path::Path>>(path: P) {
+        let _ = fs::create_dir_all(&path);
+    }
 
     #[test]
     fn test_walk_files_with_extensions() {
@@ -188,7 +233,7 @@ mod tests {
         fs::write(base.join("test.txt"), "content").unwrap();
 
         let subdir = base.join("subdir");
-        fs::create_dir(&subdir).unwrap();
+        create_dir_safe(&subdir);
         fs::write(subdir.join("nested.md"), "content").unwrap();
         fs::write(subdir.join("nested.mermaid"), "content").unwrap();
 
@@ -203,27 +248,21 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_find_git_repository_root_found_at_current() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
-        // Create .git directory at the base
-        fs::create_dir(base.join(".git")).unwrap();
+        // Create .git directory at the test directory
+        let git_dir = test_dir.join(".git");
+        let _ = fs::create_dir(&git_dir); // Ignore AlreadyExists errors
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change directory");
-
-        let result = find_git_repository_root();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = find_git_repository_root_from(&test_dir);
 
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().canonicalize().unwrap(),
-            base.canonicalize().unwrap()
+            test_dir.canonicalize().unwrap()
         );
     }
 
@@ -235,8 +274,8 @@ mod tests {
         // Create nested structure with .git at parent level
         let level1 = base.join("level1");
         let level2 = level1.join("level2");
-        fs::create_dir_all(&level2).unwrap();
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_all_safe(&level2);
+        create_dir_safe(base.join(".git"));
 
         // Test from level2 directory
         let result = find_git_repository_root_from(&level2);
@@ -249,23 +288,16 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_find_git_repository_root_not_found() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create directory structure without .git
-        let level1 = base.join("level1");
-        fs::create_dir(&level1).unwrap();
+        let level1 = test_dir.join("level1");
+        create_dir_safe(&level1);
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&level1).expect("Failed to change to test directory");
-
-        let result = find_git_repository_root();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = find_git_repository_root_from(&level1);
 
         assert!(result.is_none());
     }
@@ -279,11 +311,11 @@ mod tests {
         let mut current = base.to_path_buf();
         for i in 0..=MAX_DIRECTORY_DEPTH + 1 {
             current = current.join(format!("level{}", i));
-            fs::create_dir_all(&current).unwrap();
+            create_dir_all_safe(&current);
         }
 
         // Put .git at the base (beyond MAX_DIRECTORY_DEPTH from deepest)
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(base.join(".git"));
 
         // Test from deepest directory
         let result = find_git_repository_root_from(&current);
@@ -301,11 +333,11 @@ mod tests {
         let mut current = base.to_path_buf();
         for i in 0..5 {
             current = current.join(format!("level{}", i));
-            fs::create_dir_all(&current).unwrap();
+            create_dir_all_safe(&current);
         }
 
         // Put .git at the base
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(base.join(".git"));
 
         // Test from 5 levels deep - should find .git at base
         let result = find_git_repository_root_from(&current);
@@ -319,32 +351,25 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_find_git_repository_root_git_file_not_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create .git as a file instead of directory (as in git worktree)
         fs::write(
-            base.join(".git"),
+            test_dir.join(".git"),
             "gitdir: /some/other/path/.git/worktrees/test",
         )
         .unwrap();
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = find_git_repository_root();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = find_git_repository_root_from(&test_dir);
 
         // Should still find the repository root (git worktree or submodule case)
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().canonicalize().unwrap(),
-            base.canonicalize().unwrap()
+            test_dir.canonicalize().unwrap()
         );
     }
 
@@ -359,8 +384,8 @@ mod tests {
         fs::create_dir_all(&level2).unwrap();
 
         // Create .git directories at multiple levels
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::create_dir(level1.join(".git")).unwrap();
+        create_dir_safe(base.join(".git"));
+        create_dir_safe(level1.join(".git"));
 
         // Test from level2 directory
         let result = find_git_repository_root_from(&level2);
@@ -400,10 +425,10 @@ mod tests {
         let level1 = base.join("level1");
         let level2 = level1.join("level2");
         let level3 = level2.join("level3");
-        fs::create_dir_all(&level3).unwrap();
+        create_dir_all_safe(&level3);
 
         // Put .git at base
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(base.join(".git"));
 
         // Test from different levels
         assert!(find_git_repository_root_from(base).is_some()); // depth 0
@@ -413,201 +438,142 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_find_swissarmyhammer_directory_found() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create Git repository with .swissarmyhammer directory
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::create_dir(base.join(".swissarmyhammer")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
+        create_dir_safe(test_dir.join(".swissarmyhammer"));
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = find_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = find_swissarmyhammer_directory_from(&test_dir);
 
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().canonicalize().unwrap(),
-            base.join(".swissarmyhammer").canonicalize().unwrap()
+            test_dir.join(".swissarmyhammer").canonicalize().unwrap()
         );
     }
 
     #[test]
-    #[serial]
     fn test_find_swissarmyhammer_directory_git_no_swissarmyhammer() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create Git repository without .swissarmyhammer directory
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = find_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = find_swissarmyhammer_directory_from(&test_dir);
 
         assert!(result.is_none());
     }
 
     #[test]
-    #[serial]
     fn test_find_swissarmyhammer_directory_no_git_repo() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create .swissarmyhammer directory but no Git repository
-        fs::create_dir(base.join(".swissarmyhammer")).unwrap();
+        create_dir_safe(test_dir.join(".swissarmyhammer"));
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = find_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = find_swissarmyhammer_directory_from(&test_dir);
 
         // Should return None since no Git repository was found
         assert!(result.is_none());
     }
 
     #[test]
-    #[serial]
     fn test_find_swissarmyhammer_directory_swissarmyhammer_is_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create Git repository with .swissarmyhammer as a file instead of directory
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::write(base.join(".swissarmyhammer"), "not a directory").unwrap();
+        create_dir_safe(test_dir.join(".git"));
+        fs::write(test_dir.join(".swissarmyhammer"), "not a directory").unwrap();
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = find_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Change to the test directory for this test
+        let result = find_swissarmyhammer_directory_from(&test_dir);
 
         // Should return None since .swissarmyhammer is not a directory
         assert!(result.is_none());
     }
 
     #[test]
-    #[serial]
     fn test_find_swissarmyhammer_directory_from_subdirectory() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create nested structure with Git repository and .swissarmyhammer at root
-        let subdir1 = base.join("src");
+        let subdir1 = test_dir.join("src");
         let subdir2 = subdir1.join("lib");
-        fs::create_dir_all(&subdir2).unwrap();
+        create_dir_all_safe(&subdir2);
 
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::create_dir(base.join(".swissarmyhammer")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
+        create_dir_safe(test_dir.join(".swissarmyhammer"));
 
         // Test from nested subdirectory
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&subdir2).expect("Failed to change to test directory");
-
-        let result = find_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        let result = find_swissarmyhammer_directory_from(&subdir2);
 
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().canonicalize().unwrap(),
-            base.join(".swissarmyhammer").canonicalize().unwrap()
+            test_dir.join(".swissarmyhammer").canonicalize().unwrap()
         );
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_create() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create Git repository without .swissarmyhammer directory
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test without changing current directory
+        let result = get_or_create_swissarmyhammer_directory_from(&test_dir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
         assert_eq!(
             swissarmyhammer_dir.canonicalize().unwrap(),
-            base.join(".swissarmyhammer").canonicalize().unwrap()
+            test_dir.join(".swissarmyhammer").canonicalize().unwrap()
         );
 
         // Verify directory was created
-        assert!(base.join(".swissarmyhammer").exists());
-        assert!(base.join(".swissarmyhammer").is_dir());
+        assert!(test_dir.join(".swissarmyhammer").exists());
+        assert!(test_dir.join(".swissarmyhammer").is_dir());
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_existing() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create Git repository with existing .swissarmyhammer directory
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::create_dir(base.join(".swissarmyhammer")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
+        create_dir_safe(test_dir.join(".swissarmyhammer"));
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Change to the test directory for this test
+        let result = get_or_create_swissarmyhammer_directory_from(&test_dir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
         assert_eq!(
             swissarmyhammer_dir.canonicalize().unwrap(),
-            base.join(".swissarmyhammer").canonicalize().unwrap()
+            test_dir.join(".swissarmyhammer").canonicalize().unwrap()
         );
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_no_git_repo() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
-        // Create directory structure without Git repository
-        fs::create_dir_all(base).unwrap();
-
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Change to the test directory for this test (no .git directory)
+        let result = get_or_create_swissarmyhammer_directory_from(&test_dir);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -619,58 +585,44 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_from_subdirectory() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create nested structure with Git repository at root
-        let subdir1 = base.join("src");
+        let subdir1 = test_dir.join("src");
         let subdir2 = subdir1.join("components");
-        fs::create_dir_all(&subdir2).unwrap();
+        create_dir_all_safe(&subdir2);
 
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
 
         // Test from nested subdirectory
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&subdir2).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        let result = get_or_create_swissarmyhammer_directory_from(&subdir2);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
         assert_eq!(
             swissarmyhammer_dir.canonicalize().unwrap(),
-            base.join(".swissarmyhammer").canonicalize().unwrap()
+            test_dir.join(".swissarmyhammer").canonicalize().unwrap()
         );
 
         // Verify directory was created at repository root, not in subdirectory
-        assert!(base.join(".swissarmyhammer").exists());
-        assert!(base.join(".swissarmyhammer").is_dir());
+        assert!(test_dir.join(".swissarmyhammer").exists());
+        assert!(test_dir.join(".swissarmyhammer").is_dir());
         assert!(!subdir2.join(".swissarmyhammer").exists());
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_swissarmyhammer_is_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create Git repository with .swissarmyhammer as a file instead of directory
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::write(base.join(".swissarmyhammer"), "not a directory").unwrap();
+        create_dir_safe(test_dir.join(".git"));
+        fs::write(test_dir.join(".swissarmyhammer"), "not a directory").unwrap();
 
-        // Change to this directory and test
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(base).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Change to the test directory for this test
+        let result = get_or_create_swissarmyhammer_directory_from(&test_dir);
 
         // Should fail with DirectoryCreation error since .swissarmyhammer exists as file
         assert!(result.is_err());
@@ -683,27 +635,20 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_multiple_git_repos() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create nested structure with .git at multiple levels
-        let subdir = base.join("nested-repo");
-        fs::create_dir_all(&subdir).unwrap();
+        let subdir = test_dir.join("nested-repo");
+        create_dir_all_safe(&subdir);
 
         // Create .git directories at both levels
-        fs::create_dir(base.join(".git")).unwrap();
-        fs::create_dir(subdir.join(".git")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
+        create_dir_safe(subdir.join(".git"));
 
-        // Test from nested repository
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&subdir).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test from nested repository without changing current directory
+        let result = get_or_create_swissarmyhammer_directory_from(&subdir);
 
         assert!(result.is_ok());
         let swissarmyhammer_dir = result.unwrap();
@@ -720,29 +665,22 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_get_or_create_swissarmyhammer_directory_depth_limit_respected() {
-        let temp_dir = TempDir::new().unwrap();
-        let base = temp_dir.path();
+        let guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let test_dir = guard.temp_dir().to_path_buf();
 
         // Create very deep directory structure
-        let mut current = base.to_path_buf();
+        let mut current = test_dir.clone();
         for i in 0..=MAX_DIRECTORY_DEPTH + 1 {
             current = current.join(format!("level{}", i));
             fs::create_dir_all(&current).unwrap();
         }
 
         // Put .git at the base (beyond MAX_DIRECTORY_DEPTH from deepest)
-        fs::create_dir(base.join(".git")).unwrap();
+        create_dir_safe(test_dir.join(".git"));
 
-        // Test from deepest directory
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&current).expect("Failed to change to test directory");
-
-        let result = get_or_create_swissarmyhammer_directory();
-
-        // Restore original directory
-        let _ = env::set_current_dir(original_dir);
+        // Test from deepest directory without changing current directory
+        let result = get_or_create_swissarmyhammer_directory_from(&current);
 
         // Should return NotInGitRepository error due to depth limit
         assert!(result.is_err());

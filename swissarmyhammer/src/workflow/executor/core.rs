@@ -27,6 +27,8 @@ pub struct WorkflowExecutor {
     cache_manager: WorkflowCacheManager,
     /// Optional workflow storage for test mode
     test_storage: Option<Arc<crate::workflow::storage::WorkflowStorage>>,
+    /// Working directory for file operations (including abort file)
+    working_dir: std::path::PathBuf,
 }
 
 impl WorkflowExecutor {
@@ -38,6 +40,19 @@ impl WorkflowExecutor {
             metrics: WorkflowMetrics::new(),
             cache_manager: WorkflowCacheManager::new(),
             test_storage: None,
+            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        }
+    }
+
+    /// Create a new workflow executor with custom working directory
+    pub fn with_working_dir<P: AsRef<std::path::Path>>(working_dir: P) -> Self {
+        Self {
+            execution_history: Vec::new(),
+            max_history_size: DEFAULT_MAX_HISTORY_SIZE,
+            metrics: WorkflowMetrics::new(),
+            cache_manager: WorkflowCacheManager::new(),
+            test_storage: None,
+            working_dir: working_dir.as_ref().to_path_buf(),
         }
     }
 
@@ -49,6 +64,7 @@ impl WorkflowExecutor {
             metrics: WorkflowMetrics::new(),
             cache_manager: WorkflowCacheManager::new(),
             test_storage: Some(storage),
+            working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         }
     }
 
@@ -231,6 +247,8 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         remaining_transitions: usize,
     ) -> ExecutorResult<()> {
+        // Abort file checking happens at the flow command level before execution begins
+
         if remaining_transitions == 0 {
             return Err(ExecutorError::TransitionLimitExceeded {
                 limit: MAX_TRANSITIONS,
@@ -241,9 +259,16 @@ impl WorkflowExecutor {
 
         loop {
             // Check for abort file before each iteration
-            if std::path::Path::new(".swissarmyhammer/.abort").exists() {
-                let reason = std::fs::read_to_string(".swissarmyhammer/.abort")
+            let abort_path = self.working_dir.join(".swissarmyhammer").join(".abort");
+            if abort_path.exists() {
+                let reason = std::fs::read_to_string(&abort_path)
                     .unwrap_or_else(|_| "Unknown abort reason".to_string());
+
+                // Clean up the abort file after detection
+                if let Err(e) = std::fs::remove_file(&abort_path) {
+                    tracing::warn!("Failed to clean up abort file after detection: {}", e);
+                }
+
                 return Err(ExecutorError::Abort(reason));
             }
 

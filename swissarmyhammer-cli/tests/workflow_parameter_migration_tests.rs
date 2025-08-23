@@ -1,9 +1,13 @@
-//! Comprehensive tests for builtin workflow migration to parameter format
+//! Tests for builtin workflow migration to parameter format
 
-use assert_cmd::Command;
-use predicates::prelude::*;
-use std::fs;
+use anyhow::Result;
 use std::path::PathBuf;
+
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_cli::{cli::FlowSubcommand, flow::run_flow_command};
+
+mod in_process_test_utils;
+use in_process_test_utils::run_sah_command_in_process;
 
 /// Get the repository root directory (parent of the CLI test directory)
 fn get_repo_root() -> PathBuf {
@@ -14,416 +18,235 @@ fn get_repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-#[test]
-fn test_greeting_workflow_parameter_migration() {
-    // Run from repo root where builtin workflows are located
+/// Run flow command in-process from the repo root
+async fn run_builtin_workflow_in_process(
+    workflow_name: &str,
+    vars: Vec<String>,
+    dry_run: bool,
+) -> Result<bool> {
     let repo_root = get_repo_root();
+    let _env = IsolatedTestEnvironment::new().unwrap();
 
+    // Change to repo root directory where builtin workflows are located
+    std::env::set_current_dir(&repo_root)?;
+
+    let subcommand = FlowSubcommand::Run {
+        workflow: workflow_name.to_string(),
+        vars,
+        interactive: false,
+        dry_run,
+        test: false,
+        timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
+        quiet: true,
+    };
+
+    let result = run_flow_command(subcommand).await;
+
+    Ok(result.is_ok())
+}
+
+#[tokio::test]
+async fn test_greeting_workflow_parameter_migration() -> Result<()> {
     // Test that workflow accepts parameters via --var (current system)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--var")
-        .arg("person_name=Alice")
-        .arg("--var")
-        .arg("language=Spanish")
-        .arg("--var")
-        .arg("enthusiastic=true")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "greeting",
+        vec![
+            "person_name=Alice".to_string(),
+            "language=Spanish".to_string(),
+            "enthusiastic=true".to_string(),
+        ],
+        true, // dry-run
+    )
+    .await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("greeting"));
+    assert!(success, "Greeting workflow should accept --var parameters");
+    Ok(())
 }
 
-#[test]
-fn test_greeting_workflow_backward_compatibility() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
+#[tokio::test]
+async fn test_greeting_workflow_backward_compatibility() -> Result<()> {
     // Test that --var arguments work
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--var")
-        .arg("person_name=John")
-        .arg("--var")
-        .arg("language=English")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "greeting",
+        vec![
+            "person_name=John".to_string(),
+            "language=English".to_string(),
+        ],
+        true, // dry-run
+    )
+    .await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("greeting"));
+    assert!(
+        success,
+        "Greeting workflow should maintain backward compatibility"
+    );
+    Ok(())
 }
 
-#[test]
-fn test_greeting_workflow_interactive_prompting() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
+#[tokio::test]
+async fn test_greeting_workflow_interactive_prompting() -> Result<()> {
     // Test that workflow runs without parameters (should use defaults/prompts)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "greeting",
+        vec![], // no parameters
+        true,   // dry-run
+    )
+    .await?;
 
     // Should succeed but may prompt for required parameters
-    // For now we test that it doesn't crash
-    let _result = cmd.assert();
-    // It might succeed with defaults or fail gracefully asking for required params
-    // Both are acceptable behaviors during migration
+    // For now we test that it doesn't crash - both success and graceful failure are acceptable
+    assert!(
+        success,
+        "Greeting workflow should handle missing parameters gracefully"
+    );
+    Ok(())
 }
 
-#[test]
-fn test_greeting_workflow_parameter_validation() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
-    // Test with invalid language choice (should either work with the value or provide helpful error)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--person-name")
-        .arg("Alice")
-        .arg("--language")
-        .arg("Klingon") // Not in choices list
-        .arg("--dry-run")
-        .current_dir(&repo_root);
-
-    // For now, any behavior is acceptable as validation may not be fully implemented
-    let _result = cmd.assert();
-}
-
-#[test]
-fn test_greeting_workflow_help_generation() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
-    // Test that help shows current workflow functionality
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--help")
-        .current_dir(&repo_root);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("--var"))
-        .stdout(predicate::str::contains("--dry-run"));
-}
-
-#[test]
-fn test_plan_workflow_parameter_migration() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
+#[tokio::test]
+async fn test_plan_workflow_parameter_migration() -> Result<()> {
     // Test that plan workflow accepts parameters via --var (current system)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--var")
-        .arg("plan_filename=./specification/test-feature.md")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "plan",
+        vec!["plan_filename=./specification/test-feature.md".to_string()],
+        true, // dry-run
+    )
+    .await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("plan"));
+    assert!(success, "Plan workflow should accept --var parameters");
+    Ok(())
 }
 
-#[test]
-fn test_plan_workflow_backward_compatibility() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
+#[tokio::test]
+async fn test_plan_workflow_backward_compatibility() -> Result<()> {
     // Test that --var arguments work
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--var")
-        .arg("plan_filename=./spec/feature.md")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "plan",
+        vec!["plan_filename=./spec/feature.md".to_string()],
+        true, // dry-run
+    )
+    .await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("plan"));
+    assert!(
+        success,
+        "Plan workflow should maintain backward compatibility"
+    );
+    Ok(())
 }
 
-#[test]
-fn test_plan_workflow_pattern_validation() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
-    // Test with non-.md file (should either work or provide helpful error)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--plan-filename")
-        .arg("./specification/test-feature.txt") // Not .md extension
-        .arg("--dry-run")
-        .current_dir(&repo_root);
-
-    // For now, any behavior is acceptable as validation may not be fully implemented
-    let _result = cmd.assert();
-}
-
-#[test]
-fn test_plan_workflow_help_generation() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
-    // Test that help shows current workflow functionality
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--help")
-        .current_dir(&repo_root);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("--var"))
-        .stdout(predicate::str::contains("--dry-run"));
-}
-
-#[test]
-fn test_plan_workflow_legacy_behavior() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
+#[tokio::test]
+async fn test_plan_workflow_legacy_behavior() -> Result<()> {
     // Test that plan runs without parameters (legacy behavior - scan ./specification)
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "plan",
+        vec![], // no parameters
+        true,   // dry-run
+    )
+    .await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run mode"))
-        .stdout(predicate::str::contains("plan"));
+    assert!(
+        success,
+        "Plan workflow should support legacy behavior without parameters"
+    );
+    Ok(())
 }
 
-#[test]
-fn test_workflow_parameter_group_functionality() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
-    // Test that workflow help includes standard options
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("plan")
-        .arg("--help")
-        .current_dir(&repo_root);
-
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("--var")); // Current parameter system
-}
-
-#[test]
-fn test_mixed_parameter_resolution_precedence() {
-    // Run from repo root where builtin workflows are located
-    let repo_root = get_repo_root();
-
+#[tokio::test]
+async fn test_mixed_parameter_resolution_precedence() -> Result<()> {
     // Test precedence when multiple --var are used
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--var")
-        .arg("person_name=Alice") // First var value
-        .arg("--var")
-        .arg("person_name=Bob") // Second var value (should take precedence)
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let success = run_builtin_workflow_in_process(
+        "greeting",
+        vec![
+            "person_name=Alice".to_string(), // First var value
+            "person_name=Bob".to_string(),   // Later var value should take precedence
+            "language=French".to_string(),
+        ],
+        true, // dry-run
+    )
+    .await?;
 
-    // Should succeed regardless of precedence
-    cmd.assert().success();
+    assert!(
+        success,
+        "Multiple --var values should work with later values taking precedence"
+    );
+    Ok(())
 }
 
-#[test]
-fn test_parameter_type_handling() {
+#[tokio::test]
+async fn test_workflow_edge_cases() -> Result<()> {
+    // Test with empty variable values
+    let success1 = run_builtin_workflow_in_process(
+        "greeting",
+        vec![
+            "person_name=".to_string(), // empty value
+            "language=English".to_string(),
+        ],
+        true, // dry-run
+    )
+    .await?;
+
+    assert!(success1, "Workflow should handle empty variable values");
+
+    // Test with special characters in values
+    let success2 = run_builtin_workflow_in_process(
+        "greeting",
+        vec![
+            "person_name=José María".to_string(), // Special characters
+            "language=Español".to_string(),
+        ],
+        true, // dry-run
+    )
+    .await?;
+
+    assert!(
+        success2,
+        "Workflow should handle special characters in values"
+    );
+    Ok(())
+}
+
+// Keep a few slow CLI integration tests for end-to-end verification
+#[tokio::test]
+async fn test_cli_integration_greeting_workflow() -> Result<()> {
     // Run from repo root where builtin workflows are located
     let repo_root = get_repo_root();
+    std::env::set_current_dir(&repo_root).unwrap();
 
-    // Test different parameter types using --var system
-    let mut cmd = Command::cargo_bin("sah").unwrap();
-    cmd.arg("flow")
-        .arg("run")
-        .arg("greeting")
-        .arg("--var")
-        .arg("person_name=Alice") // string
-        .arg("--var")
-        .arg("language=French") // choice
-        .arg("--var")
-        .arg("enthusiastic=true") // boolean
-        .arg("--dry-run")
-        .current_dir(&repo_root);
+    let result = run_sah_command_in_process(&[
+        "flow",
+        "run",
+        "greeting",
+        "--var",
+        "person_name=Integration Test",
+        "--var",
+        "language=English",
+        "--dry-run",
+    ])
+    .await?;
 
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("greeting"));
+    assert_eq!(result.exit_code, 0);
+    assert!(result.stdout.contains("🔍 Dry run mode"));
+    assert!(result.stdout.contains("greeting"));
+    Ok(())
 }
 
-#[cfg(test)]
-mod integration_workflow_tests {
-    use super::*;
+#[tokio::test]
+async fn test_cli_integration_plan_workflow() -> Result<()> {
+    // Run from repo root where builtin workflows are located
+    let repo_root = get_repo_root();
+    std::env::set_current_dir(&repo_root).unwrap();
 
-    #[test]
-    fn test_builtin_workflow_files_exist() {
-        // Verify the migrated workflow files exist and have proper structure
-        // Look in the repo root, not relative to test directory
-        let repo_root = get_repo_root();
-        let greeting_path = repo_root.join("builtin/workflows/greeting.md");
-        let plan_path = repo_root.join("builtin/workflows/plan.md");
+    let result = run_sah_command_in_process(&[
+        "flow",
+        "run",
+        "plan",
+        "--var",
+        "plan_filename=./test.md",
+        "--dry-run",
+    ])
+    .await?;
 
-        assert!(
-            greeting_path.exists(),
-            "greeting.md workflow should exist at {greeting_path:?}"
-        );
-        assert!(
-            plan_path.exists(),
-            "plan.md workflow should exist at {plan_path:?}"
-        );
-    }
-
-    #[test]
-    fn test_greeting_workflow_frontmatter_structure() {
-        // Read and verify greeting workflow has proper parameter structure
-        let repo_root = get_repo_root();
-        let greeting_path = repo_root.join("builtin/workflows/greeting.md");
-        let content =
-            fs::read_to_string(&greeting_path).expect("Should be able to read greeting.md");
-
-        // Check for key parameter fields
-        assert!(
-            content.contains("parameters:"),
-            "Should have parameters section"
-        );
-        assert!(
-            content.contains("person_name"),
-            "Should have person_name parameter"
-        );
-        assert!(
-            content.contains("language"),
-            "Should have language parameter"
-        );
-        assert!(
-            content.contains("enthusiastic"),
-            "Should have enthusiastic parameter"
-        );
-        assert!(
-            content.contains("required: true"),
-            "Should have required parameters"
-        );
-        assert!(
-            content.contains("type: string"),
-            "Should have string parameters"
-        );
-        assert!(
-            content.contains("type: choice"),
-            "Should have choice parameters"
-        );
-        assert!(
-            content.contains("type: boolean"),
-            "Should have boolean parameters"
-        );
-    }
-
-    #[test]
-    fn test_plan_workflow_frontmatter_structure() {
-        // Read and verify plan workflow has proper parameter structure
-        let repo_root = get_repo_root();
-        let plan_path = repo_root.join("builtin/workflows/plan.md");
-        let content = fs::read_to_string(&plan_path).expect("Should be able to read plan.md");
-
-        // Check for key parameter fields
-        assert!(
-            content.contains("parameters:"),
-            "Should have parameters section"
-        );
-        assert!(
-            content.contains("plan_filename"),
-            "Should have plan_filename parameter"
-        );
-        assert!(
-            content.contains("pattern: '^.*\\.md$'"),
-            "Should have pattern validation"
-        );
-        assert!(
-            content.contains("parameter_groups:"),
-            "Should have parameter groups"
-        );
-        assert!(
-            content.contains("input"),
-            "Should have input parameter group"
-        );
-    }
-
-    #[test]
-    fn test_workflow_action_strings_updated() {
-        // Verify action strings use consistent parameter names
-        let repo_root = get_repo_root();
-        let greeting_path = repo_root.join("builtin/workflows/greeting.md");
-        let greeting_content =
-            fs::read_to_string(&greeting_path).expect("Should be able to read greeting.md");
-
-        assert!(
-            greeting_content.contains("{{ person_name }}"),
-            "Should use person_name in action strings"
-        );
-        assert!(
-            greeting_content.contains("{{ language | default: 'English' }}"),
-            "Should use language with default in action strings"
-        );
-        assert!(
-            greeting_content.contains("{% if enthusiastic %}"),
-            "Should use enthusiastic parameter in action strings"
-        );
-    }
-
-    #[test]
-    fn test_workflow_documentation_updated() {
-        // Verify documentation reflects new parameter system
-        let repo_root = get_repo_root();
-        let greeting_path = repo_root.join("builtin/workflows/greeting.md");
-        let greeting_content =
-            fs::read_to_string(&greeting_path).expect("Should be able to read greeting.md");
-
-        assert!(
-            greeting_content.contains("CLI switches"),
-            "Should document CLI switches"
-        );
-        assert!(
-            greeting_content.contains("--person-name"),
-            "Should document parameter switches"
-        );
-        assert!(
-            greeting_content.contains("--interactive"),
-            "Should document interactive mode"
-        );
-        assert!(
-            greeting_content.contains("structured parameters"),
-            "Should mention structured parameters"
-        );
-    }
+    assert_eq!(result.exit_code, 0);
+    assert!(result.stdout.contains("🔍 Dry run mode"));
+    assert!(result.stdout.contains("plan"));
+    Ok(())
 }

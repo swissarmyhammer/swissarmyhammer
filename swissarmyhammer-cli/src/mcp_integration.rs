@@ -114,16 +114,26 @@ impl CliToolContext {
 
     /// Create memo storage backend
     fn create_memo_storage(
-        _current_dir: &std::path::Path,
+        current_dir: &std::path::Path,
     ) -> Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>> {
-        // Use new_default() to respect SWISSARMYHAMMER_MEMOS_DIR environment variable
-        let storage = swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new_default()
-            .unwrap_or_else(|_| {
-                // Fallback to current directory if new_default() fails
-                swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new(
-                    _current_dir.to_path_buf(),
-                )
-            });
+        // First check if SWISSARMYHAMMER_MEMOS_DIR environment variable is set
+        let storage = if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
+            swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new(
+                std::path::PathBuf::from(custom_path),
+            )
+        } else {
+            // For tests and custom working directories, create .swissarmyhammer/memos in the working dir
+            let memos_dir = current_dir.join(".swissarmyhammer").join("memos");
+            // Try to create directory, but don't fail if it already exists or can't be created
+            if let Err(e) = std::fs::create_dir_all(&memos_dir) {
+                eprintln!(
+                    "Warning: Failed to create memos directory {}: {}",
+                    memos_dir.display(),
+                    e
+                );
+            }
+            swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new(memos_dir)
+        };
         Arc::new(RwLock::new(Box::new(storage)))
     }
 

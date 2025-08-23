@@ -1,4 +1,3 @@
-use assert_cmd::prelude::*;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -11,8 +10,7 @@ fn test_mcp_server_exits_on_client_disconnect() {
     // the stdio transport is closed.
 
     // Start the MCP server
-    let mut server = Command::cargo_bin("sah")
-        .unwrap()
+    let mut server = Command::new(env!("CARGO_BIN_EXE_sah"))
         .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -66,8 +64,7 @@ fn test_mcp_server_responds_to_ctrl_c() {
     use nix::unistd::Pid;
 
     // Start the MCP server
-    let mut server = Command::cargo_bin("sah")
-        .unwrap()
+    let mut server = Command::new(env!("CARGO_BIN_EXE_sah"))
         .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -69,7 +69,7 @@ fn is_likely_binary_file(path: &Path) -> bool {
 /// Check if file content contains binary data by examining a sample
 fn is_binary_content(sample: &[u8]) -> bool {
     // Check for null bytes which are common in binary files
-    sample.iter().any(|&byte| byte == 0) ||
+    sample.contains(&0) ||
     // Check if content is valid UTF-8
     std::str::from_utf8(sample).is_err()
 }

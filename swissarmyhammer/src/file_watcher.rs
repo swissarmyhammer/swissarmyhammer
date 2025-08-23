@@ -301,7 +301,7 @@ impl Default for FileWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
+    use crate::test_utils::IsolatedTestEnvironment;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -309,16 +309,6 @@ mod tests {
     struct TestCallback {
         changes: Arc<Mutex<Vec<Vec<std::path::PathBuf>>>>,
         errors: Arc<Mutex<Vec<String>>>,
-    }
-
-    struct DirGuard {
-        original_dir: std::path::PathBuf,
-    }
-
-    impl Drop for DirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.original_dir);
-        }
     }
 
     impl TestCallback {
@@ -348,7 +338,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_start_stop() {
         use std::fs;
         use tempfile::TempDir;
@@ -362,12 +351,9 @@ mod tests {
         let test_file = test_prompts_dir.join("test.md");
         fs::write(&test_file, "test prompt").unwrap();
 
-        // Set current directory to temp dir so it finds our test directory
-        let original_dir = std::env::current_dir().unwrap();
+        // Use isolated test environment for directory changes
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback = TestCallback::new();
@@ -413,7 +399,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_custom_config() {
         use std::fs;
         use tempfile::TempDir;
@@ -428,11 +413,9 @@ mod tests {
         fs::write(&test_file, "name: test\ndescription: test prompt").unwrap();
 
         // Set current directory to temp dir
-        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback = TestCallback::new();
@@ -457,7 +440,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_drop() {
         use std::fs;
         use tempfile::TempDir;
@@ -469,11 +451,9 @@ mod tests {
         fs::write(test_prompts_dir.join("test.md"), "test").unwrap();
 
         // Set current directory to temp dir
-        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback = TestCallback::new();
@@ -493,13 +473,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_restart() {
         use std::fs;
         use tempfile::TempDir;
 
-        // Save original directory first
-        let original_dir = std::env::current_dir().unwrap();
+        // Use isolated test environment for directory changes
+        let _guard = IsolatedTestEnvironment::new().unwrap();
 
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().unwrap();
@@ -511,7 +490,6 @@ mod tests {
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback1 = TestCallback::new();
@@ -600,7 +578,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_simple_start() {
         use std::fs;
         use tempfile::TempDir;
@@ -611,12 +588,9 @@ mod tests {
         fs::create_dir_all(&test_prompts_dir).unwrap();
         fs::write(test_prompts_dir.join("test.md"), "test prompt").unwrap();
 
-        // Set current directory to temp dir so it finds our test directory
-        let original_dir = std::env::current_dir().unwrap();
+        // Use isolated test environment for directory changes
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback = TestCallback::new();
@@ -629,7 +603,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
     async fn test_file_watcher_error_callback() {
         use std::fs;
         use tempfile::TempDir;
@@ -641,11 +614,9 @@ mod tests {
         fs::write(test_prompts_dir.join("test.yaml"), "name: test").unwrap();
 
         // Set current directory to temp dir with better error handling
-        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Ensure directory is restored even if test panics
-        let _guard = DirGuard { original_dir };
 
         let mut watcher = FileWatcher::new();
         let callback = ErrorCallback::new();

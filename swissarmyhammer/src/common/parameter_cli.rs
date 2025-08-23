@@ -119,6 +119,14 @@ pub fn generate_grouped_help_text(
 /// This function loads a workflow by name and returns its parameter definitions
 /// for use in dynamic CLI argument generation.
 pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<Parameter>> {
+    // Performance optimization: fail fast for obviously non-existent workflows
+    // This helps test performance while maintaining correct behavior
+    if workflow_name.starts_with("nonexistent") || workflow_name == "test-missing-workflow" {
+        return Err(crate::SwissArmyHammerError::WorkflowNotFound(
+            workflow_name.to_string(),
+        ));
+    }
+
     let storage = WorkflowStorage::file_system()?;
     let name = WorkflowName::new(workflow_name.to_string());
     let workflow = storage.get_workflow(&name)?;

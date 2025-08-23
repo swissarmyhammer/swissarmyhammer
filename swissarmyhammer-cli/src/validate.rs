@@ -379,16 +379,41 @@ impl Validator {
         }
     }
 
+    /// Format results as a string instead of printing them
+    #[allow(dead_code)] // Used by validation but may appear unused due to conditional compilation
+    pub fn format_results(
+        &self,
+        result: &ValidationResult,
+        format: ValidateFormat,
+    ) -> Result<String> {
+        match format {
+            ValidateFormat::Text => Ok(self.format_text_results(result)),
+            ValidateFormat::Json => self.format_json_results(result),
+        }
+    }
+
     fn print_text_results(&self, result: &ValidationResult) {
+        let output = self.format_text_results(result);
+        if !output.is_empty() {
+            print!("{}", output);
+        }
+    }
+
+    fn format_text_results(&self, result: &ValidationResult) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
         if result.issues.is_empty() {
             if !self.quiet {
-                println!(
+                writeln!(
+                    output,
                     "{} All {} files validated successfully!",
                     "✓".green(),
                     result.files_checked
-                );
+                )
+                .unwrap();
             }
-            return;
+            return output;
         }
 
         // Group issues by file
@@ -412,16 +437,16 @@ impl Validator {
 
                 if let Some(title) = content_title {
                     // Show the prompt title
-                    println!("\n{}", title.bold());
+                    writeln!(output, "\n{}", title.bold()).unwrap();
                     // Show the file path in smaller text if it's a user prompt
                     if file_path.to_string_lossy() != ""
                         && !file_path.to_string_lossy().contains("PathBuf")
                     {
-                        println!("  {}", file_path.display().to_string().dimmed());
+                        writeln!(output, "  {}", file_path.display().to_string().dimmed()).unwrap();
                     }
                 } else {
                     // Fallback to file path if no title
-                    println!("\n{}", file_path.display().to_string().bold());
+                    writeln!(output, "\n{}", file_path.display().to_string().bold()).unwrap();
                 }
             }
 
@@ -444,45 +469,63 @@ impl Validator {
                     continue;
                 }
 
-                println!("  {} [{}] {}", level_str, location, issue.message);
+                writeln!(output, "  {} [{}] {}", level_str, location, issue.message).unwrap();
 
                 if !self.quiet {
                     if let Some(suggestion) = &issue.suggestion {
-                        println!("    💡 {}", suggestion.dimmed());
+                        writeln!(output, "    💡 {}", suggestion.dimmed()).unwrap();
                     }
                 }
             }
         }
 
         if !self.quiet {
-            println!("\n{}", "Summary:".bold());
-            println!("  Files checked: {}", result.files_checked);
+            writeln!(output, "\n{}", "Summary:".bold()).unwrap();
+            writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
             if result.errors > 0 {
-                println!("  Errors: {}", result.errors.to_string().red());
+                writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
             }
             if result.warnings > 0 {
-                println!("  Warnings: {}", result.warnings.to_string().yellow());
+                writeln!(
+                    output,
+                    "  Warnings: {}",
+                    result.warnings.to_string().yellow()
+                )
+                .unwrap();
             }
 
             if result.has_errors() {
-                println!("\n{} Validation failed with errors.", "✗".red());
+                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
             } else if result.has_warnings() {
-                println!("\n{} Validation completed with warnings.", "⚠".yellow());
+                writeln!(
+                    output,
+                    "\n{} Validation completed with warnings.",
+                    "⚠".yellow()
+                )
+                .unwrap();
             } else {
-                println!("\n{} Validation passed!", "✓".green());
+                writeln!(output, "\n{} Validation passed!", "✓".green()).unwrap();
             }
         } else {
             // In quiet mode, only show summary for errors
             if result.has_errors() {
-                println!("\n{}", "Summary:".bold());
-                println!("  Files checked: {}", result.files_checked);
-                println!("  Errors: {}", result.errors.to_string().red());
-                println!("\n{} Validation failed with errors.", "✗".red());
+                writeln!(output, "\n{}", "Summary:".bold()).unwrap();
+                writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
+                writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
+                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
             }
         }
+
+        output
     }
 
     fn print_json_results(&self, result: &ValidationResult) -> Result<()> {
+        let output = self.format_json_results(result)?;
+        println!("{}", output);
+        Ok(())
+    }
+
+    fn format_json_results(&self, result: &ValidationResult) -> Result<String> {
         let json_issues: Vec<JsonValidationIssue> = result
             .issues
             .iter()
@@ -507,8 +550,7 @@ impl Validator {
             issues: json_issues,
         };
 
-        println!("{}", serde_json::to_string_pretty(&json_result)?);
-        Ok(())
+        Ok(serde_json::to_string_pretty(&json_result)?)
     }
 
     /// Validates workflows from custom directories
@@ -806,6 +848,37 @@ pub fn run_validate_command_with_dirs(
     } else {
         Ok(EXIT_SUCCESS) // Success
     }
+}
+
+/// Run validation command and return the output as a string and exit code
+/// This is used for in-process testing where we need to capture the output
+#[allow(dead_code)] // Used by test infrastructure
+pub fn run_validate_command_with_dirs_captured(
+    quiet: bool,
+    format: ValidateFormat,
+    workflow_dirs: Vec<String>,
+) -> Result<(String, i32)> {
+    let mut validator = Validator::new(quiet);
+
+    // Validate with custom workflow directories if provided
+    let result = if workflow_dirs.is_empty() {
+        validator.validate_all_with_options()?
+    } else {
+        validator.validate_with_custom_dirs(workflow_dirs)?
+    };
+
+    let output = validator.format_results(&result, format)?;
+
+    // Return appropriate exit code
+    let exit_code = if result.has_errors() {
+        EXIT_ERROR // Errors
+    } else if result.has_warnings() {
+        EXIT_WARNING // Warnings
+    } else {
+        EXIT_SUCCESS // Success
+    };
+
+    Ok((output, exit_code))
 }
 
 #[cfg(test)]
