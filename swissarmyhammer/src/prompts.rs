@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer_config::compat;
+use swissarmyhammer_config::ConfigProvider;
 
 /// Represents a single prompt with metadata and template content.
 ///
@@ -744,8 +744,9 @@ impl Prompt {
 
         // Also include variables from sah.toml configuration
         let mut defined_config_vars = std::collections::HashSet::new();
-        if let Ok(Some(config)) = compat::load_repo_config_for_cli() {
-            for key in config.values().keys() {
+        let provider = ConfigProvider::new();
+        if let Ok(template_context) = provider.load_template_context() {
+            for key in template_context.vars().keys() {
                 defined_config_vars.insert(key.clone());
             }
         }

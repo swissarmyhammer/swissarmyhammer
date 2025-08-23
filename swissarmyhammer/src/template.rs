@@ -78,7 +78,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer_config::compat;
+use swissarmyhammer_config::ConfigProvider;
 
 /// Custom partial tag that acts as a no-op marker for liquid partial files
 #[derive(Clone, Debug, Default)]
@@ -642,8 +642,9 @@ impl Template {
 
         // Load and merge sah.toml configuration variables (second lowest priority)
         let mut config_vars = std::collections::HashSet::new();
-        if let Ok(Some(config)) = compat::load_repo_config_for_cli() {
-            let config_object = config.to_liquid_object();
+        let provider = ConfigProvider::new();
+        if let Ok(template_context) = provider.load_template_context() {
+            let config_object = template_context.to_liquid_object();
             for (key, value) in config_object.iter() {
                 config_vars.insert(key.clone());
                 object.insert(key.clone(), value.clone());

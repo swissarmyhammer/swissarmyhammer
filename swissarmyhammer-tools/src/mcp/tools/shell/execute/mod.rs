@@ -11,9 +11,108 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use swissarmyhammer_config::compat::loader::ConfigurationLoader;
-use swissarmyhammer_config::compat::types::parse_size_string;
-use swissarmyhammer_config::compat::types::ShellToolConfig;
+use swissarmyhammer_config::ConfigProvider;
+
+// Simplified shell tool configuration structures
+/// Configuration for the shell execution tool.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShellToolConfig {
+    /// Timeout for command execution in seconds.
+    pub timeout: u64,
+    /// Maximum size of command output in bytes.
+    pub max_output_size: usize, 
+    /// Output-related configuration settings.
+    pub output: ShellOutputConfig,
+    /// Execution-related configuration settings.
+    pub execution: ShellExecutionConfig,
+}
+
+/// Configuration for shell command output handling.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShellOutputConfig {
+    /// Maximum output size as a string (e.g., "1MB", "512KB").
+    pub max_output_size: String,
+    /// Maximum length of a single output line in characters.
+    pub max_line_length: usize,
+}
+
+/// Configuration for shell command execution parameters.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ShellExecutionConfig {
+    /// Minimum allowed timeout in seconds.
+    pub min_timeout: u64,
+    /// Maximum allowed timeout in seconds.
+    pub max_timeout: u64,
+    /// Default timeout in seconds when none is specified.
+    pub default_timeout: u64,
+}
+
+impl Default for ShellToolConfig {
+    fn default() -> Self {
+        Self {
+            timeout: 300,
+            max_output_size: 1024 * 1024,
+            output: ShellOutputConfig::default(),
+            execution: ShellExecutionConfig::default(),
+        }
+    }
+}
+
+impl Default for ShellOutputConfig {
+    fn default() -> Self {
+        Self {
+            max_output_size: "1MB".to_string(),
+            max_line_length: 2000,
+        }
+    }
+}
+
+impl Default for ShellExecutionConfig {
+    fn default() -> Self {
+        Self {
+            min_timeout: 1,
+            max_timeout: 1800,
+            default_timeout: 300,
+        }
+    }
+}
+
+/// Parse a size string (e.g., "1MB", "512KB") into bytes.
+///
+/// # Arguments
+///
+/// * `size_str` - The size string to parse (e.g., "1MB", "512KB", "1024")
+///
+/// # Returns
+///
+/// Returns the size in bytes or an error message if parsing fails.
+pub fn parse_size_string(size_str: &str) -> Result<usize, String> {
+    let size_str = size_str.trim().to_uppercase();
+    if size_str.is_empty() {
+        return Err("Empty size string".to_string());
+    }
+
+    let (numeric_part, unit) = if let Some(pos) = size_str.find(|c: char| c.is_alphabetic()) {
+        (&size_str[..pos], &size_str[pos..])
+    } else {
+        return size_str.parse::<usize>()
+            .map_err(|_| format!("Invalid numeric value: {size_str}"));
+    };
+
+    let base_size: usize = numeric_part.parse()
+        .map_err(|_| format!("Invalid numeric value: {numeric_part}"))?;
+
+    let multiplier = match unit {
+        "B" | "" => 1,
+        "KB" => 1_024,
+        "MB" => 1_024 * 1_024,
+        "GB" => 1_024 * 1_024 * 1_024,
+        _ => return Err(format!("Unknown size unit: {unit}")),
+    };
+
+    base_size.checked_mul(multiplier)
+        .ok_or_else(|| "Size value too large".to_string())
+}
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
@@ -1235,15 +1334,15 @@ impl McpTool for ShellExecuteTool {
         tracing::debug!("Executing shell command: {:?}", request.command);
 
         // Load shell configuration
-        let config_loader = ConfigurationLoader::new().map_err(|e| {
-            tracing::error!("Failed to create configuration loader: {}", e);
-            McpError::internal_error(format!("Configuration system error: {e}"), None)
-        })?;
-
-        let shell_config = config_loader.load_shell_config().map_err(|e| {
-            tracing::error!("Failed to load shell configuration: {}", e);
-            McpError::internal_error(format!("Failed to load shell configuration: {e}"), None)
-        })?;
+        let provider = ConfigProvider::new();
+        let shell_config = provider.load_template_context()
+            .map(|context| {
+                // Try to extract shell configuration, fall back to defaults
+                context.get("shell")
+                    .and_then(|v| serde_json::from_value::<ShellToolConfig>(v.clone()).ok())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
 
         // Validate command is not empty
         McpValidation::validate_not_empty(&request.command, "shell command")

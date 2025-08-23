@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::Error as McpError;
 use std::time::{Duration, Instant};
-use swissarmyhammer_config::compat;
+use swissarmyhammer_config::ConfigProvider;
 
 /// Tool for performing web searches using DuckDuckGo web scraping
 #[derive(Default)]
@@ -38,136 +38,128 @@ impl WebSearchTool {
         self.duckduckgo_client.as_mut().unwrap()
     }
 
-    /// Helper function to load configuration with a callback for setting values
-    fn load_config_with_callback<T, F>(mut config: T, configure_fn: F) -> T
-    where
-        F: FnOnce(&mut T, &swissarmyhammer::Configuration),
-    {
-        if let Ok(Some(repo_config)) = compat::load_repo_config_for_cli() {
-            configure_fn(&mut config, &repo_config);
-        }
-        config
+    /// Helper function to load configuration from the natural API
+    fn load_config_from_template_context() -> Option<serde_json::Value> {
+        let provider = ConfigProvider::new();
+        provider.load_template_context()
+            .ok()
+            .and_then(|context| context.get("web_search").cloned())
     }
 
     /// Loads configuration for content fetching
     fn load_content_fetch_config() -> ContentFetchConfig {
-        Self::load_config_with_callback(ContentFetchConfig::default(), |config, repo_config| {
-            // Concurrent processing settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_concurrent)) =
-                repo_config.get("web_search.content_fetching.max_concurrent_fetches")
-            {
-                if *max_concurrent > 0 {
-                    config.max_concurrent_fetches = *max_concurrent as usize;
+        let mut config = ContentFetchConfig::default();
+        
+        if let Some(web_search_config) = Self::load_config_from_template_context() {
+            // Try to extract content fetching configuration
+            if let Some(content_fetching) = web_search_config.get("content_fetching") {
+                // Concurrent processing settings
+                if let Some(max_concurrent) = content_fetching.get("max_concurrent_fetches")
+                    .and_then(|v| v.as_u64()) {
+                    if max_concurrent > 0 {
+                        config.max_concurrent_fetches = max_concurrent as usize;
+                    }
+                }
+
+                // Timeout settings
+                if let Some(timeout) = content_fetching.get("content_fetch_timeout")
+                    .and_then(|v| v.as_u64()) {
+                    if timeout > 0 {
+                        config.fetch_timeout = Duration::from_secs(timeout);
+                    }
+                }
+
+                // Content size limit
+                if let Some(size_str) = content_fetching.get("max_content_size")
+                    .and_then(|v| v.as_str()) {
+                    if let Ok(size) = Self::parse_size_string(size_str) {
+                        config.max_content_size = size;
+                    }
+                }
+
+                // Rate limiting settings
+                if let Some(delay) = content_fetching.get("default_domain_delay")
+                    .and_then(|v| v.as_u64()) {
+                    if delay > 0 {
+                        config.default_domain_delay = Duration::from_millis(delay);
+                    }
+                }
+
+                // Content quality settings
+                if let Some(min_length) = content_fetching.get("min_content_length")
+                    .and_then(|v| v.as_u64()) {
+                    if min_length > 0 {
+                        config.quality_config.min_content_length = min_length as usize;
+                    }
+                }
+
+                if let Some(max_length) = content_fetching.get("max_content_length")
+                    .and_then(|v| v.as_u64()) {
+                    if max_length > 0 {
+                        config.quality_config.max_content_length = max_length as usize;
+                    }
+                }
+
+                // Processing settings
+                if let Some(max_summary) = content_fetching.get("max_summary_length")
+                    .and_then(|v| v.as_u64()) {
+                    if max_summary > 0 {
+                        config.processing_config.max_summary_length = max_summary as usize;
+                    }
+                }
+
+                if let Some(extract_code) = content_fetching.get("extract_code_blocks")
+                    .and_then(|v| v.as_bool()) {
+                    config.processing_config.extract_code_blocks = extract_code;
+                }
+
+                if let Some(generate_summaries) = content_fetching.get("generate_summaries")
+                    .and_then(|v| v.as_bool()) {
+                    config.processing_config.generate_summaries = generate_summaries;
+                }
+
+                if let Some(extract_metadata) = content_fetching.get("extract_metadata")
+                    .and_then(|v| v.as_bool()) {
+                    config.processing_config.extract_metadata = extract_metadata;
                 }
             }
+        }
 
-            // Timeout settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(timeout)) =
-                repo_config.get("web_search.content_fetching.content_fetch_timeout")
-            {
-                if *timeout > 0 {
-                    config.fetch_timeout = Duration::from_secs(*timeout as u64);
-                }
-            }
-
-            // Content size limit
-            if let Some(swissarmyhammer::ConfigValue::String(size_str)) =
-                repo_config.get("web_search.content_fetching.max_content_size")
-            {
-                if let Ok(size) = Self::parse_size_string(size_str) {
-                    config.max_content_size = size;
-                }
-            }
-
-            // Rate limiting settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(delay)) =
-                repo_config.get("web_search.content_fetching.default_domain_delay")
-            {
-                if *delay > 0 {
-                    config.default_domain_delay = Duration::from_millis(*delay as u64);
-                }
-            }
-
-            // Content quality settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(min_length)) =
-                repo_config.get("web_search.content_fetching.min_content_length")
-            {
-                if *min_length > 0 {
-                    config.quality_config.min_content_length = *min_length as usize;
-                }
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_length)) =
-                repo_config.get("web_search.content_fetching.max_content_length")
-            {
-                if *max_length > 0 {
-                    config.quality_config.max_content_length = *max_length as usize;
-                }
-            }
-
-            // Processing settings
-            if let Some(swissarmyhammer::ConfigValue::Integer(max_summary)) =
-                repo_config.get("web_search.content_fetching.max_summary_length")
-            {
-                if *max_summary > 0 {
-                    config.processing_config.max_summary_length = *max_summary as usize;
-                }
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_code)) =
-                repo_config.get("web_search.content_fetching.extract_code_blocks")
-            {
-                config.processing_config.extract_code_blocks = *extract_code;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Boolean(generate_summaries)) =
-                repo_config.get("web_search.content_fetching.generate_summaries")
-            {
-                config.processing_config.generate_summaries = *generate_summaries;
-            }
-
-            if let Some(swissarmyhammer::ConfigValue::Boolean(extract_metadata)) =
-                repo_config.get("web_search.content_fetching.extract_metadata")
-            {
-                config.processing_config.extract_metadata = *extract_metadata;
-            }
-        })
+        config
     }
 
     /// Loads configuration for DuckDuckGo scoring algorithm
     fn load_scoring_config() -> ScoringConfig {
-        Self::load_config_with_callback(ScoringConfig::default(), |config, repo_config| {
-            // Scoring algorithm configuration
-            if let Some(swissarmyhammer::ConfigValue::Float(base_score)) =
-                repo_config.get("web_search.scoring.base_score")
-            {
-                config.base_score = *base_score;
-            }
+        let mut config = ScoringConfig::default();
+        
+        if let Some(web_search_config) = Self::load_config_from_template_context() {
+            if let Some(scoring) = web_search_config.get("scoring") {
+                // Scoring algorithm configuration
+                if let Some(base_score) = scoring.get("base_score").and_then(|v| v.as_f64()) {
+                    config.base_score = base_score;
+                }
 
-            if let Some(swissarmyhammer::ConfigValue::Float(position_penalty)) =
-                repo_config.get("web_search.scoring.position_penalty")
-            {
-                config.position_penalty = *position_penalty;
-            }
+                if let Some(position_penalty) = scoring.get("position_penalty").and_then(|v| v.as_f64()) {
+                    config.position_penalty = position_penalty;
+                }
 
-            if let Some(swissarmyhammer::ConfigValue::Float(min_score)) =
-                repo_config.get("web_search.scoring.min_score")
-            {
-                config.min_score = *min_score;
-            }
+                if let Some(min_score) = scoring.get("min_score").and_then(|v| v.as_f64()) {
+                    config.min_score = min_score;
+                }
 
-            if let Some(swissarmyhammer::ConfigValue::Boolean(exponential_decay)) =
-                repo_config.get("web_search.scoring.exponential_decay")
-            {
-                config.exponential_decay = *exponential_decay;
-            }
+                if let Some(exponential_decay) = scoring.get("exponential_decay")
+                    .and_then(|v| v.as_bool()) {
+                    config.exponential_decay = exponential_decay;
+                }
 
-            if let Some(swissarmyhammer::ConfigValue::Float(decay_rate)) =
-                repo_config.get("web_search.scoring.decay_rate")
-            {
-                config.decay_rate = *decay_rate;
+                if let Some(decay_rate) = scoring.get("decay_rate")
+                    .and_then(|v| v.as_f64()) {
+                    config.decay_rate = decay_rate;
+                }
             }
-        })
+        }
+
+        config
     }
 
     /// Parse size string like "2MB" into bytes

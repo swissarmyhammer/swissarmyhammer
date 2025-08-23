@@ -9,7 +9,7 @@ use swissarmyhammer::validation::{
 use swissarmyhammer::workflow::{
     MemoryWorkflowStorage, MermaidParser, Workflow, WorkflowResolver, WorkflowStorageBackend,
 };
-use swissarmyhammer_config::compat::validate_config_file;
+use swissarmyhammer_config::ConfigProvider;
 
 use crate::cli::ValidateFormat;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
@@ -730,7 +730,7 @@ impl Validator {
     /// Validate sah.toml configuration file if it exists
     fn validate_sah_config(&self, result: &mut ValidationResult) -> Result<()> {
         use std::path::Path;
-        use swissarmyhammer_config::compat::ValidationError as ConfigValidationError;
+        use swissarmyhammer_config::ConfigError as ConfigValidationError;
 
         // Check for sah.toml in the current directory
         let config_path = Path::new("sah.toml");
@@ -741,9 +741,10 @@ impl Validator {
 
         result.files_checked += 1;
 
-        // Try to validate the configuration file
-        match validate_config_file(config_path) {
-            Ok(()) => {
+        // Try to validate the configuration file by attempting to load it
+        let provider = ConfigProvider::new();
+        match provider.load_template_context() {
+            Ok(_) => {
                 if !self.quiet {
                     let issue = ValidationIssue {
                         level: ValidationLevel::Info,

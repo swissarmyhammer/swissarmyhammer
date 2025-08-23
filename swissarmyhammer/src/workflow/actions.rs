@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer_config::compat;
+use swissarmyhammer_config::ConfigProvider;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -1776,11 +1776,39 @@ pub fn parse_action_from_description_with_context(
     let mut enhanced_context = context.clone();
 
     // Load and merge sah.toml configuration variables into the context
-    // This uses the existing template integration infrastructure
-    if let Err(e) = compat::load_and_merge_repo_config(&mut enhanced_context) {
+    // This uses the natural config API infrastructure
+    let provider = ConfigProvider::new();
+    if let Ok(template_context) = provider.load_template_context() {
+        // Extract existing _template_vars or create empty object
+        let existing_vars = match enhanced_context.get("_template_vars") {
+            Some(serde_json::Value::Object(obj)) => obj.clone(),
+            _ => serde_json::Map::new(),
+        };
+
+        // Convert TemplateContext to HashMap for merging
+        let config_vars = template_context.as_hashmap();
+
+        // Create merged template vars with proper precedence
+        let mut merged_vars = serde_json::Map::new();
+
+        // First add configuration values (lower priority)
+        for (key, value) in config_vars {
+            merged_vars.insert(key.clone(), value.clone());
+        }
+
+        // Then add existing workflow variables (higher priority - will override config)
+        for (key, value) in existing_vars {
+            merged_vars.insert(key, value);
+        }
+
+        // Update the context with merged template variables
+        enhanced_context.insert(
+            "_template_vars".to_string(),
+            serde_json::Value::Object(merged_vars),
+        );
+    } else {
         tracing::debug!(
-            "Failed to load sah.toml configuration: {}. Continuing without config variables.",
-            e
+            "Failed to load sah.toml configuration. Continuing without config variables."
         );
     }
 
