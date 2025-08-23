@@ -52,6 +52,15 @@ pub struct CheckCounts {
     pub error_count: usize,
 }
 
+/// Groups of checks organized by category
+struct CheckGroups<'a> {
+    pub system_checks: Vec<&'a Check>,
+    pub config_checks: Vec<&'a Check>,
+    pub prompt_checks: Vec<&'a Check>,
+    pub workflow_checks: Vec<&'a Check>,
+    pub migration_checks: Vec<&'a Check>,
+}
+
 /// Main diagnostic tool for SwissArmyHammer system health checks
 ///
 /// The Doctor struct accumulates diagnostic results and provides a summary
@@ -282,6 +291,50 @@ impl Doctor {
     }
 
 
+
+    /// Group checks by category
+    fn group_checks_by_category(&self) -> CheckGroups<'_> {
+        let mut system_checks = Vec::new();
+        let mut config_checks = Vec::new();
+        let mut prompt_checks = Vec::new();
+        let mut workflow_checks = Vec::new();
+        let mut migration_checks = Vec::new();
+
+        for check in &self.checks {
+            if check.name.contains("Installation")
+                || check.name.contains("PATH")
+                || check.name.contains("Permission")
+                || check.name.contains("Binary")
+            {
+                system_checks.push(check);
+            } else if check.name.contains("Claude")
+                || check.name.contains("Config")
+                || check.name.contains("MCP")
+            {
+                config_checks.push(check);
+            } else if check.name.contains("Prompt")
+                || check.name.contains("YAML")
+                || check.name.contains("Template")
+            {
+                prompt_checks.push(check);
+            } else if check.name.contains("Workflow") || check.name.contains("workflow") {
+                workflow_checks.push(check);
+            } else if check.name.contains("Migration") || check.name.contains("migration") {
+                migration_checks.push(check);
+            } else {
+                // Default to system checks
+                system_checks.push(check);
+            }
+        }
+
+        CheckGroups {
+            system_checks,
+            config_checks,
+            prompt_checks,
+            workflow_checks,
+            migration_checks,
+        }
+    }
 
     /// Print a category of checks
     fn print_check_category(&self, checks: &[&Check], category_name: &str, use_color: bool) {

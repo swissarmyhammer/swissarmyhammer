@@ -297,6 +297,9 @@ Example:
                 ),
         );
 
+        // Add static commands before MCP tool commands
+        cli = Self::add_static_commands(cli);
+
         // Add dynamic MCP tool commands using pre-computed data
         for (category_name, category_data) in &self.category_commands {
             cli =
@@ -548,5 +551,585 @@ Example:
         }
 
         arg
+    }
+
+    /// Add static commands to the CLI (doctor, prompt, flow, validate, plan, implement)
+    fn add_static_commands(mut cli: Command) -> Command {
+        // Add doctor command
+        cli = cli.subcommand(
+            Command::new("doctor")
+                .about("Diagnose configuration and setup issues")
+                .long_about(
+                    "
+Runs comprehensive diagnostics to help troubleshoot setup issues.
+The doctor command will check:
+
+- If swissarmyhammer is in your PATH
+- Claude Code MCP configuration
+- Prompt directories and permissions
+- YAML syntax in prompt files
+- File watching capabilities
+
+Exit codes:
+  0 - All checks passed
+  1 - Warnings found
+  2 - Errors found
+
+Example:
+  swissarmyhammer doctor
+  swissarmyhammer doctor --migration    # Check migration status and conflicts
+                ",
+                )
+                .arg(
+                    Arg::new("migration")
+                        .long("migration")
+                        .help("Check migration status and validate directory consolidation readiness")
+                        .action(ArgAction::SetTrue),
+                ),
+        );
+
+        // Add prompt command with subcommands
+        cli = cli.subcommand(Self::build_prompt_command());
+
+        // Add flow command with subcommands  
+        cli = cli.subcommand(Self::build_flow_command());
+
+        // Add validate command
+        cli = cli.subcommand(
+            Command::new("validate")
+                .about("Validate prompt files and workflows for syntax and best practices")
+                .long_about(
+                    "
+Validates BOTH prompt files AND workflows for syntax errors and best practices.
+
+This command comprehensively validates:
+- All prompt files from builtin, user, and local directories
+- All workflow files from standard locations (builtin, user, local)
+
+Validation checks:
+- YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
+- Required fields (title, description)
+- Template variables match arguments
+- Liquid template syntax
+- Workflow structure and connectivity
+- Best practice recommendations
+
+Examples:
+  swissarmyhammer validate                 # Validate all prompts and workflows
+  swissarmyhammer validate --quiet         # CI/CD mode - only shows errors, hides warnings
+  swissarmyhammer validate --format json   # JSON output for tooling
+                ",
+                )
+                .arg(
+                    Arg::new("quiet")
+                        .short('q')
+                        .long("quiet")
+                        .help("Suppress all output except errors")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("format")
+                        .long("format")
+                        .help("Output format")
+                        .value_parser(["text", "json"])
+                        .default_value("text"),
+                )
+                .arg(
+                    Arg::new("workflow-dirs")
+                        .long("workflow-dir")
+                        .help("[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
+                        .action(ArgAction::Append)
+                        .hide(true),
+                ),
+        );
+
+        // Add plan command
+        cli = cli.subcommand(
+            Command::new("plan")
+                .about("Plan a specific specification file")
+                .long_about(
+                    "
+Execute planning workflow for a specific specification file.
+Takes a path to a markdown specification file and generates step-by-step implementation issues.
+
+The planning workflow will:
+• Read and analyze the specified plan file
+• Review existing issues to avoid conflicts
+• Generate numbered issue files in the ./issues directory  
+• Create incremental, focused implementation steps
+• Use existing memos and codebase context for better planning
+
+Examples:
+  swissarmyhammer plan ./specification/user-authentication.md
+  swissarmyhammer plan /home/user/projects/plans/database-migration.md
+                ",
+                )
+                .arg(
+                    Arg::new("plan_filename")
+                        .help("Path to the markdown plan file (relative or absolute)")
+                        .value_name("PLAN_FILENAME")
+                        .required(true),
+                ),
+        );
+
+        // Add implement command
+        cli = cli.subcommand(
+            Command::new("implement")
+                .about("Execute the implement workflow for autonomous issue resolution")
+                .long_about(
+                    "
+Execute the implement workflow to autonomously work through and resolve all pending issues.
+This is a convenience command equivalent to 'sah flow run implement'.
+
+The implement workflow will:
+• Check for pending issues in the ./issues directory
+• Work through each issue systematically  
+• Continue until all issues are resolved
+• Provide status updates throughout the process
+
+Examples:
+  swissarmyhammer implement
+                ",
+                ),
+        );
+
+        cli
+    }
+
+    /// Build the prompt command with all its subcommands
+    fn build_prompt_command() -> Command {
+        Command::new("prompt")
+            .about("Manage and test prompts")
+            .subcommand(
+                Command::new("list")
+                    .about("List all available prompts")
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["table", "json", "yaml"])
+                            .default_value("table"),
+                    )
+                    .arg(
+                        Arg::new("verbose")
+                            .short('v')
+                            .long("verbose")
+                            .help("Show verbose output including arguments")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("source")
+                            .long("source")
+                            .help("Filter by source")
+                            .value_parser(["builtin", "user", "local", "dynamic"]),
+                    )
+                    .arg(
+                        Arg::new("category")
+                            .long("category")
+                            .help("Filter by category"),
+                    )
+                    .arg(
+                        Arg::new("search")
+                            .long("search")
+                            .help("Search prompts by name or description"),
+                    ),
+            )
+            .subcommand(
+                Command::new("test")
+                    .about("Test prompts interactively with sample arguments")
+                    .arg(
+                        Arg::new("prompt_name")
+                            .help("Prompt name to test")
+                            .value_name("PROMPT_NAME"),
+                    )
+                    .arg(
+                        Arg::new("file")
+                            .short('f')
+                            .long("file")
+                            .help("Path to prompt file to test")
+                            .value_name("FILE"),
+                    )
+                    .arg(
+                        Arg::new("vars")
+                            .long("var")
+                            .help("Variables as key=value pairs")
+                            .value_name("KEY=VALUE")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(
+                        Arg::new("raw")
+                            .long("raw")
+                            .help("Show raw output without formatting")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("copy")
+                            .long("copy")
+                            .help("Copy rendered prompt to clipboard")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("save")
+                            .long("save")
+                            .help("Save rendered prompt to file")
+                            .value_name("FILE"),
+                    )
+                    .arg(
+                        Arg::new("debug")
+                            .long("debug")
+                            .help("Show debug information")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("search")
+                    .about("Search for prompts with advanced filtering and ranking")
+                    .arg(
+                        Arg::new("query")
+                            .help("Search query")
+                            .value_name("QUERY")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("in")
+                            .long("in")
+                            .help("Search in specific fields")
+                            .value_delimiter(','),
+                    )
+                    .arg(
+                        Arg::new("regex")
+                            .short('r')
+                            .long("regex")
+                            .help("Use regular expressions")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("fuzzy")
+                            .short('f')
+                            .long("fuzzy")
+                            .help("Enable fuzzy matching for typo tolerance")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("case-sensitive")
+                            .long("case-sensitive")
+                            .help("Case-sensitive search")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("source")
+                            .long("source")
+                            .help("Filter by source")
+                            .value_parser(["builtin", "user", "local", "dynamic"]),
+                    )
+                    .arg(
+                        Arg::new("has-arg")
+                            .long("has-arg")
+                            .help("Find prompts with specific argument name"),
+                    )
+                    .arg(
+                        Arg::new("no-args")
+                            .long("no-args")
+                            .help("Find prompts without any arguments")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("full")
+                            .long("full")
+                            .help("Show complete prompt details")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["table", "json", "yaml"])
+                            .default_value("table"),
+                    )
+                    .arg(
+                        Arg::new("highlight")
+                            .long("highlight")
+                            .help("Highlight matching terms in output")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("limit")
+                            .short('l')
+                            .long("limit")
+                            .help("Maximum number of results to show")
+                            .value_parser(clap::value_parser!(usize)),
+                    ),
+            )
+    }
+
+    /// Build the flow command with all its subcommands
+    fn build_flow_command() -> Command {
+        Command::new("flow")
+            .about("Execute and manage workflows")
+            .subcommand(
+                Command::new("run")
+                    .about("Run a workflow")
+                    .arg(
+                        Arg::new("workflow")
+                            .help("Workflow name to run")
+                            .value_name("WORKFLOW")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("vars")
+                            .long("var")
+                            .help("Initial variables as key=value pairs")
+                            .value_name("KEY=VALUE")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(
+                        Arg::new("interactive")
+                            .short('i')
+                            .long("interactive")
+                            .help("Interactive mode - prompt at each state")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("dry-run")
+                            .long("dry-run")
+                            .help("Dry run - show execution plan without running")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("test")
+                            .long("test")
+                            .help("Test mode - execute with mocked actions")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("timeout")
+                            .long("timeout")
+                            .help("Execution timeout (e.g., 30s, 5m, 1h)")
+                            .value_name("DURATION"),
+                    )
+                    .arg(
+                        Arg::new("quiet")
+                            .short('q')
+                            .long("quiet")
+                            .help("Quiet mode - only show errors")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("resume")
+                    .about("Resume a paused workflow run")
+                    .arg(
+                        Arg::new("run_id")
+                            .help("Run ID to resume")
+                            .value_name("RUN_ID")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("interactive")
+                            .short('i')
+                            .long("interactive")
+                            .help("Interactive mode - prompt at each state")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("timeout")
+                            .long("timeout")
+                            .help("Execution timeout")
+                            .value_name("DURATION"),
+                    )
+                    .arg(
+                        Arg::new("quiet")
+                            .short('q')
+                            .long("quiet")
+                            .help("Quiet mode - only show errors")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("list")
+                    .about("List available workflows")
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["table", "json", "yaml"])
+                            .default_value("table"),
+                    )
+                    .arg(
+                        Arg::new("verbose")
+                            .short('v')
+                            .long("verbose")
+                            .help("Show verbose output including workflow details")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("source")
+                            .long("source")
+                            .help("Filter by source")
+                            .value_parser(["builtin", "user", "local", "dynamic"]),
+                    ),
+            )
+            .subcommand(
+                Command::new("status")
+                    .about("Check status of a workflow run")
+                    .arg(
+                        Arg::new("run_id")
+                            .help("Run ID to check")
+                            .value_name("RUN_ID")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["table", "json", "yaml"])
+                            .default_value("table"),
+                    )
+                    .arg(
+                        Arg::new("watch")
+                            .short('w')
+                            .long("watch")
+                            .help("Watch for status changes")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("logs")
+                    .about("View logs for a workflow run")
+                    .arg(
+                        Arg::new("run_id")
+                            .help("Run ID to view logs for")
+                            .value_name("RUN_ID")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("follow")
+                            .short('f')
+                            .long("follow")
+                            .help("Follow log output")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("tail")
+                            .short('n')
+                            .long("tail")
+                            .help("Number of log lines to show")
+                            .value_parser(clap::value_parser!(usize)),
+                    )
+                    .arg(
+                        Arg::new("level")
+                            .long("level")
+                            .help("Filter logs by level")
+                            .value_name("LEVEL"),
+                    ),
+            )
+            .subcommand(
+                Command::new("metrics")
+                    .about("View metrics for workflow runs")
+                    .arg(
+                        Arg::new("run_id")
+                            .help("Run ID to view metrics for (optional)")
+                            .value_name("RUN_ID"),
+                    )
+                    .arg(
+                        Arg::new("workflow")
+                            .long("workflow")
+                            .help("Workflow name to filter by")
+                            .value_name("WORKFLOW"),
+                    )
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["table", "json", "yaml"])
+                            .default_value("table"),
+                    )
+                    .arg(
+                        Arg::new("global")
+                            .short('g')
+                            .long("global")
+                            .help("Show global metrics summary")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("visualize")
+                    .about("Generate execution visualization")
+                    .arg(
+                        Arg::new("run_id")
+                            .help("Run ID to visualize")
+                            .value_name("RUN_ID")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("format")
+                            .long("format")
+                            .help("Output format")
+                            .value_parser(["mermaid", "html", "json", "dot"])
+                            .default_value("mermaid"),
+                    )
+                    .arg(
+                        Arg::new("output")
+                            .short('o')
+                            .long("output")
+                            .help("Output file path")
+                            .value_name("FILE"),
+                    )
+                    .arg(
+                        Arg::new("timing")
+                            .long("timing")
+                            .help("Include timing information")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("counts")
+                            .long("counts")
+                            .help("Include execution counts")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("path-only")
+                            .long("path-only")
+                            .help("Show only executed path")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
+                Command::new("test")
+                    .about("Test a workflow without executing actions")
+                    .arg(
+                        Arg::new("workflow")
+                            .help("Workflow name to test")
+                            .value_name("WORKFLOW")
+                            .required(true),
+                    )
+                    .arg(
+                        Arg::new("vars")
+                            .long("var")
+                            .help("Initial variables as key=value pairs")
+                            .value_name("KEY=VALUE")
+                            .action(ArgAction::Append),
+                    )
+                    .arg(
+                        Arg::new("interactive")
+                            .short('i')
+                            .long("interactive")
+                            .help("Interactive mode - prompt at each state")
+                            .action(ArgAction::SetTrue),
+                    )
+                    .arg(
+                        Arg::new("timeout")
+                            .long("timeout")
+                            .help("Execution timeout")
+                            .value_name("DURATION"),
+                    )
+                    .arg(
+                        Arg::new("quiet")
+                            .short('q')
+                            .long("quiet")
+                            .help("Quiet mode - only show errors")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
     }
 }
