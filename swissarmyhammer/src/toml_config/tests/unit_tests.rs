@@ -7,25 +7,6 @@ use crate::toml_config::{ConfigError, ConfigParser, ConfigValue, Configuration, 
 use std::collections::HashMap;
 use tempfile::TempDir;
 
-// Directory guard to ensure we always restore the original directory
-struct DirGuard {
-    original_dir: std::path::PathBuf,
-}
-
-impl DirGuard {
-    fn new(original_dir: &std::path::Path) -> Self {
-        Self {
-            original_dir: original_dir.to_path_buf(),
-        }
-    }
-}
-
-impl Drop for DirGuard {
-    fn drop(&mut self) {
-        let _ = std::env::set_current_dir(&self.original_dir);
-    }
-}
-
 /// Test ConfigValue enum conversion and serialization
 mod config_value_tests {
     use super::*;
@@ -1129,6 +1110,8 @@ mod parser_tests {
 
     #[test]
     fn test_parser_load_from_repo_root() {
+        use std::panic;
+
         let temp_dir = TempDir::new().unwrap();
 
         // Create .git directory to simulate repository root
@@ -1149,12 +1132,18 @@ mod parser_tests {
 
         // Change to subdirectory and test loading with proper cleanup
         let original_dir = std::env::current_dir().unwrap();
-        let config_result = {
-            let _guard = DirGuard::new(&original_dir);
-            std::env::set_current_dir(&sub_dir).unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+
+        // Use panic::catch_unwind to ensure directory is restored even on panic
+        let result = panic::catch_unwind(|| {
             let parser = ConfigParser::new();
-            parser.load_from_repo_root().unwrap()
-        };
+            parser.load_from_repo_root()
+        });
+
+        // Always restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        let config_result = result.unwrap().unwrap();
         assert!(config_result.is_some());
         let config = config_result.unwrap();
         assert_eq!(

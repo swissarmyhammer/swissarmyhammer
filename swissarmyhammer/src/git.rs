@@ -752,7 +752,7 @@ mod tests {
     #[test]
     fn test_git_operations_new_in_git_repo() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        let _temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
         let original_dir = std::env::current_dir().unwrap();
 
         // Ensure we restore directory on panic or normal exit
@@ -769,7 +769,7 @@ mod tests {
         let _guard = DirGuard { original_dir };
 
         // Change to test repo directory
-        std::env::set_current_dir(_temp_dir.path()).unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Test creating GitOperations
         let result = GitOperations::new();
@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn test_git_operations_new_not_in_git_repo() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        let _temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();
 
         // Ensure we restore directory on panic or normal exit
@@ -805,7 +805,7 @@ mod tests {
         let _guard = DirGuard { original_dir };
 
         // Change to non-git directory
-        std::env::set_current_dir(_temp_dir.path()).unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
 
         // Test creating GitOperations should fail
         let result = GitOperations::new();
@@ -1747,16 +1747,16 @@ mod tests {
     #[test]
     fn test_abort_file_contains_detailed_context() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        let _temp_dir = create_test_git_repo().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
 
         // Save original directory and restore it safely at the end
         let original_dir = std::env::current_dir().unwrap();
 
         // Use a closure to ensure directory is restored even if test panics
         let test_result = std::panic::catch_unwind(|| {
-            std::env::set_current_dir(_temp_dir.path()).unwrap();
+            std::env::set_current_dir(temp_dir.path()).unwrap();
 
-            let git_ops = GitOperations::with_work_dir(_temp_dir.path().to_path_buf()).unwrap();
+            let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
             // Create issue branch
             git_ops.create_work_branch("detailed_issue").unwrap();
@@ -1768,7 +1768,7 @@ mod tests {
             assert!(result.is_err());
 
             // Check abort file contains detailed context (use temp directory path)
-            let abort_file = _temp_dir.path().join(".swissarmyhammer/.abort");
+            let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
             assert!(abort_file.exists());
 
             let abort_content = std::fs::read_to_string(&abort_file).unwrap();

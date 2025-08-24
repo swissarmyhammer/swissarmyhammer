@@ -1666,9 +1666,9 @@ mod comprehensive_error_handling_tests {
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("stdout message"));
 
-        // stderr should be empty for successful command, but allow shell-init messages during testing
+        // stderr should be empty for successful command
         let stderr = context.get("stderr").unwrap().as_str().unwrap();
-        assert!(stderr.trim().is_empty() || stderr.contains("shell-init"));
+        assert_eq!(stderr.trim(), "");
     }
 
     #[tokio::test]

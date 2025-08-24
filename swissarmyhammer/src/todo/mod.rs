@@ -369,11 +369,11 @@ mod tests {
         use std::env;
         use tempfile::TempDir;
 
-        let _temp_dir = TempDir::new().unwrap(); // Keep handle alive
+        let temp_dir = TempDir::new().unwrap();
         let original_dir = env::current_dir().unwrap();
 
         // Change to non-git directory
-        env::set_current_dir(_temp_dir.path()).unwrap();
+        env::set_current_dir(temp_dir.path()).unwrap();
         let result = get_todo_directory();
         env::set_current_dir(original_dir).unwrap();
 
