@@ -928,11 +928,11 @@ mod tests {
         use tempfile::TempDir;
 
         // Create a temporary directory that doesn't have .git (not a Git repository)
-        let temp_dir = TempDir::new().unwrap();
+        let _temp_dir = TempDir::new().unwrap(); // Keep handle alive
 
         // Change to a directory without .git repository
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_temp_dir.path()).unwrap();
 
         let config = SemanticConfig::default();
 
@@ -957,15 +957,15 @@ mod tests {
         use std::fs;
         use tempfile::TempDir;
 
-        let temp_dir = TempDir::new().unwrap();
+        let _temp_dir = TempDir::new().unwrap(); // Keep handle alive
 
         // Create Git repository without .swissarmyhammer directory
-        fs::create_dir(temp_dir.path().join(".git")).unwrap();
+        fs::create_dir(_temp_dir.path().join(".git")).unwrap();
         // Note: intentionally NOT creating .swissarmyhammer
 
         // Change to the temp directory to simulate being in a Git repository
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        std::env::set_current_dir(_temp_dir.path()).unwrap();
 
         let config = SemanticConfig::default();
 
