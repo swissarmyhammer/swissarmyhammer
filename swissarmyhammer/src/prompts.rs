@@ -1211,7 +1211,21 @@ impl PromptLibrary {
     ///     Err(e) => eprintln!("Failed to render system prompt: {}", e),
     /// }
     /// ```
-    pub fn render_system_prompt() -> Result<String> {
+    /// Creates a PromptLibrary with standard prompt directories loaded.
+    ///
+    /// This method sets up a PromptLibrary with the standard directories:
+    /// - builtin/prompts (if exists)
+    /// - .swissarmyhammer/prompts (if exists)  
+    /// - prompts (if exists)
+    ///
+    /// # Returns
+    ///
+    /// A configured PromptLibrary ready to render prompts from standard locations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of the existing directories cannot be added.
+    pub fn with_standard_directories() -> Result<Self> {
         let mut library = PromptLibrary::new();
 
         // Add builtin prompts directory
@@ -1231,9 +1245,39 @@ impl PromptLibrary {
             }
         }
 
-        // Use the standard render_prompt method for consistency
+        Ok(library)
+    }
+
+    /// Renders the system prompt using the standard PromptLibrary infrastructure.
+    ///
+    /// This method uses the existing `render_prompt_with_env` functionality with
+    /// the `.system` prompt name and an empty environment map.
+    ///
+    /// # Returns
+    ///
+    /// The rendered system prompt content as a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The `.system` prompt cannot be found in standard directories
+    /// - Template rendering fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer::PromptLibrary;
+    ///
+    /// let result = PromptLibrary::render_system_prompt();
+    /// match result {
+    ///     Ok(content) => println!("System prompt: {}", content),
+    ///     Err(e) => eprintln!("Failed to render system prompt: {}", e),
+    /// }
+    /// ```
+    pub fn render_system_prompt() -> Result<String> {
+        let library = Self::with_standard_directories()?;
         let args = HashMap::new();
-        library.render_prompt(".system", &args)
+        library.render_prompt_with_env(".system", &args)
             .map_err(|e| SwissArmyHammerError::Template(
                 format!("Failed to render system prompt: {}. Make sure .system prompt exists in one of the standard directories (builtin/prompts, .swissarmyhammer/prompts, prompts)", e)
             ))
