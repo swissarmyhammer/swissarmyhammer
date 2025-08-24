@@ -51,8 +51,6 @@ pub mod prompt_resolver;
 /// Template engine and rendering
 pub mod template;
 
-
-
 /// Storage abstractions and implementations
 pub mod storage;
 
@@ -151,8 +149,6 @@ pub use storage::{PromptStorage, StorageBackend};
 /// Template engine and rendering functionality
 pub use template::{Template, TemplateEngine};
 
-
-
 /// Workflow system for state-based execution
 pub use workflow::{
     State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
@@ -226,8 +222,6 @@ pub mod prelude {
         PromptLoader, PromptStorage, Result, StorageBackend, SwissArmyHammerError,
         SwissArmyHammerPlugin, Template, TemplateEngine,
     };
-
-
 
     pub use crate::prompt_search::{SearchEngine, SearchResult};
     pub use crate::search_advanced::{

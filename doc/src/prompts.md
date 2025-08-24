@@ -277,11 +277,8 @@ Main content here...
    editor .swissarmyhammer/prompts/.system.md
    ```
 
-4. **Configuration**: System prompt injection can be controlled via environment variables:
+4. **Configuration**: System prompt injection is always enabled and cannot be disabled. Debug logging can be controlled via environment variables:
    ```bash
-   # Disable system prompt injection
-   export SAH_CLAUDE_SYSTEM_PROMPT_ENABLED=false
-   
    # Enable debug logging
    export SAH_CLAUDE_SYSTEM_PROMPT_DEBUG=true
    ```
