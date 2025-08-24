@@ -138,6 +138,69 @@ impl ConfigParser {
         Ok(None)
     }
 
+    /// Load configuration from repository root with a specific starting directory
+    ///
+    /// This method searches for a sah.toml file starting from the specified directory
+    /// and walking up the filesystem until it reaches the repository root (directory with .git).
+    /// If not in a git repository, returns None.
+    ///
+    /// # Arguments
+    /// * `start_dir` - Directory to start the search from
+    ///
+    /// # Returns
+    /// * `Ok(Some(Configuration))` - Found and parsed configuration
+    /// * `Ok(None)` - No configuration found or not in a git repository
+    /// * `Err(ConfigError)` - Parsing or validation error
+    pub fn load_from_repo_root_with_start_dir(
+        &self,
+        start_dir: &Path,
+    ) -> Result<Option<Configuration>, ConfigError> {
+        let mut search_dir = start_dir;
+
+        // First, find the repository root
+        let mut repo_root = None;
+        let mut check_dir = search_dir;
+        loop {
+            if check_dir.join(".git").exists() {
+                repo_root = Some(check_dir);
+                break;
+            }
+            match check_dir.parent() {
+                Some(parent) => check_dir = parent,
+                None => break, // Reached filesystem root
+            }
+        }
+
+        // If not in a repository, return None
+        let repo_root = match repo_root {
+            Some(root) => root,
+            None => return Ok(None),
+        };
+
+        // Now search for sah.toml from start directory up to repository root
+        search_dir = start_dir;
+        loop {
+            let config_path = search_dir.join("sah.toml");
+
+            if config_path.exists() {
+                return Ok(Some(self.parse_file(&config_path)?));
+            }
+
+            // Stop when we reach the repository root
+            if search_dir == repo_root {
+                break;
+            }
+
+            // Move to parent directory
+            match search_dir.parent() {
+                Some(parent) => search_dir = parent,
+                None => break, // Reached filesystem root (shouldn't happen)
+            }
+        }
+
+        Ok(None)
+    }
+
     /// Read file contents with UTF-8 validation
     fn read_file_contents(&self, file_path: &Path) -> Result<String, ConfigError> {
         if self.validate_utf8 {

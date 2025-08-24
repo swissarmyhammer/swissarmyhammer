@@ -1110,8 +1110,6 @@ mod parser_tests {
 
     #[test]
     fn test_parser_load_from_repo_root() {
-        use std::panic;
-
         let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
 
@@ -1131,20 +1129,9 @@ mod parser_tests {
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        // Change to subdirectory and test loading with proper cleanup
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&sub_dir).unwrap();
-
-        // Use panic::catch_unwind to ensure directory is restored even on panic
-        let result = panic::catch_unwind(|| {
-            let parser = ConfigParser::new();
-            parser.load_from_repo_root()
-        });
-
-        // Always restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
-
-        let config_result = result.unwrap().unwrap();
+        // Test loading from subdirectory without changing global state
+        let parser = ConfigParser::new();
+        let config_result = parser.load_from_repo_root_with_start_dir(&sub_dir).unwrap();
         assert!(config_result.is_some());
         let config = config_result.unwrap();
         assert_eq!(

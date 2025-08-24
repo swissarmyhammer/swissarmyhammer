@@ -3,7 +3,8 @@
 //! This module tests the complete configuration system workflow including file loading,
 //! template integration, and complex real-world scenarios.
 
-use crate::toml_config::{load_repo_config, parse_config_string, ConfigValue};
+use crate::toml_config::parser::ConfigParser;
+use crate::toml_config::{parse_config_string, ConfigValue};
 use std::fs;
 use tempfile::TempDir;
 
@@ -318,8 +319,6 @@ fn test_template_integration() {
 /// Test file discovery from different directory structures
 #[test]
 fn test_file_discovery_from_different_directories() {
-    use std::panic;
-
     let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
     let temp_dir = TempDir::new().unwrap();
 
@@ -356,21 +355,11 @@ fn test_file_discovery_from_different_directories() {
     let integration_dir = tests_dir.join("integration");
     fs::create_dir(&integration_dir).unwrap();
 
-    // Test discovery from different directories with proper cleanup
-    let original_dir = std::env::current_dir().unwrap();
-
-    // Helper function to run test and ensure directory cleanup
-    let run_test = |test_dir: &std::path::Path| {
-        panic::catch_unwind(|| {
-            std::env::set_current_dir(test_dir).unwrap();
-            load_repo_config()
-        })
-    };
+    // Test discovery from different directories without changing global state
+    let parser = ConfigParser::new();
 
     // Test from repository root
-    let result = run_test(repo_root);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = parser.load_from_repo_root_with_start_dir(repo_root);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -382,9 +371,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from src directory
-    let result = run_test(&src_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = parser.load_from_repo_root_with_start_dir(&src_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -396,9 +383,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from deeply nested directory
-    let result = run_test(&deep_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = parser.load_from_repo_root_with_start_dir(&deep_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -410,9 +395,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from tests directory
-    let result = run_test(&tests_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = parser.load_from_repo_root_with_start_dir(&tests_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -424,9 +407,7 @@ fn test_file_discovery_from_different_directories() {
     }
 
     // Test from integration tests directory
-    let result = run_test(&integration_dir);
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = parser.load_from_repo_root_with_start_dir(&integration_dir);
     assert!(config_result.is_ok());
     if let Ok(Some(config)) = config_result {
         assert_eq!(
@@ -439,9 +420,7 @@ fn test_file_discovery_from_different_directories() {
 
     // Test from directory without .git (should return None)
     let non_repo_dir = TempDir::new().unwrap();
-    let result = run_test(non_repo_dir.path());
-    std::env::set_current_dir(&original_dir).unwrap();
-    let config_result = result.unwrap();
+    let config_result = parser.load_from_repo_root_with_start_dir(non_repo_dir.path());
     assert!(config_result.is_ok());
     assert!(config_result.unwrap().is_none());
 
