@@ -54,3 +54,50 @@ This will eliminate the duplicated library setup logic and use the existing, tes
 - **Integration**: ✅ All existing tests continue to pass
 
 The refactoring successfully eliminates the duplication while maintaining all existing functionality.
+
+## Code Review Results
+
+### Summary
+
+✅ **ISSUE RESOLVED**: The duplicate prompt resolving logic in `render_system_prompt` has been successfully eliminated.
+
+### Current Branch
+`issue/01K3ED27N2CDW7XY0QY9BD7SAC`
+
+### Verification Results
+
+All verification steps completed successfully:
+
+1. **Build**: ✅ `cargo build --lib` - compiles without errors
+2. **Linting**: ✅ `cargo clippy` - no warnings or errors  
+3. **Formatting**: ✅ `cargo fmt` - code properly formatted
+4. **Functionality**: ✅ `sah prompt test .system` - system prompt renders correctly with full content
+
+### Details
+
+**Current Implementation** (`swissarmyhammer/src/prompts.rs:1277`):
+```rust
+pub fn render_system_prompt() -> Result<String> {
+    let library = Self::with_standard_directories()?;
+    let args = HashMap::new();
+    library.render_prompt_with_env(".system", &args)
+        .map_err(|e| SwissArmyHammerError::Template(
+            format!("Failed to render system prompt: {}. Make sure .system prompt exists in one of the standard directories (builtin/prompts, .swissarmyhammer/prompts, prompts)", e)
+        ))
+}
+```
+
+**Key Improvements Made:**
+
+1. ✅ **Extracted Library Setup Logic**: The `with_standard_directories()` method eliminates duplicate directory setup code
+2. ✅ **Uses Standard Infrastructure**: Now calls `render_prompt_with_env()` instead of duplicating prompt rendering logic  
+3. ✅ **Follows Established Patterns**: Uses the same infrastructure as other prompt rendering functionality
+4. ✅ **Maintains Backward Compatibility**: The public API remains unchanged
+
+**Code Quality Checks:**
+- No compiler errors or warnings
+- No clippy violations  
+- Code properly formatted
+- System prompt functionality verified working
+
+The refactoring successfully eliminates code duplication while maintaining all existing functionality and improving maintainability.
