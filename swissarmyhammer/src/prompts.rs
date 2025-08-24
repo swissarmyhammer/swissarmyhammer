@@ -1189,64 +1189,6 @@ impl PromptLibrary {
     pub fn remove(&mut self, name: &str) -> Result<()> {
         self.storage.remove(name)
     }
-
-    /// Render the system prompt using standard PromptLibrary infrastructure
-    ///
-    /// This method loads the .system prompt from standard prompt directories and renders it
-    /// using the same pipeline as other prompts. It searches the following directories in order:
-    /// 1. builtin/prompts (relative to current directory)
-    /// 2. .swissarmyhammer/prompts
-    /// 3. prompts
-    ///
-    /// Returns the rendered system prompt content as a string with improved error messages.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer::PromptLibrary;
-    ///
-    /// let result = PromptLibrary::render_system_prompt();
-    /// match result {
-    ///     Ok(content) => println!("System prompt: {}", content),
-    ///     Err(e) => eprintln!("Failed to render system prompt: {}", e),
-    /// }
-    /// ```
-    /// Creates a PromptLibrary with standard prompt directories loaded.
-    ///
-    /// This method sets up a PromptLibrary with the standard directories:
-    /// - builtin/prompts (if exists)
-    /// - .swissarmyhammer/prompts (if exists)  
-    /// - prompts (if exists)
-    ///
-    /// # Returns
-    ///
-    /// A configured PromptLibrary ready to render prompts from standard locations.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any of the existing directories cannot be added.
-    pub fn with_standard_directories() -> Result<Self> {
-        let mut library = PromptLibrary::new();
-
-        // Add builtin prompts directory
-        if let Ok(builtin_path) = std::env::current_dir().map(|p| p.join("builtin/prompts")) {
-            if builtin_path.exists() {
-                library.add_directory(builtin_path)?;
-            }
-        }
-
-        // Add other standard prompt directories
-        let standard_paths = [".swissarmyhammer/prompts", "prompts"];
-
-        for path_str in &standard_paths {
-            let path = std::path::Path::new(path_str);
-            if path.exists() {
-                library.add_directory(path)?;
-            }
-        }
-
-        Ok(library)
-    }
 }
 
 impl Default for PromptLibrary {
