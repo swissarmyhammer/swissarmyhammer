@@ -3,11 +3,12 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
+use crate::common::render_system_prompt;
 use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
 };
-use crate::system_prompt::render_system_prompt;
+
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::mcp_integration::{response_processing, WorkflowShellContext};
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
@@ -406,6 +407,8 @@ impl PromptAction {
             (rendered_prompt, None)
         }
     }
+
+
 
     /// Get Claude CLI path from context or environment
     fn get_claude_path(&self, context: &HashMap<String, Value>) -> String {
