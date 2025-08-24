@@ -6,7 +6,7 @@ use crate::mcp::memo_types::GetAllContextRequest;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 
 /// Tool for getting all memo content formatted for AI context consumption
 #[derive(Default)]

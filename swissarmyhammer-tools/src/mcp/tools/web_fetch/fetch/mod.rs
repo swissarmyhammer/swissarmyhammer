@@ -9,7 +9,7 @@ use crate::mcp::types::WebFetchRequest;
 use async_trait::async_trait;
 use markdowndown::{convert_url_with_config, Config};
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::time::Instant;
 
 /// Configuration constants for web fetch operations
@@ -201,6 +201,7 @@ impl WebFetchTool {
                 }),
                 None,
             )],
+            structured_content: None,
             is_error: Some(false),
         })
     }
@@ -249,6 +250,7 @@ impl WebFetchTool {
                 }),
                 None,
             )],
+            structured_content: None,
             is_error: Some(true),
         })
     }

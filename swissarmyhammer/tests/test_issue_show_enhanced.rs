@@ -161,7 +161,7 @@ impl IssueShowTestEnvironment {
     async fn execute_tool(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.tool.execute(arguments, &self.tool_context).await
     }
 }

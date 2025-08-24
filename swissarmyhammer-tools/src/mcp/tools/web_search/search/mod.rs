@@ -11,7 +11,7 @@ use crate::mcp::tools::web_search::types::ScoringConfig;
 use crate::mcp::tools::web_search::types::*;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::time::{Duration, Instant};
 
 /// Tool for performing web searches using DuckDuckGo web scraping

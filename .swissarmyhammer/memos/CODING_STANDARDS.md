@@ -1,4 +1,9 @@
+
+
 # SwissArmyHammer Coding Standards
+
+
+NEVER ignore a test, for any reason -- 'flakiness' is not an excuse- fix the root cause.
 
 ## Architecture Guidelines
 

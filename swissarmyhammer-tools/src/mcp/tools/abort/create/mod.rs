@@ -8,7 +8,7 @@ use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use serde::Deserialize;
 use swissarmyhammer::common::create_abort_file_current_dir;
 
@@ -143,7 +143,8 @@ mod tests {
     #[test]
     fn test_parse_missing_reason() {
         let args = serde_json::Map::new();
-        let result: Result<AbortCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<AbortCreateRequest, rmcp::ErrorData> =
+            BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -318,7 +319,8 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("reason".to_string(), serde_json::Value::Number(42.into()));
 
-        let result: Result<AbortCreateRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<AbortCreateRequest, rmcp::ErrorData> =
+            BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 

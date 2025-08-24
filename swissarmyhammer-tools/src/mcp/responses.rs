@@ -11,6 +11,7 @@ pub fn create_success_response(message: String) -> CallToolResult {
             None,
         )],
         is_error: Some(false),
+        structured_content: None,
     }
 }
 
@@ -22,6 +23,7 @@ pub fn create_error_response(message: String) -> CallToolResult {
             None,
         )],
         is_error: Some(true),
+        structured_content: None,
     }
 }
 
@@ -56,6 +58,7 @@ pub fn create_issue_response(issue_info: &IssueInfo) -> CallToolResult {
             None,
         )],
         is_error: Some(false),
+        structured_content: None,
     }
 }
 
@@ -75,5 +78,6 @@ pub fn create_mark_complete_response(issue: &Issue) -> CallToolResult {
             None,
         )],
         is_error: Some(false),
+        structured_content: None,
     }
 }

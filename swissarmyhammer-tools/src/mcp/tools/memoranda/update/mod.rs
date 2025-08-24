@@ -6,7 +6,7 @@ use crate::mcp::memo_types::UpdateMemoRequest;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 
 /// Tool for updating a memo's content by its ID
 #[derive(Default)]

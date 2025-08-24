@@ -17,7 +17,7 @@
 //! All utilities provide comprehensive error handling with MCP-compatible
 //! error types for consistent client experience across all file tools.
 
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

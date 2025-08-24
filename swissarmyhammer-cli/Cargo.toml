@@ -16,12 +16,6 @@ path = "src/lib.rs"
 name = "sah"
 path = "src/main.rs"
 
-[features]
-default = ["dynamic-cli"]
-dynamic-cli = []
-file-cli-tests-disabled = []
-
-
 [dependencies]
 # Library dependencies
 swissarmyhammer = { path = "../swissarmyhammer" }

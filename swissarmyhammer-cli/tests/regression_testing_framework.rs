@@ -291,52 +291,31 @@ impl RegressionTestSuite {
     ) -> Result<CapturedOutput> {
         use tokio::time::{timeout, Duration};
 
-        // Find the actual sah executable in target/debug/deps/
-        let binary_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
-            path
-        } else {
-            // Fallback: find the sah executable in deps directory
-            let base_dir = env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "");
-            let deps_dir = format!("{}/target/debug/deps", base_dir);
+        // Find the built sah binary - cargo build should have created it already
+        // Use CARGO_MANIFEST_DIR which points to the actual source project directory
+        let project_root = std::env::var("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                // Fallback: start from current executable path and search upward
+                let exe_path = std::env::current_exe().unwrap_or_default();
+                exe_path
+                    .ancestors()
+                    .find(|path| path.join("Cargo.toml").exists())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::env::current_dir().unwrap())
+            });
 
-            match std::fs::read_dir(&deps_dir) {
-                Ok(entries) => {
-                    let mut sah_exe = None;
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                            if filename.starts_with("sah-") && !filename.contains('.') {
-                                // Check if it's executable by trying to get metadata
-                                if let Ok(metadata) = std::fs::metadata(&path) {
-                                    // On Unix, check if it has execute permissions
-                                    #[cfg(unix)]
-                                    {
-                                        use std::os::unix::fs::PermissionsExt;
-                                        if metadata.permissions().mode() & 0o111 != 0 {
-                                            sah_exe = Some(path);
-                                            break;
-                                        }
-                                    }
-                                    // On Windows, any file in deps is potentially executable
-                                    #[cfg(windows)]
-                                    {
-                                        sah_exe = Some(path);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    sah_exe
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| format!("{}/target/debug/sah", base_dir))
-                }
-                Err(_) => format!("{}/target/debug/sah", base_dir),
-            }
-        };
+        let binary_path = project_root
+            .parent()
+            .unwrap_or(&project_root)
+            .join("target/debug/sah");
 
         let command_future = async {
-            eprintln!("DEBUG: Trying to execute binary at: {}", binary_path);
+            eprintln!(
+                "DEBUG: Trying to execute binary: {:?} with args: {:?}",
+                binary_path, command
+            );
+
             let output = tokio::process::Command::new(&binary_path)
                 .args(command)
                 .current_dir(std::env::current_dir().unwrap())
@@ -603,10 +582,43 @@ async fn test_custom_regression_suite() -> Result<()> {
     let report = RegressionTestReport::from_results(results);
 
     assert_eq!(report.total_tests, 2);
+    // Show detailed report for debugging
+    println!("\n=== Detailed Test Results ===");
+    for result in &report.results {
+        println!("Test: {}", result.test_case.description);
+        println!("Command: sah {}", result.test_case.command.join(" "));
+        println!(
+            "Status: {}",
+            if result.passed {
+                "✅ PASS"
+            } else {
+                "❌ FAIL"
+            }
+        );
+        if let Some(failure) = &result.failure_reason {
+            println!("Failure: {}", failure);
+        }
+        if let Some(exit_code) = result.actual_exit_code {
+            println!(
+                "Exit code: {} (expected: {})",
+                exit_code, result.test_case.expected_exit_code
+            );
+        }
+        if !result.actual_stdout.is_empty() {
+            println!("Stdout: {}", result.actual_stdout);
+        }
+        if !result.actual_stderr.is_empty() {
+            println!("Stderr: {}", result.actual_stderr);
+        }
+        println!("---");
+    }
+
     // At least one should pass
     assert!(
         report.passed_tests >= 1,
-        "At least one custom test should pass"
+        "At least one custom test should pass. Got {} passes out of {} tests",
+        report.passed_tests,
+        report.total_tests
     );
 
     Ok(())

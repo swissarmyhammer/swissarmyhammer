@@ -403,15 +403,17 @@ impl FileSystemIssueStorage {
     /// where the migration result is `Some` if migration was performed,
     /// or `None` if no migration was needed.
     pub fn new_default_with_migration() -> Result<(Self, Option<MigrationResult>)> {
-        // Check if migration should occur
+        // Check if migration should occur and perform it
         let migration_result = if Self::should_migrate()? {
             Some(Self::perform_migration()?)
         } else {
             None
         };
 
-        // Create storage with new defaults
-        let storage = Self::new_default()?;
+        // Create storage with default directory WITHOUT calling new_default()
+        // to avoid double migration
+        let issues_dir = Self::default_directory()?;
+        let storage = Self::new(issues_dir)?;
 
         Ok((storage, migration_result))
     }

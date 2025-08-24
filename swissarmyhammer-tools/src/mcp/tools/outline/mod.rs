@@ -57,7 +57,7 @@
 //!         &self,
 //!         arguments: serde_json::Map<String, serde_json::Value>,
 //!         context: &ToolContext,
-//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
+//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
 //!         let request: generate::OutlineRequest = BaseToolImpl::parse_arguments(arguments)?;
 //!         // Tool implementation here
 //!         Ok(BaseToolImpl::create_success_response("Success!"))

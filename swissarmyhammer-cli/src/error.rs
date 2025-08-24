@@ -306,7 +306,6 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
 }
 
 /// Convert schema validation errors to CLI errors with appropriate exit codes
-#[cfg(feature = "dynamic-cli")]
 impl From<crate::schema_validation::ValidationError> for CliError {
     fn from(error: crate::schema_validation::ValidationError) -> Self {
         let mut message = format!("❌ Schema validation failed: {}", error);
@@ -328,7 +327,6 @@ impl From<crate::schema_validation::ValidationError> for CliError {
 }
 
 /// Convert schema conversion errors to CLI errors with appropriate exit codes
-#[cfg(feature = "dynamic-cli")]
 impl From<crate::schema_conversion::ConversionError> for CliError {
     fn from(error: crate::schema_conversion::ConversionError) -> Self {
         // Use the existing formatting from schema_conversion module
@@ -344,8 +342,8 @@ impl From<crate::schema_conversion::ConversionError> for CliError {
 }
 
 /// Convert MCP errors to CLI errors with appropriate exit codes
-impl From<rmcp::Error> for CliError {
-    fn from(error: rmcp::Error) -> Self {
+impl From<rmcp::ErrorData> for CliError {
+    fn from(error: rmcp::ErrorData) -> Self {
         let error_msg = error.to_string();
         // Regular MCP error handling - use EXIT_WARNING for standard MCP errors
         Self {

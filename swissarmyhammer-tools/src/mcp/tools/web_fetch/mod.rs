@@ -44,7 +44,7 @@
 //!         &self,
 //!         arguments: serde_json::Map<String, serde_json::Value>,
 //!         _context: &ToolContext,
-//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
+//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
 //!         Ok(BaseToolImpl::create_success_response("Example executed"))
 //!     }
 //! }

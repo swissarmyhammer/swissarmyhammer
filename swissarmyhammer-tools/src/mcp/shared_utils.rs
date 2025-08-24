@@ -3,7 +3,7 @@
 //! This module provides common functionality used across MCP tool handlers
 //! to reduce code duplication and ensure consistent behavior.
 
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use swissarmyhammer::{Result, SwissArmyHammerError};
 

@@ -6,7 +6,7 @@ use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
@@ -1374,6 +1374,7 @@ impl McpTool for ShellExecuteTool {
                         }),
                         None,
                     )],
+                    structured_content: None,
                     is_error: Some(is_error),
                 })
             }
@@ -1422,6 +1423,7 @@ impl McpTool for ShellExecuteTool {
                                     None,
                                 ),
                             ],
+                            structured_content: None,
                             is_error: Some(true),
                         })
                     }
@@ -1437,6 +1439,7 @@ impl McpTool for ShellExecuteTool {
                                 }),
                                 None,
                             )],
+                            structured_content: None,
                             is_error: Some(true),
                         })
                     }

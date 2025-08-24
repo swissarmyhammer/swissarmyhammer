@@ -4,7 +4,7 @@ use super::memo_types::*;
 use super::responses::create_success_response;
 use super::shared_utils::{McpErrorHandler, McpFormatter, McpValidation};
 use rmcp::model::*;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::sync::Arc;
 use swissarmyhammer::memoranda::{MemoId, MemoStorage};
 use tokio::sync::RwLock;
