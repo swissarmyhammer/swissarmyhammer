@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_cli::{cli::FlowSubcommand, flow::run_flow_command};
+use swissarmyhammer_cli::{cli::FlowSubcommand, commands::flow::run_flow_command};
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;

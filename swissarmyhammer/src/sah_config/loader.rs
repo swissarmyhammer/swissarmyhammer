@@ -169,7 +169,7 @@ impl ConfigurationLoader {
     /// to find the repository root (indicated by .git directory or filesystem root)
     /// Returns None if not within a git repository.
     pub fn load_from_repo_root(&self) -> Result<Option<Configuration>, ConfigurationError> {
-        let current_dir = std::env::current_dir().map_err(ConfigurationError::Io)?;
+        let current_dir = std::env::current_dir().or_else(|_| Ok(std::env::temp_dir())).map_err(ConfigurationError::Io)?;
         let mut search_dir = current_dir.as_path();
 
         // First, find the repository root
