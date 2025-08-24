@@ -10,4 +10,5 @@ pub mod flow;
 pub mod implement;
 pub mod plan;
 pub mod prompt;
+pub mod serve;
 pub mod validate;

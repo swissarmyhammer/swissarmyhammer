@@ -195,10 +195,7 @@ async fn handle_dynamic_matches(
 
     // Handle subcommands
     match matches.subcommand() {
-        Some(("serve", _sub_matches)) => {
-            tracing::debug!("Starting MCP server");
-            run_server().await
-        }
+        Some(("serve", sub_matches)) => handle_serve_command(sub_matches).await,
         Some(("doctor", sub_matches)) => handle_doctor_command(sub_matches).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches).await,
@@ -222,58 +219,8 @@ async fn handle_dynamic_matches(
     }
 }
 
-async fn run_server() -> i32 {
-    use rmcp::serve_server;
-    use rmcp::transport::io::stdio;
-    use swissarmyhammer::PromptLibrary;
-    use swissarmyhammer_tools::McpServer;
-
-    // Create library and server
-    let library = PromptLibrary::new();
-    let server = match McpServer::new(library) {
-        Ok(server) => server,
-        Err(e) => {
-            eprintln!("Failed to create MCP server: {}", e);
-            return EXIT_ERROR;
-        }
-    };
-
-    // Initialize the server before starting
-    if let Err(e) = server.initialize().await {
-        eprintln!("Failed to initialize MCP server: {}", e);
-        return EXIT_ERROR;
-    }
-
-    // Start the rmcp SDK server with stdio transport -- THINK before messing with this!
-    let running_service = match serve_server(server, stdio()).await {
-        Ok(service) => {
-            tracing::info!("MCP server started successfully");
-            service
-        }
-        Err(e) => {
-            tracing::error!("MCP server error: {}", e);
-            return EXIT_WARNING;
-        }
-    };
-
-    // Wait for the service to complete - this will return when:
-    // - The client disconnects (transport closed)
-    // - The server is cancelled
-    // - A serious error occurs
-    // THINK before missing with this, otherwise you can easily end up with a server that does not start.
-    match running_service.waiting().await {
-        Ok(quit_reason) => {
-            // The QuitReason enum is not exported by rmcp, so we'll just log it
-            tracing::info!("MCP server stopped: {:?}", quit_reason);
-        }
-        Err(e) => {
-            tracing::error!("MCP server task error: {}", e);
-            return EXIT_WARNING;
-        }
-    }
-
-    tracing::info!("MCP server shutting down gracefully");
-    EXIT_SUCCESS
+async fn handle_serve_command(matches: &clap::ArgMatches) -> i32 {
+    commands::serve::handle_command(matches).await
 }
 
 async fn handle_dynamic_tool_command(

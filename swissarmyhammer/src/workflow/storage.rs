@@ -1130,10 +1130,18 @@ stateDiagram-v2
         ";
         fs::write(&workflow_file, workflow_content).unwrap();
 
+        // Temporarily change to temp directory to load workflows, then restore
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+        
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
-
-        resolver.load_all_workflows(&mut storage).unwrap();
+        let load_result = resolver.load_all_workflows(&mut storage);
+        
+        // Immediately restore the original directory
+        std::env::set_current_dir(&original_dir).unwrap();
+        
+        load_result.unwrap();
 
         // Check that the user workflow was loaded
         let workflows = storage.list_workflows().unwrap();
@@ -1157,24 +1165,14 @@ stateDiagram-v2
         let env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
 
-        // Use the isolated temp directory as working directory
+        // Use the isolated temp directory with absolute paths
         let temp_dir = env.temp_dir();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
-
-        // Create a guard to restore directory on panic
-        struct DirGuard(PathBuf);
-        impl Drop for DirGuard {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-        let _guard = DirGuard(original_dir);
 
         // Create a .git directory to make it look like a Git repository
-        fs::create_dir_all(".git").unwrap();
+        let git_dir = temp_dir.join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
 
-        let local_workflows_dir = PathBuf::from(".swissarmyhammer").join("workflows");
+        let local_workflows_dir = temp_dir.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create a test workflow file
@@ -1224,22 +1222,12 @@ stateDiagram-v2
         let env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
 
-        // Use the isolated temp directory as working directory
+        // Use the isolated temp directory with absolute paths
         let temp_dir = env.temp_dir();
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
 
-        // Create a guard to restore directory on panic
-        struct DirGuard(PathBuf);
-        impl Drop for DirGuard {
-            fn drop(&mut self) {
-                let _ = std::env::set_current_dir(&self.0);
-            }
-        }
-        let _guard = DirGuard(original_dir);
-
-        // Create a .git directory in current working directory to simulate a Git repository
-        fs::create_dir_all(".git").unwrap();
+        // Create a .git directory in temp directory to simulate a Git repository
+        let git_dir = temp_dir.join(".git");
+        fs::create_dir_all(&git_dir).unwrap();
 
         // Get the isolated home directory (managed by IsolatedTestEnvironment)
         let test_home = PathBuf::from(std::env::var("HOME").unwrap());
@@ -1248,8 +1236,8 @@ stateDiagram-v2
         let user_workflows_dir = test_home.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&user_workflows_dir).unwrap();
 
-        // Create local workflows directory in the current working directory (also managed by IsolatedTestEnvironment)
-        let local_workflows_dir = PathBuf::from(".swissarmyhammer").join("workflows");
+        // Create local workflows directory in the temp directory
+        let local_workflows_dir = temp_dir.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&local_workflows_dir).unwrap();
 
         // Create same-named workflow in both locations
@@ -1275,11 +1263,20 @@ stateDiagram-v2
         )
         .unwrap();
 
+        // Temporarily change to temp directory to load workflows, then restore
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+        
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
-
+        
         // Load all workflows (user first, then local to test precedence)
-        resolver.load_all_workflows(&mut storage).unwrap();
+        let load_result = resolver.load_all_workflows(&mut storage);
+        
+        // Immediately restore the original directory
+        std::env::set_current_dir(&original_dir).unwrap();
+        
+        load_result.unwrap();
 
         // Check that at least one workflow was loaded
         let workflows = storage.list_workflows().unwrap();
