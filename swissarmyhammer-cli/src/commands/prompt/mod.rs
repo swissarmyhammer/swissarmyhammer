@@ -104,7 +104,7 @@ fn run_list_command(
     // Apply filter and get prompts - pass empty file sources since we're using all sources
     let file_sources = HashMap::new();
     let all_prompts = library.list_filtered(&filter, &file_sources)?;
-    
+
     // Filter out partial templates
     let prompts: Vec<_> = all_prompts
         .into_iter()
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_is_partial_template() {
         use swissarmyhammer::prompts::Prompt;
-        
+
         // Test template with partial marker
         let partial_prompt = Prompt {
             name: "test-partial".to_string(),
