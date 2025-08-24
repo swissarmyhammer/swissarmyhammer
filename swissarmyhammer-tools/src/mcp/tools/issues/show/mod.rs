@@ -6,7 +6,7 @@ use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use swissarmyhammer::config::Config;
 use swissarmyhammer::issues::IssueInfo;

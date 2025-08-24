@@ -220,7 +220,7 @@
 
 use super::tool_handlers::ToolHandlers;
 use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::RateLimitChecker;
@@ -641,6 +641,7 @@ impl ToolRegistry {
                     description: Some(tool.description().into()),
                     input_schema: std::sync::Arc::new(schema_map),
                     annotations: None,
+                    output_schema: None,
                 }
             })
             .collect()
@@ -927,6 +928,7 @@ impl BaseToolImpl {
                 }),
                 None,
             )],
+            structured_content: None,
             is_error: Some(false),
         }
     }
@@ -955,6 +957,7 @@ impl BaseToolImpl {
                 RawContent::Text(RawTextContent { text: error_text }),
                 None,
             )],
+            structured_content: None,
             is_error: Some(true),
         }
     }
@@ -1328,6 +1331,7 @@ mod tests {
                     }),
                     None,
                 )],
+                structured_content: None,
                 is_error: Some(false),
             })
         }

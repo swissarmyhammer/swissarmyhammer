@@ -2,7 +2,7 @@
 
 use rmcp::model::*;
 use rmcp::service::RequestContext;
-use rmcp::{Error as McpError, RoleServer, ServerHandler};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -193,6 +193,7 @@ impl McpServer {
         register_todo_tools(&mut tool_registry);
         register_web_fetch_tools(&mut tool_registry);
         register_web_search_tools(&mut tool_registry);
+        tracing::debug!("Registered all tool handlers");
 
         Ok(Self {
             library: Arc::new(RwLock::new(library)),

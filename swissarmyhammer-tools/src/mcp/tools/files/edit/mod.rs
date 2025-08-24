@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use encoding_rs::{Encoding, UTF_8};
 use filetime::{set_file_times, FileTime};
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::Path;

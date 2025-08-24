@@ -7,7 +7,7 @@ use crate::mcp::tools::files::shared_utils::FilePathValidator;
 use async_trait::async_trait;
 use ignore::WalkBuilder;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -89,7 +89,7 @@ impl McpTool for GlobFileTool {
                 // Use comprehensive security validation
                 let validated_path = validator.validate_absolute_path(&path_str)?;
                 if !validated_path.exists() {
-                    return Err(rmcp::Error::invalid_request(
+                    return Err(rmcp::ErrorData::invalid_request(
                         format!(
                             "Search directory does not exist: {}",
                             validated_path.display()
@@ -100,7 +100,7 @@ impl McpTool for GlobFileTool {
                 validated_path
             }
             None => std::env::current_dir().map_err(|e| {
-                rmcp::Error::internal_error(format!("Failed to get current directory: {}", e), None)
+                rmcp::ErrorData::internal_error(format!("Failed to get current directory: {}", e), None)
             })?,
         };
 
@@ -164,7 +164,7 @@ fn find_files_with_gitignore(
     let glob_pattern = match glob::Pattern::new(pattern) {
         Ok(p) => p,
         Err(e) => {
-            return Err(rmcp::Error::invalid_request(
+            return Err(rmcp::ErrorData::invalid_request(
                 format!("Invalid glob pattern: {}", e),
                 None,
             ));
@@ -263,7 +263,7 @@ fn find_files_with_glob(
 
     // Execute glob pattern
     let entries = glob::glob_with(&glob_pattern, glob_options)
-        .map_err(|e| rmcp::Error::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
+        .map_err(|e| rmcp::ErrorData::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
 
     let mut matched_files = Vec::new();
 
@@ -319,7 +319,7 @@ fn sort_files_by_modification_time(files: &mut [String]) {
 fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
     // Check for empty pattern
     if pattern.trim().is_empty() {
-        return Err(rmcp::Error::invalid_request(
+        return Err(rmcp::ErrorData::invalid_request(
             "Pattern cannot be empty".to_string(),
             None,
         ));
@@ -327,7 +327,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
 
     // Check for extremely long patterns that might cause performance issues
     if pattern.len() > 1000 {
-        return Err(rmcp::Error::invalid_request(
+        return Err(rmcp::ErrorData::invalid_request(
             "Pattern is too long (maximum 1000 characters)".to_string(),
             None,
         ));
@@ -335,7 +335,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
 
     // Validate pattern syntax by trying to compile it
     if let Err(e) = glob::Pattern::new(pattern) {
-        return Err(rmcp::Error::invalid_request(
+        return Err(rmcp::ErrorData::invalid_request(
             format!("Invalid glob pattern: {}", e),
             None,
         ));
@@ -343,7 +343,7 @@ fn validate_glob_pattern(pattern: &str) -> Result<(), McpError> {
 
     // Check for potentially problematic patterns
     if pattern.starts_with('/') && !Path::new(pattern).is_absolute() {
-        return Err(rmcp::Error::invalid_request(
+        return Err(rmcp::ErrorData::invalid_request(
             "Pattern cannot start with '/' unless it's an absolute path".to_string(),
             None,
         ));

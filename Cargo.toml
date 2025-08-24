@@ -53,7 +53,16 @@ clap_complete = "4"
 colored = "2"
 is-terminal = "0.4"
 
-rmcp = { version = "0.2.1", features = ["server", "transport-io"] }
+rmcp = { version = "0.6.0", features = [
+    "server",
+    "macros",
+    "transport-sse-server",
+    "transport-io",
+    "transport-streamable-http-server",
+    "auth",
+    "elicitation",
+    "schemars",
+] }
 dirs = "5"
 rust-embed = "8"
 tabled = "0.20"

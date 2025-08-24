@@ -9,7 +9,7 @@ use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 
 /// Tool for sending notification messages to users through the logging system
 #[derive(Default)]
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn test_parse_missing_message() {
         let args = serde_json::Map::new();
-        let result: Result<NotifyRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<NotifyRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -237,7 +237,7 @@ mod tests {
         );
         args.insert("level".to_string(), serde_json::Value::Number(42.into()));
 
-        let result: Result<NotifyRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<NotifyRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -246,7 +246,7 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("message".to_string(), serde_json::Value::Number(42.into()));
 
-        let result: Result<NotifyRequest, rmcp::Error> = BaseToolImpl::parse_arguments(args);
+        let result: Result<NotifyRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 

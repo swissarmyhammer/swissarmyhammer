@@ -268,6 +268,7 @@ fn test_response_formatting_utilities() {
             }),
             None,
         )],
+        structured_content: None,
         is_error: Some(false),
     };
 
@@ -282,6 +283,7 @@ fn test_response_formatting_utilities() {
             }),
             None,
         )],
+        structured_content: None,
         is_error: Some(true),
     };
 
@@ -294,7 +296,7 @@ fn test_response_formatting_utilities() {
 
 #[test]
 fn test_error_conversion() {
-    use rmcp::Error as McpError;
+    use rmcp::ErrorData as McpError;
     use swissarmyhammer_cli::error::CliError;
 
     // Test basic MCP error conversion

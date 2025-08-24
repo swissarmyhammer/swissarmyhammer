@@ -3,7 +3,7 @@ use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::types::CreateTodoRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use serde_json::json;
 use swissarmyhammer::todo::TodoStorage;
 

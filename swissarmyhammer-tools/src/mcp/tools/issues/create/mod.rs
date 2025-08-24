@@ -9,7 +9,7 @@ use crate::mcp::types::CreateIssueRequest;
 use crate::mcp::utils::validate_issue_name;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 
 /// Tool for creating new issues
 #[derive(Default)]

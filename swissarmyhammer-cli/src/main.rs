@@ -34,15 +34,6 @@ async fn main() {
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry);
 
-    // Check if this is a serve command early to bypass heavy CLI operations during MCP mode
-    let is_serve_command = std::env::args().any(|arg| arg == "serve");
-
-    // For serve command, skip all CLI building and validation to avoid startup delays
-    if is_serve_command {
-        let exit_code = run_server().await;
-        process::exit(exit_code);
-    }
-
     // Get validation statistics for startup reporting (only for non-serve commands)
     let validation_stats = cli_builder.get_validation_stats();
 
@@ -74,8 +65,19 @@ async fn main() {
     let matches = match dynamic_cli.try_get_matches() {
         Ok(matches) => matches,
         Err(e) => {
-            eprintln!("{}", e);
-            process::exit(EXIT_ERROR);
+            // Check if this is a help or version request (which are normal exits)
+            use clap::error::ErrorKind;
+            match e.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    // Print the help/version output
+                    print!("{}", e);
+                    process::exit(EXIT_SUCCESS);
+                }
+                _ => {
+                    eprintln!("{}", e);
+                    process::exit(EXIT_ERROR);
+                }
+            }
         }
     };
 
@@ -84,7 +86,6 @@ async fn main() {
     process::exit(exit_code);
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: bool) -> i32 {
     let tool_registry = cli_tool_context.get_tool_registry_arc();
     let cli_builder = CliBuilder::new(tool_registry.clone());
@@ -148,7 +149,6 @@ async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: 
     EXIT_WARNING
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_dynamic_matches(
     matches: clap::ArgMatches,
     cli_tool_context: Arc<CliToolContext>,
@@ -244,20 +244,38 @@ async fn run_server() -> i32 {
         return EXIT_ERROR;
     }
 
-    // Handle server startup and shutdown
-    match serve_server(server, stdio()).await {
-        Ok(_) => {
-            tracing::info!("MCP server completed successfully");
-            EXIT_SUCCESS
+    // Start the rmcp SDK server with stdio transport -- THINK before messing with this!
+    let running_service = match serve_server(server, stdio()).await {
+        Ok(service) => {
+            tracing::info!("MCP server started successfully");
+            service
         }
         Err(e) => {
-            eprintln!("Server error: {}", e);
-            EXIT_ERROR
+            tracing::error!("MCP server error: {}", e);
+            return EXIT_WARNING;
+        }
+    };
+
+    // Wait for the service to complete - this will return when:
+    // - The client disconnects (transport closed)
+    // - The server is cancelled
+    // - A serious error occurs
+    // THINK before missing with this, otherwise you can easily end up with a server that does not start.
+    match running_service.waiting().await {
+        Ok(quit_reason) => {
+            // The QuitReason enum is not exported by rmcp, so we'll just log it
+            tracing::info!("MCP server stopped: {:?}", quit_reason);
+        }
+        Err(e) => {
+            tracing::error!("MCP server task error: {}", e);
+            return EXIT_WARNING;
         }
     }
+
+    tracing::info!("MCP server shutting down gracefully");
+    EXIT_SUCCESS
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_dynamic_tool_command(
     category: &str,
     tool_name: &str,
@@ -327,7 +345,6 @@ async fn handle_dynamic_tool_command(
     }
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn convert_matches_to_arguments(
     matches: &clap::ArgMatches,
     tool_name: &str,
@@ -355,7 +372,6 @@ async fn convert_matches_to_arguments(
     Ok(arguments)
 }
 
-#[cfg(feature = "dynamic-cli")]
 fn extract_clap_value(
     matches: &clap::ArgMatches,
     prop_name: &str,
@@ -398,13 +414,11 @@ fn extract_clap_value(
     }
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
     let migration = matches.get_flag("migration");
     commands::doctor::handle_command(migration).await
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
     use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
 
@@ -510,7 +524,6 @@ async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
     commands::prompt::handle_command(subcommand).await
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
     use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
 
@@ -667,7 +680,6 @@ async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
     commands::flow::handle_command(subcommand).await
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
     use crate::cli::ValidateFormat;
 
@@ -684,18 +696,15 @@ async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
     commands::validate::handle_command(quiet, format, workflow_dirs)
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_plan_command(matches: &clap::ArgMatches) -> i32 {
     let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
     commands::plan::handle_command(plan_filename).await
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn handle_implement_command() -> i32 {
     commands::implement::handle_command().await
 }
 
-#[cfg(feature = "dynamic-cli")]
 async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
     use tracing::Level;
     use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};

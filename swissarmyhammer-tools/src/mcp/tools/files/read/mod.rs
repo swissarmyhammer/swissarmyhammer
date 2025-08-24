@@ -29,7 +29,7 @@
 //! # use swissarmyhammer_tools::mcp::tools::files::read::ReadFileTool;
 //! # use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 //! # use serde_json::json;
-//! # async fn example(context: &ToolContext) -> Result<(), rmcp::Error> {
+//! # async fn example(context: &ToolContext) -> Result<(), rmcp::ErrorData> {
 //! let tool = ReadFileTool::new();
 //!
 //! // Read entire file
@@ -50,7 +50,7 @@
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use tracing::{debug, info};
 
 /// Tool for reading file contents from the local filesystem with comprehensive security validation

@@ -65,7 +65,7 @@
 //!         &self,
 //!         arguments: serde_json::Map<String, serde_json::Value>,
 //!         context: &ToolContext,
-//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::Error> {
+//!     ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
 //!         // Shell command execution logic
 //!     }
 //! }

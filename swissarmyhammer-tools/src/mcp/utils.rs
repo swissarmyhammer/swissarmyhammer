@@ -1,6 +1,6 @@
 //! Utility functions for MCP operations
 
-use rmcp::Error as McpError;
+use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
