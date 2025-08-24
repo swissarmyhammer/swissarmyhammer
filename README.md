@@ -55,6 +55,7 @@ claude mcp add --scope user sah sah serve
 - **📝 Issue Management** - Git-integrated issue tracking with automatic branch management
 - **💾 Memoranda System** - Note-taking and knowledge management with full-text search
 - **🔍 Semantic Search** - Vector-based search with TreeSitter parsing and embedding models
+- **⚡ Dynamic CLI** - CLI commands automatically generated from MCP tools, eliminating code duplication
 
 ### Common Commands
 
@@ -75,18 +76,22 @@ sah prompt test my-prompt --var task="help me"
 # Execute workflows
 sah flow run my-workflow
 
-# Issue management
+# Issue management (automatically generated from MCP tools)
 sah issue list
 sah issue create --name "feature-xyz" --content "# Feature XYZ\n\nImplement new feature"
 sah issue work feature-xyz
 
-# Memoranda (notes) management
+# Memoranda (notes) management (automatically generated from MCP tools)
 sah memo list
 sah memo create --title "Meeting Notes" --content "# Team Meeting\n\n- Discussed roadmap"
 
-# Semantic search
-sah search index "**/*.rs"
-sah search query "error handling"
+# Semantic search (automatically generated from MCP tools)
+sah search index --patterns "**/*.rs"
+sah search query --query "error handling"
+
+# File operations (automatically generated from MCP tools)
+sah files read --absolute-path ./src/main.rs
+sah files write --file-path ./output.txt --content "Hello World"
 
 # Validate configurations
 sah validate
@@ -194,15 +199,31 @@ This simple workflow demonstrates:
 
 You can also run it through Claude Code using the MCP integration to see how workflows integrate with AI interactions.
 
-## 🔧 MCP Tools
+## 🔧 MCP Tools & Dynamic CLI
 
-SwissArmyHammer provides a comprehensive suite of MCP tools for Claude Code:
+SwissArmyHammer features a **dynamic CLI architecture** that automatically generates command-line interfaces from MCP tool definitions. This eliminates code duplication and ensures perfect consistency between MCP and CLI interfaces.
 
-- **Abort Tool** - Controlled workflow termination with file-based abort detection
-- **Issue Management** - Complete issue tracking with Git branch integration  
-- **Memoranda System** - Note-taking and knowledge management with search
-- **Semantic Search** - Vector-based code and content search with TreeSitter parsing
+### Available Tool Categories
 
-All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The abort tool provides robust workflow control, replacing legacy string-based detection with a reliable file-based approach.
+- **Issue Management** - Complete issue tracking with Git branch integration (`sah issue create`, `sah issue work`, etc.)
+- **Memoranda System** - Note-taking and knowledge management (`sah memo create`, `sah memo search`, etc.)
+- **File Operations** - Comprehensive file manipulation (`sah files read`, `sah files write`, `sah files grep`, etc.)
+- **Semantic Search** - Vector-based code and content search (`sah search index`, `sah search query`, etc.)
+- **Web Tools** - Web fetching and search capabilities (`sah web fetch`, `sah web search`, etc.)
+- **Shell Integration** - Safe shell command execution (`sah shell execute`, etc.)
+- **Todo Management** - Ephemeral task tracking (`sah todo create`, `sah todo show`, etc.)
+- **Workflow Control** - Abort and notification tools (`sah abort create`, `sah notify create`, etc.)
+
+### Dynamic Architecture Benefits
+
+- **Single Source of Truth** - MCP tool schemas drive both MCP and CLI interfaces
+- **Automatic CLI Generation** - New MCP tools appear in CLI without code changes  
+- **Consistent Help Text** - Tool descriptions automatically become CLI help
+- **Zero Maintenance** - Adding tools requires no CLI-specific code
+- **Perfect Consistency** - CLI and MCP interfaces never drift apart
+
+All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The system uses JSON Schema to automatically generate appropriate CLI arguments, validation, and help text.
+
+For detailed information about the architecture, see [`docs/dynamic-cli-architecture.md`](docs/dynamic-cli-architecture.md).
 
 

@@ -238,6 +238,10 @@ impl McpTool for WebSearchTool {
             .expect("Failed to generate schema")
     }
 
+    fn cli_category(&self) -> Option<&'static str> {
+        Some("web-search")
+    }
+
     async fn execute(
         &self,
         arguments: serde_json::Map<String, serde_json::Value>,

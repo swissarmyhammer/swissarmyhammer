@@ -6,6 +6,7 @@ use super::types::{
     UpdateIssueRequest, WorkIssueRequest,
 };
 use super::utils::validate_issue_name;
+use crate::test_utils::TestIssueEnvironment;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
 use swissarmyhammer::prompts::Prompt;
@@ -13,8 +14,11 @@ use swissarmyhammer::PromptLibrary;
 
 #[tokio::test]
 async fn test_mcp_server_creation() {
+    let test_env = TestIssueEnvironment::new();
+    let _guard = std::env::set_current_dir(test_env.path());
+
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
 
     let info = server.get_info();
     // Just verify we can get server info - details depend on default implementation
@@ -47,12 +51,15 @@ async fn test_mcp_server_exposes_shell_tools() {
 
 #[tokio::test]
 async fn test_mcp_server_list_prompts() {
+    let test_env = TestIssueEnvironment::new();
+    let _guard = std::env::set_current_dir(test_env.path());
+
     let mut library = PromptLibrary::new();
     let prompt = Prompt::new("test", "Test prompt: {{ name }}")
         .with_description("Test description".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
     let prompts = server.list_prompts().await.unwrap();
 
     assert_eq!(prompts.len(), 1);
@@ -61,12 +68,15 @@ async fn test_mcp_server_list_prompts() {
 
 #[tokio::test]
 async fn test_mcp_server_get_prompt() {
+    let test_env = TestIssueEnvironment::new();
+    let _guard = std::env::set_current_dir(test_env.path());
+
     let mut library = PromptLibrary::new();
     let prompt =
         Prompt::new("test", "Hello {{ name }}!").with_description("Greeting prompt".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
     let mut arguments = HashMap::new();
     arguments.insert("name".to_string(), "World".to_string());
 
@@ -155,6 +165,9 @@ async fn test_mcp_server_file_watching_integration() {
 
 #[tokio::test]
 async fn test_mcp_server_uses_same_directory_discovery() {
+    let test_env = TestIssueEnvironment::new();
+    let _guard = std::env::set_current_dir(test_env.path());
+
     // Verify that MCP server uses same directory discovery as PromptResolver
     let resolver = swissarmyhammer::PromptResolver::new();
     let resolver_dirs = resolver.get_prompt_directories().unwrap();
@@ -162,7 +175,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     // The server should use the same directories for file watching
     // This test ensures the fix for hardcoded paths is working
     let library = PromptLibrary::new();
-    let _server = McpServer::new(library).unwrap();
+    let _server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
 
     // File watching now requires a peer connection from the MCP client
     // The important thing is that both use get_prompt_directories() method
@@ -239,6 +252,9 @@ async fn test_mcp_server_exposes_workflow_tools_capability() {
 
 #[tokio::test]
 async fn test_mcp_server_does_not_expose_partial_templates() {
+    let test_env = TestIssueEnvironment::new();
+    let _guard = std::env::set_current_dir(test_env.path());
+
     // Create a test library with both regular and partial templates
     let mut library = PromptLibrary::new();
 
@@ -260,7 +276,7 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     .with_description("Another partial template".to_string());
     library.add(partial_with_marker).unwrap();
 
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
 
     // Test list_prompts - should only return regular prompts
     let prompts = server.list_prompts().await.unwrap();

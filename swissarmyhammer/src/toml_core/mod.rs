@@ -268,6 +268,7 @@ port = 5432
 
     #[test]
     fn test_load_repo_config_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         // This test might find an actual sah.toml file depending on where it runs
         // but should not error - just return None if no file is found
         let result = load_repo_config()?;

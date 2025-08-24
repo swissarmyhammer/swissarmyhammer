@@ -1,205 +1,225 @@
 use std::process;
 mod cli;
-mod completions;
-pub mod config;
-mod doctor;
+mod commands;
+mod dynamic_cli;
 mod error;
 mod exit_codes;
-mod file;
 mod flow;
-mod issue;
-mod list;
 mod logging;
 mod mcp_integration;
-mod memo;
-mod migrate;
 mod parameter_cli;
-// prompt_loader module removed - using SDK's PromptResolver directly
+mod plan;
 mod prompt;
-mod search;
-mod shell;
+mod schema_conversion;
+mod schema_validation;
 mod signal_handler;
-mod test;
 mod validate;
-mod web_search;
-
-use clap::CommandFactory;
-use cli::{Cli, Commands};
+use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
-use swissarmyhammer::SwissArmyHammerError;
+use mcp_integration::CliToolContext;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse_args();
-
-    // Fast path for help - avoid expensive initialization
-    if cli.command.is_none() {
-        Cli::command().print_help().expect("Failed to print help");
-        process::exit(EXIT_SUCCESS);
-    }
-
-    // Only initialize heavy dependencies when actually needed
-    use tracing::Level;
-    use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
-
-    // Configure logging based on verbosity flags and MCP mode detection
-    use is_terminal::IsTerminal;
-    let is_mcp_mode =
-        matches!(cli.command, Some(Commands::Serve)) && !std::io::stdin().is_terminal();
-
-    let log_level = if is_mcp_mode {
-        Level::DEBUG // More verbose for MCP mode to help with debugging
-    } else if cli.quiet {
-        Level::ERROR
-    } else if cli.debug {
-        Level::DEBUG
-    } else if cli.verbose {
-        Level::TRACE
-    } else {
-        Level::INFO
+    // Initialize tool context and registry for dynamic CLI
+    let cli_tool_context = match CliToolContext::new().await {
+        Ok(context) => Arc::new(context),
+        Err(e) => {
+            eprintln!("Failed to initialize tool context: {}", e);
+            process::exit(EXIT_ERROR);
+        }
     };
 
-    // Helper function to create EnvFilter since it doesn't implement Clone
-    let create_filter = || EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}"));
+    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let cli_builder = CliBuilder::new(tool_registry);
 
-    if is_mcp_mode {
-        // In MCP mode, write logs to .swissarmyhammer/log for debugging
-        use std::fs;
-        use std::path::PathBuf;
+    // Check if this is a serve command early to bypass heavy CLI operations during MCP mode
+    let is_serve_command = std::env::args().any(|arg| arg == "serve");
 
-        let log_dir = PathBuf::from(".swissarmyhammer");
-
-        // Ensure the directory exists
-        if let Err(e) = fs::create_dir_all(&log_dir) {
-            tracing::warn!("Failed to create log directory: {}", e);
-        }
-
-        let log_filename =
-            std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
-        let log_file = log_dir.join(log_filename);
-
-        // Try to open the log file - use unbuffered writing for immediate flushing
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file)
-        {
-            Ok(file) => {
-                // Use Arc<Mutex<File>> for thread-safe, unbuffered writing
-                use std::sync::{Arc, Mutex};
-                let shared_file = Arc::new(Mutex::new(file));
-
-                registry()
-                    .with(create_filter())
-                    .with(
-                        fmt::layer()
-                            .with_writer(move || {
-                                let file = shared_file.clone();
-                                Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
-                            })
-                            .with_ansi(false), // No color codes in file
-                    )
-                    .init();
-            }
-            Err(e) => {
-                // Fallback to stderr if file logging fails
-                tracing::warn!("Failed to open log file, using stderr: {}", e);
-                registry()
-                    .with(create_filter())
-                    .with(fmt::layer().with_writer(std::io::stderr))
-                    .init();
-            }
-        }
-    } else {
-        registry()
-            .with(create_filter())
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .init();
+    // For serve command, skip all CLI building and validation to avoid startup delays
+    if is_serve_command {
+        let exit_code = run_server().await;
+        process::exit(exit_code);
     }
 
-    let exit_code = match cli.command {
-        Some(Commands::Serve) => {
+    // Get validation statistics for startup reporting (only for non-serve commands)
+    let validation_stats = cli_builder.get_validation_stats();
+
+    // Check for validation issues and report them
+    if !validation_stats.is_all_valid() {
+        // Always show validation summary for issues (not just in verbose mode)
+        eprintln!("⚠️  CLI Validation Issues: {}", validation_stats.summary());
+
+        // Show detailed warnings if there are validation problems
+        let warnings = cli_builder.get_validation_warnings();
+        if !warnings.is_empty() {
+            eprintln!("Validation warnings ({} issues):", warnings.len());
+            for (i, warning) in warnings.iter().enumerate().take(5) {
+                eprintln!("  {}. {}", i + 1, warning);
+            }
+            if warnings.len() > 5 {
+                eprintln!("  ... and {} more warnings", warnings.len() - 5);
+                eprintln!("  Use --verbose for complete validation report");
+            }
+        }
+        eprintln!(); // Add blank line for readability
+    }
+
+    // Build CLI with warnings for validation issues (graceful degradation)
+    // This will skip problematic tools but continue building the CLI
+    let dynamic_cli = cli_builder.build_cli_with_warnings();
+
+    // Parse arguments with dynamic CLI
+    let matches = match dynamic_cli.try_get_matches() {
+        Ok(matches) => matches,
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(EXIT_ERROR);
+        }
+    };
+
+    // Handle dynamic command dispatch
+    let exit_code = handle_dynamic_matches(matches, cli_tool_context).await;
+    process::exit(exit_code);
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: bool) -> i32 {
+    let tool_registry = cli_tool_context.get_tool_registry_arc();
+    let cli_builder = CliBuilder::new(tool_registry.clone());
+
+    println!("🔍 Validating MCP tool schemas for CLI compatibility...\n");
+
+    let validation_stats = cli_builder.get_validation_stats();
+    let validation_errors = cli_builder.validate_all_tools();
+
+    // Always show validation summary
+    println!("📊 Validation Summary:");
+    println!("   {}", validation_stats.summary());
+    println!();
+
+    if validation_stats.is_all_valid() {
+        println!("✅ All tools passed validation!");
+        if verbose {
+            let categories = tool_registry.get_cli_categories();
+            println!("\n📋 Validated CLI categories ({}):", categories.len());
+            for category in categories {
+                let tools = tool_registry.get_tools_for_category(&category);
+                println!("   {} - {} tools", category, tools.len());
+                if verbose {
+                    for tool in tools {
+                        println!("     ├── {} ({})", tool.cli_name(), tool.name());
+                    }
+                }
+            }
+        }
+        return EXIT_SUCCESS;
+    }
+
+    // Show validation errors
+    println!("❌ Validation Issues Found:");
+
+    if verbose {
+        for (i, error) in validation_errors.iter().enumerate() {
+            println!("{}. {}", i + 1, error);
+            if let Some(suggestion) = error.suggestion() {
+                println!("   💡 {}", suggestion);
+            }
+            println!();
+        }
+    } else {
+        let warnings = cli_builder.get_validation_warnings();
+        for (i, warning) in warnings.iter().enumerate().take(10) {
+            println!("{}. {}", i + 1, warning);
+        }
+        if warnings.len() > 10 {
+            println!("   ... and {} more issues", warnings.len() - 10);
+            println!("   Use --verbose for complete details");
+        }
+    }
+
+    println!("🔧 To fix these issues:");
+    println!("   • Review tool schema definitions");
+    println!("   • Ensure all CLI tools have proper categories");
+    println!("   • Use supported parameter types (string, integer, number, boolean, array)");
+    println!("   • Add required schema fields like 'properties'");
+
+    EXIT_WARNING
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_dynamic_matches(
+    matches: clap::ArgMatches,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
+    // Handle global verbose/debug/quiet flags
+    let verbose = matches.get_flag("verbose");
+    let debug = matches.get_flag("debug");
+    let quiet = matches.get_flag("quiet");
+    let validate_tools = matches.get_flag("validate-tools");
+
+    // Check if this is a serve command for MCP mode logging
+    let is_serve_command = matches
+        .subcommand()
+        .is_some_and(|(name, _)| name == "serve");
+
+    // Initialize logging similar to static CLI
+    configure_logging(verbose, debug, quiet, is_serve_command).await;
+
+    // Handle --validate-tools flag
+    if validate_tools {
+        return handle_tool_validation(cli_tool_context, verbose).await;
+    }
+
+    // Show detailed validation report in verbose mode (but not during serve mode)
+    if verbose && !is_serve_command {
+        let tool_registry = cli_tool_context.get_tool_registry_arc();
+        let cli_builder = CliBuilder::new(tool_registry);
+        let validation_stats = cli_builder.get_validation_stats();
+
+        if verbose {
+            eprintln!("🔍 CLI Tool Validation Report:");
+            eprintln!("   {}", validation_stats.summary());
+
+            if !validation_stats.is_all_valid() {
+                eprintln!("   Tools with issues:");
+                let warnings = cli_builder.get_validation_warnings();
+                for (i, warning) in warnings.iter().enumerate() {
+                    eprintln!("     {}. {}", i + 1, warning);
+                }
+            }
+            eprintln!(); // Add blank line
+        }
+    }
+
+    // Handle subcommands
+    match matches.subcommand() {
+        Some(("serve", _sub_matches)) => {
             tracing::debug!("Starting MCP server");
             run_server().await
         }
-        Some(Commands::Doctor { migration }) => {
-            tracing::debug!("Running diagnostics with migration={}", migration);
-            run_doctor_with_options(migration)
-        }
-        Some(Commands::Prompt { subcommand }) => {
-            tracing::debug!("Running prompt command");
-            run_prompt(subcommand).await
-        }
-        Some(Commands::Completion { shell }) => {
-            tracing::debug!("Generating completion for {:?}", shell);
-            run_completions(shell)
-        }
-        Some(Commands::Flow { subcommand }) => {
-            tracing::debug!("Running flow command");
-            run_flow(subcommand).await
-        }
-        Some(Commands::Validate {
-            quiet,
-            format,
-            workflow_dirs,
-        }) => {
-            tracing::info!("Running validate command");
-            run_validate(quiet, format, workflow_dirs)
-        }
-        Some(Commands::Issue { subcommand }) => {
-            tracing::info!("Running issue command");
-            run_issue(subcommand).await
-        }
-        Some(Commands::Memo { subcommand }) => {
-            tracing::info!("Running memo command");
-            run_memo(subcommand).await
-        }
-        Some(Commands::File { subcommand }) => {
-            tracing::info!("Running file command");
-            run_file(subcommand).await
-        }
-        Some(Commands::Search { subcommand }) => {
-            tracing::info!("Running search command");
-            run_search(subcommand).await
-        }
-        Some(Commands::Plan { plan_filename }) => {
-            tracing::info!("Running plan command");
-            run_plan(plan_filename).await
-        }
-        Some(Commands::WebSearch { subcommand }) => {
-            tracing::info!("Running web search command");
-            run_web_search(subcommand).await
-        }
-        Some(Commands::Config { subcommand }) => {
-            tracing::info!("Running config command");
-            run_config(subcommand).await
-        }
-        Some(Commands::Implement) => {
-            tracing::info!("Running implement command");
-            run_implement().await
-        }
-        Some(Commands::Shell { subcommand }) => {
-            tracing::info!("Running shell command");
-            run_shell(subcommand).await
-        }
-        Some(Commands::Migrate { subcommand }) => {
-            tracing::info!("Running migrate command");
-            run_migrate(subcommand).await
-        }
+        Some(("doctor", sub_matches)) => handle_doctor_command(sub_matches).await,
+        Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches).await,
+        Some(("flow", sub_matches)) => handle_flow_command(sub_matches).await,
+        Some(("validate", sub_matches)) => handle_validate_command(sub_matches).await,
+        Some(("plan", sub_matches)) => handle_plan_command(sub_matches).await,
+        Some(("implement", _sub_matches)) => handle_implement_command().await,
+        Some((category, sub_matches)) => match sub_matches.subcommand() {
+            Some((tool_name, tool_matches)) => {
+                handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
+                    .await
+            }
+            None => {
+                eprintln!("No command specified for category '{}'", category);
+                EXIT_ERROR
+            }
+        },
         None => {
-            // This case is handled early above for performance
-            unreachable!()
+            eprintln!("No command specified. Use --help for usage information.");
+            EXIT_ERROR
         }
-    };
-
-    // Ensure all logs are flushed before process exit
-    if is_mcp_mode {
-        // Give tracing sufficient time to flush any pending logs
-        std::thread::sleep(std::time::Duration::from_millis(200));
     }
-
-    process::exit(exit_code);
 }
 
 async fn run_server() -> i32 {
@@ -213,380 +233,530 @@ async fn run_server() -> i32 {
     let server = match McpServer::new(library) {
         Ok(server) => server,
         Err(e) => {
-            tracing::error!("Failed to create MCP server: {}", e);
-            return EXIT_WARNING;
-        }
-    };
-
-    // Initialize prompts (this will load user and local prompts)
-    if let Err(e) = server.initialize().await {
-        tracing::error!("Failed to initialize MCP server: {}", e);
-        return EXIT_WARNING;
-    }
-
-    // Don't start file watching here - it will be started when MCP client connects
-    // File watching is started in the ServerHandler::initialize method
-    tracing::info!("MCP server initialized, file watching will start when client connects");
-
-    // Start the rmcp SDK server with stdio transport
-    let running_service = match serve_server(server, stdio()).await {
-        Ok(service) => {
-            tracing::info!("MCP server started successfully");
-            service
-        }
-        Err(e) => {
-            tracing::error!("MCP server error: {}", e);
-            return EXIT_WARNING;
-        }
-    };
-
-    // Wait for the service to complete - this will return when:
-    // - The client disconnects (transport closed)
-    // - The server is cancelled
-    // - A serious error occurs
-    match running_service.waiting().await {
-        Ok(quit_reason) => {
-            // The QuitReason enum is not exported by rmcp, so we'll just log it
-            tracing::info!("MCP server stopped: {:?}", quit_reason);
-        }
-        Err(e) => {
-            tracing::error!("MCP server task error: {}", e);
-            return EXIT_WARNING;
-        }
-    }
-
-    tracing::info!("MCP server shutting down gracefully");
-    EXIT_SUCCESS
-}
-
-fn run_doctor_with_options(migration: bool) -> i32 {
-    use doctor::Doctor;
-
-    let mut doctor = Doctor::new();
-    match doctor.run_diagnostics_with_options(migration) {
-        Ok(exit_code) => exit_code,
-        Err(e) => {
-            tracing::error!("Doctor error: {}", e);
-            EXIT_ERROR
-        }
-    }
-}
-
-async fn run_prompt(subcommand: cli::PromptSubcommand) -> i32 {
-    use error::handle_cli_result;
-    use prompt;
-
-    handle_cli_result(prompt::run_prompt_command(subcommand).await)
-}
-
-fn run_completions(shell: clap_complete::Shell) -> i32 {
-    use completions;
-
-    match completions::print_completion(shell) {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Completion error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
-    use flow;
-
-    match flow::run_flow_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            // Check if this is an abort error (file-based detection)
-            if let SwissArmyHammerError::ExecutorError(
-                swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
-            ) = &e
-            {
-                tracing::error!("Workflow aborted: {}", abort_reason);
-                return EXIT_ERROR;
-            }
-            tracing::error!("Flow error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-async fn run_issue(subcommand: cli::IssueCommands) -> i32 {
-    use error::CliError;
-    use issue;
-
-    match issue::handle_issue_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            // Check if this is a CliError and preserve exit code
-            if let Some(cli_error) = e.downcast_ref::<CliError>() {
-                tracing::error!("Issue error: {}", cli_error);
-                cli_error.exit_code
-            } else {
-                tracing::error!("Issue error: {}", e);
-                EXIT_WARNING
-            }
-        }
-    }
-}
-
-async fn run_memo(subcommand: cli::MemoCommands) -> i32 {
-    use error::CliError;
-    use memo;
-
-    match memo::handle_memo_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            // Check if this is a CliError and preserve exit code
-            if let Some(cli_error) = e.downcast_ref::<CliError>() {
-                tracing::error!("Memo error: {}", cli_error);
-                cli_error.exit_code
-            } else {
-                tracing::error!("Memo error: {}", e);
-                EXIT_WARNING
-            }
-        }
-    }
-}
-
-async fn run_file(subcommand: cli::FileCommands) -> i32 {
-    use file;
-
-    match file::handle_file_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("File error: {}", e);
-            EXIT_WARNING
-        }
-    }
-}
-
-async fn run_search(subcommand: cli::SearchCommands) -> i32 {
-    use search;
-
-    search::run_search(subcommand).await
-}
-
-/// Runs the validate command to check prompt files and workflows for syntax and best practices.
-///
-/// This function validates:
-/// - All prompt files from builtin, user, and local directories
-/// - YAML front matter syntax (skipped for .liquid files with {% partial %} marker)
-/// - Required fields (title, description)
-/// - Template variables match arguments
-/// - Liquid template syntax
-/// - Workflow structure and connectivity in .mermaid files
-///
-/// # Arguments
-///
-/// * `quiet` - Only show errors, no warnings or info
-/// * `format` - Output format (text or json)
-/// * `workflow_dirs` - \[DEPRECATED\] This parameter is ignored
-///
-/// # Returns
-///
-/// Exit code:
-/// - 0: Success (no errors or warnings)
-/// - 1: Warnings found
-/// - 2: Errors found
-fn run_validate(quiet: bool, format: cli::ValidateFormat, workflow_dirs: Vec<String>) -> i32 {
-    use validate;
-
-    match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs) {
-        Ok(exit_code) => exit_code,
-        Err(e) => {
-            tracing::error!("Validate error: {}", e);
-            EXIT_ERROR
-        }
-    }
-}
-
-async fn run_plan(plan_filename: String) -> i32 {
-    use cli::FlowSubcommand;
-    use flow;
-    use swissarmyhammer::error::{ErrorSeverity, PlanCommandError};
-    use swissarmyhammer::plan_utils::{
-        validate_issues_directory, validate_plan_file_comprehensive,
-    };
-
-    // Comprehensive plan file validation
-    let validated_file = match validate_plan_file_comprehensive(&plan_filename, None) {
-        Ok(file) => file,
-        Err(e) => {
-            // Display user-friendly error with color support
-            let use_color = cli::Cli::should_use_color();
-            eprintln!("{}", e.display_to_user(use_color));
-
-            // Log the error for debugging
-            e.log_error();
-
-            // Return appropriate exit code based on severity
-            return match e.severity() {
-                ErrorSeverity::Warning => EXIT_WARNING,
-                ErrorSeverity::Error => EXIT_ERROR,
-                ErrorSeverity::Critical => EXIT_ERROR,
-            };
-        }
-    };
-
-    // Validate issues directory
-    match validate_issues_directory() {
-        Ok(_) => {
-            tracing::debug!("Issues directory validation successful");
-        }
-        Err(e) => {
-            // Display user-friendly error
-            let use_color = cli::Cli::should_use_color();
-            eprintln!("{}", e.display_to_user(use_color));
-
-            // Log the error for debugging
-            e.log_error();
-
+            eprintln!("Failed to create MCP server: {}", e);
             return EXIT_ERROR;
         }
-    }
-
-    // Create a FlowSubcommand::Run with the validated plan_filename variable
-    let plan_var = format!("plan_filename={}", validated_file.path.display());
-
-    let subcommand = FlowSubcommand::Run {
-        workflow: "plan".to_string(),
-        vars: vec![plan_var],
-        interactive: false,
-        dry_run: false,
-        test: false,
-        timeout: None,
-        quiet: false,
     };
 
-    tracing::info!(
-        "Executing plan workflow for file: {}",
-        validated_file.path.display()
-    );
-    tracing::debug!("Plan file size: {} bytes", validated_file.size);
+    // Initialize the server before starting
+    if let Err(e) = server.initialize().await {
+        eprintln!("Failed to initialize MCP server: {}", e);
+        return EXIT_ERROR;
+    }
 
-    match flow::run_flow_command(subcommand).await {
+    // Handle server startup and shutdown
+    match serve_server(server, stdio()).await {
         Ok(_) => {
-            tracing::info!("Plan workflow completed successfully");
+            tracing::info!("MCP server completed successfully");
             EXIT_SUCCESS
         }
         Err(e) => {
-            // Check if this is an abort error (file-based detection)
-            if let SwissArmyHammerError::ExecutorError(
-                swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
-            ) = &e
-            {
-                // Create and display a PlanCommandError for workflow failures
-                let plan_error = PlanCommandError::WorkflowExecutionFailed {
-                    plan_filename: plan_filename.clone(),
-                    source: swissarmyhammer::error::WorkflowError::ExecutionFailed {
-                        reason: abort_reason.clone(),
-                    },
-                };
+            eprintln!("Server error: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
 
-                let use_color = cli::Cli::should_use_color();
-                eprintln!("{}", plan_error.display_to_user(use_color));
-                plan_error.log_error();
+#[cfg(feature = "dynamic-cli")]
+async fn handle_dynamic_tool_command(
+    category: &str,
+    tool_name: &str,
+    matches: &clap::ArgMatches,
+    cli_tool_context: Arc<CliToolContext>,
+) -> i32 {
+    // Look up the tool by category and CLI name
+    let tool = match cli_tool_context
+        .get_tool_registry()
+        .get_tool_by_cli_name(category, tool_name)
+    {
+        Some(tool) => tool,
+        None => {
+            let available_tools: Vec<String> = cli_tool_context
+                .get_tool_registry()
+                .get_tools_for_category(category)
+                .iter()
+                .map(|t| format!("{} -> {}", t.cli_name(), t.name()))
+                .collect();
+            eprintln!(
+                "Tool '{}' not found in category '{}'. Available tools in this category: [{}]",
+                tool_name,
+                category,
+                available_tools.join(", ")
+            );
+            return EXIT_ERROR;
+        }
+    };
 
+    let full_tool_name = tool.name();
+
+    // Convert clap matches to JSON arguments
+    let arguments =
+        match convert_matches_to_arguments(matches, full_tool_name, &cli_tool_context).await {
+            Ok(args) => args,
+            Err(e) => {
+                eprintln!("Error processing arguments: {}", e);
                 return EXIT_ERROR;
             }
+        };
 
-            // For other workflow errors, also wrap them
-            let plan_error = PlanCommandError::WorkflowExecutionFailed {
-                plan_filename: plan_filename.clone(),
-                source: swissarmyhammer::error::WorkflowError::ExecutionFailed {
-                    reason: e.to_string(),
-                },
+    // Execute the MCP tool
+    match cli_tool_context
+        .execute_tool(full_tool_name, arguments)
+        .await
+    {
+        Ok(result) => {
+            // Format and display the result
+            if result.is_error.unwrap_or(false) {
+                eprintln!(
+                    "{}",
+                    mcp_integration::response_formatting::format_error_response(&result)
+                );
+                EXIT_ERROR
+            } else {
+                println!(
+                    "{}",
+                    mcp_integration::response_formatting::format_success_response(&result)
+                );
+                EXIT_SUCCESS
+            }
+        }
+        Err(e) => {
+            eprintln!("Tool execution error: {}", e);
+            EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn convert_matches_to_arguments(
+    matches: &clap::ArgMatches,
+    tool_name: &str,
+    cli_tool_context: &CliToolContext,
+) -> Result<serde_json::Map<String, serde_json::Value>, Box<dyn std::error::Error>> {
+    let mut arguments = serde_json::Map::new();
+
+    // Get the tool to access its schema
+    let tool = cli_tool_context
+        .get_tool_registry()
+        .get_tool(tool_name)
+        .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
+
+    let schema = tool.schema();
+
+    // Extract properties from schema
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (prop_name, prop_schema) in properties {
+            if let Some(value) = extract_clap_value(matches, prop_name, prop_schema) {
+                arguments.insert(prop_name.clone(), value);
+            }
+        }
+    }
+
+    Ok(arguments)
+}
+
+#[cfg(feature = "dynamic-cli")]
+fn extract_clap_value(
+    matches: &clap::ArgMatches,
+    prop_name: &str,
+    prop_schema: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    match prop_schema.get("type").and_then(|t| t.as_str()) {
+        Some("boolean") => {
+            if matches.get_flag(prop_name) {
+                Some(serde_json::Value::Bool(true))
+            } else {
+                None
+            }
+        }
+        Some("integer") => matches
+            .get_one::<i64>(prop_name)
+            .map(|v| serde_json::Value::Number(serde_json::Number::from(*v))),
+        Some("number") => matches
+            .get_one::<f64>(prop_name)
+            .and_then(|v| serde_json::Number::from_f64(*v))
+            .map(serde_json::Value::Number),
+        Some("array") => {
+            let values: Vec<String> = matches
+                .get_many::<String>(prop_name)
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            if values.is_empty() {
+                None
+            } else {
+                Some(serde_json::Value::Array(
+                    values.into_iter().map(serde_json::Value::String).collect(),
+                ))
+            }
+        }
+        _ => {
+            // Default to string
+            matches
+                .get_one::<String>(prop_name)
+                .map(|s| serde_json::Value::String(s.clone()))
+        }
+    }
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
+    let migration = matches.get_flag("migration");
+    commands::doctor::handle_command(migration).await
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
+
+    let subcommand = match matches.subcommand() {
+        Some(("list", sub_matches)) => {
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
             };
+            let verbose = sub_matches.get_flag("verbose");
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
+            let category = sub_matches.get_one::<String>("category").cloned();
+            let search = sub_matches.get_one::<String>("search").cloned();
 
-            let use_color = cli::Cli::should_use_color();
-            eprintln!("{}", plan_error.display_to_user(use_color));
-            plan_error.log_error();
-
-            EXIT_ERROR
+            PromptSubcommand::List {
+                format,
+                verbose,
+                source,
+                category,
+                search,
+            }
         }
-    }
-}
+        Some(("test", sub_matches)) => {
+            let prompt_name = sub_matches.get_one::<String>("prompt_name").cloned();
+            let file = sub_matches.get_one::<String>("file").cloned();
+            let vars = sub_matches
+                .get_many::<String>("vars")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let raw = sub_matches.get_flag("raw");
+            let copy = sub_matches.get_flag("copy");
+            let save = sub_matches.get_one::<String>("save").cloned();
+            let debug = sub_matches.get_flag("debug");
 
-async fn run_config(subcommand: cli::ConfigCommands) -> i32 {
-    use config;
-
-    match config::handle_config_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Config error: {}", e);
-            EXIT_WARNING
+            PromptSubcommand::Test {
+                prompt_name,
+                file,
+                vars,
+                raw,
+                copy,
+                save,
+                debug,
+            }
         }
-    }
-}
+        Some(("search", sub_matches)) => {
+            let query = sub_matches.get_one::<String>("query").cloned().unwrap();
+            let r#in = sub_matches
+                .get_many::<String>("in")
+                .map(|vals| vals.cloned().collect());
+            let regex = sub_matches.get_flag("regex");
+            let fuzzy = sub_matches.get_flag("fuzzy");
+            let case_sensitive = sub_matches.get_flag("case-sensitive");
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
+            let has_arg = sub_matches.get_one::<String>("has-arg").cloned();
+            let no_args = sub_matches.get_flag("no-args");
+            let full = sub_matches.get_flag("full");
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let highlight = sub_matches.get_flag("highlight");
+            let limit = sub_matches.get_one::<usize>("limit").copied();
 
-async fn run_implement() -> i32 {
-    use cli::FlowSubcommand;
-    use flow;
-
-    // Create a FlowSubcommand::Run equivalent to 'sah flow run implement'
-    let subcommand = FlowSubcommand::Run {
-        workflow: "implement".to_string(),
-        vars: Vec::new(),
-        interactive: false,
-        dry_run: false,
-        test: false,
-        timeout: None,
-        quiet: false,
+            PromptSubcommand::Search {
+                query,
+                r#in,
+                regex,
+                fuzzy,
+                case_sensitive,
+                source,
+                has_arg,
+                no_args,
+                full,
+                format,
+                highlight,
+                limit,
+            }
+        }
+        _ => {
+            eprintln!("No prompt subcommand specified");
+            return EXIT_ERROR;
+        }
     };
 
-    tracing::info!("Executing implement workflow");
+    commands::prompt::handle_command(subcommand).await
+}
 
-    match flow::run_flow_command(subcommand).await {
-        Ok(_) => {
-            tracing::info!("Implement workflow completed successfully");
-            EXIT_SUCCESS
-        }
-        Err(e) => {
-            // Check if this is an abort error (file-based detection)
-            if let SwissArmyHammerError::ExecutorError(
-                swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
-            ) = &e
-            {
-                tracing::error!("Implement workflow aborted: {}", abort_reason);
-                return EXIT_ERROR;
+#[cfg(feature = "dynamic-cli")]
+async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
+
+    let subcommand = match matches.subcommand() {
+        Some(("run", sub_matches)) => {
+            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
+            let vars = sub_matches
+                .get_many::<String>("vars")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let interactive = sub_matches.get_flag("interactive");
+            let dry_run = sub_matches.get_flag("dry-run");
+            let test = sub_matches.get_flag("test");
+            let timeout = sub_matches.get_one::<String>("timeout").cloned();
+            let quiet = sub_matches.get_flag("quiet");
+
+            FlowSubcommand::Run {
+                workflow,
+                vars,
+                interactive,
+                dry_run,
+                test,
+                timeout,
+                quiet,
             }
-            tracing::error!("Implement workflow error: {}", e);
-            EXIT_WARNING
         }
-    }
+        Some(("resume", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let interactive = sub_matches.get_flag("interactive");
+            let timeout = sub_matches.get_one::<String>("timeout").cloned();
+            let quiet = sub_matches.get_flag("quiet");
+
+            FlowSubcommand::Resume {
+                run_id,
+                interactive,
+                timeout,
+                quiet,
+            }
+        }
+        Some(("list", sub_matches)) => {
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let verbose = sub_matches.get_flag("verbose");
+            let source = sub_matches
+                .get_one::<String>("source")
+                .map(|s| match s.as_str() {
+                    "builtin" => PromptSourceArg::Builtin,
+                    "user" => PromptSourceArg::User,
+                    "local" => PromptSourceArg::Local,
+                    "dynamic" => PromptSourceArg::Dynamic,
+                    _ => PromptSourceArg::Dynamic,
+                });
+
+            FlowSubcommand::List {
+                format,
+                verbose,
+                source,
+            }
+        }
+        Some(("status", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let watch = sub_matches.get_flag("watch");
+
+            FlowSubcommand::Status {
+                run_id,
+                format,
+                watch,
+            }
+        }
+        Some(("logs", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let follow = sub_matches.get_flag("follow");
+            let tail = sub_matches.get_one::<usize>("tail").copied();
+            let level = sub_matches.get_one::<String>("level").cloned();
+
+            FlowSubcommand::Logs {
+                run_id,
+                follow,
+                tail,
+                level,
+            }
+        }
+        Some(("metrics", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned();
+            let workflow = sub_matches.get_one::<String>("workflow").cloned();
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("json") => OutputFormat::Json,
+                Some("yaml") => OutputFormat::Yaml,
+                _ => OutputFormat::Table,
+            };
+            let global = sub_matches.get_flag("global");
+
+            FlowSubcommand::Metrics {
+                run_id,
+                workflow,
+                format,
+                global,
+            }
+        }
+        Some(("visualize", sub_matches)) => {
+            let run_id = sub_matches.get_one::<String>("run_id").cloned().unwrap();
+            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
+                Some("html") => VisualizationFormat::Html,
+                Some("json") => VisualizationFormat::Json,
+                Some("dot") => VisualizationFormat::Dot,
+                _ => VisualizationFormat::Mermaid,
+            };
+            let output = sub_matches.get_one::<String>("output").cloned();
+            let timing = sub_matches.get_flag("timing");
+            let counts = sub_matches.get_flag("counts");
+            let path_only = sub_matches.get_flag("path-only");
+
+            FlowSubcommand::Visualize {
+                run_id,
+                format,
+                output,
+                timing,
+                counts,
+                path_only,
+            }
+        }
+        Some(("test", sub_matches)) => {
+            let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
+            let vars = sub_matches
+                .get_many::<String>("vars")
+                .map(|vals| vals.cloned().collect())
+                .unwrap_or_default();
+            let interactive = sub_matches.get_flag("interactive");
+            let timeout = sub_matches.get_one::<String>("timeout").cloned();
+            let quiet = sub_matches.get_flag("quiet");
+
+            FlowSubcommand::Test {
+                workflow,
+                vars,
+                interactive,
+                timeout,
+                quiet,
+            }
+        }
+        _ => {
+            eprintln!("No flow subcommand specified");
+            return EXIT_ERROR;
+        }
+    };
+
+    commands::flow::handle_command(subcommand).await
 }
 
-async fn run_shell(subcommand: cli::ShellCommands) -> i32 {
-    use shell;
+#[cfg(feature = "dynamic-cli")]
+async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::cli::ValidateFormat;
 
-    match shell::handle_shell_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Shell error: {}", e);
-            EXIT_WARNING
-        }
-    }
+    let quiet = matches.get_flag("quiet");
+    let format = match matches.get_one::<String>("format").map(|s| s.as_str()) {
+        Some("json") => ValidateFormat::Json,
+        _ => ValidateFormat::Text,
+    };
+    let workflow_dirs = matches
+        .get_many::<String>("workflow-dirs")
+        .map(|vals| vals.cloned().collect())
+        .unwrap_or_default();
+
+    commands::validate::handle_command(quiet, format, workflow_dirs)
 }
 
-async fn run_web_search(subcommand: cli::WebSearchCommands) -> i32 {
-    use web_search;
-
-    match web_search::handle_web_search_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Web search error: {}", e);
-            EXIT_WARNING
-        }
-    }
+#[cfg(feature = "dynamic-cli")]
+async fn handle_plan_command(matches: &clap::ArgMatches) -> i32 {
+    let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
+    commands::plan::handle_command(plan_filename).await
 }
 
-async fn run_migrate(subcommand: cli::MigrateCommands) -> i32 {
-    match migrate::handle_migrate_command(subcommand).await {
-        Ok(_) => EXIT_SUCCESS,
-        Err(e) => {
-            tracing::error!("Migration error: {}", e);
-            EXIT_ERROR
+#[cfg(feature = "dynamic-cli")]
+async fn handle_implement_command() -> i32 {
+    commands::implement::handle_command().await
+}
+
+#[cfg(feature = "dynamic-cli")]
+async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {
+    use tracing::Level;
+    use tracing_subscriber::{fmt, prelude::*, registry, EnvFilter};
+
+    let log_level = if is_mcp_mode {
+        Level::DEBUG // More verbose for MCP mode to help with debugging
+    } else if quiet {
+        Level::ERROR
+    } else if debug {
+        Level::DEBUG
+    } else if verbose {
+        Level::TRACE
+    } else {
+        Level::INFO
+    };
+
+    let create_filter = || EnvFilter::new(format!("ort=warn,rmcp=warn,{log_level}"));
+
+    if is_mcp_mode {
+        // In MCP mode, write logs to .swissarmyhammer/mcp.log for debugging
+        use std::fs;
+        use std::path::PathBuf;
+
+        let log_dir = PathBuf::from(".swissarmyhammer");
+        if let Err(e) = fs::create_dir_all(&log_dir) {
+            eprintln!("Warning: Could not create log directory: {}", e);
         }
+
+        let log_file_name =
+            std::env::var("SWISSARMYHAMMER_LOG_FILE").unwrap_or_else(|_| "mcp.log".to_string());
+        let log_file_path = log_dir.join(log_file_name);
+        match fs::File::create(&log_file_path) {
+            Ok(file) => {
+                let shared_file = Arc::new(std::sync::Mutex::new(file));
+                registry()
+                    .with(create_filter())
+                    .with(
+                        fmt::layer()
+                            .with_writer(move || {
+                                let file = shared_file.clone();
+                                Box::new(FileWriterGuard::new(file)) as Box<dyn std::io::Write>
+                            })
+                            .with_ansi(false), // No color codes in file
+                    )
+                    .init();
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not create log file: {}. Falling back to stderr.",
+                    e
+                );
+                registry()
+                    .with(create_filter())
+                    .with(fmt::layer().with_writer(std::io::stderr))
+                    .init();
+            }
+        }
+    } else {
+        registry()
+            .with(create_filter())
+            .with(fmt::layer().with_writer(std::io::stderr))
+            .init();
     }
 }

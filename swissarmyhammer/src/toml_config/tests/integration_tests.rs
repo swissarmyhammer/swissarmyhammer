@@ -339,6 +339,7 @@ fn test_template_integration() {
 fn test_file_discovery_from_different_directories() {
     use std::panic;
 
+    let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
     let temp_dir = TempDir::new().unwrap();
 
     // Create repository structure

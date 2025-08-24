@@ -1154,8 +1154,22 @@ stateDiagram-v2
         use crate::test_utils::IsolatedTestEnvironment;
         use std::fs;
 
-        let _env =
+        let env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+
+        // Use the isolated temp directory as working directory
+        let temp_dir = env.temp_dir();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Create a guard to restore directory on panic
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _guard = DirGuard(original_dir);
 
         // Create a .git directory to make it look like a Git repository
         fs::create_dir_all(".git").unwrap();
@@ -1207,8 +1221,22 @@ stateDiagram-v2
         use std::fs;
 
         // Use isolated test environment to safely manage both HOME and current working directory
-        let _env =
+        let env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
+
+        // Use the isolated temp directory as working directory
+        let temp_dir = env.temp_dir();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Create a guard to restore directory on panic
+        struct DirGuard(PathBuf);
+        impl Drop for DirGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _guard = DirGuard(original_dir);
 
         // Create a .git directory in current working directory to simulate a Git repository
         fs::create_dir_all(".git").unwrap();

@@ -62,21 +62,22 @@ impl TestEnvironment {
     }
 
     fn create_abort_file(&self, reason: &str) -> Result<()> {
-        fs::create_dir_all(".swissarmyhammer")?;
-        fs::write(".swissarmyhammer/.abort", reason)?;
+        let sah_dir = self.temp_path.join(".swissarmyhammer");
+        fs::create_dir_all(&sah_dir)?;
+        fs::write(sah_dir.join(".abort"), reason)?;
         Ok(())
     }
 
     fn verify_abort_file(&self, expected_reason: &str) -> Result<()> {
-        let abort_path = Path::new(".swissarmyhammer/.abort");
+        let abort_path = self.temp_path.join(".swissarmyhammer").join(".abort");
         assert!(abort_path.exists(), "Abort file should exist");
-        let content = fs::read_to_string(abort_path)?;
+        let content = fs::read_to_string(&abort_path)?;
         assert_eq!(content, expected_reason, "Abort file content mismatch");
         Ok(())
     }
 
     fn verify_no_abort_file(&self) {
-        let abort_path = Path::new(".swissarmyhammer/.abort");
+        let abort_path = self.temp_path.join(".swissarmyhammer").join(".abort");
         assert!(!abort_path.exists(), "Abort file should not exist");
     }
 
@@ -113,10 +114,11 @@ stateDiagram-v2
 "#
         );
 
-        // Create .swissarmyhammer/workflows directory
-        fs::create_dir_all(".swissarmyhammer/workflows")?;
+        // Create .swissarmyhammer/workflows directory in temp path
+        let workflows_dir = self.temp_path.join(".swissarmyhammer").join("workflows");
+        fs::create_dir_all(&workflows_dir)?;
         let filename = format!("{}.md", workflow_name);
-        let filepath = format!(".swissarmyhammer/workflows/{filename}");
+        let filepath = workflows_dir.join(&filename);
         fs::write(&filepath, workflow_content)?;
         Ok(workflow_name)
     }
