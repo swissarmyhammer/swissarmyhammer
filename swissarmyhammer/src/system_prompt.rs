@@ -72,10 +72,6 @@ impl From<SwissArmyHammerError> for SystemPromptError {
     }
 }
 
-
-
-
-
 /// System prompt renderer with caching capabilities
 pub struct SystemPromptRenderer {
     /// Prompt library for accessing partials
@@ -125,14 +121,6 @@ impl SystemPromptRenderer {
             DEFAULT_SYSTEM_PROMPT_PATHS.join(", ")
         )))
     }
-
-
-
-
-
-
-
-
 
     /// Render the system prompt without caching
     pub fn render(&self) -> std::result::Result<String, SystemPromptError> {
@@ -201,11 +189,6 @@ pub fn clear_cache() {
 mod tests {
     use super::*;
 
-
-
-
-
-
     #[test]
     fn test_find_system_prompt_file_not_found() {
         // Clear cache to ensure clean test
@@ -249,6 +232,4 @@ mod tests {
             SystemPromptError::RenderingFailed(_)
         ));
     }
-
-
 }

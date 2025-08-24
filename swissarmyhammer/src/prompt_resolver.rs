@@ -111,13 +111,13 @@ mod tests {
 
     #[test]
     fn test_prompt_resolver_loads_local_prompts() {
-        let temp_dir = TempDir::new().unwrap();
+        let _temp_dir = TempDir::new().unwrap(); // Keep handle alive
 
         // Create a .git directory to make it look like a Git repository
-        let git_dir = temp_dir.path().join(".git");
+        let git_dir = _temp_dir.path().join(".git");
         fs::create_dir_all(&git_dir).unwrap();
 
-        let local_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
+        let local_prompts_dir = _temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&local_prompts_dir).unwrap();
 
         // Create a test prompt file with proper header
@@ -133,7 +133,7 @@ mod tests {
 
         // Change to the temp directory to simulate local prompts
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
+        std::env::set_current_dir(&_temp_dir).unwrap();
 
         resolver.load_all_prompts(&mut library).unwrap();
 
