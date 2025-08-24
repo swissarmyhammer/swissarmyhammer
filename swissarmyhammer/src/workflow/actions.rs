@@ -366,8 +366,7 @@ impl PromptAction {
         Ok(rendered)
     }
 
-    /// Prepare user prompt and system prompt separately for Claude CLI
-    /// System prompt injection is always enabled and cannot be disabled
+    /// Prepare user prompt and system prompts separately
     async fn prepare_prompts(
         &self,
         rendered_prompt: String,
