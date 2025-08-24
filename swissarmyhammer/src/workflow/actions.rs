@@ -2360,11 +2360,6 @@ mod tests {
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("hello world"));
 
-<<<<<<< HEAD
-        // Verify stderr is empty or only contains shell-init messages (which can occur during testing)
-        let stderr = context.get("stderr").unwrap().as_str().unwrap();
-        assert!(stderr.is_empty() || stderr.trim().is_empty() || stderr.contains("shell-init"));
-=======
         // Verify stderr is empty or contains only directory-related warnings from shell
         let stderr = context.get("stderr").unwrap().as_str().unwrap();
         let stderr_trimmed = stderr.trim();
@@ -2377,7 +2372,6 @@ mod tests {
             "Unexpected stderr content: {}",
             stderr
         );
->>>>>>> origin/main
 
         // Verify duration is tracked
         assert!(context.contains_key("duration_ms"));
