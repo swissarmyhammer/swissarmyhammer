@@ -44,7 +44,7 @@ fn test_mcp_tools_are_registered() {
         "files_write",
         "files_edit",
         "files_glob",
-        "files_grep", 
+        "files_grep",
         "issue_create",
         "issue_list",
         "issue_show",
@@ -68,7 +68,14 @@ fn test_mcp_tools_are_registered() {
     for &expected_tool in &expected_tools {
         if let Some(tool) = registry.get_tool(expected_tool) {
             found_tools.push(expected_tool);
-            println!("✅ Found tool: {} - {}", expected_tool, tool.description().lines().next().unwrap_or("No description"));
+            println!(
+                "✅ Found tool: {} - {}",
+                expected_tool,
+                tool.description()
+                    .lines()
+                    .next()
+                    .unwrap_or("No description")
+            );
         } else {
             missing_tools.push(expected_tool);
         }
@@ -82,26 +89,42 @@ fn test_mcp_tools_are_registered() {
     }
 
     println!("✅ All expected tools are registered");
-    println!("📊 Found {} out of {} expected core tools", found_tools.len(), expected_tools.len());
+    println!(
+        "📊 Found {} out of {} expected core tools",
+        found_tools.len(),
+        expected_tools.len()
+    );
 
     // Test that tools can be listed for MCP
     let mcp_tools = registry.list_tools();
-    assert!(
-        !mcp_tools.is_empty(),
-        "MCP tools list should not be empty"
-    );
+    assert!(!mcp_tools.is_empty(), "MCP tools list should not be empty");
 
-    println!("✅ MCP tools list generation works ({} tools)", mcp_tools.len());
+    println!(
+        "✅ MCP tools list generation works ({} tools)",
+        mcp_tools.len()
+    );
 
     // Validate tool structure
     for (i, tool) in mcp_tools.iter().take(5).enumerate() {
-        assert!(!tool.name.is_empty(), "Tool {} should have non-empty name", i);
-        assert!(tool.description.is_some(), "Tool {} should have description", i);
-        assert!(!tool.input_schema.is_empty(), "Tool {} should have input schema", i);
+        assert!(
+            !tool.name.is_empty(),
+            "Tool {} should have non-empty name",
+            i
+        );
+        assert!(
+            tool.description.is_some(),
+            "Tool {} should have description",
+            i
+        );
+        assert!(
+            !tool.input_schema.is_empty(),
+            "Tool {} should have input schema",
+            i
+        );
     }
 
     println!("✅ Tool structure validation passed");
-    
+
     println!("🎉 SUCCESS: MCP tools are properly registered and available");
     println!("   This disproves the issue that 'sah serve does not actually appear to serve any MCP tools'");
     println!("   The tools ARE registered and would be served by the MCP server.");
@@ -129,8 +152,17 @@ fn test_cli_categories_are_available() {
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like abort and notify)
-    let expected_categories = ["file", "issue", "memo", "outline", "search", "shell", "todo", "web-search"];
-    
+    let expected_categories = [
+        "file",
+        "issue",
+        "memo",
+        "outline",
+        "search",
+        "shell",
+        "todo",
+        "web-search",
+    ];
+
     for &expected_cat in &expected_categories {
         assert!(
             categories.contains(&expected_cat.to_string()),
@@ -141,7 +173,7 @@ fn test_cli_categories_are_available() {
     }
 
     println!("✅ All expected CLI categories are available");
-    
+
     // This proves the dynamic CLI generation works
     for category in &categories {
         let tools_in_category = registry.get_tools_for_category(category);
@@ -150,10 +182,14 @@ fn test_cli_categories_are_available() {
             "Category '{}' should have at least one tool",
             category
         );
-        
-        println!("📂 Category '{}': {} tools", category, tools_in_category.len());
+
+        println!(
+            "📂 Category '{}': {} tools",
+            category,
+            tools_in_category.len()
+        );
     }
-    
+
     println!("🎯 VALIDATION: CLI categories and tool mapping work correctly");
     println!("   This explains why 'sah --help' shows tool categories - they come from MCP tools!");
 }

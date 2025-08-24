@@ -100,7 +100,10 @@ impl McpTool for GlobFileTool {
                 validated_path
             }
             None => std::env::current_dir().map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get current directory: {}", e), None)
+                rmcp::ErrorData::internal_error(
+                    format!("Failed to get current directory: {}", e),
+                    None,
+                )
             })?,
         };
 
@@ -262,8 +265,9 @@ fn find_files_with_glob(
     glob_options.require_literal_leading_dot = false;
 
     // Execute glob pattern
-    let entries = glob::glob_with(&glob_pattern, glob_options)
-        .map_err(|e| rmcp::ErrorData::invalid_request(format!("Invalid glob pattern: {}", e), None))?;
+    let entries = glob::glob_with(&glob_pattern, glob_options).map_err(|e| {
+        rmcp::ErrorData::invalid_request(format!("Invalid glob pattern: {}", e), None)
+    })?;
 
     let mut matched_files = Vec::new();
 

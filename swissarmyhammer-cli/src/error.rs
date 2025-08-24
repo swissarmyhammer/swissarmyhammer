@@ -306,7 +306,6 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
 }
 
 /// Convert schema validation errors to CLI errors with appropriate exit codes
-
 impl From<crate::schema_validation::ValidationError> for CliError {
     fn from(error: crate::schema_validation::ValidationError) -> Self {
         let mut message = format!("❌ Schema validation failed: {}", error);
@@ -328,7 +327,6 @@ impl From<crate::schema_validation::ValidationError> for CliError {
 }
 
 /// Convert schema conversion errors to CLI errors with appropriate exit codes
-
 impl From<crate::schema_conversion::ConversionError> for CliError {
     fn from(error: crate::schema_conversion::ConversionError) -> Self {
         // Use the existing formatting from schema_conversion module

@@ -304,12 +304,18 @@ impl RegressionTestSuite {
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| std::env::current_dir().unwrap())
             });
-            
-        let binary_path = project_root.parent().unwrap_or(&project_root).join("target/debug/sah");
+
+        let binary_path = project_root
+            .parent()
+            .unwrap_or(&project_root)
+            .join("target/debug/sah");
 
         let command_future = async {
-            eprintln!("DEBUG: Trying to execute binary: {:?} with args: {:?}", binary_path, command);
-            
+            eprintln!(
+                "DEBUG: Trying to execute binary: {:?} with args: {:?}",
+                binary_path, command
+            );
+
             let output = tokio::process::Command::new(&binary_path)
                 .args(command)
                 .current_dir(std::env::current_dir().unwrap())
@@ -581,12 +587,22 @@ async fn test_custom_regression_suite() -> Result<()> {
     for result in &report.results {
         println!("Test: {}", result.test_case.description);
         println!("Command: sah {}", result.test_case.command.join(" "));
-        println!("Status: {}", if result.passed { "✅ PASS" } else { "❌ FAIL" });
+        println!(
+            "Status: {}",
+            if result.passed {
+                "✅ PASS"
+            } else {
+                "❌ FAIL"
+            }
+        );
         if let Some(failure) = &result.failure_reason {
             println!("Failure: {}", failure);
         }
         if let Some(exit_code) = result.actual_exit_code {
-            println!("Exit code: {} (expected: {})", exit_code, result.test_case.expected_exit_code);
+            println!(
+                "Exit code: {} (expected: {})",
+                exit_code, result.test_case.expected_exit_code
+            );
         }
         if !result.actual_stdout.is_empty() {
             println!("Stdout: {}", result.actual_stdout);
@@ -596,7 +612,7 @@ async fn test_custom_regression_suite() -> Result<()> {
         }
         println!("---");
     }
-    
+
     // At least one should pass
     assert!(
         report.passed_tests >= 1,

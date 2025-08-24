@@ -143,7 +143,8 @@ mod tests {
     #[test]
     fn test_parse_missing_reason() {
         let args = serde_json::Map::new();
-        let result: Result<AbortCreateRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
+        let result: Result<AbortCreateRequest, rmcp::ErrorData> =
+            BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 
@@ -318,7 +319,8 @@ mod tests {
         let mut args = serde_json::Map::new();
         args.insert("reason".to_string(), serde_json::Value::Number(42.into()));
 
-        let result: Result<AbortCreateRequest, rmcp::ErrorData> = BaseToolImpl::parse_arguments(args);
+        let result: Result<AbortCreateRequest, rmcp::ErrorData> =
+            BaseToolImpl::parse_arguments(args);
         assert!(result.is_err());
     }
 

@@ -329,11 +329,8 @@ async fn test_single_tool_execution(
 
     let response = timeout(Duration::from_secs(15), async { read_mcp_response(reader) })
         .await
-        .expect(&format!(
-            "Timeout waiting for {} execution response",
-            tool_name
-        ))
-        .expect(&format!("Failed to read {} execution response", tool_name));
+        .unwrap_or_else(|_| panic!("Timeout waiting for {} execution response", tool_name))
+        .unwrap_or_else(|_| panic!("Failed to read {} execution response", tool_name));
 
     // Validate response structure
     assert_eq!(response["jsonrpc"], "2.0");
@@ -546,8 +543,8 @@ async fn test_sah_serve_concurrent_requests() {
             read_mcp_response(&mut reader)
         })
         .await
-        .expect(&format!("Timeout on request {}", i))
-        .expect(&format!("Failed to read response for request {}", i));
+        .unwrap_or_else(|_| panic!("Timeout on request {}", i))
+        .unwrap_or_else(|_| panic!("Failed to read response for request {}", i));
 
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], i);

@@ -171,13 +171,11 @@ impl CliToolContext {
     /// Helper to convert CLI arguments to MCP tool arguments
     ///
     /// Get a reference to the tool registry for dynamic CLI generation
-
     pub fn get_tool_registry(&self) -> &ToolRegistry {
         &self.tool_registry
     }
 
     /// Get an Arc to the tool registry for dynamic CLI generation
-
     pub fn get_tool_registry_arc(&self) -> Arc<ToolRegistry> {
         self.tool_registry.clone()
     }
