@@ -128,11 +128,11 @@ Focus on understanding the problem requirements and coding tests that prove the 
   - A function takes a single parameter that is a structure or object
   - A function takes two parameters, a context object, and a single parameter that is a structure or object
   - AVOID making functions that take a long list of primitives as parameters
+- Never #[allow(dead_code)], delete it -- we have source control these days
 
 ### React
 
 - Always use TypeScript with full type annotations
-- Never #[allow(dead_code)], delete it -- we have source control these days
 - Always format your files with `npx prettier`
   - Format all files with `npx prettier --write .`
 - Always lint your files with `npx eslint` and `npx tsc --noEmit`
