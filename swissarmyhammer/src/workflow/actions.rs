@@ -4,6 +4,7 @@
 //! including Claude integration, variable operations, and control flow actions.
 
 use crate::common::render_system_prompt;
+use crate::error::Result;
 use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
@@ -101,7 +102,7 @@ pub enum ActionError {
 }
 
 /// Result type for action operations
-pub type ActionResult<T> = Result<T, ActionError>;
+pub type ActionResult<T> = std::result::Result<T, ActionError>;
 
 /// Configuration for action timeouts
 #[derive(Debug, Clone)]
@@ -371,7 +372,7 @@ impl PromptAction {
         &self,
         rendered_prompt: String,
         _context: &HashMap<String, Value>,
-    ) -> (String, Option<String>) {
+    ) -> Result<(String, Option<String>)> {
         // System prompt injection is always enabled
         match render_system_prompt() {
             Ok(system_prompt) => {
@@ -379,14 +380,11 @@ impl PromptAction {
                     "System prompt rendered successfully ({} chars)",
                     system_prompt.len()
                 );
-                (rendered_prompt, Some(system_prompt))
+                Ok((rendered_prompt, Some(system_prompt)))
             }
             Err(e) => {
-                tracing::warn!(
-                    "Failed to render system prompt, continuing without it: {}",
-                    e
-                );
-                (rendered_prompt, None)
+                tracing::error!("Failed to render system prompt, cannot proceed: {}", e);
+                Err(e)
             }
         }
     }
@@ -517,7 +515,12 @@ impl PromptAction {
         tracing::debug!("Executing prompt '{}' with Claude Code", self.prompt_name);
 
         // Prepare user prompt and system prompt separately
-        let (user_prompt, system_prompt) = self.prepare_prompts(rendered_prompt, context).await;
+        let (user_prompt, system_prompt) = self
+            .prepare_prompts(rendered_prompt, context)
+            .await
+            .map_err(|e| {
+                ActionError::ClaudeError(format!("System prompt preparation failed: {}", e))
+            })?;
 
         // Get Claude CLI path
         let claude_path = self.get_claude_path(context);
