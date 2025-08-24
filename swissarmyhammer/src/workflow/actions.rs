@@ -366,49 +366,31 @@ impl PromptAction {
         Ok(rendered)
     }
 
-    /// Prepare the final prompt by combining user prompt with system prompt if enabled
     /// Prepare user prompt and system prompt separately for Claude CLI
+    /// System prompt injection is always enabled and cannot be disabled
     async fn prepare_prompts(
         &self,
         rendered_prompt: String,
-        context: &HashMap<String, Value>,
+        _context: &HashMap<String, Value>,
     ) -> (String, Option<String>) {
-        // Check if system prompt injection is enabled
-        let enable_system_prompt = context
-            .get("claude_system_prompt_enabled")
-            .and_then(|v| v.as_bool())
-            .or_else(|| {
-                std::env::var("SAH_CLAUDE_SYSTEM_PROMPT_ENABLED")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-            })
-            .unwrap_or(true); // Default to enabled
-
-        // Return user prompt and optional system prompt separately
-        if enable_system_prompt {
-            match render_system_prompt() {
-                Ok(system_prompt) => {
-                    tracing::debug!(
-                        "System prompt rendered successfully ({} chars)",
-                        system_prompt.len()
-                    );
-                    (rendered_prompt, Some(system_prompt))
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to render system prompt, continuing without it: {}",
-                        e
-                    );
-                    (rendered_prompt, None)
-                }
+        // System prompt injection is always enabled
+        match render_system_prompt() {
+            Ok(system_prompt) => {
+                tracing::debug!(
+                    "System prompt rendered successfully ({} chars)",
+                    system_prompt.len()
+                );
+                (rendered_prompt, Some(system_prompt))
             }
-        } else {
-            tracing::debug!("System prompt injection disabled");
-            (rendered_prompt, None)
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to render system prompt, continuing without it: {}",
+                    e
+                );
+                (rendered_prompt, None)
+            }
         }
     }
-
-
 
     /// Get Claude CLI path from context or environment
     fn get_claude_path(&self, context: &HashMap<String, Value>) -> String {
