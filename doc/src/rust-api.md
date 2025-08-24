@@ -191,9 +191,8 @@ use swissarmyhammer::claude_code_integration::{
     ClaudeCodeError
 };
 
-// Configure system prompt integration
+// Configure system prompt integration (always enabled)
 let config = ClaudeCodeConfig {
-    enable_system_prompt_injection: true,
     system_prompt_debug: false,
 };
 

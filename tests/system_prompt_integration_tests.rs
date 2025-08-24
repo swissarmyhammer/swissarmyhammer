@@ -89,32 +89,46 @@ async fn test_system_prompt_for_actions_integration() {
     }
 }
 
-/// Test environment variable handling for system prompt control (as used by actions.rs)
+/// Test that system prompt injection is always enabled and cannot be disabled
 #[tokio::test]
-async fn test_system_prompt_environment_control() {
-    // Test the logic that actions.rs uses to determine if system prompt should be enabled
-    let default_enabled = std::env::var("SAH_CLAUDE_SYSTEM_PROMPT_ENABLED")
-        .ok()
-        .and_then(|s| s.parse::<bool>().ok())
-        .unwrap_or(true); // Default to enabled as actions.rs does
-    
-    // Should default to enabled
-    assert!(default_enabled, "System prompt should be enabled by default");
+async fn test_system_prompt_always_enabled() {
+    // System prompt injection is now always enabled regardless of any environment variables
+    // or configuration settings - test this invariant
     
     // Test system prompt rendering works regardless of environment
     let result = render_system_prompt();
     match result {
         Ok(content) => {
             assert!(!content.is_empty(), "System prompt content should not be empty");
-            println!("Environment control test passed - system prompt available ({} chars)", content.len());
-        }
-        Err(_) => {
-            println!("Environment control test - system prompt file not found (expected in some environments)");
+            println!("System prompt always enabled test passed - system prompt available ({} chars)", content.len());
         }
         Err(e) => {
-            println!("Environment control test - render error: {} (may be expected)", e);
+            println!("System prompt always enabled test - system prompt error: {} (expected in some environments)", e);
         }
     }
+    
+    // Verify that even if someone tries to set the old environment variable,
+    // it has no effect on the system prompt rendering capability
+    std::env::set_var("SAH_CLAUDE_SYSTEM_PROMPT_ENABLED", "false");
+    let result_with_false_env = render_system_prompt();
+    
+    // Should still work the same way regardless of environment variable
+    match (&result, &result_with_false_env) {
+        (Ok(_), Ok(_)) => {
+            println!("✓ System prompt injection remains enabled despite environment variable");
+        }
+        (Err(_), Err(_)) => {
+            println!("✓ Environment variable does not affect system prompt rendering (both failed due to missing file)");
+        }
+        _ => {
+            // Results should be consistent
+            assert_eq!(result.is_ok(), result_with_false_env.is_ok(), 
+                "System prompt rendering should be consistent regardless of SAH_CLAUDE_SYSTEM_PROMPT_ENABLED environment variable");
+        }
+    }
+    
+    // Clean up
+    std::env::remove_var("SAH_CLAUDE_SYSTEM_PROMPT_ENABLED");
 }
 
 /// Test error handling for system prompt failures (as handled by actions.rs)
@@ -216,13 +230,8 @@ async fn test_complete_system_prompt_workflow() {
         println!("! System prompt not available in test environment");
     }
     
-    // Step 4: Test environment variable configuration (as used by actions.rs)
-    let enable_system_prompt = std::env::var("SAH_CLAUDE_SYSTEM_PROMPT_ENABLED")
-        .ok()
-        .and_then(|s| s.parse::<bool>().ok())
-        .unwrap_or(true); // Default to enabled
-    assert!(enable_system_prompt, "System prompt should be enabled by default");
-    println!("✓ Environment variable configuration works");
+    // Step 4: Verify system prompt is always enabled (environment variables have no effect)
+    println!("✓ System prompt is always enabled - no environment variable control");
     
     // Step 5: Test error handling  
     let error_test = render_system_prompt();

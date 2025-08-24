@@ -225,16 +225,12 @@ SwissArmyHammer provides seamless system prompt integration with Claude Code thr
 
 ```mermaid
 graph TD
-    A[Claude Code Invocation] --> B[System Prompt Check]
-    B --> C{System Prompt Enabled?}
-    C -->|Yes| D[Find .system.md]
-    C -->|No| I[Execute Without System Prompt]
-    D --> E[Render Template]
-    E --> F[Cache Rendered Content]
-    F --> G[Add --append-system-prompt]
-    G --> H[Execute Claude Code]
-    H --> J[Return Result]
-    I --> J
+    A[Claude Code Invocation] --> B[Find .system.md]
+    B --> C[Render Template]
+    C --> D[Cache Rendered Content]
+    D --> E[Add --append-system-prompt]
+    E --> F[Execute Claude Code]
+    F --> G[Return Result]
 ```
 
 #### Key Components
@@ -247,14 +243,13 @@ graph TD
 
 **Claude Code Integration**:
 - Automatically appends `--append-system-prompt` parameter to all Claude Code invocations
-- Configurable enablement/disablement via `SAH_CLAUDE_SYSTEM_PROMPT_ENABLED`
+- System prompt injection is always enabled and cannot be disabled
 - Debug logging for system prompt operations via `SAH_CLAUDE_SYSTEM_PROMPT_DEBUG`
 - Non-blocking operation - continues without system prompt if rendering fails
 
 **Configuration Options**:
 ```rust
 pub struct ClaudeCodeConfig {
-    pub enable_system_prompt_injection: bool,  // Default: true
     pub system_prompt_debug: bool,             // Default: false
 }
 ```
