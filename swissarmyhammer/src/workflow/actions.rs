@@ -366,11 +366,12 @@ impl PromptAction {
     }
 
     /// Prepare the final prompt by combining user prompt with system prompt if enabled
-    async fn prepare_final_prompt(
+    /// Prepare user prompt and system prompt separately for Claude CLI
+    async fn prepare_prompts(
         &self,
         rendered_prompt: String,
         context: &HashMap<String, Value>,
-    ) -> String {
+    ) -> (String, Option<String>) {
         // Check if system prompt injection is enabled
         let enable_system_prompt = context
             .get("claude_system_prompt_enabled")
@@ -382,7 +383,7 @@ impl PromptAction {
             })
             .unwrap_or(true); // Default to enabled
 
-        // Render and combine with system prompt if enabled
+        // Return user prompt and optional system prompt separately
         if enable_system_prompt {
             match render_system_prompt() {
                 Ok(system_prompt) => {
@@ -390,19 +391,19 @@ impl PromptAction {
                         "System prompt rendered successfully ({} chars)",
                         system_prompt.len()
                     );
-                    format!("{}\n\n{}", system_prompt, rendered_prompt)
+                    (rendered_prompt, Some(system_prompt))
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Failed to render system prompt, continuing without it: {}",
                         e
                     );
-                    rendered_prompt
+                    (rendered_prompt, None)
                 }
             }
         } else {
             tracing::debug!("System prompt injection disabled");
-            rendered_prompt
+            (rendered_prompt, None)
         }
     }
 
@@ -416,22 +417,31 @@ impl PromptAction {
             .unwrap_or_else(|| "claude".to_string())
     }
 
-    /// Execute Claude CLI with the given prompt using stdin
+    /// Execute Claude CLI with the given prompt using stdin and optional system prompt
     async fn execute_claude_cli(
         &self,
         prompt: String,
         claude_path: String,
+        system_prompt: Option<String>,
     ) -> ActionResult<String> {
         use tokio::io::AsyncWriteExt;
         use tokio::process::Command;
 
+        // Build command with system prompt if provided
+        let mut cmd = Command::new(&claude_path);
+        cmd.args([
+            "--dangerously-skip-permissions",
+            "--print",
+            "-", // Read from stdin
+        ]);
+
+        // Add system prompt parameter if provided
+        if let Some(ref sys_prompt) = system_prompt {
+            cmd.args(["--append-system-prompt", sys_prompt]);
+        }
+
         // Execute Claude Code with stdin input
-        let mut child = Command::new(&claude_path)
-            .args([
-                "--dangerously-skip-permissions",
-                "--print",
-                "-", // Read from stdin
-            ])
+        let mut child = cmd
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -522,14 +532,16 @@ impl PromptAction {
         // Execute the rendered prompt with Claude directly
         tracing::debug!("Executing prompt '{}' with Claude Code", self.prompt_name);
 
-        // Prepare final prompt with system prompt if enabled
-        let final_prompt = self.prepare_final_prompt(rendered_prompt, context).await;
+        // Prepare user prompt and system prompt separately
+        let (user_prompt, system_prompt) = self.prepare_prompts(rendered_prompt, context).await;
 
         // Get Claude CLI path
         let claude_path = self.get_claude_path(context);
 
-        // Execute Claude CLI
-        let response_text = self.execute_claude_cli(final_prompt, claude_path).await?;
+        // Execute Claude CLI with separate system prompt
+        let response_text = self
+            .execute_claude_cli(user_prompt, claude_path, system_prompt)
+            .await?;
 
         // Log the response for debugging if not in quiet mode
         if !quiet && !response_text.is_empty() {
