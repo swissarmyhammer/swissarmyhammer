@@ -1132,15 +1132,15 @@ stateDiagram-v2
 
         // Temporarily change to temp directory to load workflows, then restore
         let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&temp_dir).unwrap();
-        
+        std::env::set_current_dir(_env.temp_dir()).unwrap();
+
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
         let load_result = resolver.load_all_workflows(&mut storage);
-        
+
         // Immediately restore the original directory
         std::env::set_current_dir(&original_dir).unwrap();
-        
+
         load_result.unwrap();
 
         // Check that the user workflow was loaded
@@ -1192,10 +1192,18 @@ stateDiagram-v2
         ";
         fs::write(&workflow_file, workflow_content).unwrap();
 
+        // Temporarily change to temp directory to load workflows, then restore
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(env.temp_dir()).unwrap();
+
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
+        let load_result = resolver.load_all_workflows(&mut storage);
 
-        resolver.load_all_workflows(&mut storage).unwrap();
+        // Immediately restore the original directory
+        std::env::set_current_dir(&original_dir).unwrap();
+
+        load_result.unwrap();
 
         // Check that at least one workflow was loaded
         let workflows = storage.list_workflows().unwrap();
@@ -1266,16 +1274,16 @@ stateDiagram-v2
         // Temporarily change to temp directory to load workflows, then restore
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
-        
+
         let mut resolver = WorkflowResolver::new();
         let mut storage = MemoryWorkflowStorage::new();
-        
+
         // Load all workflows (user first, then local to test precedence)
         let load_result = resolver.load_all_workflows(&mut storage);
-        
+
         // Immediately restore the original directory
         std::env::set_current_dir(&original_dir).unwrap();
-        
+
         load_result.unwrap();
 
         // Check that at least one workflow was loaded

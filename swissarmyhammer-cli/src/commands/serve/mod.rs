@@ -102,9 +102,13 @@ mod tests {
     use clap::{Arg, Command};
 
     #[test]
-    fn test_description_exists() {
-        assert!(!DESCRIPTION.is_empty());
+    fn test_description_content() {
         assert!(DESCRIPTION.contains("Serve Command"));
+        assert!(DESCRIPTION.contains("MCP server"));
+        assert!(
+            DESCRIPTION.len() > 100,
+            "Description should be comprehensive"
+        );
     }
 
     #[test]

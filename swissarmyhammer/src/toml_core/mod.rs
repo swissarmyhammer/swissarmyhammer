@@ -269,16 +269,19 @@ port = 5432
     #[test]
     fn test_load_repo_config_not_found() -> Result<(), Box<dyn std::error::Error>> {
         use tempfile::TempDir;
-        
+
         let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
         let temp_dir = TempDir::new()?;
-        
+
         // Test from a directory that is not a git repository and has no sah.toml
         let parser = crate::toml_core::parser::ConfigParser::new();
         let result = parser.load_from_repo_root_with_start_dir(temp_dir.path())?;
-        
+
         // Should return None when no config file is found
-        assert!(result.is_none(), "Expected no config to be found in empty temp directory");
+        assert!(
+            result.is_none(),
+            "Expected no config to be found in empty temp directory"
+        );
         Ok(())
     }
 

@@ -3,8 +3,8 @@
 //! This module tests the complete configuration system workflow including file loading,
 //! template integration, and complex real-world scenarios.
 
-use crate::toml_config::{load_repo_config, parse_config_string, ConfigValue};
 use crate::toml_config::parser::ConfigParser;
+use crate::toml_config::{parse_config_string, ConfigValue};
 use std::fs;
 use tempfile::TempDir;
 
@@ -319,8 +319,6 @@ fn test_template_integration() {
 /// Test file discovery from different directory structures
 #[test]
 fn test_file_discovery_from_different_directories() {
-
-
     let _test_env = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
     let temp_dir = TempDir::new().unwrap();
 
