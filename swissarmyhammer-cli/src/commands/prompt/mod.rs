@@ -135,7 +135,9 @@ async fn run_test_command(
     let prompt_name = prompt_name.ok_or_else(|| anyhow::anyhow!("Prompt name is required"))?;
 
     // Load all prompts
-    let library = PromptLibrary::new();
+    let mut library = PromptLibrary::new();
+    let mut resolver = PromptResolver::new();
+    resolver.load_all_prompts(&mut library)?;
 
     // Parse variables
     let mut arguments = HashMap::new();
