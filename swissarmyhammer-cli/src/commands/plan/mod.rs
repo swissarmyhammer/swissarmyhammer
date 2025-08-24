@@ -72,13 +72,16 @@ async fn run_plan(plan_filename: String) -> i32 {
 
     // Execute the flow command with the plan workflow
     let exit_code = crate::commands::flow::handle_command(subcommand).await;
-    
+
     if exit_code == EXIT_SUCCESS {
         tracing::info!("Plan workflow execution completed successfully");
         EXIT_SUCCESS
     } else {
-        tracing::error!("Plan workflow execution failed with exit code: {}", exit_code);
-        
+        tracing::error!(
+            "Plan workflow execution failed with exit code: {}",
+            exit_code
+        );
+
         // Create and display a PlanCommandError for workflow failures
         let plan_error = PlanCommandError::WorkflowExecutionFailed {
             plan_filename: plan_filename.clone(),
