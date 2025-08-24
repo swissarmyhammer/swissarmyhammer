@@ -34,7 +34,7 @@ Always put mcp.log and semantic.db in the .gitignore.
 ### Helper Methods
 
 **HELPER METHOD ARE FORBIDDEN**.
-Do not create 'helper methods'. Use APIs in the natural form.
+Do not create 'helper methods' or 'convenience methods'. Use APIs in the natural form.
 If the natural form of an API is consistently inconvenient:
 - In the current repository? Fix the API!
 - Not in the current repository? Leave a comment in the code indicating that the lower level API could use a new method with a suggested name and signature.
@@ -128,11 +128,13 @@ Focus on understanding the problem requirements and coding tests that prove the 
   - A function takes a single parameter that is a structure or object
   - A function takes two parameters, a context object, and a single parameter that is a structure or object
   - AVOID making functions that take a long list of primitives as parameters
+- Never #[allow(dead_code)], delete it -- we have source control these days
+- Never create a feature in a Cargo.toml unless EXPLICITLY requested by the user
+- Never ignore or remove a unit tests.
 
 ### React
 
 - Always use TypeScript with full type annotations
-- Never #[allow(dead_code)], delete it -- we have source control these days
 - Always format your files with `npx prettier`
   - Format all files with `npx prettier --write .`
 - Always lint your files with `npx eslint` and `npx tsc --noEmit`
