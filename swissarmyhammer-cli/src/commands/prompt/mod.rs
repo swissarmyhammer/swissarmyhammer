@@ -51,6 +51,27 @@ async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
     }
 }
 
+/// Check if a prompt is a partial template that should not be displayed in the list.
+///
+/// Partial templates are identified by either:
+/// 1. Starting with the `{% partial %}` marker
+/// 2. Having a description containing "Partial template for reuse in other prompts"
+fn is_partial_template(prompt: &swissarmyhammer::prompts::Prompt) -> bool {
+    // Check if the template starts with the partial marker
+    if prompt.template.trim().starts_with("{% partial %}") {
+        return true;
+    }
+
+    // Check if the description indicates it's a partial template
+    if let Some(description) = &prompt.description {
+        if description.contains("Partial template for reuse in other prompts") {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Run the list command
 fn run_list_command(
     format: crate::cli::OutputFormat,
@@ -82,7 +103,13 @@ fn run_list_command(
 
     // Apply filter and get prompts - pass empty file sources since we're using all sources
     let file_sources = HashMap::new();
-    let prompts = library.list_filtered(&filter, &file_sources)?;
+    let all_prompts = library.list_filtered(&filter, &file_sources)?;
+    
+    // Filter out partial templates
+    let prompts: Vec<_> = all_prompts
+        .into_iter()
+        .filter(|prompt| !is_partial_template(prompt))
+        .collect();
 
     // Display results based on format
     match format {
@@ -220,5 +247,49 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(e.exit_code, 1);
         }
+    }
+
+    #[test]
+    fn test_is_partial_template() {
+        use swissarmyhammer::prompts::Prompt;
+        
+        // Test template with partial marker
+        let partial_prompt = Prompt {
+            name: "test-partial".to_string(),
+            description: None,
+            category: None,
+            tags: vec![],
+            template: "{% partial %}\nThis is a partial template".to_string(),
+            parameters: vec![],
+            source: None,
+            metadata: Default::default(),
+        };
+        assert!(is_partial_template(&partial_prompt));
+
+        // Test template with partial description
+        let partial_desc_prompt = Prompt {
+            name: "test-partial-desc".to_string(),
+            description: Some("Partial template for reuse in other prompts".to_string()),
+            category: None,
+            tags: vec![],
+            template: "Regular template content".to_string(),
+            parameters: vec![],
+            source: None,
+            metadata: Default::default(),
+        };
+        assert!(is_partial_template(&partial_desc_prompt));
+
+        // Test regular template
+        let regular_prompt = Prompt {
+            name: "test-regular".to_string(),
+            description: Some("A regular prompt".to_string()),
+            category: None,
+            tags: vec![],
+            template: "This is a regular template".to_string(),
+            parameters: vec![],
+            source: None,
+            metadata: Default::default(),
+        };
+        assert!(!is_partial_template(&regular_prompt));
     }
 }
