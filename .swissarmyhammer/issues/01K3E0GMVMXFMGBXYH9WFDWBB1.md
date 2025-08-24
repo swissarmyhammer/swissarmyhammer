@@ -1,0 +1,1 @@
+the whole system_prompt.rs module should not exist, the system prompt should jsut be rendered like any other prompt... it is just called .system
