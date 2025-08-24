@@ -5,9 +5,20 @@
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use swissarmyhammer::{PromptLibrary, common::render_system_prompt};
+use swissarmyhammer::PromptLibrary;
 use tempfile::TempDir;
 use tokio::test;
+use std::collections::HashMap;
+
+/// Helper function to render system prompt using the same pattern as workflow actions
+fn render_system_prompt() -> swissarmyhammer::Result<String> {
+    let library = PromptLibrary::with_standard_directories()?;
+    let args = HashMap::new();
+    library.render_prompt_with_env(".system", &args)
+        .map_err(|e| swissarmyhammer::SwissArmyHammerError::Template(
+            format!("Failed to render system prompt: {}. Make sure .system prompt exists in one of the standard directories (builtin/prompts, .swissarmyhammer/prompts, prompts)", e)
+        ))
+}
 
 /// Test that the system prompt can be rendered successfully
 #[tokio::test]
