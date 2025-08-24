@@ -1131,7 +1131,7 @@ stateDiagram-v2
         fs::write(&workflow_file, workflow_content).unwrap();
 
         // Temporarily change to temp directory to load workflows, then restore
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
         std::env::set_current_dir(_env.temp_dir()).unwrap();
 
         let mut resolver = WorkflowResolver::new();
@@ -1193,7 +1193,7 @@ stateDiagram-v2
         fs::write(&workflow_file, workflow_content).unwrap();
 
         // Temporarily change to temp directory to load workflows, then restore
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
         std::env::set_current_dir(env.temp_dir()).unwrap();
 
         let mut resolver = WorkflowResolver::new();
@@ -1272,7 +1272,7 @@ stateDiagram-v2
         .unwrap();
 
         // Temporarily change to temp directory to load workflows, then restore
-        let original_dir = std::env::current_dir().unwrap();
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
         std::env::set_current_dir(&temp_dir).unwrap();
 
         let mut resolver = WorkflowResolver::new();
