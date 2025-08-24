@@ -3,6 +3,7 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
+use crate::common::render_system_prompt;
 use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
@@ -385,7 +386,7 @@ impl PromptAction {
 
         // Return user prompt and optional system prompt separately
         if enable_system_prompt {
-            match Self::render_system_prompt_via_library() {
+            match render_system_prompt() {
                 Ok(system_prompt) => {
                     tracing::debug!(
                         "System prompt rendered successfully ({} chars)",
@@ -407,37 +408,7 @@ impl PromptAction {
         }
     }
 
-    /// Render system prompt using PromptLibrary instead of dedicated system_prompt module
-    fn render_system_prompt_via_library() -> Result<String, Box<dyn std::error::Error>> {
-        let mut library = PromptLibrary::new();
-        
-        // Add builtin prompts directory
-        if let Ok(builtin_path) = std::env::current_dir().map(|p| p.join("builtin/prompts")) {
-            if builtin_path.exists() {
-                library.add_directory(builtin_path)?;
-            }
-        }
-        
-        // Add other standard prompt directories
-        let standard_paths = [
-            ".swissarmyhammer/prompts",
-            "prompts",
-        ];
-        
-        for path_str in &standard_paths {
-            let path = std::path::Path::new(path_str);
-            if path.exists() {
-                library.add_directory(path)?;
-            }
-        }
-        
-        // Get and render the .system prompt
-        let system_prompt = library.get(".system")?;
-        let args = std::collections::HashMap::new();
-        let rendered = system_prompt.render_with_partials(&args, Arc::new(library))?;
-        
-        Ok(rendered)
-    }
+
 
     /// Get Claude CLI path from context or environment
     fn get_claude_path(&self, context: &HashMap<String, Value>) -> String {

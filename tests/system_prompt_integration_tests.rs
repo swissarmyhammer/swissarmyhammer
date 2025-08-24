@@ -5,14 +5,14 @@
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use swissarmyhammer::PromptLibrary;
+use swissarmyhammer::{PromptLibrary, common::render_system_prompt};
 use tempfile::TempDir;
 use tokio::test;
 
 /// Test that the system prompt can be rendered successfully
 #[tokio::test]
 async fn test_system_prompt_rendering_with_builtin_content() {
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     
     match result {
         Ok(rendered_content) => {
@@ -32,46 +32,16 @@ async fn test_system_prompt_rendering_with_builtin_content() {
     }
 }
 
-/// Helper function to render system prompt using PromptLibrary
-fn render_system_prompt_via_library() -> Result<String, Box<dyn std::error::Error>> {
-    let mut library = PromptLibrary::new();
-    
-    // Add builtin prompts directory
-    if let Ok(builtin_path) = std::env::current_dir().map(|p| p.join("builtin/prompts")) {
-        if builtin_path.exists() {
-            library.add_directory(builtin_path)?;
-        }
-    }
-    
-    // Add other standard prompt directories
-    let standard_paths = [
-        ".swissarmyhammer/prompts",
-        "prompts",
-    ];
-    
-    for path_str in &standard_paths {
-        let path = std::path::Path::new(path_str);
-        if path.exists() {
-            library.add_directory(path)?;
-        }
-    }
-    
-    // Get and render the .system prompt
-    let system_prompt = library.get(".system")?;
-    let args = std::collections::HashMap::new();
-    let rendered = system_prompt.render_with_partials(&library, &args)?;
-    
-    Ok(rendered)
-}
+
 
 /// Test system prompt consistency (multiple renders should produce same result)
 #[tokio::test]
 async fn test_system_prompt_consistency() {
     // First render
-    let result1 = render_system_prompt_via_library();
+    let result1 = render_system_prompt();
     
     // Second render 
-    let result2 = render_system_prompt_via_library();
+    let result2 = render_system_prompt();
     
     // Both should have the same success/failure result
     match (&result1, &result2) {
@@ -90,7 +60,7 @@ async fn test_system_prompt_consistency() {
 #[tokio::test]
 async fn test_system_prompt_for_actions_integration() {
     // Test that system prompt can be rendered for actions.rs usage
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     
     match result {
         Ok(system_prompt) => {
@@ -132,7 +102,7 @@ async fn test_system_prompt_environment_control() {
     assert!(default_enabled, "System prompt should be enabled by default");
     
     // Test system prompt rendering works regardless of environment
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     match result {
         Ok(content) => {
             assert!(!content.is_empty(), "System prompt content should not be empty");
@@ -151,7 +121,7 @@ async fn test_system_prompt_environment_control() {
 #[tokio::test]
 async fn test_system_prompt_error_handling() {
     // Test system prompt rendering error handling
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     
     match result {
         Ok(content) => {
@@ -188,7 +158,7 @@ async fn test_system_prompt_error_handling() {
 /// Test system prompt content quality
 #[tokio::test]
 async fn test_system_prompt_content_quality() {
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     
     if let Ok(content) = result {
         // Test for key content sections that should be present
@@ -225,14 +195,14 @@ async fn test_complete_system_prompt_workflow() {
     println!("Starting complete system prompt workflow test");
     
     // Step 1: Test initial rendering
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     let has_system_prompt = result.is_ok();
     
     if has_system_prompt {
         println!("✓ System prompt rendered successfully");
         
         // Step 2: Test consistency 
-        let second_result = render_system_prompt_via_library();
+        let second_result = render_system_prompt();
         assert!(second_result.is_ok(), "Second render should work");
         println!("✓ System prompt consistency works");
         
@@ -255,7 +225,7 @@ async fn test_complete_system_prompt_workflow() {
     println!("✓ Environment variable configuration works");
     
     // Step 5: Test error handling  
-    let error_test = render_system_prompt_via_library();
+    let error_test = render_system_prompt();
     // Should either succeed or fail consistently
     println!("✓ Error handling behaves consistently");
     
@@ -267,7 +237,7 @@ async fn test_complete_system_prompt_workflow() {
 async fn test_system_prompt_performance() {
     // Time the rendering process
     let start = std::time::Instant::now();
-    let result = render_system_prompt_via_library();
+    let result = render_system_prompt();
     let duration = start.elapsed();
     
     // Should complete within reasonable time
@@ -276,7 +246,7 @@ async fn test_system_prompt_performance() {
     if result.is_ok() {
         // Time a second render (no caching)
         let start = std::time::Instant::now();
-        let _second = render_system_prompt_via_library();
+        let _second = render_system_prompt();
         let second_duration = start.elapsed();
         
         // Second render should still be reasonable
