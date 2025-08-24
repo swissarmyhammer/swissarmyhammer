@@ -8,8 +8,6 @@ description: "Improve coverage."
 
 The goal is to improve test code coverage.
 
-{% render "principals" %}
-{% render "coding_standards" %}
 
 ## Guidelines
 

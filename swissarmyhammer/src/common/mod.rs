@@ -40,6 +40,7 @@ pub mod interactive_prompts;
 pub mod parameter_conditions;
 
 // Re-export commonly used items
+pub use crate::prompts::PromptLibrary;
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
     remove_abort_file,
