@@ -7,7 +7,7 @@ use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
 };
-use crate::system_prompt::render_system_prompt;
+
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::mcp_integration::{response_processing, WorkflowShellContext};
 use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
@@ -385,7 +385,7 @@ impl PromptAction {
 
         // Return user prompt and optional system prompt separately
         if enable_system_prompt {
-            match render_system_prompt() {
+            match Self::render_system_prompt_via_library() {
                 Ok(system_prompt) => {
                     tracing::debug!(
                         "System prompt rendered successfully ({} chars)",
@@ -405,6 +405,38 @@ impl PromptAction {
             tracing::debug!("System prompt injection disabled");
             (rendered_prompt, None)
         }
+    }
+
+    /// Render system prompt using PromptLibrary instead of dedicated system_prompt module
+    fn render_system_prompt_via_library() -> Result<String, Box<dyn std::error::Error>> {
+        let mut library = PromptLibrary::new();
+        
+        // Add builtin prompts directory
+        if let Ok(builtin_path) = std::env::current_dir().map(|p| p.join("builtin/prompts")) {
+            if builtin_path.exists() {
+                library.add_directory(builtin_path)?;
+            }
+        }
+        
+        // Add other standard prompt directories
+        let standard_paths = [
+            ".swissarmyhammer/prompts",
+            "prompts",
+        ];
+        
+        for path_str in &standard_paths {
+            let path = std::path::Path::new(path_str);
+            if path.exists() {
+                library.add_directory(path)?;
+            }
+        }
+        
+        // Get and render the .system prompt
+        let system_prompt = library.get(".system")?;
+        let args = std::collections::HashMap::new();
+        let rendered = system_prompt.render_with_partials(&args, Arc::new(library))?;
+        
+        Ok(rendered)
     }
 
     /// Get Claude CLI path from context or environment
