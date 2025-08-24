@@ -1189,6 +1189,55 @@ impl PromptLibrary {
     pub fn remove(&mut self, name: &str) -> Result<()> {
         self.storage.remove(name)
     }
+
+    /// Render the system prompt using standard PromptLibrary infrastructure
+    ///
+    /// This method loads the .system prompt from standard prompt directories and renders it
+    /// using the same pipeline as other prompts. It searches the following directories in order:
+    /// 1. builtin/prompts (relative to current directory)
+    /// 2. .swissarmyhammer/prompts
+    /// 3. prompts
+    ///
+    /// Returns the rendered system prompt content as a string with improved error messages.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer::PromptLibrary;
+    ///
+    /// let result = PromptLibrary::render_system_prompt();
+    /// match result {
+    ///     Ok(content) => println!("System prompt: {}", content),
+    ///     Err(e) => eprintln!("Failed to render system prompt: {}", e),
+    /// }
+    /// ```
+    pub fn render_system_prompt() -> Result<String> {
+        let mut library = PromptLibrary::new();
+
+        // Add builtin prompts directory
+        if let Ok(builtin_path) = std::env::current_dir().map(|p| p.join("builtin/prompts")) {
+            if builtin_path.exists() {
+                library.add_directory(builtin_path)?;
+            }
+        }
+
+        // Add other standard prompt directories
+        let standard_paths = [".swissarmyhammer/prompts", "prompts"];
+
+        for path_str in &standard_paths {
+            let path = std::path::Path::new(path_str);
+            if path.exists() {
+                library.add_directory(path)?;
+            }
+        }
+
+        // Use the standard render_prompt method for consistency
+        let args = HashMap::new();
+        library.render_prompt(".system", &args)
+            .map_err(|e| SwissArmyHammerError::Template(
+                format!("Failed to render system prompt: {}. Make sure .system prompt exists in one of the standard directories (builtin/prompts, .swissarmyhammer/prompts, prompts)", e)
+            ))
+    }
 }
 
 impl Default for PromptLibrary {
