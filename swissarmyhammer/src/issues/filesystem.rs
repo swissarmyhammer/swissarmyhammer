@@ -5090,12 +5090,12 @@ mod tests {
 
         #[test]
         fn test_new_default_without_swissarmyhammer_directory() {
-            let temp_dir = TempDir::new().unwrap();
+            let _temp_dir = TempDir::new().unwrap();
             let original_dir = std::env::current_dir().unwrap();
-            std::env::set_current_dir(temp_dir.path()).unwrap();
+            std::env::set_current_dir(_temp_dir.path()).unwrap();
 
             // Ensure .swissarmyhammer directory does NOT exist to test legacy behavior
-            let swissarmyhammer_dir = temp_dir.path().join(".swissarmyhammer");
+            let swissarmyhammer_dir = _temp_dir.path().join(".swissarmyhammer");
             if swissarmyhammer_dir.exists() {
                 std::fs::remove_dir_all(&swissarmyhammer_dir).unwrap();
             }
@@ -5471,8 +5471,8 @@ mod tests {
             let _test_env = IsolatedTestEnvironment::new().unwrap();
 
             // Try to set current dir to something that might not work
-            let temp_dir = TempDir::new().unwrap();
-            let test_path = temp_dir.path().join("nonexistent");
+            let _temp_dir = TempDir::new().unwrap();
+            let test_path = _temp_dir.path().join("nonexistent");
 
             // Attempting to set current directory to non-existent path should fail
             // But std::env::set_current_dir will create the error we want to test
@@ -5490,12 +5490,12 @@ mod tests {
 
         #[test]
         fn test_migration_info_with_permission_errors() {
-            let temp_dir = TempDir::new().unwrap();
+            let _temp_dir = TempDir::new().unwrap();
 
             let _test_env = IsolatedTestEnvironment::new().unwrap();
-            std::env::set_current_dir(temp_dir.path()).unwrap();
+            std::env::set_current_dir(_temp_dir.path()).unwrap();
 
-            let issues_dir = temp_dir.path().join("issues");
+            let issues_dir = _temp_dir.path().join("issues");
             std::fs::create_dir_all(&issues_dir).unwrap();
             std::fs::write(issues_dir.join("test.md"), "test content").unwrap();
 
