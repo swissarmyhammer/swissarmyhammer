@@ -39,6 +39,9 @@ pub mod interactive_prompts;
 /// Conditional parameter system for dynamic parameter requirements
 pub mod parameter_conditions;
 
+/// Prompt utility functions for common prompt operations
+pub mod prompt_utils;
+
 // Re-export commonly used items
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
@@ -61,6 +64,7 @@ pub use parameters::{
     DefaultParameterResolver, Parameter, ParameterError, ParameterProvider, ParameterResolver,
     ParameterResult, ParameterType, ParameterValidator,
 };
+pub use prompt_utils::render_system_prompt;
 pub use rate_limiter::{
     get_rate_limiter, init_rate_limiter, RateLimitStatus, RateLimiter, RateLimiterConfig,
 };
