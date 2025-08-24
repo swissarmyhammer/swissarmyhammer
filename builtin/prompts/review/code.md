@@ -8,9 +8,6 @@ description: Review code for quality, bugs, and improvements
 
 Please review the all code in this project.
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Review Checklist
 
 1. **Code Quality**

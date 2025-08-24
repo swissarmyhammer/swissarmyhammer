@@ -7,9 +7,6 @@ description: Perform a comprehensive review of the code to improve pattern use.
 
 Please review the all code in this project.
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Review Checklist
 
 ### 1. Pattern Consistency Analysis

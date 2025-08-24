@@ -4,7 +4,7 @@ description: Write up corrections to documentation
 ---
 
 
-{% render "principals" %}
+
 {% render "documentation" %}
 
 ## Process

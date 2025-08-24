@@ -3,9 +3,6 @@ title: "review code placeholers"
 description: "Creates issues to replace placeholders with actual work."
 ---
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Rules
 
 DO NOT code now, the goal is just to create issues

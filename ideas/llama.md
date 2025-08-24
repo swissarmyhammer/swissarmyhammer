@@ -225,7 +225,7 @@ impl AgentExecutor for ClaudeCodeExecutor {
 
 ### 3. LlamaAgent Implementation
 
-Create a new LlamaAgent executor with lazy initialization and session-per-prompt:
+Create a new LlamaAgent executor with lazy initialization and session-per-prompt-action:
 
 ```rust
 use std::sync::Arc;
@@ -440,6 +440,14 @@ impl PromptAction {
 }
 ```
 
+### 6. System Prompt
+
+LlamaAgent will need to use the .system.md system prompt with MessageRole::System as the very first prompt in each session.
+
+Before rendering the system prompt -- for all models, include a new variable `model` in the prompt rendering context.
+
+This will be the hugging face name of the model for LlamaAgent models, or `claude` for claude code.
+
 ## MCP Server Architecture Requirements
 
 ### Dual MCP Server Support
@@ -459,6 +467,8 @@ sah serve http
 sah serve http 8080  # specific port
 sah serve http --port 8080 --host 0.0.0.0  # bind to all interfaces
 ```
+
+Note that this will require http!
 
 #### 2. In-Process MCP Server (LlamaAgent)
 
@@ -532,14 +542,12 @@ pub struct LlamaAgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub source: ModelSource,
-    pub repo: String,
-    pub filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelSource {
-    HuggingFace,
-    Local,
+    HuggingFace{ repo: String, filename: Option<String>},
+    Local{filename: String},
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -554,9 +562,10 @@ impl Default for LlamaAgentConfig {
     fn default() -> Self {
         Self {
             model: ModelConfig {
-                source: ModelSource::HuggingFace,
+                source: ModelSource::HuggingFace{
                 repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
-                filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string())
+                },
             },
             mcp_server: McpServerConfig {
                 port: 0, // Random available port
@@ -571,9 +580,10 @@ impl LlamaAgentConfig {
     pub fn for_testing() -> Self {
         Self {
             model: ModelConfig {
-                source: ModelSource::HuggingFace,
+                source: ModelSource::HuggingFace{
                 repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
-                filename: Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
+                filename: Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string())
+                },
             },
             mcp_server: McpServerConfig {
                 port: 0, // Random available port
