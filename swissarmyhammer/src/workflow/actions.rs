@@ -3,8 +3,6 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
-use crate::common::render_system_prompt;
-use crate::error::Result;
 use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
@@ -316,11 +314,11 @@ impl Action for PromptAction {
 }
 
 impl PromptAction {
-    /// Render the prompt directly using the prompt library instead of shelling out
-    async fn render_prompt_directly(
+    /// Render both user prompt and system prompt using the same library instance
+    async fn render_prompts_directly(
         &self,
         context: &HashMap<String, Value>,
-    ) -> ActionResult<String> {
+    ) -> ActionResult<(String, Option<String>)> {
         // Substitute variables in arguments
         let args = self.substitute_variables(context);
 
@@ -341,6 +339,7 @@ impl PromptAction {
             ActionError::ClaudeError(format!("Failed to load prompts from directories: {e}"))
         })?;
 
+        // Render user prompt
         let rendered = library
             .render_prompt_with_env(&self.prompt_name, &args)
             .map_err(|e| {
@@ -364,29 +363,21 @@ impl PromptAction {
                 ))
             })?;
 
-        Ok(rendered)
-    }
+        // Render system prompt using the same library instance
+        let system_prompt = library
+            .render_prompt_with_env(".system", &std::collections::HashMap::new())
+            .map_err(|e| {
+                ActionError::ClaudeError(
+                    format!("Failed to render system prompt: {}. Make sure .system prompt exists in one of the standard directories (builtin/prompts, .swissarmyhammer/prompts, prompts)", e)
+                )
+            })?;
 
-    /// Prepare user prompt and system prompts separately
-    async fn prepare_prompts(
-        &self,
-        rendered_prompt: String,
-        _context: &HashMap<String, Value>,
-    ) -> Result<(String, Option<String>)> {
-        // System prompt injection is always enabled
-        match render_system_prompt() {
-            Ok(system_prompt) => {
-                tracing::debug!(
-                    "System prompt rendered successfully ({} chars)",
-                    system_prompt.len()
-                );
-                Ok((rendered_prompt, Some(system_prompt)))
-            }
-            Err(e) => {
-                tracing::error!("Failed to render system prompt, cannot proceed: {}", e);
-                Err(e)
-            }
-        }
+        tracing::debug!(
+            "System prompt rendered successfully ({} chars)",
+            system_prompt.len()
+        );
+
+        Ok((rendered, Some(system_prompt)))
     }
 
     /// Get Claude CLI path from context or environment
@@ -498,11 +489,11 @@ impl PromptAction {
             context
         );
 
-        // First, render the prompt using swissarmyhammer
-        let rendered_prompt = self.render_prompt_directly(context).await?;
+        // Render both user and system prompts using the same library instance
+        let (user_prompt, system_prompt) = self.render_prompts_directly(context).await?;
 
         // Log the actual prompt being sent to Claude
-        tracing::debug!("Piping prompt to Claude:\n{}", rendered_prompt);
+        tracing::debug!("Piping prompt to Claude:\n{}", user_prompt);
 
         // Check if quiet mode is enabled in the context
         let quiet = self.quiet
@@ -513,14 +504,6 @@ impl PromptAction {
 
         // Execute the rendered prompt with Claude directly
         tracing::debug!("Executing prompt '{}' with Claude Code", self.prompt_name);
-
-        // Prepare user prompt and system prompt separately
-        let (user_prompt, system_prompt) = self
-            .prepare_prompts(rendered_prompt, context)
-            .await
-            .map_err(|e| {
-                ActionError::ClaudeError(format!("System prompt preparation failed: {}", e))
-            })?;
 
         // Get Claude CLI path
         let claude_path = self.get_claude_path(context);

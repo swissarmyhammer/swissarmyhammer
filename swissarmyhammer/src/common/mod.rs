@@ -67,11 +67,3 @@ pub use rate_limiter::{
 };
 pub use ulid_generator::{generate_monotonic_ulid, generate_monotonic_ulid_string};
 pub use validation_builders::{quick, ValidationChain, ValidationErrorBuilder, ValidationResult};
-
-/// Render the system prompt using standard PromptLibrary infrastructure
-///
-/// This is a convenience function that delegates to PromptLibrary::render_system_prompt()
-/// to maintain backward compatibility while using the centralized implementation.
-pub fn render_system_prompt() -> crate::Result<String> {
-    crate::prompts::PromptLibrary::render_system_prompt()
-}
