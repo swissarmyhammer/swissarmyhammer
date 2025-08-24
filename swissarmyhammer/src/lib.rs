@@ -51,8 +51,7 @@ pub mod prompt_resolver;
 /// Template engine and rendering
 pub mod template;
 
-/// System prompt rendering infrastructure
-pub mod system_prompt;
+
 
 /// Storage abstractions and implementations
 pub mod storage;
@@ -152,11 +151,7 @@ pub use storage::{PromptStorage, StorageBackend};
 /// Template engine and rendering functionality
 pub use template::{Template, TemplateEngine};
 
-/// System prompt rendering functionality
-pub use system_prompt::{
-    clear_cache as clear_system_prompt_cache, render_system_prompt, SystemPromptError,
-    SystemPromptRenderer,
-};
+
 
 /// Workflow system for state-based execution
 pub use workflow::{
@@ -232,11 +227,7 @@ pub mod prelude {
         SwissArmyHammerPlugin, Template, TemplateEngine,
     };
 
-    // System prompt rendering for convenient access
-    pub use crate::system_prompt::{
-        clear_cache as clear_system_prompt_cache, render_system_prompt, SystemPromptError,
-        SystemPromptRenderer,
-    };
+
 
     pub use crate::prompt_search::{SearchEngine, SearchResult};
     pub use crate::search_advanced::{
