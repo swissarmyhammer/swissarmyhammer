@@ -104,10 +104,10 @@ mod tests {
         let temp_dir = create_test_git_repo().unwrap();
         let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Initially git2 repo should not be initialized
-        assert!(!git_ops.has_git2_repo());
+        // After migration, git2 repo is eagerly initialized during construction
+        assert!(git_ops.has_git2_repo());
 
-        // Initialize git2 repo
+        // Initialize git2 repo (should be idempotent)
         git_ops.init_git2().unwrap();
         assert!(git_ops.has_git2_repo());
 
@@ -121,10 +121,10 @@ mod tests {
         let temp_dir = create_test_git_repo().unwrap();
         let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Initially git2 repo should not be initialized
-        assert!(!git_ops.has_git2_repo());
+        // After migration, git2 repo is eagerly initialized during construction
+        assert!(git_ops.has_git2_repo());
 
-        // Calling git2_repo() should auto-initialize
+        // Should be able to access repo reference (already initialized)
         let _repo = git_ops.git2_repo().unwrap();
         assert!(git_ops.has_git2_repo());
     }

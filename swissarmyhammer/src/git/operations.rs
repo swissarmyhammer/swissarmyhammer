@@ -24,41 +24,37 @@ impl GitOperations {
     pub fn new() -> Result<Self> {
         let work_dir = std::env::current_dir()?;
 
-        // Verify this is a git repository
+        // Verify this is a git repository and initialize git2 repository
         Self::verify_git_repo(&work_dir)?;
+        let git2_repo = Some(git2_utils::discover_repository(&work_dir)?);
 
         Ok(Self {
             work_dir,
-            git2_repo: None,
+            git2_repo,
         })
     }
 
     /// Create git operations handler with explicit work directory
     pub fn with_work_dir(work_dir: PathBuf) -> Result<Self> {
-        // Verify this is a git repository
+        // Verify this is a git repository and initialize git2 repository
         Self::verify_git_repo(&work_dir)?;
+        let git2_repo = Some(git2_utils::discover_repository(&work_dir)?);
 
         Ok(Self {
             work_dir,
-            git2_repo: None,
+            git2_repo,
         })
     }
 
-    /// Verify directory is a git repository
+    /// Verify directory is a git repository using git2
     fn verify_git_repo(path: &Path) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(path)
-            .args(["rev-parse", "--git-dir"])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(SwissArmyHammerError::git_operation_failed(
+        match git2_utils::discover_repository(path) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SwissArmyHammerError::git_operation_failed(
                 "check repository",
                 "Not in a git repository",
-            ));
+            )),
         }
-
-        Ok(())
     }
 
     /// Initialize git2 repository handle for native operations
@@ -66,9 +62,11 @@ impl GitOperations {
     /// This method opens a git2::Repository handle for the working directory,
     /// enabling native git operations alongside the existing shell commands.
     /// This supports gradual migration from shell to native operations.
+    /// Uses discover for better robustness with subdirectories and worktrees.
     pub fn init_git2(&mut self) -> Result<()> {
         if self.git2_repo.is_none() {
-            let repo = git2_utils::open_repository(&self.work_dir)?;
+            let repo = git2_utils::discover_repository(&self.work_dir)?;
+            git2_utils::validate_repository_state(&repo)?;
             self.git2_repo = Some(repo);
         }
         Ok(())
@@ -649,6 +647,30 @@ impl GitOperations {
     /// Get the work directory path
     pub fn work_dir(&self) -> &std::path::Path {
         &self.work_dir
+    }
+
+    /// Check if repository is bare using git2
+    pub fn is_bare_repository(&mut self) -> Result<bool> {
+        let repo = self.git2_repo()?;
+        Ok(git2_utils::is_bare_repository(repo))
+    }
+
+    /// Get git directory path using git2
+    pub fn git_directory(&mut self) -> Result<std::path::PathBuf> {
+        let repo = self.git2_repo()?;
+        git2_utils::get_git_dir(repo)
+    }
+
+    /// Get working directory path using git2
+    pub fn working_directory(&mut self) -> Result<Option<std::path::PathBuf>> {
+        let repo = self.git2_repo()?;
+        git2_utils::get_work_dir(repo)
+    }
+
+    /// Validate repository consistency using git2
+    pub fn validate_repository(&mut self) -> Result<()> {
+        let repo = self.git2_repo()?;
+        git2_utils::validate_repository_state(repo)
     }
 
     /// Validate source branch state for merge operations

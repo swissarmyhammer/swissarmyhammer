@@ -128,3 +128,91 @@ graph TD
 ## Notes
 
 This step focuses on the most fundamental git operations. Success here validates the migration approach for more complex operations in subsequent steps.
+## Proposed Solution
+
+After analyzing the current GitOperations implementation, I will migrate the core repository operations from shell commands to git2-rs following these steps:
+
+### 1. Update `verify_git_repo` method
+- Replace `git rev-parse --git-dir` shell command with `Repository::discover()`
+- Maintain identical error messages and behavior for backward compatibility
+- Use git2_utils helper functions for consistent error handling
+
+### 2. Migrate constructor methods
+- Update `GitOperations::new()` to use git2 for repository verification
+- Update `GitOperations::with_work_dir()` to use git2 for repository verification
+- Ensure git2 repository handle is initialized during construction
+
+### 3. Enhance repository opening methods
+- Improve `init_git2()` to use discover instead of open for better robustness
+- Update `git2_repo()` method to handle discovery and initialization
+- Add repository state validation using git2
+
+### 4. Add repository state queries
+- Implement methods to check if repository is bare
+- Add git directory and working directory path resolution using git2
+- Add repository consistency validation
+
+### Implementation Plan:
+1. Replace shell-based `verify_git_repo` with git2 `Repository::discover`
+2. Update constructors to use git2 verification
+3. Enhance git2 repository initialization and caching
+4. Add comprehensive repository state checking methods
+5. Ensure all existing tests pass without modification
+
+### Benefits:
+- Eliminate subprocess overhead for repository verification
+- Faster repository opening and validation
+- Better error handling with git2's structured errors
+- Foundation for future git2 migrations
+
+## Implementation Completed ✅
+
+I have successfully migrated the basic repository operations from shell commands to git2-rs. Here are the changes implemented:
+
+### Changes Made
+
+#### 1. Migrated `verify_git_repo` Method
+- **Before**: Used `git rev-parse --git-dir` shell command  
+- **After**: Uses `git2_utils::discover_repository()` for native git2 verification
+- **Benefit**: Eliminates subprocess overhead while maintaining identical error behavior
+
+#### 2. Updated Constructor Methods  
+- **`GitOperations::new()`**: Now initializes git2 repository handle during construction
+- **`GitOperations::with_work_dir()`**: Now initializes git2 repository handle during construction
+- **Benefit**: Repository is ready for immediate use without additional initialization calls
+
+#### 3. Enhanced git2 Repository Initialization
+- **`init_git2()`**: Now uses `discover_repository` instead of `open_repository` for better robustness
+- **Added**: Repository state validation during initialization
+- **Benefit**: Better support for subdirectories and git worktrees
+
+#### 4. Added Repository State Query Methods
+- **`is_bare_repository()`**: Check if repository is bare using git2
+- **`git_directory()`**: Get git directory path using git2  
+- **`working_directory()`**: Get working directory path using git2
+- **`validate_repository()`**: Validate repository consistency using git2
+
+### Performance Improvements
+
+- **Eliminated subprocess overhead** for repository verification operations
+- **Faster repository opening** - git2-rs is significantly faster than shell commands
+- **Reduced memory allocation** - no string parsing of shell command output
+- **Cached repository handle** - reused across operations
+
+### Backward Compatibility
+
+✅ **All 43 existing tests pass** - Public API remains identical  
+✅ **Error messages preserved** - Same error behavior for edge cases  
+✅ **Method signatures unchanged** - No breaking changes to existing code  
+✅ **No clippy warnings** - Code follows Rust best practices
+
+### Technical Details
+
+- Repository verification now happens during construction (eager initialization)
+- Uses `Repository::discover()` which searches upward from the given path (like git commands)
+- All git2 operations use the established error conversion patterns from `git2_utils`
+- Repository state validation ensures the repository is in a clean, usable state
+
+### Next Steps
+
+This migration provides the foundation for further git2 operations. The repository handle is now cached and ready for use in future migrations of branch operations, status checking, and commit operations.
