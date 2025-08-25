@@ -855,7 +855,25 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Validate that it's safe to delete the branch (non-force deletion)
+    /// Validates branch deletion safety for non-force deletion operations.
+    /// 
+    /// Performs two key safety checks:
+    /// 1. Ensures the branch is not currently checked out (prevents deletion of current branch)
+    /// 2. Verifies the branch is fully merged (prevents data loss from unmerged commits)
+    /// 
+    /// This method replicates the safety behavior of `git branch --delete` (non-forced).
+    /// 
+    /// # Parameters
+    /// - `branch`: Git2 branch reference to validate
+    /// - `branch_name`: Name of the branch for error reporting
+    /// 
+    /// # Returns  
+    /// - `Ok(())` if the branch is safe to delete
+    /// - `Err(SwissArmyHammerError)` if deletion would be unsafe
+    /// 
+    /// # Errors
+    /// - When attempting to delete the currently checked out branch
+    /// - When attempting to delete an unmerged branch (contains unmerged commits)
     fn validate_branch_deletion_safety(
         &self,
         branch: &git2::Branch,
@@ -867,7 +885,7 @@ impl GitOperations {
             return Err(git2_utils::convert_git2_error(
                 "delete current branch",
                 git2::Error::from_str(&format!(
-                    "Cannot delete branch '{}' - currently checked out. Switch to another branch first.",
+                    "Cannot delete branch '{}' - currently checked out. Switch to another branch first (e.g., 'git checkout main' or 'git checkout -' for previous branch).",
                     branch_name
                 ))
             ));
@@ -878,8 +896,8 @@ impl GitOperations {
             return Err(git2_utils::convert_git2_error(
                 "delete unmerged branch",
                 git2::Error::from_str(&format!(
-                    "Branch '{}' is not fully merged. Use force deletion if you're sure.",
-                    branch_name
+                    "Branch '{}' is not fully merged and contains unmerged commits. To preserve these commits, merge the branch first with 'git merge {}'. To delete anyway, use force deletion with the --force flag.",
+                    branch_name, branch_name
                 ))
             ));
         }
@@ -887,7 +905,30 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Check if a branch is merged into the current HEAD
+    /// Determines if a branch is fully merged into the current HEAD.
+    /// 
+    /// This method checks whether all commits in the branch are reachable from HEAD,
+    /// indicating that the branch has been merged and contains no unique commits.
+    /// The logic mirrors Git's merge detection used by `git branch --delete`.
+    /// 
+    /// # Algorithm
+    /// 1. If branch points to same commit as HEAD → merged (fast-forward case)
+    /// 2. If branch commit is ancestor of HEAD → merged (branch was merged)  
+    /// 3. If HEAD is descendant of branch → merged (no unique commits in branch)
+    /// 4. Otherwise → not merged (branch has unique commits)
+    /// 
+    /// # Parameters
+    /// - `branch`: Git2 branch reference to check
+    /// - `branch_name`: Name of the branch for error reporting
+    /// 
+    /// # Returns
+    /// - `Ok(true)` if the branch is fully merged into HEAD
+    /// - `Ok(false)` if the branch contains unmerged commits  
+    /// - `Err(SwissArmyHammerError)` for Git operation failures
+    /// 
+    /// # Errors
+    /// - When unable to access branch or HEAD commits
+    /// - When Git repository operations fail
     fn is_branch_merged(&self, branch: &git2::Branch, branch_name: &str) -> Result<bool> {
         let repo = self.open_git2_repository()?;
         
@@ -928,7 +969,46 @@ impl GitOperations {
         }
     }
 
-    /// Delete multiple branches with batch processing
+    /// Deletes multiple branches in a single batch operation with detailed results.
+    /// 
+    /// This method provides efficient batch processing for deleting multiple branches
+    /// while returning detailed success/failure information for each branch. It uses
+    /// the same safety validation and idempotent behavior as `delete_branch()`.
+    /// 
+    /// # Behavior
+    /// - **Force Mode (true)**: Continues processing all branches even if some fail
+    /// - **Safe Mode (false)**: Stops at first failure to prevent unexpected behavior
+    /// - Each branch deletion is independent and idempotent
+    /// - Failed deletions are logged with detailed context
+    /// 
+    /// # Parameters
+    /// - `branch_names`: Array of branch names to delete
+    /// - `force`: Skip safety validation and continue on failures when true
+    /// 
+    /// # Returns
+    /// `Ok(Vec<(String, bool)>)` where each tuple contains:
+    /// - Branch name (String)
+    /// - Success status (bool): true if deleted successfully, false if failed
+    /// 
+    /// # Errors  
+    /// - In safe mode: Returns first deletion error encountered
+    /// - In force mode: Never returns errors, check individual results instead
+    /// 
+    /// # Examples
+    /// ```rust
+    /// // Safe batch deletion (stops on first error)
+    /// let results = git.delete_branches(&["feature-1", "feature-2"], false)?;
+    /// 
+    /// // Force batch deletion (processes all branches)
+    /// let results = git.delete_branches(&["old-branch-1", "old-branch-2"], true)?;
+    /// for (branch, success) in results {
+    ///     if success {
+    ///         println!("Deleted: {}", branch);
+    ///     } else {
+    ///         println!("Failed: {}", branch);
+    ///     }
+    /// }
+    /// ```
     pub fn delete_branches(&self, branch_names: &[&str], force: bool) -> Result<Vec<(String, bool)>> {
         let mut results = Vec::new();
         
@@ -1002,10 +1082,9 @@ impl GitOperations {
             if let Some(branch_name) = branch.name()
                 .map_err(|e| git2_utils::convert_git2_error("get branch name", e))?
             {
-                if self.is_issue_branch(branch_name) {
-                    if !self.is_branch_merged(&branch, branch_name)? {
-                        unmerged_branches.push(branch_name.to_string());
-                    }
+                if self.is_issue_branch(branch_name) 
+                    && !self.is_branch_merged(&branch, branch_name)? {
+                    unmerged_branches.push(branch_name.to_string());
                 }
             }
         }
