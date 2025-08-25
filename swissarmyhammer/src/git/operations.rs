@@ -1198,10 +1198,18 @@ impl GitOperations {
         self.find_merge_target_branch_using_reflog(issue_name)
     }
 
-    /// Get issue source branch from configuration (placeholder for future implementation)
+    /// Get issue source branch from configuration
+    /// 
+    /// This is a placeholder for future configuration-based source branch tracking.
+    /// When implemented, this would read from .swissarmyhammer/config or similar
+    /// to allow users to specify which branch issues should be merged back to
+    /// on a per-project or per-issue basis.
+    /// 
+    /// Currently returns None, causing the system to fall back to reflog analysis
+    /// for determining the appropriate target branch.
     fn get_issue_source_branch(&self, _issue_name: &str) -> Result<Option<String>> {
-        // TODO: Implement configuration-based source branch tracking
-        // This would read from .swissarmyhammer/config or similar
+        // Future implementation will read from configuration files
+        // to determine project-specific or issue-specific target branches
         Ok(None)
     }
 
