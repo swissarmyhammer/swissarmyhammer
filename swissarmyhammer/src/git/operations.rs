@@ -153,26 +153,31 @@ impl GitOperations {
         self.git2_repo.is_some()
     }
 
-    /// Get current branch name using git2-rs native operations
+    /// Get reference to git2 repository (read-only access)
     ///
-    /// This method uses git2-rs to determine the current branch name without
-    /// spawning shell processes. It provides better performance and more structured
-    /// error handling compared to the shell-based current_branch() method.
+    /// This method provides read-only access to the git2::Repository handle
+    /// that was initialized during construction. Since the repository is
+    /// initialized eagerly, this method can work with immutable references.
     ///
     /// # Returns
-    /// - `Ok(String)` containing the current branch name
-    /// - `Err(SwissArmyHammerError)` if the repository is not initialized, HEAD
-    ///   cannot be read, or the current branch name cannot be determined
-    ///
-    /// # Performance
-    /// This method is significantly faster than shell-based alternatives as it
-    /// eliminates subprocess creation overhead and directly accesses git repository data.
-    ///
-    /// # Usage
-    /// Use this method when you need high-performance branch name retrieval or when
-    /// working in environments where subprocess creation should be minimized.
-    pub fn current_branch_git2(&mut self) -> Result<String> {
-        let repo = self.git2_repo()?;
+    /// - `Ok(&Repository)` - Reference to the initialized repository
+    /// - `Err(SwissArmyHammerError)` - If repository is not initialized
+    fn get_git2_repo(&self) -> Result<&Repository> {
+        self.git2_repo.as_ref().ok_or_else(|| {
+            SwissArmyHammerError::git_operation_failed(
+                "access repository",
+                "Git2 repository not initialized"
+            )
+        })
+    }
+
+
+
+
+
+    /// Get current branch name using git2-rs native operations
+    pub fn current_branch(&self) -> Result<String> {
+        let repo = self.get_git2_repo()?;
 
         let head = repo
             .head()
@@ -185,69 +190,6 @@ impl GitOperations {
             let git2_error = git2::Error::from_str("HEAD reference does not point to a valid branch name");
             Err(git2_utils::convert_git2_error("determine branch name from HEAD", git2_error))
         }
-    }
-
-    /// Check if a local branch exists using git2-rs native operations
-    ///
-    /// This method uses git2-rs to check for branch existence without spawning
-    /// shell processes. It provides better performance and more structured error
-    /// handling compared to shell-based alternatives.
-    ///
-    /// # Arguments
-    /// * `branch` - The name of the branch to check for existence
-    ///
-    /// # Returns
-    /// - `Ok(true)` if the branch exists as a local branch
-    /// - `Ok(false)` if the branch does not exist
-    /// - `Err(SwissArmyHammerError)` if the repository is not initialized or
-    ///   other git2 errors occur during branch lookup
-    ///
-    /// # Performance
-    /// This method is faster than shell-based alternatives and provides immediate
-    /// feedback without subprocess overhead.
-    ///
-    /// # Usage
-    /// Use this method when you need to verify branch existence in performance-critical
-    /// code paths or when minimizing system calls.
-    pub fn branch_exists_git2(&mut self, branch: &str) -> Result<bool> {
-        // Handle empty or whitespace-only branch names
-        if branch.trim().is_empty() {
-            return Ok(false);
-        }
-        
-        let repo = self.git2_repo()?;
-
-        match repo.find_branch(branch, git2::BranchType::Local) {
-            Ok(_) => Ok(true),
-            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
-            Err(e) => Err(git2_utils::convert_git2_error("check branch existence", e)),
-        }
-    }
-
-    /// Get current branch name
-    pub fn current_branch(&self) -> Result<String> {
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(SwissArmyHammerError::git_command_failed(
-                "rev-parse --abbrev-ref HEAD",
-                output.status.code().unwrap_or(UNKNOWN_EXIT_CODE),
-                &stderr,
-            ));
-        }
-
-        let branch = String::from_utf8(output.stdout)
-            .map_err(|e| {
-                SwissArmyHammerError::parsing_failed("git output", "stdout", &e.to_string())
-            })?
-            .trim()
-            .to_string();
-
-        Ok(branch)
     }
 
     /// Get the main branch name (main or master) for backward compatibility testing.
@@ -271,19 +213,53 @@ impl GitOperations {
         ))
     }
 
-    /// Check if a branch exists
-    pub fn branch_exists(&self, branch: &str) -> Result<bool> {
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args([
-                "show-ref",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ])
-            .output()?;
+    /// List all local branch names using git2-rs native operations
+    ///
+    /// This method provides git2-based branch listing for future use in
+    /// advanced branch operations. It returns a vector of all local branch names.
+    ///
+    /// # Returns
+    /// - `Ok(Vec<String>)` containing all local branch names
+    /// - `Err(SwissArmyHammerError)` if the repository cannot be accessed or
+    ///   branch iteration fails
+    ///
+    /// # Performance
+    /// This method eliminates subprocess overhead and provides direct access
+    /// to repository branch data through git2.
+    pub fn list_branches(&self) -> Result<Vec<String>> {
+        let repo = self.get_git2_repo()?;
+        let mut branch_names = Vec::new();
+        
+        let branches = repo.branches(Some(git2::BranchType::Local))
+            .map_err(|e| git2_utils::convert_git2_error("list branches", e))?;
+            
+        for branch_result in branches {
+            let (branch, _) = branch_result
+                .map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
+            
+            if let Some(name) = branch.name()
+                .map_err(|e| git2_utils::convert_git2_error("get branch name", e))? {
+                branch_names.push(name.to_string());
+            }
+        }
+        
+        Ok(branch_names)
+    }
 
-        Ok(output.status.success())
+    /// Check if a local branch exists using git2-rs native operations
+    pub fn branch_exists(&self, branch: &str) -> Result<bool> {
+        // Handle empty or whitespace-only branch names
+        if branch.trim().is_empty() {
+            return Ok(false);
+        }
+        
+        let repo = self.get_git2_repo()?;
+
+        match repo.find_branch(branch, git2::BranchType::Local) {
+            Ok(_) => Ok(true),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(git2_utils::convert_git2_error("check branch existence", e)),
+        }
     }
 
     /// Check if a branch name follows the issue branch pattern

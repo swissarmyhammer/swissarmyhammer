@@ -57,45 +57,35 @@ mod tests {
     }
 
     #[test]
-    fn test_current_branch_shell_vs_git2() {
+    fn test_current_branch_git2_migration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Get branch name using shell method
-        let shell_branch = git_ops.current_branch().unwrap();
-
-        // Get branch name using git2 method
-        let git2_branch = git_ops.current_branch_git2().unwrap();
-
-        // They should be identical
-        assert_eq!(shell_branch, git2_branch);
+        // Get branch name using migrated git2 method
+        let git2_branch = git_ops.current_branch().unwrap();
 
         // Should be main or master
-        assert!(shell_branch == "main" || shell_branch == "master");
+        assert!(git2_branch == "main" || git2_branch == "master");
     }
 
     #[test]
-    fn test_branch_exists_shell_vs_git2() {
+    fn test_branch_exists_git2_migration() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test existing branch
         let main_branch = git_ops.current_branch().unwrap();
 
-        let shell_exists = git_ops.branch_exists(&main_branch).unwrap();
-        let git2_exists = git_ops.branch_exists_git2(&main_branch).unwrap();
+        let git2_exists = git_ops.branch_exists(&main_branch).unwrap();
 
-        assert_eq!(shell_exists, git2_exists);
-        assert!(shell_exists); // Main branch should exist
+        assert!(git2_exists); // Main branch should exist
 
         // Test non-existent branch
-        let shell_not_exists = git_ops.branch_exists("non-existent-branch").unwrap();
-        let git2_not_exists = git_ops.branch_exists_git2("non-existent-branch").unwrap();
+        let git2_not_exists = git_ops.branch_exists("non-existent-branch").unwrap();
 
-        assert_eq!(shell_not_exists, git2_not_exists);
-        assert!(!shell_not_exists); // Non-existent branch should not exist
+        assert!(!git2_not_exists); // Non-existent branch should not exist
     }
 
     #[test]
@@ -133,21 +123,18 @@ mod tests {
     fn test_git2_operations_with_branches() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create a new branch using shell operations
         git_ops.create_work_branch("test-issue").unwrap();
 
-        // Verify the branch exists using both methods
+        // Verify the branch exists using git2 method
         assert!(git_ops.branch_exists("issue/test-issue").unwrap());
-        assert!(git_ops.branch_exists_git2("issue/test-issue").unwrap());
 
-        // Verify current branch using both methods
-        let shell_branch = git_ops.current_branch().unwrap();
-        let git2_branch = git_ops.current_branch_git2().unwrap();
+        // Verify current branch using git2 method
+        let git2_branch = git_ops.current_branch().unwrap();
 
-        assert_eq!(shell_branch, git2_branch);
-        assert_eq!(shell_branch, "issue/test-issue");
+        assert_eq!(git2_branch, "issue/test-issue");
     }
 
     #[test]
@@ -190,16 +177,16 @@ mod tests {
     fn test_mixed_shell_git2_operations() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Use shell operations to create a branch
         git_ops.create_work_branch("mixed-test").unwrap();
 
         // Use git2 operations to verify it exists
-        assert!(git_ops.branch_exists_git2("issue/mixed-test").unwrap());
+        assert!(git_ops.branch_exists("issue/mixed-test").unwrap());
 
         // Use git2 to check current branch
-        let git2_branch = git_ops.current_branch_git2().unwrap();
+        let git2_branch = git_ops.current_branch().unwrap();
         assert_eq!(git2_branch, "issue/mixed-test");
 
         // Switch back using shell operations
@@ -207,7 +194,7 @@ mod tests {
         git_ops.checkout_branch(&main_branch).unwrap();
 
         // Verify using git2
-        let git2_branch = git_ops.current_branch_git2().unwrap();
+        let git2_branch = git_ops.current_branch().unwrap();
         assert_eq!(git2_branch, main_branch);
     }
 
@@ -252,10 +239,10 @@ mod tests {
     fn test_git2_current_branch_behavior() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test normal branch name retrieval
-        let result = git_ops.current_branch_git2();
+        let result = git_ops.current_branch();
         assert!(result.is_ok());
         
         let branch_name = result.unwrap();
@@ -272,7 +259,7 @@ mod tests {
         if checkout_result.status.success() {
             // In detached HEAD state, git2 should handle this gracefully
             // Either return a commit hash or handle it appropriately
-            let result = git_ops.current_branch_git2();
+            let result = git_ops.current_branch();
             
             // Both success and error are acceptable in detached HEAD
             match result {
@@ -293,48 +280,37 @@ mod tests {
     fn test_git2_branch_exists_nonexistent() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test with various invalid branch names
-        assert!(!git_ops.branch_exists_git2("definitely-does-not-exist").unwrap());
-        assert!(!git_ops.branch_exists_git2("feature/never-created").unwrap());
+        assert!(!git_ops.branch_exists("definitely-does-not-exist").unwrap());
+        assert!(!git_ops.branch_exists("feature/never-created").unwrap());
         
         // Empty string should be handled gracefully - should return false now
-        assert!(!git_ops.branch_exists_git2("").unwrap());
+        assert!(!git_ops.branch_exists("").unwrap());
     }
 
     #[test]
-    fn test_git2_performance_vs_shell() {
+    fn test_git2_performance() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         let iterations = 10;
-
-        // Time shell-based operations
-        let shell_start = std::time::Instant::now();
-        for _ in 0..iterations {
-            let _ = git_ops.current_branch().unwrap();
-            let _ = git_ops.branch_exists("main").unwrap();
-        }
-        let shell_duration = shell_start.elapsed();
 
         // Time git2-based operations
         let git2_start = std::time::Instant::now();
         for _ in 0..iterations {
-            let _ = git_ops.current_branch_git2().unwrap();
-            let _ = git_ops.branch_exists_git2("main").unwrap();
+            let _ = git_ops.current_branch().unwrap();
+            let _ = git_ops.branch_exists("main").unwrap();
         }
         let git2_duration = git2_start.elapsed();
 
-        // git2 should be faster than shell operations
-        // Note: This is a basic performance test - git2 should be consistently faster
-        println!("Shell operations took: {:?}", shell_duration);
+        // git2 operations should complete successfully and be reasonably fast
         println!("Git2 operations took: {:?}", git2_duration);
         
-        // In most cases git2 should be faster, but we'll just verify both complete successfully
-        // The actual performance benefit verification would be better suited for benchmark tests
-        assert!(shell_duration > std::time::Duration::from_nanos(0));
+        // Verify git2 operations complete successfully
         assert!(git2_duration > std::time::Duration::from_nanos(0));
+        assert!(git2_duration < std::time::Duration::from_secs(5)); // Should be much faster than 5 seconds
     }
 }
