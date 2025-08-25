@@ -1171,9 +1171,8 @@ impl GitOperations {
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("push HEAD to revwalk", e))?;
         
         let mut commits = Vec::new();
-        let mut count = 0;
         
-        for oid_result in revwalk {
+        for (count, oid_result) in revwalk.enumerate() {
             if let Some(limit) = limit {
                 if count >= limit {
                     break;
@@ -1187,7 +1186,6 @@ impl GitOperations {
                 .map_err(|e| SwissArmyHammerError::git2_operation_failed("find commit", e))?;
             
             commits.push(self.commit_to_info(&commit));
-            count += 1;
         }
         
         Ok(commits)
@@ -1196,7 +1194,7 @@ impl GitOperations {
     /// Convert git2::Commit to CommitInfo
     fn commit_to_info(&self, commit: &git2::Commit) -> CommitInfo {
         let hash = commit.id().to_string();
-        let short_hash = hash[..7].to_string();
+        let short_hash = hash.get(..7).unwrap_or(&hash).to_string();
         let message = commit.message().unwrap_or("").trim().to_string();
         let summary = commit.summary().unwrap_or("").to_string();
         let author_name = commit.author().name().unwrap_or("unknown").to_string();
@@ -1222,18 +1220,35 @@ impl GitOperations {
 
     /// Find commits by author name or email
     pub fn find_commits_by_author(&self, author: &str, limit: Option<usize>) -> Result<Vec<CommitInfo>> {
-        let all_commits = self.get_commit_history(None)?;
+        let repo = self.open_git2_repository()?;
+        let mut revwalk = repo.revwalk()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("create revwalk", e))?;
+        
+        // Start from HEAD
+        revwalk.push_head()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("push HEAD to revwalk", e))?;
         
         let mut matching_commits = Vec::new();
-        let mut count = 0;
+        let mut match_count = 0;
         
-        for commit in all_commits {
-            if commit.author_name.contains(author) || commit.author_email.contains(author) {
-                matching_commits.push(commit);
-                count += 1;
+        for oid_result in revwalk {
+            let oid = oid_result
+                .map_err(|e| SwissArmyHammerError::git2_operation_failed("iterate revwalk", e))?;
+            
+            let commit = repo.find_commit(oid)
+                .map_err(|e| SwissArmyHammerError::git2_operation_failed("find commit", e))?;
+            
+            // Check if this commit matches the author filter
+            let author_signature = commit.author();
+            let author_name = author_signature.name().unwrap_or("unknown");
+            let author_email = author_signature.email().unwrap_or("");
+            
+            if author_name.contains(author) || author_email.contains(author) {
+                matching_commits.push(self.commit_to_info(&commit));
+                match_count += 1;
                 
                 if let Some(limit) = limit {
-                    if count >= limit {
+                    if match_count >= limit {
                         break;
                     }
                 }
@@ -1302,9 +1317,8 @@ impl GitOperations {
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("push branch to revwalk", e))?;
         
         let mut commits = Vec::new();
-        let mut count = 0;
         
-        for oid_result in revwalk {
+        for (count, oid_result) in revwalk.enumerate() {
             if let Some(limit) = limit {
                 if count >= limit {
                     break;
@@ -1318,7 +1332,6 @@ impl GitOperations {
                 .map_err(|e| SwissArmyHammerError::git2_operation_failed("find branch commit", e))?;
             
             commits.push(self.commit_to_info(&commit));
-            count += 1;
         }
         
         Ok(commits)
