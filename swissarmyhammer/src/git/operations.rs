@@ -124,6 +124,24 @@ impl StatusSummary {
     }
 }
 
+/// Parameters for merge analysis handling to reduce function argument count
+struct MergeAnalysisParams<'a> {
+    /// Git2 repository instance
+    repo: &'a git2::Repository,
+    /// Merge analysis and preference results
+    analysis: (git2::MergeAnalysis, git2::MergePreference),
+    /// Source commit object
+    source_commit: &'a git2::Commit<'a>,
+    /// Target commit object
+    target_commit: &'a git2::Commit<'a>,
+    /// Source branch name
+    source_branch: &'a str,
+    /// Target branch name
+    target_branch: &'a str,
+    /// Merge commit message
+    message: &'a str,
+}
+
 /// Reflog entry representation for enhanced git2-based operations
 #[derive(Debug, Clone)]
 pub struct ReflogEntry {
@@ -1256,58 +1274,47 @@ impl GitOperations {
             .merge_analysis(&[&source_annotated])
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("analyze merge", e))?;
 
-        self.handle_merge_analysis_with_repo(
-            &repo,
-            merge_analysis,
-            &source_commit,
-            &target_commit,
+        self.handle_merge_analysis_with_repo(MergeAnalysisParams {
+            repo: &repo,
+            analysis: merge_analysis,
+            source_commit: &source_commit,
+            target_commit: &target_commit,
             source_branch,
             target_branch,
             message,
-        )
+        })
     }
 
-
-
     /// Handle merge analysis with provided repository instance
-    fn handle_merge_analysis_with_repo(
-        &self,
-        repo: &git2::Repository,
-        analysis: (git2::MergeAnalysis, git2::MergePreference),
-        source_commit: &git2::Commit,
-        target_commit: &git2::Commit,
-        source_branch: &str,
-        target_branch: &str,
-        message: &str,
-    ) -> Result<()> {
-        let (merge_analysis, _merge_pref) = analysis;
+    fn handle_merge_analysis_with_repo(&self, params: MergeAnalysisParams) -> Result<()> {
+        let (merge_analysis, _merge_pref) = params.analysis;
 
         if merge_analysis.is_fast_forward() {
             // Force non-fast-forward merge as per original shell behavior
             self.create_merge_commit_with_repo(
-                repo,
-                source_commit,
-                target_commit,
-                source_branch,
-                target_branch,
-                message,
+                params.repo,
+                params.source_commit,
+                params.target_commit,
+                params.source_branch,
+                params.target_branch,
+                params.message,
             )
         } else if merge_analysis.is_normal() {
             // Normal merge - may have conflicts
             self.perform_normal_merge_with_repo(
-                repo,
-                source_commit,
-                target_commit,
-                source_branch,
-                target_branch,
-                message,
+                params.repo,
+                params.source_commit,
+                params.target_commit,
+                params.source_branch,
+                params.target_branch,
+                params.message,
             )
         } else if merge_analysis.is_up_to_date() {
             // Nothing to merge
             tracing::info!(
                 "Branch '{}' is already up to date with '{}'",
-                target_branch,
-                source_branch
+                params.target_branch,
+                params.source_branch
             );
             Ok(())
         } else {
@@ -1316,7 +1323,7 @@ impl GitOperations {
                 &self.work_dir,
                 &format!(
                 "Cannot merge '{}' into '{}': repository is in an unmerged state or has conflicts",
-                source_branch, target_branch
+                params.source_branch, params.target_branch
             ),
             )?;
 
@@ -1326,8 +1333,6 @@ impl GitOperations {
             ))
         }
     }
-
-
 
     /// Perform normal merge with provided repository instance
     fn perform_normal_merge_with_repo(
@@ -1377,7 +1382,7 @@ impl GitOperations {
         let mut repo_index = repo
             .index()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("get repository index", e))?;
-        
+
         // Create the merged tree and get the Tree object
         let tree_oid = index
             .write_tree_to(repo)
@@ -1385,12 +1390,12 @@ impl GitOperations {
         let merge_tree = repo
             .find_tree(tree_oid)
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("find merge tree", e))?;
-        
+
         // Write the merged tree to the repository index
         repo_index
             .read_tree(&merge_tree)
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("read tree to index", e))?;
-        
+
         // Write index to working directory
         repo_index
             .write()
@@ -1462,8 +1467,6 @@ impl GitOperations {
         Ok(())
     }
 
-
-
     /// Create merge commit with provided repository instance
     fn create_merge_commit_with_repo(
         &self,
@@ -1483,12 +1486,12 @@ impl GitOperations {
         let mut repo_index = repo
             .index()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("get repository index", e))?;
-        
+
         // Read the source tree into the index
         repo_index
             .read_tree(&tree)
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("read tree to index", e))?;
-        
+
         // Write index to disk
         repo_index
             .write()
@@ -1509,8 +1512,6 @@ impl GitOperations {
             &full_message,
         )
     }
-
-
 
     /// Internal helper to create commit with parents using provided repository
     fn create_commit_with_parents_internal(
