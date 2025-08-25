@@ -2006,9 +2006,12 @@ Neither of these should cause validation errors."#;
         // Test validate_tools method directly
         // This should not panic even if no MCP tools are available
         let validation_result = validator.validate_tools(&mut result).await;
-        
+
         // The method should complete without error
-        assert!(validation_result.is_ok(), "validate_tools should not fail even without MCP tools");
+        assert!(
+            validation_result.is_ok(),
+            "validate_tools should not fail even without MCP tools"
+        );
     }
 
     #[tokio::test]
@@ -2017,11 +2020,17 @@ Neither of these should cause validation errors."#;
 
         // Test validation with validate_tools = false
         let result_without_tools = validator.validate_all_with_options(false).await;
-        assert!(result_without_tools.is_ok(), "Validation without tools should succeed");
+        assert!(
+            result_without_tools.is_ok(),
+            "Validation without tools should succeed"
+        );
 
         // Test validation with validate_tools = true
         let result_with_tools = validator.validate_all_with_options(true).await;
-        assert!(result_with_tools.is_ok(), "Validation with tools should succeed even if no tools available");
+        assert!(
+            result_with_tools.is_ok(),
+            "Validation with tools should succeed even if no tools available"
+        );
     }
 
     #[tokio::test]
@@ -2032,15 +2041,18 @@ Neither of these should cause validation errors."#;
 
         // Test that validation continues even if tool context fails
         let validation_result = validator.validate_tools(&mut result).await;
-        
+
         // Should handle gracefully when MCP tool context cannot be created
-        assert!(validation_result.is_ok(), "validate_tools should handle MCP context errors gracefully");
+        assert!(
+            validation_result.is_ok(),
+            "validate_tools should handle MCP context errors gracefully"
+        );
     }
 
     #[test]
     fn test_cli_validation_stats_default() {
         let stats = CliValidationStats::default();
-        
+
         assert_eq!(stats.total_tools, 0);
         assert_eq!(stats.valid_tools, 0);
         assert_eq!(stats.invalid_tools, 0);
@@ -2059,7 +2071,7 @@ Neither of these should cause validation errors."#;
 
         assert!(!stats.is_all_valid());
         assert_eq!(stats.success_rate(), 80.0);
-        
+
         let summary = stats.summary();
         assert!(summary.contains("8 of 10"));
         assert!(summary.contains("80.0%"));
@@ -2078,10 +2090,10 @@ Neither of these should cause validation errors."#;
         stats.valid_tools = 5;
         stats.invalid_tools = 0;
         stats.validation_errors = 0;
-        
+
         assert!(stats.is_all_valid());
         assert_eq!(stats.success_rate(), 100.0);
-        
+
         let summary = stats.summary();
         assert!(summary.contains("All 5 CLI tools are valid"));
     }

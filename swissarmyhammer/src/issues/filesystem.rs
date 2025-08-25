@@ -5541,7 +5541,8 @@ mod tests {
             std::fs::write(&issues_path, "this is a file, not a directory").unwrap();
 
             // Should not migrate because "issues" is not a directory
-            let should_migrate = FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap();
+            let should_migrate =
+                FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap();
             assert!(!should_migrate);
 
             // Migration info should reflect this
