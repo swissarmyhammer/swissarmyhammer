@@ -96,6 +96,7 @@ pub struct StatusSummary {
 
 impl StatusSummary {
     /// Create a new empty status summary
+    /// Create a new compatibility report
     pub fn new() -> Self {
         Self::default()
     }
@@ -183,43 +184,162 @@ pub struct CommitInfo {
     pub parent_count: usize,
 }
 
+/// Information about which backend is being used
+#[derive(Debug, Clone)]
+pub struct BackendInfo {
+    /// Type of backend being used ("git2" or "shell")
+    pub backend_type: String,
+    /// Whether git2 backend is available
+    pub git2_available: bool,
+    /// Version of git2 library
+    pub git2_version: String,
+    /// Whether shell git command is available
+    pub shell_available: bool,
+    /// Working directory for git operations
+    pub work_dir: PathBuf,
+    /// Whether the repository is valid for operations
+    pub repository_valid: bool,
+}
+
+/// Report on compatibility between git2 and shell backends
+#[derive(Debug, Clone)]
+pub struct CompatibilityReport {
+    /// List of operation tests performed
+    pub tests: Vec<OperationTest>,
+    /// Whether backends are overall compatible
+    pub overall_compatible: bool,
+}
+
+impl Default for CompatibilityReport {
+    fn default() -> Self {
+        Self {
+            tests: Vec::new(),
+            overall_compatible: true,
+        }
+    }
+}
+
+impl CompatibilityReport {
+    /// Create a new compatibility report
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a test result for an operation
+    pub fn add_test(&mut self, operation: &str, git2_success: bool, shell_success: bool) {
+        self.tests.push(OperationTest {
+            operation: operation.to_string(),
+            git2_success,
+            shell_success,
+            results_match: None,
+        });
+        
+        if !git2_success || !shell_success {
+            self.overall_compatible = false;
+        }
+    }
+
+    /// Add a comparison result for an operation
+    pub fn add_comparison(&mut self, operation: &str, results_match: bool) {
+        if let Some(test) = self.tests.iter_mut().find(|t| t.operation == operation) {
+            test.results_match = Some(results_match);
+        }
+        
+        if !results_match {
+            self.overall_compatible = false;
+        }
+    }
+}
+
+/// Result of testing an operation with both backends
+#[derive(Debug, Clone)]
+pub struct OperationTest {
+    /// Name of the operation being tested
+    pub operation: String,
+    /// Whether the git2 backend succeeded
+    pub git2_success: bool,
+    /// Whether the shell backend succeeded
+    pub shell_success: bool,
+    /// Whether the results from both backends match
+    pub results_match: Option<bool>,
+}
+
 /// Git operations for issue management
 pub struct GitOperations {
     /// Working directory for git operations
     work_dir: PathBuf,
     /// Git2 repository handle for native operations (optional for gradual migration)
     git2_repo: Option<Repository>,
+    /// Migration flag to control which backend to use
+    use_git2: bool,
 }
 
 impl GitOperations {
-    /// Create new git operations handler
+    /// Create new git operations handler with automatic backend selection
     pub fn new() -> Result<Self> {
         let work_dir = std::env::current_dir()?;
-
-        // Verify this is a git repository and initialize git2 repository
-        Self::verify_git_repo(&work_dir)?;
-        let git2_repo = Some(git2_utils::discover_repository(&work_dir)?);
-
-        Ok(Self {
-            work_dir,
-            git2_repo,
-        })
+        let use_git2 = Self::should_use_git2();
+        Self::with_work_dir_and_backend(work_dir, use_git2)
     }
 
     /// Create git operations handler with explicit work directory
     pub fn with_work_dir(work_dir: PathBuf) -> Result<Self> {
-        // Verify this is a git repository and initialize git2 repository
-        Self::verify_git_repo(&work_dir)?;
-        let git2_repo = Some(git2_utils::discover_repository(&work_dir)?);
+        let use_git2 = Self::should_use_git2();
+        Self::with_work_dir_and_backend(work_dir, use_git2)
+    }
+
+    /// Create git operations handler with explicit work directory and backend choice
+    pub fn with_work_dir_and_backend(work_dir: PathBuf, use_git2: bool) -> Result<Self> {
+        // Verify this is a git repository using appropriate backend
+        if use_git2 {
+            Self::verify_git_repo_git2(&work_dir)?;
+        } else {
+            Self::verify_git_repo(&work_dir)?;
+        }
+
+        let git2_repo = if use_git2 {
+            Some(git2_utils::discover_repository(&work_dir)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             work_dir,
             git2_repo,
+            use_git2,
         })
     }
 
-    /// Verify directory is a git repository using git2
+    /// Create GitOperations with automatic backend selection
+    pub fn new_auto() -> Result<Self> {
+        let use_git2 = Self::should_use_git2();
+        let work_dir = std::env::current_dir()?;
+        Self::with_work_dir_and_backend(work_dir, use_git2)
+    }
+
+    /// Verify directory is a git repository using shell git command (legacy)
     fn verify_git_repo(path: &Path) -> Result<()> {
+        let output = Command::new("git")
+            .arg("rev-parse")
+            .arg("--git-dir")
+            .current_dir(path)
+            .output()
+            .map_err(|e| SwissArmyHammerError::git_operation_failed(
+                "check repository", 
+                &format!("Failed to execute git command: {}", e)
+            ))?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "check repository",
+                "Not in a git repository",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Verify directory is a git repository using git2
+    fn verify_git_repo_git2(path: &Path) -> Result<()> {
         match git2_utils::discover_repository(path) {
             Ok(_) => Ok(()),
             Err(_) => Err(SwissArmyHammerError::git_operation_failed(
@@ -227,6 +347,22 @@ impl GitOperations {
                 "Not in a git repository",
             )),
         }
+    }
+
+    /// Determine which backend to use based on configuration
+    fn should_use_git2() -> bool {
+        // Check environment variable for explicit backend selection
+        if let Ok(backend) = std::env::var("SAH_GIT_BACKEND") {
+            return backend.to_lowercase() == "git2";
+        }
+        
+        // Check if git2 is explicitly disabled
+        if std::env::var("SAH_DISABLE_GIT2").is_ok() {
+            return false;
+        }
+        
+        // Default to git2 for new installations
+        true
     }
 
     /// Initialize git2 repository handle for native operations
@@ -280,8 +416,17 @@ impl GitOperations {
         })
     }
 
-    /// Get current branch name using git2-rs native operations
+    /// Get current branch name using selected backend
     pub fn current_branch(&self) -> Result<String> {
+        if self.use_git2 {
+            self.current_branch_git2()
+        } else {
+            self.current_branch_shell()
+        }
+    }
+
+    /// Get current branch name using git2-rs native operations
+    pub fn current_branch_git2(&self) -> Result<String> {
         let repo = self.get_git2_repo()?;
 
         let head = repo
@@ -301,19 +446,76 @@ impl GitOperations {
         }
     }
 
+    /// Get current branch name using shell git command
+    pub fn current_branch_shell(&self) -> Result<String> {
+        let output = Command::new("git")
+            .arg("rev-parse")
+            .arg("--abbrev-ref")
+            .arg("HEAD")
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| SwissArmyHammerError::git_operation_failed(
+                "get current branch",
+                &format!("Failed to execute git command: {}", e),
+            ))?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "get current branch",
+                &String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+
+        let branch_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if branch_name == "HEAD" {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "get current branch",
+                "Repository is in detached HEAD state",
+            ));
+        }
+
+        Ok(branch_name)
+    }
+
     /// Get the main branch name (main or master) for backward compatibility testing.
     ///
     /// Note: This method is primarily used by tests to verify backward compatibility
     /// with traditional main/master branch workflows. The issue management system
     /// no longer defaults to main branches for merge operations.
     pub fn main_branch(&self) -> Result<String> {
+        if self.use_git2 {
+            self.main_branch_git2()
+        } else {
+            self.main_branch_shell()
+        }
+    }
+
+    /// Get the main branch name using git2 backend
+    pub fn main_branch_git2(&self) -> Result<String> {
         // Try 'main' first
-        if self.branch_exists("main")? {
+        if self.branch_exists_git2("main")? {
             return Ok("main".to_string());
         }
 
         // Fall back to 'master'
-        if self.branch_exists("master")? {
+        if self.branch_exists_git2("master")? {
+            return Ok("master".to_string());
+        }
+
+        Err(SwissArmyHammerError::Other(
+            "No main or master branch found".to_string(),
+        ))
+    }
+
+    /// Get the main branch name using shell backend
+    pub fn main_branch_shell(&self) -> Result<String> {
+        // Try 'main' first
+        if self.branch_exists_shell("main")? {
+            return Ok("main".to_string());
+        }
+
+        // Fall back to 'master'
+        if self.branch_exists_shell("master")? {
             return Ok("master".to_string());
         }
 
@@ -359,7 +561,17 @@ impl GitOperations {
     }
 
     /// Check if a local branch exists using git2-rs native operations
+    /// Check if a local branch exists using selected backend
     pub fn branch_exists(&self, branch: &str) -> Result<bool> {
+        if self.use_git2 {
+            self.branch_exists_git2(branch)
+        } else {
+            self.branch_exists_shell(branch)
+        }
+    }
+
+    /// Check if a local branch exists using git2-rs native operations
+    pub fn branch_exists_git2(&self, branch: &str) -> Result<bool> {
         // Handle empty or whitespace-only branch names
         if branch.trim().is_empty() {
             return Ok(false);
@@ -372,6 +584,28 @@ impl GitOperations {
             Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
             Err(e) => Err(git2_utils::convert_git2_error("check branch existence", e)),
         }
+    }
+
+    /// Check if a local branch exists using shell git command
+    pub fn branch_exists_shell(&self, branch: &str) -> Result<bool> {
+        // Handle empty or whitespace-only branch names
+        if branch.trim().is_empty() {
+            return Ok(false);
+        }
+
+        let output = Command::new("git")
+            .arg("show-ref")
+            .arg("--verify")
+            .arg("--quiet")
+            .arg(format!("refs/heads/{}", branch))
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| SwissArmyHammerError::git_operation_failed(
+                "check branch existence",
+                &format!("Failed to execute git command: {}", e),
+            ))?;
+
+        Ok(output.status.success())
     }
 
     /// Validate branch name using git2-rs reference validation
@@ -423,9 +657,20 @@ impl GitOperations {
     /// 2. If switching to existing branch, must be on a non-issue branch first
     /// 3. If creating new branch, must be on a non-issue branch
     /// 4. Returns error if branching rules are violated
+    ///
+    /// Create work branch using selected backend
     pub fn create_work_branch(&self, issue_name: &str) -> Result<String> {
+        if self.use_git2 {
+            self.create_work_branch_git2(issue_name)
+        } else {
+            self.create_work_branch_shell(issue_name)
+        }
+    }
+
+    /// Create work branch using git2 backend
+    pub fn create_work_branch_git2(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
-        let current_branch = self.current_branch()?;
+        let current_branch = self.current_branch_git2()?;
 
         // Early return: If we're already on the target issue branch (resume scenario)
         if current_branch == branch_name {
@@ -438,7 +683,7 @@ impl GitOperations {
 
         // Check for branch operation validation first to provide specific error messages
         if self.is_issue_branch(&current_branch) {
-            if self.branch_exists(&branch_name)? {
+            if self.branch_exists_git2(&branch_name)? {
                 return Err(SwissArmyHammerError::Other(
                     "Cannot switch to issue branch from another issue branch. Please switch to a non-issue branch first.".to_string()
                 ));
@@ -450,13 +695,13 @@ impl GitOperations {
         }
 
         // Handle existing branch: switch to it
-        if self.branch_exists(&branch_name)? {
+        if self.branch_exists_git2(&branch_name)? {
             tracing::info!(
                 "Switching to existing issue branch '{}' from '{}'",
                 branch_name,
                 current_branch
             );
-            self.checkout_branch(&branch_name)?;
+            self.checkout_branch_git2(&branch_name)?;
             return Ok(branch_name);
         }
 
@@ -466,7 +711,56 @@ impl GitOperations {
             branch_name,
             current_branch
         );
-        self.create_and_checkout_branch(&branch_name)?;
+        self.create_and_checkout_branch_git2(&branch_name)?;
+
+        Ok(branch_name)
+    }
+
+    /// Create work branch using shell backend
+    pub fn create_work_branch_shell(&self, issue_name: &str) -> Result<String> {
+        let branch_name = format!("issue/{issue_name}");
+        let current_branch = self.current_branch_shell()?;
+
+        // Early return: If we're already on the target issue branch (resume scenario)
+        if current_branch == branch_name {
+            tracing::info!("Already on target issue branch: {}", branch_name);
+            return Ok(branch_name);
+        }
+
+        // Enhanced validation to prevent circular dependencies
+        self.validate_branch_creation(issue_name, None)?;
+
+        // Check for branch operation validation first to provide specific error messages
+        if self.is_issue_branch(&current_branch) {
+            if self.branch_exists_shell(&branch_name)? {
+                return Err(SwissArmyHammerError::Other(
+                    "Cannot switch to issue branch from another issue branch. Please switch to a non-issue branch first.".to_string()
+                ));
+            } else {
+                return Err(SwissArmyHammerError::Other(
+                    "Cannot create new issue branch from another issue branch. Must be on a non-issue branch.".to_string()
+                ));
+            }
+        }
+
+        // Handle existing branch: switch to it
+        if self.branch_exists_shell(&branch_name)? {
+            tracing::info!(
+                "Switching to existing issue branch '{}' from '{}'",
+                branch_name,
+                current_branch
+            );
+            self.checkout_branch_shell(&branch_name)?;
+            return Ok(branch_name);
+        }
+
+        // Handle new branch: create and switch
+        tracing::info!(
+            "Creating new issue branch '{}' from '{}'",
+            branch_name,
+            current_branch
+        );
+        self.create_and_checkout_branch_shell(&branch_name)?;
 
         Ok(branch_name)
     }
@@ -479,7 +773,8 @@ impl GitOperations {
     }
 
     /// Create and checkout a new branch using git2-rs
-    fn create_and_checkout_branch(&self, branch_name: &str) -> Result<()> {
+    /// Create and checkout a new branch using git2-rs
+    fn create_and_checkout_branch_git2(&self, branch_name: &str) -> Result<()> {
         // Validate that we can create the branch
         if !self.can_create_branch(branch_name)? {
             return Err(SwissArmyHammerError::git2_operation_failed(
@@ -532,8 +827,49 @@ impl GitOperations {
         Ok(())
     }
 
+    /// Create and checkout a new branch using shell git command
+    fn create_and_checkout_branch_shell(&self, branch_name: &str) -> Result<()> {
+        // Validate that we can create the branch
+        if !self.can_create_branch(branch_name)? {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "create work branch",
+                &format!("Cannot create branch '{}'", branch_name),
+            ));
+        }
+
+        let output = Command::new("git")
+            .arg("checkout")
+            .arg("-b")
+            .arg(branch_name)
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| SwissArmyHammerError::git_operation_failed(
+                "create and checkout branch",
+                &format!("Failed to execute git command: {}", e),
+            ))?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "create and checkout branch",
+                &String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Switch to existing branch using git2-rs
+    /// Switch to existing branch using selected backend
     pub fn checkout_branch(&self, branch: &str) -> Result<()> {
+        if self.use_git2 {
+            self.checkout_branch_git2(branch)
+        } else {
+            self.checkout_branch_shell(branch)
+        }
+    }
+
+    /// Switch to existing branch using git2-rs
+    pub fn checkout_branch_git2(&self, branch: &str) -> Result<()> {
         let repo = self.get_git2_repo()?;
 
         // Find the branch reference
@@ -566,6 +902,28 @@ impl GitOperations {
                 e,
             )
         })?;
+
+        Ok(())
+    }
+
+    /// Switch to existing branch using shell git command
+    pub fn checkout_branch_shell(&self, branch: &str) -> Result<()> {
+        let output = Command::new("git")
+            .arg("checkout")
+            .arg(branch)
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| SwissArmyHammerError::git_operation_failed(
+                "checkout branch",
+                &format!("Failed to execute git command: {}", e),
+            ))?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "checkout branch",
+                &String::from_utf8_lossy(&output.stderr),
+            ));
+        }
 
         Ok(())
     }
@@ -782,12 +1140,75 @@ impl GitOperations {
     /// store source branch information.
     ///
     /// Returns the target branch that was merged to.
+    /// Merge issue branch to automatically determined target with fallback support
     pub fn merge_issue_branch_auto(&self, issue_name: &str) -> Result<String> {
+        if self.use_git2 {
+            match self.merge_issue_branch_auto_git2(issue_name) {
+                Ok(target) => Ok(target),
+                Err(e) => {
+                    tracing::warn!("Git2 merge failed, falling back to shell: {}", e);
+                    self.merge_issue_branch_auto_shell(issue_name)
+                }
+            }
+        } else {
+            self.merge_issue_branch_auto_shell(issue_name)
+        }
+    }
+
+    /// Merge issue branch using git2 backend
+    pub fn merge_issue_branch_auto_git2(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
         let target_branch = self.find_merge_target_branch_using_reflog(issue_name)?;
 
         tracing::debug!(
-            "Merging issue branch '{}' back to target branch '{}' (determined by git reflog)",
+            "Merging issue branch '{}' back to target branch '{}' using git2",
+            branch_name,
+            target_branch
+        );
+
+        // Enhanced validation for issue branch targets
+        if self.is_issue_branch(&target_branch) {
+            return Err(SwissArmyHammerError::git_branch_operation_failed(
+                "merge",
+                &target_branch,
+                &format!("Cannot merge issue '{issue_name}' to issue branch '{target_branch}'. Issue branches cannot be merge targets")
+            ));
+        }
+
+        // Switch to target branch first
+        self.checkout_branch_git2(&target_branch).map_err(|e| {
+            let error_msg = format!(
+                "Failed to checkout target branch '{target_branch}' for issue '{issue_name}': {}",
+                e
+            );
+            create_abort_file(&self.work_dir, &error_msg).ok();
+            SwissArmyHammerError::git_branch_operation_failed("checkout", &target_branch, &error_msg)
+        })?;
+
+        // Perform merge using git2
+        self.merge_branches_git2(
+            &branch_name,
+            &target_branch,
+            &format!("Merge issue/{}", issue_name),
+        ).map_err(|e| {
+            let error_msg = format!(
+                "Git2 merge failed for issue '{issue_name}': '{branch_name}' -> '{target_branch}': {}",
+                e
+            );
+            create_abort_file(&self.work_dir, &error_msg).ok();
+            SwissArmyHammerError::git_branch_operation_failed("merge", &branch_name, &error_msg)
+        })?;
+
+        Ok(target_branch)
+    }
+
+    /// Merge issue branch using shell backend
+    pub fn merge_issue_branch_auto_shell(&self, issue_name: &str) -> Result<String> {
+        let branch_name = format!("issue/{issue_name}");
+        let target_branch = self.find_merge_target_branch_using_reflog(issue_name)?;
+
+        tracing::debug!(
+            "Merging issue branch '{}' back to target branch '{}' using shell",
             branch_name,
             target_branch
         );
@@ -1119,7 +1540,17 @@ impl GitOperations {
     }
 
     /// Get information about the last commit
+    /// Get last commit info using selected backend
     pub fn get_last_commit_info(&self) -> Result<String> {
+        if self.use_git2 {
+            self.get_last_commit_info_git2()
+        } else {
+            self.get_last_commit_info_shell()
+        }
+    }
+
+    /// Get last commit info using git2
+    pub fn get_last_commit_info_git2(&self) -> Result<String> {
         let repo = self.open_git2_repository()?;
         
         // Get HEAD commit
@@ -1158,6 +1589,27 @@ impl GitOperations {
         );
         
         Ok(format!("{}|{}|{}|{}", hash, message, author_name, iso_date))
+    }
+
+    /// Get last commit info using shell
+    pub fn get_last_commit_info_shell(&self) -> Result<String> {
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["log", "-1", "--pretty=format:%H|%s|%an|%ai"])
+            .output()
+            .map_err(|e| SwissArmyHammerError::git_operation_failed(
+                "get last commit info",
+                &format!("Failed to execute git command: {}", e),
+            ))?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "get last commit info",
+                &String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     /// Get commit history using git2-rs revwalk
@@ -1386,7 +1838,35 @@ impl GitOperations {
     }
 
     /// Check if working directory is clean (no uncommitted changes)
+    /// Check working directory status using selected backend
     pub fn is_working_directory_clean(&self) -> Result<Vec<String>> {
+        if self.use_git2 {
+            self.is_working_directory_clean_git2()
+        } else {
+            self.is_working_directory_clean_shell()
+        }
+    }
+
+    /// Check working directory status using git2
+    pub fn is_working_directory_clean_git2(&self) -> Result<Vec<String>> {
+        let summary = self.get_status_summary()?;
+        let mut changes = Vec::new();
+
+        // Combine all types of changes into a single list
+        changes.extend(summary.staged_modified.clone());
+        changes.extend(summary.unstaged_modified.clone());
+        changes.extend(summary.untracked.clone());
+        changes.extend(summary.staged_new.clone());
+        changes.extend(summary.staged_deleted.clone());
+        changes.extend(summary.unstaged_deleted.clone());
+        changes.extend(summary.renamed.clone());
+        changes.extend(summary.typechange.clone());
+
+        Ok(changes)
+    }
+
+    /// Check working directory status using shell
+    pub fn is_working_directory_clean_shell(&self) -> Result<Vec<String>> {
         let output = Command::new("git")
             .current_dir(&self.work_dir)
             .args(["status", "--porcelain"])
@@ -1413,9 +1893,24 @@ impl GitOperations {
         Ok(changes)
     }
 
-    /// Check if working directory has uncommitted changes
+    /// Check if working directory has uncommitted changes using selected backend
     pub fn has_uncommitted_changes(&self) -> Result<bool> {
-        let changes = self.is_working_directory_clean()?;
+        if self.use_git2 {
+            self.has_uncommitted_changes_git2()
+        } else {
+            self.has_uncommitted_changes_shell()
+        }
+    }
+
+    /// Check if working directory has uncommitted changes using git2
+    pub fn has_uncommitted_changes_git2(&self) -> Result<bool> {
+        let summary = self.get_status_summary()?;
+        Ok(!summary.is_clean())
+    }
+
+    /// Check if working directory has uncommitted changes using shell
+    pub fn has_uncommitted_changes_shell(&self) -> Result<bool> {
+        let changes = self.is_working_directory_clean_shell()?;
         Ok(!changes.is_empty())
     }
 
@@ -1721,6 +2216,94 @@ impl GitOperations {
         // Future implementation will read from configuration files
         // to determine project-specific or issue-specific target branches
         Ok(None)
+    }
+
+    /// Get information about which backend is being used
+    pub fn backend_info(&self) -> BackendInfo {
+        BackendInfo {
+            backend_type: if self.use_git2 { "git2".to_string() } else { "shell".to_string() },
+            git2_available: true, // git2 is always available since it's compiled in
+            git2_version: env!("CARGO_PKG_VERSION").to_string(),
+            shell_available: self.is_shell_git_available(),
+            work_dir: self.work_dir.clone(),
+            repository_valid: self.verify_repository().is_ok(),
+        }
+    }
+
+    /// Check if shell git command is available
+    fn is_shell_git_available(&self) -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Repository verification with fallback support
+    pub fn verify_repository(&self) -> Result<()> {
+        if self.use_git2 {
+            match Self::verify_git_repo_git2(&self.work_dir) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    tracing::warn!("Git2 verification failed, trying shell: {}", e);
+                    Self::verify_git_repo(&self.work_dir)
+                }
+            }
+        } else {
+            Self::verify_git_repo(&self.work_dir)
+        }
+    }
+
+    /// Test both backends for compatibility
+    pub fn test_backend_compatibility(&self) -> Result<CompatibilityReport> {
+        let mut report = CompatibilityReport::new();
+        
+        // Test basic operations with both backends
+        let operations = vec![
+            "current_branch",
+            "branch_exists_main",
+            "working_directory_status",
+        ];
+        
+        for op in &operations {
+            let git2_result = self.test_operation_git2(op);
+            let shell_result = self.test_operation_shell(op);
+            
+            report.add_test(op, git2_result.is_ok(), shell_result.is_ok());
+            
+            // Compare results if both succeeded
+            if let (Ok(git2_val), Ok(shell_val)) = (&git2_result, &shell_result) {
+                report.add_comparison(op, git2_val == shell_val);
+            }
+        }
+        
+        Ok(report)
+    }
+
+    /// Test an operation with git2 backend
+    fn test_operation_git2(&self, operation: &str) -> Result<String> {
+        match operation {
+            "current_branch" => self.current_branch_git2(),
+            "branch_exists_main" => Ok(self.branch_exists_git2("main")?.to_string()),
+            "working_directory_status" => {
+                let summary = self.get_status_summary()?;
+                Ok(format!("clean: {}, changes: {}", summary.is_clean(), summary.total_changes()))
+            },
+            _ => Err(SwissArmyHammerError::Other(format!("Unknown test operation: {}", operation))),
+        }
+    }
+
+    /// Test an operation with shell backend  
+    fn test_operation_shell(&self, operation: &str) -> Result<String> {
+        match operation {
+            "current_branch" => self.current_branch_shell(),
+            "branch_exists_main" => Ok(self.branch_exists_shell("main")?.to_string()),
+            "working_directory_status" => {
+                let changes = self.is_working_directory_clean()?;
+                Ok(format!("clean: {}, changes: {}", changes.is_empty(), changes.len()))
+            },
+            _ => Err(SwissArmyHammerError::Other(format!("Unknown test operation: {}", operation))),
+        }
     }
 
     /// Merge branches using git2-rs for improved performance and reliability
@@ -2281,12 +2864,12 @@ mod tests {
         // Make a change on the work branch
         fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "test.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add test file"])
             .output()
             .unwrap();
@@ -2331,12 +2914,12 @@ mod tests {
 
         // Stage and commit the file
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "test.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add test file"])
             .output()
             .unwrap();
@@ -2440,14 +3023,14 @@ mod tests {
 
         // Initialize git repo
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["init"])
             .output()
             .unwrap();
 
         // Create a custom branch (not main or master) and check it out
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "custom_branch"])
             .output()
             .unwrap();
@@ -2455,12 +3038,12 @@ mod tests {
         // Add a test file and commit to make the branch valid
         fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "."])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args([
                 "-c",
                 "user.email=test@example.com",
@@ -2475,13 +3058,13 @@ mod tests {
 
         // Delete main branch if it exists (though it shouldn't in this fresh repo)
         let _ = Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["branch", "-D", "main"])
             .output();
 
         // Delete master branch if it exists
         let _ = Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["branch", "-D", "master"])
             .output();
 
@@ -2540,7 +3123,7 @@ mod tests {
         // Create and switch to a feature branch
         git_ops.checkout_branch("main").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/new-feature"])
             .output()
             .unwrap();
@@ -2567,7 +3150,7 @@ mod tests {
 
         // Create a feature branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/user-auth"])
             .output()
             .unwrap();
@@ -2575,12 +3158,12 @@ mod tests {
         // Add initial feature work
         fs::write(temp_dir.path().join("auth.rs"), "// Auth module").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "auth.rs"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Initial auth module"])
             .output()
             .unwrap();
@@ -2593,12 +3176,12 @@ mod tests {
         // Make changes on issue branch
         fs::write(temp_dir.path().join("auth_tests.rs"), "// Auth tests").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "auth_tests.rs"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add auth tests"])
             .output()
             .unwrap();
@@ -2621,7 +3204,7 @@ mod tests {
 
         // Create a release branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "release/v1.0"])
             .output()
             .unwrap();
@@ -2650,7 +3233,7 @@ mod tests {
         // Create develop branch from main
         let main_branch = git_ops.main_branch().unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "develop"])
             .output()
             .unwrap();
@@ -2658,12 +3241,12 @@ mod tests {
         // Add file to develop branch to differentiate it
         fs::write(temp_dir.path().join("develop.txt"), "develop branch file").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "develop.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add develop file"])
             .output()
             .unwrap();
@@ -2674,12 +3257,12 @@ mod tests {
         // Make changes on issue branch
         fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature"])
             .output()
             .unwrap();
@@ -2708,13 +3291,13 @@ mod tests {
         // Create multiple branches
         let _main_branch = git_ops.main_branch().unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/api"])
             .output()
             .unwrap();
 
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/ui"])
             .output()
             .unwrap();
@@ -2778,12 +3361,12 @@ mod tests {
         // Make a change and commit
         fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "test.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Test change"])
             .output()
             .unwrap();
@@ -2810,7 +3393,7 @@ mod tests {
 
         // Create a feature branch from main
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/awesome"])
             .output()
             .unwrap();
@@ -2818,12 +3401,12 @@ mod tests {
         // Make a commit on feature branch
         std::fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature"])
             .output()
             .unwrap();
@@ -2853,7 +3436,7 @@ mod tests {
 
         // Create and switch to a development branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "development"])
             .output()
             .unwrap();
@@ -2895,7 +3478,7 @@ mod tests {
 
         // Create a feature branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/cool"])
             .output()
             .unwrap();
@@ -2945,7 +3528,7 @@ mod tests {
 
         // Create and switch to feature branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/test"])
             .output()
             .unwrap();
@@ -3017,7 +3600,7 @@ mod tests {
 
         // Create a feature branch and make changes
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/conflict"])
             .output()
             .unwrap();
@@ -3025,12 +3608,12 @@ mod tests {
         // Create conflicting content on feature branch
         std::fs::write(temp_dir.path().join("conflict.txt"), "feature content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "conflict.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add conflict file on feature"])
             .output()
             .unwrap();
@@ -3039,12 +3622,12 @@ mod tests {
         git_ops.checkout_branch("main").unwrap();
         std::fs::write(temp_dir.path().join("conflict.txt"), "main content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "conflict.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add conflict file on main"])
             .output()
             .unwrap();
@@ -3056,12 +3639,12 @@ mod tests {
         // Make additional changes on issue branch
         std::fs::write(temp_dir.path().join("issue.txt"), "issue content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "issue.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add issue content"])
             .output()
             .unwrap();
@@ -3086,7 +3669,7 @@ mod tests {
 
         // Create a valid branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "valid_branch"])
             .output()
             .unwrap();
@@ -3170,12 +3753,12 @@ mod tests {
         // Make a change
         fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "test.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add test file"])
             .output()
             .unwrap();
@@ -3196,7 +3779,7 @@ mod tests {
 
         // Create a feature branch and switch to it
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/compat"])
             .output()
             .unwrap();
@@ -3274,7 +3857,7 @@ mod tests {
 
         // Create the branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "test-branch"])
             .output()
             .unwrap();
@@ -3362,7 +3945,7 @@ mod tests {
 
         // Create feature branch and issue branch from it
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/test-feature"])
             .output()
             .unwrap();
@@ -3398,7 +3981,7 @@ mod tests {
 
         // Create branch manually without going through normal checkout flow
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["branch", "issue/manual-branch"])
             .output()
             .unwrap();
@@ -3426,7 +4009,7 @@ mod tests {
 
         // Create feature branch and issue branch from it
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/source"])
             .output()
             .unwrap();
@@ -3482,7 +4065,7 @@ mod tests {
 
         // Create a feature branch and make a commit
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature"])
             .output()
             .unwrap();
@@ -3490,20 +4073,20 @@ mod tests {
         fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
 
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature.txt"])
             .output()
             .unwrap();
 
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature"])
             .output()
             .unwrap();
 
         // Switch back to main and merge
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "main"])
             .output()
             .unwrap();
@@ -3518,7 +4101,7 @@ mod tests {
 
         // Verify merge commit was created
         let log_output = Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["log", "--oneline", "-3"])
             .output()
             .unwrap();
@@ -3537,37 +4120,37 @@ mod tests {
 
         // Create feature branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature"])
             .output()
             .unwrap();
 
         fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature"])
             .output()
             .unwrap();
 
         // Switch back to main and make a different commit
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "main"])
             .output()
             .unwrap();
         fs::write(temp_dir.path().join("main.txt"), "main content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "main.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add main feature"])
             .output()
             .unwrap();
@@ -3588,7 +4171,7 @@ mod tests {
 
         // Verify merge commit was created
         let log_output = Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["log", "--oneline", "-1"])
             .output()
             .unwrap();
@@ -3608,48 +4191,48 @@ mod tests {
         // Create initial commit with a file
         fs::write(temp_dir.path().join("conflict.txt"), "original content\n").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "conflict.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Initial commit"])
             .output()
             .unwrap();
 
         // Create feature branch and modify the file
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature"])
             .output()
             .unwrap();
         fs::write(temp_dir.path().join("conflict.txt"), "feature content\n").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "conflict.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Feature change"])
             .output()
             .unwrap();
 
         // Switch back to main and modify the same file differently
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "main"])
             .output()
             .unwrap();
         fs::write(temp_dir.path().join("conflict.txt"), "main content\n").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "conflict.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Main change"])
             .output()
             .unwrap();
@@ -3684,12 +4267,12 @@ mod tests {
 
         // Create branch but don't make any changes
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "identical"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "main"])
             .output()
             .unwrap();
@@ -3733,37 +4316,37 @@ mod tests {
         // Create a file and commit on main
         fs::write(temp_dir.path().join("file1.txt"), "content1").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "file1.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "First parent"])
             .output()
             .unwrap();
 
         // Create second parent on a branch
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "branch"])
             .output()
             .unwrap();
         fs::write(temp_dir.path().join("file2.txt"), "content2").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "file2.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Second parent"])
             .output()
             .unwrap();
 
         // Switch back to main for merge commit
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "main"])
             .output()
             .unwrap();
@@ -3779,7 +4362,7 @@ mod tests {
 
         // Verify the commit has two parents using shell commands (more reliable)
         let log_output = Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["log", "--format=%P", "-1"])
             .output()
             .unwrap();
@@ -3798,49 +4381,49 @@ mod tests {
         fs::write(temp_dir.path().join("file1.txt"), "original\n").unwrap();
         fs::write(temp_dir.path().join("file2.txt"), "original\n").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "."])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Initial"])
             .output()
             .unwrap();
 
         // Create conflicting changes on both branches
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "branch1"])
             .output()
             .unwrap();
         fs::write(temp_dir.path().join("file1.txt"), "branch1 change\n").unwrap();
         fs::write(temp_dir.path().join("file2.txt"), "branch1 change\n").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "."])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Branch1 changes"])
             .output()
             .unwrap();
 
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "main"])
             .output()
             .unwrap();
         fs::write(temp_dir.path().join("file1.txt"), "main change\n").unwrap();
         fs::write(temp_dir.path().join("file2.txt"), "main change\n").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "."])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Main changes"])
             .output()
             .unwrap();
@@ -3995,12 +4578,12 @@ mod tests {
             fs::write(temp_dir.path().join(format!("file{}.txt", i)), format!("Content {}", i))?;
             
             Command::new("git")
-                .current_dir(_temp_dir.path())
+                .current_dir(temp_dir.path())
                 .args(["add", &format!("file{}.txt", i)])
                 .output()?;
                 
             Command::new("git")
-                .current_dir(_temp_dir.path())
+                .current_dir(temp_dir.path())
                 .args(["commit", "-m", &format!("Add file{}.txt", i)])
                 .output()?;
         }
@@ -4081,23 +4664,23 @@ mod tests {
 
     #[test]
     fn test_get_branch_history() {
-        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         
         // Create a new branch with additional commits
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature-branch"])
             .output()
             .unwrap();
             
-        fs::write(_temp_dir.path().join("feature.txt"), "Feature content").unwrap();
+        fs::write(temp_dir.path().join("feature.txt"), "Feature content").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature"])
             .output()
             .unwrap();
@@ -4119,36 +4702,36 @@ mod tests {
 
     #[test]
     fn test_get_commits_unique_to_branch() {
-        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         let main_branch = git_ops.main_branch().unwrap();
         
         // Create a new branch with additional commits
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature-branch"])
             .output()
             .unwrap();
             
-        fs::write(_temp_dir.path().join("feature1.txt"), "Feature 1").unwrap();
+        fs::write(temp_dir.path().join("feature1.txt"), "Feature 1").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature1.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature 1"])
             .output()
             .unwrap();
             
-        fs::write(_temp_dir.path().join("feature2.txt"), "Feature 2").unwrap();
+        fs::write(temp_dir.path().join("feature2.txt"), "Feature 2").unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["add", "feature2.txt"])
             .output()
             .unwrap();
         Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["commit", "-m", "Add feature 2"])
             .output()
             .unwrap();
@@ -4221,14 +4804,14 @@ mod tests {
 
     #[test] 
     fn test_commit_history_output_compatibility() {
-        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         
         // Get last commit info using git2 implementation
         let git2_output = git_ops.get_last_commit_info().unwrap();
         
         // Get the same info using shell command for comparison
         let shell_output = Command::new("git")
-            .current_dir(_temp_dir.path())
+            .current_dir(temp_dir.path())
             .args(["log", "-1", "--pretty=format:%H|%s|%an|%ad", "--date=iso"])
             .output()
             .unwrap();
