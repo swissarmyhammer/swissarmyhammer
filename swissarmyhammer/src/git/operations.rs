@@ -210,12 +210,19 @@ pub struct CompatibilityReport {
     pub overall_compatible: bool,
 }
 
-impl CompatibilityReport {
-    pub fn new() -> Self {
+impl Default for CompatibilityReport {
+    fn default() -> Self {
         Self {
             tests: Vec::new(),
             overall_compatible: true,
         }
+    }
+}
+
+impl CompatibilityReport {
+    /// Create a new compatibility report
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Add a test result for an operation
@@ -590,7 +597,7 @@ impl GitOperations {
             .arg("show-ref")
             .arg("--verify")
             .arg("--quiet")
-            .arg(&format!("refs/heads/{}", branch))
+            .arg(format!("refs/heads/{}", branch))
             .current_dir(&self.work_dir)
             .output()
             .map_err(|e| SwissArmyHammerError::git_operation_failed(
@@ -650,6 +657,7 @@ impl GitOperations {
     /// 2. If switching to existing branch, must be on a non-issue branch first
     /// 3. If creating new branch, must be on a non-issue branch
     /// 4. Returns error if branching rules are violated
+    ///
     /// Create work branch using selected backend
     pub fn create_work_branch(&self, issue_name: &str) -> Result<String> {
         if self.use_git2 {
@@ -4585,7 +4593,7 @@ mod tests {
 
     #[test]
     fn test_get_last_commit_info() {
-        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         
         let commit_info = git_ops.get_last_commit_info().unwrap();
         
@@ -4609,7 +4617,7 @@ mod tests {
 
     #[test]
     fn test_get_commit_history() {
-        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         
         // Get all commits
         let all_commits = git_ops.get_commit_history(None).unwrap();
@@ -4635,7 +4643,7 @@ mod tests {
 
     #[test]
     fn test_find_commits_by_author() {
-        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         
         // Find by author name
         let commits_by_name = git_ops.find_commits_by_author("Test User", None).unwrap();
@@ -4741,7 +4749,7 @@ mod tests {
 
     #[test]
     fn test_commit_to_info_conversion() {
-        let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
+        let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         
         let commits = git_ops.get_commit_history(Some(1)).unwrap();
         let commit_info = &commits[0];
