@@ -58,17 +58,12 @@ impl CliToolContext {
 
     /// Create issue storage backend
     fn create_issue_storage(
-        current_dir: &std::path::Path,
+        working_dir: &std::path::Path,
     ) -> Result<IssueStorageArc, Box<dyn std::error::Error>> {
-        // Set working directory for migration context
-        let original_dir = std::env::current_dir()?;
-        if current_dir != original_dir {
-            std::env::set_current_dir(current_dir)?;
-        }
-
-        // Create storage with automatic migration and detailed results
+        // Create storage with working directory - no global directory changes needed
+        // This avoids race conditions in parallel test execution
         let (storage, migration_result) =
-            swissarmyhammer::issues::FileSystemIssueStorage::new_default_with_migration_info()?;
+            swissarmyhammer::issues::FileSystemIssueStorage::new_default_in(working_dir)?;
 
         // Log migration results for CLI users
         if let Some(result) = migration_result {
@@ -83,11 +78,6 @@ impl CliToolContext {
                     // Silent for CLI - no need to inform about no migration
                 }
             }
-        }
-
-        // Restore original directory
-        if current_dir != original_dir {
-            std::env::set_current_dir(original_dir)?;
         }
 
         Ok(Arc::new(RwLock::new(Box::new(storage))))

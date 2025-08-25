@@ -17,7 +17,7 @@ impl WorkflowDirectory {
     ///
     /// ```
     /// use std::path::PathBuf;
-    /// use swissarmyhammer_cli::doctor::WorkflowDirectory;
+    /// use swissarmyhammer_cli::commands::doctor::types::WorkflowDirectory;
     ///
     /// let dir = WorkflowDirectory::new(PathBuf::from("/home/user/.swissarmyhammer/workflows"));
     /// ```
@@ -30,8 +30,8 @@ impl WorkflowDirectory {
     /// # Example
     ///
     /// ```
-    /// use std::path::PathBuf;
-    /// use swissarmyhammer_cli::doctor::WorkflowDirectory;
+    /// use std::path::{Path, PathBuf};
+    /// use swissarmyhammer_cli::commands::doctor::types::WorkflowDirectory;
     ///
     /// let dir = WorkflowDirectory::new(PathBuf::from("/test"));
     /// assert_eq!(dir.path(), Path::new("/test"));
@@ -102,7 +102,7 @@ impl WorkflowDirectoryInfo {
     ///
     /// ```
     /// use std::path::PathBuf;
-    /// use swissarmyhammer_cli::doctor::{WorkflowDirectory, WorkflowDirectoryInfo, WorkflowCategory};
+    /// use swissarmyhammer_cli::commands::doctor::types::{WorkflowDirectory, WorkflowDirectoryInfo, WorkflowCategory};
     ///
     /// let dir = WorkflowDirectory::new(PathBuf::from("/home/user/.swissarmyhammer/workflows"));
     /// let info = WorkflowDirectoryInfo::new(dir, WorkflowCategory::User);
@@ -177,7 +177,7 @@ impl Check {
     /// # Example
     ///
     /// ```
-    /// use swissarmyhammer_cli::doctor::{Check, CheckStatus};
+    /// use swissarmyhammer_cli::commands::doctor::types::{Check, CheckStatus};
     ///
     /// let check = Check::builder("Test Check", CheckStatus::Ok)
     ///     .with_message("Everything is working")

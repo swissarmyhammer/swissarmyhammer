@@ -44,6 +44,27 @@ fn setup_test_environment() -> TempDir {
         .output()
         .expect("Failed to configure git name");
 
+    // Create initial README file
+    let readme_path = temp_dir.path().join("README.md");
+    std::fs::write(
+        &readme_path,
+        "# Test Repository\n\nThis is a test repository.",
+    )
+    .expect("Failed to create README.md");
+
+    // Add and commit initial file to establish HEAD
+    std::process::Command::new("git")
+        .current_dir(temp_dir.path())
+        .args(["add", "README.md"])
+        .output()
+        .expect("Failed to add README.md");
+
+    std::process::Command::new("git")
+        .current_dir(temp_dir.path())
+        .args(["commit", "-m", "Initial commit"])
+        .output()
+        .expect("Failed to create initial commit");
+
     // No longer change global current directory to avoid test isolation issues
     temp_dir
 }

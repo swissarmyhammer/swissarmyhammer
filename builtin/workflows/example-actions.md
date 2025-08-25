@@ -48,7 +48,7 @@ The Actions section maps state names to their actions. Format: `- StateName: Act
 - SuccessPath: Log "Success! Taking the success branch"
 - FailurePath: Log error "Failure detected, handling error"
 - HandleError: Log "Error has been handled"
-- WaitExample: Wait 2 seconds
+- WaitExample: Wait 1 seconds
 - BranchDecision: Set branch_value="${example_var}"
 - Branch1: Log "Branch 1 selected: {{branch_value}} contains Hello"
 - Branch2: Log "Branch 2 selected: {{branch_value}} is error state"

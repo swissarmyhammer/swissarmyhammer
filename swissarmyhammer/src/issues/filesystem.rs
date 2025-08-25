@@ -1120,7 +1120,6 @@ impl FileSystemIssueStorage {
     ) -> Result<DirectoryStructureCheck> {
         let mut directories_preserved = true;
         let mut relative_paths_correct = true;
-        let permissions_preserved = true;
         let mut structure_differences = Vec::new();
 
         // Check if both directories have the same subdirectory structure
@@ -1154,10 +1153,13 @@ impl FileSystemIssueStorage {
             }
         }
 
+        // Check permissions for directories
+        let permissions_preserved = Self::check_directory_permissions(source, destination)?;
+
         Ok(DirectoryStructureCheck {
             directories_preserved,
             relative_paths_correct,
-            permissions_preserved, // TODO: Implement permission checking
+            permissions_preserved,
             structure_differences,
         })
     }
@@ -1186,6 +1188,48 @@ impl FileSystemIssueStorage {
         }
 
         Ok(dirs)
+    }
+
+    /// Check directory permissions between source and destination
+    #[cfg(unix)]
+    fn check_directory_permissions(source: &Path, destination: &Path) -> Result<bool> {
+        use std::os::unix::fs::PermissionsExt;
+        
+        if !source.exists() || !destination.exists() {
+            return Ok(false);
+        }
+
+        let source_dirs = Self::collect_directory_list(source)?;
+        
+        for dir_path in source_dirs {
+            let source_dir = source.join(&dir_path);
+            let dest_dir = destination.join(&dir_path);
+            
+            if dest_dir.exists() {
+                let source_perms = source_dir.metadata()
+                    .map_err(SwissArmyHammerError::Io)?
+                    .permissions()
+                    .mode();
+                let dest_perms = dest_dir.metadata()
+                    .map_err(SwissArmyHammerError::Io)?
+                    .permissions()
+                    .mode();
+                    
+                if source_perms != dest_perms {
+                    return Ok(false);
+                }
+            }
+        }
+        
+        Ok(true)
+    }
+
+    /// Check directory permissions between source and destination (Windows implementation)
+    #[cfg(not(unix))]
+    fn check_directory_permissions(_source: &Path, _destination: &Path) -> Result<bool> {
+        // Windows permission checking is more complex and platform-specific
+        // For now, assume permissions are preserved on Windows
+        Ok(true)
     }
 
     /// Validate content integrity using checksums
@@ -1259,15 +1303,101 @@ impl FileSystemIssueStorage {
 
     /// Validate metadata preservation  
     fn validate_metadata_preservation(
-        _source: &Path,
-        _destination: &Path,
+        source: &Path,
+        destination: &Path,
     ) -> Result<MetadataPreservationCheck> {
-        // Basic implementation - can be enhanced with more detailed metadata checks
+        let permissions_preserved = Self::check_file_permissions(source, destination)?;
+        let (timestamps_preserved, timestamp_differences) = Self::check_file_timestamps(source, destination)?;
+        
+        let mut metadata_differences = Vec::new();
+        if !permissions_preserved {
+            metadata_differences.push("File permissions differ between source and destination".to_string());
+        }
+        metadata_differences.extend(timestamp_differences);
+        
         Ok(MetadataPreservationCheck {
-            permissions_preserved: true, // TODO: Implement detailed permission comparison
-            timestamps_preserved: true,  // TODO: Implement timestamp comparison
-            metadata_differences: Vec::new(),
+            permissions_preserved,
+            timestamps_preserved,
+            metadata_differences,
         })
+    }
+
+    /// Check file permissions between source and destination files
+    #[cfg(unix)]
+    fn check_file_permissions(source: &Path, destination: &Path) -> Result<bool> {
+        use std::os::unix::fs::PermissionsExt;
+        
+        if !source.exists() || !destination.exists() {
+            return Ok(false);
+        }
+
+        let source_files = Self::collect_file_list(source)?;
+        
+        for file_path in source_files {
+            let source_file = source.join(&file_path);
+            let dest_file = destination.join(&file_path);
+            
+            if dest_file.exists() {
+                let source_perms = source_file.metadata()
+                    .map_err(SwissArmyHammerError::Io)?
+                    .permissions()
+                    .mode();
+                let dest_perms = dest_file.metadata()
+                    .map_err(SwissArmyHammerError::Io)?
+                    .permissions()
+                    .mode();
+                    
+                if source_perms != dest_perms {
+                    return Ok(false);
+                }
+            }
+        }
+        
+        Ok(true)
+    }
+
+    /// Check file permissions between source and destination files (Windows implementation)
+    #[cfg(not(unix))]
+    fn check_file_permissions(_source: &Path, _destination: &Path) -> Result<bool> {
+        // Windows permission checking is more complex and platform-specific
+        // For now, assume permissions are preserved on Windows
+        Ok(true)
+    }
+
+    /// Check file timestamps between source and destination files
+    fn check_file_timestamps(source: &Path, destination: &Path) -> Result<(bool, Vec<String>)> {
+        if !source.exists() || !destination.exists() {
+            return Ok((false, vec!["Source or destination directory does not exist".to_string()]));
+        }
+
+        let source_files = Self::collect_file_list(source)?;
+        let mut differences = Vec::new();
+        let mut all_timestamps_match = true;
+        
+        for file_path in source_files {
+            let source_file = source.join(&file_path);
+            let dest_file = destination.join(&file_path);
+            
+            if dest_file.exists() {
+                let source_modified = source_file.metadata()
+                    .map_err(SwissArmyHammerError::Io)?
+                    .modified()
+                    .map_err(SwissArmyHammerError::Io)?;
+                let dest_modified = dest_file.metadata()
+                    .map_err(SwissArmyHammerError::Io)?
+                    .modified()
+                    .map_err(SwissArmyHammerError::Io)?;
+                    
+                // Allow for small timestamp differences (1 second tolerance)
+                if source_modified.duration_since(dest_modified).unwrap_or_default().as_secs() > 1 
+                   || dest_modified.duration_since(source_modified).unwrap_or_default().as_secs() > 1 {
+                    all_timestamps_match = false;
+                    differences.push(format!("Timestamp mismatch for file: {}", file_path.display()));
+                }
+            }
+        }
+        
+        Ok((all_timestamps_match, differences))
     }
 
     /// Validate migration completed successfully

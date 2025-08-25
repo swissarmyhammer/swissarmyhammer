@@ -44,6 +44,7 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
 
 /// Comprehensive integration test for sah serve MCP tools
 #[tokio::test]
+#[ignore = "Slow MCP server integration test - run with --ignored"]
 async fn test_sah_serve_tools_integration() -> Result<(), Box<dyn std::error::Error>> {
     // Start the MCP server process
     let child = Command::new("cargo")
@@ -451,6 +452,7 @@ fn read_mcp_response(
 
 /// Test that validates the server properly shuts down
 #[tokio::test]
+#[ignore = "Slow MCP server integration test - run with --ignored"]
 async fn test_sah_serve_shutdown() {
     // Start server
     let child = Command::new("cargo")

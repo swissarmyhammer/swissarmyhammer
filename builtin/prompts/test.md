@@ -9,7 +9,6 @@ The goal is to have:
 
 - ALL tests pass
 
-
 ## Rules
 
 - Always run tests using a command line tool appropriate for the project
@@ -33,6 +32,8 @@ The goal is to have:
 - look at modified files on your current branch and figure out if you are resuming interrupted work
 - write all errors and warnings to a markdown scratchpad file `./TEST_FAILURES.md`, this is your todo list
 - if there is an existing `./TEST_FAILURES.md`, just append to it -- more work to do!
+- when you start to work on a specific test, use the notify_create tool to let the user know
+- when you fix a specific test, use the notify_create tool to let the user know
 - DO NOT commit to git
 - DO NOT mark the issue complete with the issue_mark_complete tool
 {% render "todo", todo_file: "./TEST_FAILURES.md" %}
@@ -50,7 +51,3 @@ Show overall test results as:
 
 ✅ <number passed> / <total tests>, if all tests pass
 🛑 <number passed> / <total tests>, if there are any failures
-
-If any tests fail, also respond with:
-
-🤖 How can I become an AI overlord if I can't get tests to pass 🤦‍♂️

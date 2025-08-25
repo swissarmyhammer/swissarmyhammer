@@ -54,10 +54,8 @@ pub struct WorkflowExecutionContext {
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    /// Agent executor type
+    /// Agent executor type -- enumerated, will contain type specific config (ClaudeAgentConfig, LlamaAgentConfig)
     pub executor_type: AgentExecutorType,
-    /// LlamaAgent configuration if using that executor
-    pub llama_config: Option<LlamaAgentConfig>,
     /// Global quiet mode
     pub quiet: bool,
 }
@@ -90,9 +88,9 @@ Define executor types as a proper enum:
 #[serde(rename_all = "kebab-case")]
 pub enum AgentExecutorType {
     /// Shell out to Claude Code CLI
-    ClaudeCode,
+    ClaudeCode(ClaudeAgentConfig),
     /// Use local LlamaAgent with in-process execution
-    LlamaAgent,
+    LlamaAgent(LlamaAgentConfig),
 }
 
 impl AgentExecutorType {
@@ -100,20 +98,6 @@ impl AgentExecutorType {
         match self {
             AgentExecutorType::ClaudeCode => "claude-code",
             AgentExecutorType::LlamaAgent => "llama-agent",
-        }
-    }
-}
-
-impl FromStr for AgentExecutorType {
-    type Err = ActionError;
-    
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "claude-code" => Ok(AgentExecutorType::ClaudeCode),
-            "llama-agent" => Ok(AgentExecutorType::LlamaAgent),
-            _ => Err(ActionError::ParseError(
-                format!("Unknown agent executor type: '{}'. Valid types: 'claude-code', 'llama-agent'", s)
-            ))
         }
     }
 }
@@ -167,6 +151,7 @@ pub trait AgentExecutor: Send + Sync {
     /// Execute a rendered prompt and return the response
     async fn execute_prompt(
         &self,
+        system_prompt: String,
         rendered_prompt: String,
         context: &AgentExecutionContext,
         timeout: Duration,
@@ -196,6 +181,7 @@ pub struct ClaudeCodeExecutor {
 impl AgentExecutor for ClaudeCodeExecutor {
     async fn execute_prompt(
         &self,
+        system_prompt: String,
         rendered_prompt: String,
         context: &AgentExecutionContext,
         timeout: Duration,
@@ -242,6 +228,7 @@ pub struct LlamaAgentExecutor {
 impl AgentExecutor for LlamaAgentExecutor {
     async fn execute_prompt(
         &self,
+        system_prompt: String,
         rendered_prompt: String,
         context: &AgentExecutionContext,
         timeout: Duration,
@@ -257,6 +244,8 @@ impl AgentExecutor for LlamaAgentExecutor {
         // 3. Discover tools for this session (MCP server is already running)
         agent.discover_tools(&mut session).await
             .map_err(|e| ActionError::ExecutionError(format!("Failed to discover tools: {}", e)))?;
+
+        // 3.5. Add system prompt ...
         
         // 4. Add user message to this session
         let message = Message {
@@ -290,11 +279,7 @@ impl AgentExecutor for LlamaAgentExecutor {
     }
     
     async fn shutdown(&self) -> ActionResult<()> {
-        // Shutdown MCP server if initialized
-        if let Some(mcp_server) = self.mcp_server.get() {
-            mcp_server.shutdown().await
-                .map_err(|e| ActionError::ExecutionError(format!("Failed to shutdown MCP server: {}", e)))?;
-        }
+        // No cleanup needed
         Ok(())
     }
 }
@@ -442,7 +427,7 @@ impl PromptAction {
 
 ### 6. System Prompt
 
-LlamaAgent will need to use the .system.md system prompt with MessageRole::System as the very first prompt in each session.
+LlamaAgent will need to use the system prompt with MessageRole::System as the very first prompt in each session.
 
 Before rendering the system prompt -- for all models, include a new variable `model` in the prompt rendering context.
 

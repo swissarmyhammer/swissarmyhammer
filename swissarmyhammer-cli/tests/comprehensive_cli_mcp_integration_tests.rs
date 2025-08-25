@@ -5,73 +5,23 @@
 
 use anyhow::Result;
 use serde_json::json;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
-use tempfile::TempDir;
 
 mod test_utils;
-use test_utils::{create_semantic_test_guard, setup_git_repo};
-
-/// Test helper to create a comprehensive test environment
-fn setup_comprehensive_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
-    let temp_dir = TempDir::new()?;
-    let temp_path = temp_dir.path().to_path_buf();
-
-    // Create issues directory with sample issues
-    let issues_dir = temp_path.join("issues");
-    std::fs::create_dir_all(&issues_dir)?;
-
-    // Create test issues
-    std::fs::write(
-        issues_dir.join("TEST_001_integration_test.md"),
-        r#"# Integration Test Issue
-
-This is a test issue for comprehensive CLI-MCP integration testing.
-
-## Test Coverage
-- MCP tool execution
-- Error handling
-- Response formatting
-"#,
-    )?;
-
-    // Create .swissarmyhammer directory for memos
-    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
-    std::fs::create_dir_all(&swissarmyhammer_dir)?;
-
-    // Create source files for search testing
-    let src_dir = temp_path.join("src");
-    std::fs::create_dir_all(&src_dir)?;
-
-    std::fs::write(
-        src_dir.join("integration_test.rs"),
-        r#"
-// Comprehensive integration test source file
-use std::error::Error;
-
-/// Function for testing search functionality
-pub fn integration_test_function() -> Result<String, Box<dyn Error>> {
-    println!("Running integration test");
-    Ok("Integration test completed".to_string())
-}
-
-/// Error handling function for testing
-pub fn handle_integration_error(error: &str) -> Result<(), String> {
-    eprintln!("Integration error: {}", error);
-    Err("Integration error handled".to_string())
-}
-"#,
-    )?;
-
-    // Initialize git repository
-    setup_git_repo(&temp_path)?;
-
-    Ok((temp_dir, temp_path))
-}
+use test_utils::create_semantic_test_guard;
 
 /// Test all issue-related MCP tools can be executed
 #[tokio::test]
 async fn test_all_issue_tools_execution() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create .swissarmyhammer directory structure for issues
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    let issues_dir = swissarmyhammer_dir.join("issues");
+    std::fs::create_dir_all(&issues_dir)?;
+
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -125,7 +75,8 @@ async fn test_all_issue_tools_execution() -> Result<()> {
 /// Test all memo-related MCP tools can be executed
 #[tokio::test]
 async fn test_all_memo_tools_execution() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -205,7 +156,33 @@ async fn test_all_memo_tools_execution() -> Result<()> {
 // Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_all_search_tools_execution() -> Result<()> {
     let _guard = create_semantic_test_guard();
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create source files for search testing
+    let src_dir = temp_path.join("src");
+    std::fs::create_dir_all(&src_dir)?;
+
+    std::fs::write(
+        src_dir.join("integration_test.rs"),
+        r#"
+// Comprehensive integration test source file
+use std::error::Error;
+
+/// Function for testing search functionality
+pub fn integration_test_function() -> Result<String, Box<dyn Error>> {
+    println!("Running integration test");
+    Ok("Integration test completed".to_string())
+}
+
+/// Error handling function for testing
+pub fn handle_integration_error(error: &str) -> Result<(), String> {
+    eprintln!("Integration error: {}", error);
+    Err("Integration error handled".to_string())
+}
+"#,
+    )?;
+
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -233,7 +210,8 @@ async fn test_all_search_tools_execution() -> Result<()> {
 /// Test error propagation from MCP tools to CLI
 #[tokio::test]
 async fn test_mcp_error_propagation() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -265,7 +243,19 @@ async fn test_mcp_error_propagation() -> Result<()> {
 // Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_argument_passing_and_validation() -> Result<()> {
     let _guard = create_semantic_test_guard();
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create source files for search testing
+    let src_dir = temp_path.join("src");
+    std::fs::create_dir_all(&src_dir)?;
+
+    std::fs::write(
+        src_dir.join("integration_test.rs"),
+        r#"// Test file for search functionality
+pub fn test_function() -> String { "test".to_string() }"#,
+    )?;
+
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -315,7 +305,8 @@ async fn test_argument_passing_and_validation() -> Result<()> {
 /// Test response formatting utilities
 #[tokio::test]
 async fn test_response_formatting() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -360,7 +351,14 @@ async fn test_response_formatting() -> Result<()> {
 /// Test concurrent tool execution
 #[tokio::test]
 async fn test_concurrent_tool_execution() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create .swissarmyhammer directory structure for issues
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    let issues_dir = swissarmyhammer_dir.join("issues");
+    std::fs::create_dir_all(&issues_dir)?;
+
     let _context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -399,7 +397,8 @@ async fn test_concurrent_tool_execution() -> Result<()> {
 /// Test tool execution with complex data structures
 #[tokio::test]
 async fn test_complex_data_structures() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -444,7 +443,8 @@ fn example_code() {
 /// Test tool execution edge cases
 #[tokio::test]
 async fn test_tool_execution_edge_cases() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -484,7 +484,8 @@ async fn test_tool_execution_edge_cases() -> Result<()> {
 /// Test error message formatting and user-friendliness
 #[tokio::test]
 async fn test_error_message_formatting() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -523,7 +524,8 @@ async fn test_error_message_formatting() -> Result<()> {
 /// Test tool context initialization with different configurations
 #[tokio::test]
 async fn test_tool_context_configurations() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
 
     // Test with different working directories
     let context1 = CliToolContext::new_with_dir(&temp_path)
@@ -557,7 +559,8 @@ async fn test_tool_context_configurations() -> Result<()> {
 // Fixed: Limited patterns to specific files to avoid DuckDB timeout
 async fn test_mcp_tool_stress_conditions() -> Result<()> {
     let _guard = create_semantic_test_guard();
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -590,7 +593,14 @@ async fn test_mcp_tool_stress_conditions() -> Result<()> {
 /// Test MCP tool state consistency across operations
 #[tokio::test]
 async fn test_mcp_tool_state_consistency() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create .swissarmyhammer directory structure for issues
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    let issues_dir = swissarmyhammer_dir.join("issues");
+    std::fs::create_dir_all(&issues_dir)?;
+
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -635,7 +645,8 @@ async fn test_mcp_tool_state_consistency() -> Result<()> {
 /// Test MCP error boundaries and recovery
 #[tokio::test]
 async fn test_mcp_error_boundaries() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -665,7 +676,14 @@ async fn test_mcp_error_boundaries() -> Result<()> {
 /// Test comprehensive issue_show functionality with enhanced parameters
 #[tokio::test]
 async fn test_issue_show_comprehensive() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create .swissarmyhammer directory structure for issues
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    let issues_dir = swissarmyhammer_dir.join("issues");
+    std::fs::create_dir_all(&issues_dir)?;
+
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -787,7 +805,14 @@ async fn test_issue_show_comprehensive() -> Result<()> {
 /// Test issue_show performance and edge cases
 #[tokio::test]
 async fn test_issue_show_performance_and_edge_cases() -> Result<()> {
-    let (_temp_dir, temp_path) = setup_comprehensive_test_environment()?;
+    let _env = IsolatedTestEnvironment::new().unwrap();
+    let temp_path = _env.temp_dir();
+
+    // Create .swissarmyhammer directory structure for issues
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    let issues_dir = swissarmyhammer_dir.join("issues");
+    std::fs::create_dir_all(&issues_dir)?;
+
     let context = CliToolContext::new_with_dir(&temp_path)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;

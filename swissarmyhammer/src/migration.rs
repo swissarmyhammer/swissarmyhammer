@@ -12,14 +12,19 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! ```rust,no_run
 //! use swissarmyhammer::migration::{scan_existing_directories, validate_migration_safety};
+//! use std::path::Path;
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Scan current directory tree for all .swissarmyhammer directories
 //! let scan_result = scan_existing_directories()?;
 //!
 //! // Validate migration for a specific Git repository
+//! let git_root_path = Path::new(".");
 //! let migration_plan = validate_migration_safety(&git_root_path)?;
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::directory_utils::walk_files_with_extensions;

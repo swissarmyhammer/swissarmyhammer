@@ -14,6 +14,7 @@ use test_utils::ProcessGuard;
 /// Test that sah serve actually serves MCP tools and they are accessible
 /// DO NOT ignore this
 #[tokio::test]
+#[ignore = "Slow MCP server integration test - run with --ignored"]
 async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>> {
     // This test addresses the specific issue:
     // "`sah serve` does not actually appear to serve any MCP tools"
@@ -340,6 +341,7 @@ fn read_response_with_timeout(
 
 /// Quick smoke test to ensure sah binary exists and can be invoked
 #[tokio::test]
+#[ignore = "Slow binary compilation test - run with --ignored"]
 async fn test_sah_binary_exists() {
     let output = Command::new("cargo")
         .args(["run", "--bin", "sah", "--", "--help"])

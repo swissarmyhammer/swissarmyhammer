@@ -115,31 +115,6 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "Expensive CLI integration test - similar behavior tested elsewhere"]
-async fn test_prompt_command_with_abort_file() -> Result<()> {
-    cleanup_abort_file();
-
-    // Create abort file
-    create_abort_file("Prompt command abort test")?;
-
-    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["prompt", "test", "example"]).await?;
-    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
-
-    cleanup_abort_file();
-
-    // Even though prompt test doesn't execute workflows, it should still
-    // detect the abort file if the system is properly integrated
-    // For now, just verify the command can run with abort file present
-    // This may succeed or fail depending on internal workflow usage
-    println!(
-        "Prompt test output: exit_code={}, stderr={}",
-        result.exit_code, result.stderr
-    );
-    Ok(())
-}
-
-#[tokio::test]
 #[ignore = "Multiple CLI executions - expensive integration test"]
 async fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     cleanup_abort_file();
@@ -166,52 +141,6 @@ async fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     cleanup_abort_file();
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "Unicode test - file I/O behavior tested elsewhere"]
-async fn test_abort_file_with_unicode_reason() -> Result<()> {
-    cleanup_abort_file();
-
-    let workflow_content = r#"---
-name: Unicode Abort Test
-description: Test workflow with unicode abort
-initial_state: start
-states:
-  start:
-    name: Start
-    description: Starting state
-    is_final: false
-  end:
-    name: End
-    description: Final state
-    is_final: true
-transitions:
-  - from: start
-    to: end
-    condition:
-      type: always
-"#;
-
-    std::fs::write("unicode_abort_test.md", workflow_content)?;
-
-    let unicode_reason = "中文测试 🚫 Abort with émojis and ñoñ-ASCII";
-    create_abort_file(unicode_reason)?;
-
-    std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", "unicode_abort_test.md"]).await?;
-    std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
-
-    cleanup_abort_file();
-    let _ = std::fs::remove_file("unicode_abort_test.md");
-
-    assert_abort_error_handling(&result);
-
-    // Check that unicode is preserved in error message
-    let stderr = &result.stderr;
-    // Unicode might be in the error message depending on how it's propagated
-    println!("Unicode abort stderr: {stderr}");
     Ok(())
 }
 

@@ -84,7 +84,7 @@ use std::fs;
 use tempfile::TempDir;
 
 mod in_process_test_utils;
-use in_process_test_utils::run_sah_command_in_process;
+use in_process_test_utils::run_sah_command_in_process_with_dir;
 
 mod test_utils;
 use test_utils::{create_temp_dir, setup_git_repo};
@@ -294,15 +294,13 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create a simple test plan file
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
     // Test that the plan command starts execution (it should begin processing before timing out)
-    let result = run_sah_command_in_process(&["plan", plan_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path).await?;
 
     // The command should start executing (showing log output)
     // We're not testing full execution here due to AI service calls, so we accept either success or timeout
@@ -318,8 +316,7 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
         result.stderr
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -330,21 +327,19 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create a test plan file
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
     // Execute plan workflow in test mode using flow test
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "flow",
         "test",
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ])
+    ], &temp_path)
     .await?;
 
     assert!(
@@ -373,8 +368,7 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
         "Should achieve high coverage: {stdout}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -385,9 +379,7 @@ async fn test_plan_command_relative_path() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create subdirectory with plan file
     let plans_dir = temp_path.join("specification");
@@ -395,13 +387,13 @@ async fn test_plan_command_relative_path() -> Result<()> {
     let _plan_file = create_test_plan_file(&plans_dir, "relative-test.md", "Relative Path Test")?;
 
     // Test using flow test mode with relative path
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "flow",
         "test",
         "plan",
         "--var",
         "plan_filename=./specification/relative-test.md",
-    ])
+    ], &temp_path)
     .await?;
 
     assert!(
@@ -416,8 +408,7 @@ async fn test_plan_command_relative_path() -> Result<()> {
         "Should execute workflow in test mode: {stdout}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -428,21 +419,19 @@ async fn test_plan_command_absolute_path() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create plan file
     let plan_file = create_test_plan_file(&temp_path, "absolute-test.md", "Absolute Path Test")?;
 
     // Test using flow test mode with absolute path
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "flow",
         "test",
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ])
+    ], &temp_path)
     .await?;
 
     assert!(
@@ -457,8 +446,7 @@ async fn test_plan_command_absolute_path() -> Result<()> {
         "Should execute workflow successfully: {stdout}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -469,21 +457,19 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create complex plan file
     let plan_file = create_complex_plan_file(&temp_path, "advanced-feature.md")?;
 
     // Test complex plan using flow test mode
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "flow",
         "test",
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ])
+    ], &temp_path)
     .await?;
 
     assert!(
@@ -503,8 +489,7 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
         "Should show coverage report: {stdout}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -515,11 +500,9 @@ async fn test_plan_command_file_not_found() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["plan", "nonexistent-plan.md"]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent-plan.md"], &temp_path).await?;
 
     assert!(
         result.exit_code != 0,
@@ -534,8 +517,7 @@ async fn test_plan_command_file_not_found() -> Result<()> {
         "Should show file not found error: {stderr}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -546,15 +528,13 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create directory with same name as expected file
     let dir_path = temp_path.join("directory-not-file");
     fs::create_dir_all(&dir_path)?;
 
-    let result = run_sah_command_in_process(&["plan", dir_path.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path).await?;
 
     assert!(
         result.exit_code != 0,
@@ -567,8 +547,7 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
         "Should show appropriate error for directory: {stderr}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -579,15 +558,13 @@ async fn test_plan_command_empty_file() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create empty file
     let empty_file = temp_path.join("empty-plan.md");
     fs::write(&empty_file, "")?;
 
-    let result = run_sah_command_in_process(&["plan", empty_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
 
     // Empty file might still be processed, but should not create meaningful issues
     // The important thing is the command completes without crashing
@@ -596,8 +573,7 @@ async fn test_plan_command_empty_file() -> Result<()> {
         "Plan command should complete even with empty file"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -608,9 +584,7 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create some existing issues
     let issues_dir = temp_path.join("issues");
@@ -626,13 +600,13 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
     // Create and test plan workflow in test mode
     let plan_file = create_test_plan_file(&temp_path, "new-feature.md", "New Feature Plan")?;
 
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "flow",
         "test",
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ])
+    ], &temp_path)
     .await?;
 
     assert!(
@@ -658,8 +632,7 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
         "Should preserve existing issues: {existing_files:?}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -670,9 +643,7 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create plan file with spaces and special characters in name
     let plan_file = create_test_plan_file(
@@ -681,13 +652,13 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         "Special Characters Test",
     )?;
 
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "flow",
         "test",
         "plan",
         "--var",
         &format!("plan_filename={}", plan_file.display()),
-    ])
+    ], &temp_path)
     .await?;
 
     assert!(
@@ -702,8 +673,7 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         "Should execute workflow successfully: {stdout}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -728,22 +698,16 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
             )
             .unwrap();
 
-            // Change to temp directory for test
-            let original_dir = std::env::current_dir().unwrap();
-            std::env::set_current_dir(&temp_path).unwrap();
-
-            let result = run_sah_command_in_process(&[
+            // Use explicit working directory instead of global directory change
+            let result = run_sah_command_in_process_with_dir(&[
                 "flow",
                 "test",
                 "plan",
                 "--var",
                 &format!("plan_filename={}", plan_file.display()),
-            ])
+            ], &temp_path)
             .await
             .expect("Failed to run plan workflow test");
-
-            // Restore original directory (ignore errors since other concurrent tasks may have changed it)
-            let _ = std::env::set_current_dir(original_dir);
 
             (i, result.exit_code == 0)
         });
@@ -767,11 +731,9 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["plan", "definitely-nonexistent-plan.md"]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", "definitely-nonexistent-plan.md"], &temp_path).await?;
 
     assert!(
         result.exit_code != 0,
@@ -797,8 +759,7 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
         "Should include actionable suggestions: {stderr}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -809,15 +770,13 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create empty file
     let empty_file = temp_path.join("empty-plan.md");
     fs::write(&empty_file, "")?;
 
-    let result = run_sah_command_in_process(&["plan", empty_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
 
     // Empty file should trigger enhanced error handling
     let stderr = &result.stderr;
@@ -837,8 +796,7 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -849,15 +807,13 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create file with only whitespace
     let whitespace_file = temp_path.join("whitespace-plan.md");
     fs::write(&whitespace_file, "   \n\t  \n  ")?;
 
-    let result = run_sah_command_in_process(&["plan", whitespace_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", whitespace_file.to_str().unwrap()], &temp_path).await?;
 
     let stderr = &result.stderr;
 
@@ -874,8 +830,7 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -886,15 +841,13 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create directory with same name as expected file
     let dir_path = temp_path.join("directory-not-file");
     fs::create_dir_all(&dir_path)?;
 
-    let result = run_sah_command_in_process(&["plan", dir_path.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path).await?;
 
     assert!(
         result.exit_code != 0,
@@ -916,8 +869,7 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
         "Should provide specific guidance for directory error: {stderr}"
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -928,16 +880,14 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create a large file (over the validation limit)
     let large_file = temp_path.join("huge-plan.md");
     let large_content = "x".repeat(11 * 1024 * 1024); // 11MB - over default 10MB limit
     fs::write(&large_file, large_content)?;
 
-    let result = run_sah_command_in_process(&["plan", large_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", large_file.to_str().unwrap()], &temp_path).await?;
 
     let stderr = &result.stderr;
 
@@ -954,8 +904,7 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -966,16 +915,14 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create file with binary content (null bytes)
     let binary_file = temp_path.join("binary-plan.md");
     let binary_content = b"# Plan with\0null bytes\0in content";
     fs::write(&binary_file, binary_content)?;
 
-    let result = run_sah_command_in_process(&["plan", binary_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", binary_file.to_str().unwrap()], &temp_path).await?;
 
     let stderr = &result.stderr;
 
@@ -997,8 +944,7 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -1009,13 +955,11 @@ async fn test_plan_enhanced_error_color_output() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Test with explicit NO_COLOR environment variable
     std::env::set_var("NO_COLOR", "1");
-    let result = run_sah_command_in_process(&["plan", "nonexistent.md"]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
     std::env::remove_var("NO_COLOR");
 
     let stderr = &result.stderr;
@@ -1029,8 +973,7 @@ async fn test_plan_enhanced_error_color_output() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -1041,12 +984,10 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Test file not found exit code
-    let result = run_sah_command_in_process(&["plan", "nonexistent.md"]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
 
     assert_eq!(
         result.exit_code,
@@ -1058,7 +999,7 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
     let empty_file = temp_path.join("empty.md");
     fs::write(&empty_file, "")?;
 
-    let result2 = run_sah_command_in_process(&["plan", empty_file.to_str().unwrap()]).await?;
+    let result2 = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
 
     // Empty file should return warning exit code if detected as empty
     let stderr = &result2.stderr;
@@ -1070,8 +1011,7 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -1084,9 +1024,7 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
     let _temp_dir = create_temp_dir()?;
     let temp_path = _temp_dir.path().to_path_buf();
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
     // Create necessary directories (but NOT issues directory)
     let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
@@ -1105,7 +1043,7 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
     let issues_file = temp_path.join("issues");
     fs::write(&issues_file, "not a directory")?;
 
-    let result = run_sah_command_in_process(&["plan", plan_file.to_str().unwrap()]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path).await?;
 
     let stderr = &result.stderr;
 
@@ -1122,8 +1060,7 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }
@@ -1134,11 +1071,9 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
     let _guard = create_test_home_guard();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["plan", "structured-error-test.md"]).await?;
+    let result = run_sah_command_in_process_with_dir(&["plan", "structured-error-test.md"], &temp_path).await?;
 
     let stderr = &result.stderr;
 
@@ -1163,8 +1098,7 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
+
 
     Ok(())
 }

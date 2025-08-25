@@ -11,7 +11,7 @@ mod test_utils;
 use test_utils::setup_git_repo;
 
 mod in_process_test_utils;
-use in_process_test_utils::run_sah_command_in_process;
+use in_process_test_utils::{run_sah_command_in_process, run_sah_command_in_process_with_dir};
 
 /// Setup function for error scenario testing using IsolatedTestHome
 fn setup_error_test_environment() -> Result<(IsolatedTestHome, TempDir, std::path::PathBuf)> {
@@ -42,12 +42,11 @@ This issue exists for error scenario testing.
 async fn test_invalid_issue_operations() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
     // Test showing non-existent issue
-    let result = run_sah_command_in_process(&["issue", "show", "nonexistent_issue"]).await?;
+    // Use explicit working directory instead of global directory change to avoid race conditions
+    let result =
+        run_sah_command_in_process_with_dir(&["issue", "show", "nonexistent_issue"], &temp_path)
+            .await?;
     assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
     assert!(
         result.stderr.contains("Error")
@@ -58,7 +57,9 @@ async fn test_invalid_issue_operations() -> Result<()> {
     );
 
     // Test working on non-existent issue
-    let work_result = run_sah_command_in_process(&["issue", "work", "nonexistent_issue"]).await?;
+    let work_result =
+        run_sah_command_in_process_with_dir(&["issue", "work", "nonexistent_issue"], &temp_path)
+            .await?;
     assert_ne!(
         work_result.exit_code, 0,
         "Should fail for non-existent issue work"
@@ -72,8 +73,11 @@ async fn test_invalid_issue_operations() -> Result<()> {
     );
 
     // Test completing non-existent issue
-    let complete_result =
-        run_sah_command_in_process(&["issue", "complete", "nonexistent_issue"]).await?;
+    let complete_result = run_sah_command_in_process_with_dir(
+        &["issue", "complete", "nonexistent_issue"],
+        &temp_path,
+    )
+    .await?;
     assert_ne!(
         complete_result.exit_code, 0,
         "Should fail for non-existent issue complete"
@@ -87,13 +91,16 @@ async fn test_invalid_issue_operations() -> Result<()> {
     );
 
     // Test updating non-existent issue
-    let update_result = run_sah_command_in_process(&[
-        "issue",
-        "update",
-        "nonexistent_issue",
-        "--content",
-        "Updated content",
-    ])
+    let update_result = run_sah_command_in_process_with_dir(
+        &[
+            "issue",
+            "update",
+            "nonexistent_issue",
+            "--content",
+            "Updated content",
+        ],
+        &temp_path,
+    )
     .await?;
     assert_ne!(
         update_result.exit_code, 0,
@@ -106,9 +113,6 @@ async fn test_invalid_issue_operations() -> Result<()> {
         "Should show error for non-existent issue update: {}",
         update_result.stderr
     );
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }
@@ -197,20 +201,19 @@ async fn _test_invalid_memo_operations_disabled() -> Result<()> {
 async fn test_invalid_command_arguments() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
     // Test completely invalid command
+    // Use explicit working directory instead of global directory change to avoid race conditions
     let invalid_cmd_result =
-        run_sah_command_in_process(&["completely", "invalid", "command"]).await?;
+        run_sah_command_in_process_with_dir(&["completely", "invalid", "command"], &temp_path)
+            .await?;
     assert_eq!(
         invalid_cmd_result.exit_code, 2,
         "Invalid command should return clap usage error code"
     );
 
     // Test invalid subcommand
-    let invalid_sub_result = run_sah_command_in_process(&["issue", "invalid_subcommand"]).await?;
+    let invalid_sub_result =
+        run_sah_command_in_process_with_dir(&["issue", "invalid_subcommand"], &temp_path).await?;
     assert_eq!(
         invalid_sub_result.exit_code, 2,
         "Invalid subcommand should return clap usage error code"
@@ -218,15 +221,19 @@ async fn test_invalid_command_arguments() -> Result<()> {
 
     // Test invalid flags
     let invalid_flag_result =
-        run_sah_command_in_process(&["issue", "list", "--invalid-flag"]).await?;
+        run_sah_command_in_process_with_dir(&["issue", "list", "--invalid-flag"], &temp_path)
+            .await?;
     assert_eq!(
         invalid_flag_result.exit_code, 2,
         "Invalid flag should return clap usage error code"
     );
 
     // Test invalid format option - this should succeed since MCP doesn't validate format at CLI level
-    let invalid_format_result =
-        run_sah_command_in_process(&["issue", "list", "--format", "invalid_format"]).await?;
+    let invalid_format_result = run_sah_command_in_process_with_dir(
+        &["issue", "list", "--format", "invalid_format"],
+        &temp_path,
+    )
+    .await?;
     assert_eq!(
         invalid_format_result.exit_code, 2,
         "Invalid format should return clap usage error code"
@@ -239,9 +246,6 @@ async fn test_invalid_command_arguments() -> Result<()> {
         invalid_format_result.stderr
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
     Ok(())
 }
 
@@ -250,17 +254,14 @@ async fn test_invalid_command_arguments() -> Result<()> {
 async fn test_storage_backend_errors() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
     // Create a file where issues directory should be to cause storage errors
     let issues_path = temp_path.join("issues");
     std::fs::remove_dir_all(&issues_path).ok(); // Remove existing directory
     std::fs::write(&issues_path, "This is a file, not a directory")?;
 
     // Test operations that require issues directory
-    let result = run_sah_command_in_process(&["issue", "list"]).await?;
+    // Use explicit working directory instead of global directory change to avoid race conditions
+    let result = run_sah_command_in_process_with_dir(&["issue", "list"], &temp_path).await?;
     assert_ne!(
         result.exit_code, 0,
         "Should fail when issues directory is not accessible"
@@ -274,9 +275,6 @@ async fn test_storage_backend_errors() -> Result<()> {
         result.stderr
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
     Ok(())
 }
 
@@ -286,10 +284,6 @@ async fn test_git_related_errors() -> Result<()> {
     // Create a separate temporary directory without git for this test
     let temp_dir = tempfile::TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
-
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
 
     // Create directory structure without git repository
     let issues_dir = temp_path.join("issues");
@@ -301,7 +295,10 @@ async fn test_git_related_errors() -> Result<()> {
     )?;
 
     // Test operations that might require git without git repository
-    let result = run_sah_command_in_process(&["issue", "work", "GIT_001_test_issue"]).await?;
+    // Use explicit working directory instead of global directory change to avoid race conditions
+    let result =
+        run_sah_command_in_process_with_dir(&["issue", "work", "GIT_001_test_issue"], &temp_path)
+            .await?;
     assert_ne!(
         result.exit_code, 0,
         "Should fail when git repository is not available"
@@ -315,9 +312,6 @@ async fn test_git_related_errors() -> Result<()> {
         result.stderr
     );
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
     Ok(())
 }
 /// Test resource exhaustion scenarios
@@ -325,19 +319,19 @@ async fn test_git_related_errors() -> Result<()> {
 async fn test_resource_exhaustion() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
     // Test with very large content (potential memory issues)
     let large_content = "A".repeat(1_000_000); // 1MB of content
-    let result = run_sah_command_in_process(&[
-        "issue",
-        "create",
-        "large_content_test",
-        "--content",
-        &large_content,
-    ])
+                                               // Use explicit working directory instead of global directory change to avoid race conditions
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "issue",
+            "create",
+            "large_content_test",
+            "--content",
+            &large_content,
+        ],
+        &temp_path,
+    )
     .await?;
 
     // Should either succeed or fail gracefully (not crash)
@@ -352,9 +346,6 @@ async fn test_resource_exhaustion() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
     Ok(())
 }
 
@@ -362,10 +353,6 @@ async fn test_resource_exhaustion() -> Result<()> {
 #[tokio::test]
 async fn test_malformed_input_handling() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
-
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
 
     // Test with special characters in issue names
     let special_names = vec![
@@ -382,13 +369,17 @@ async fn test_malformed_input_handling() -> Result<()> {
     ];
 
     for name in special_names {
-        let result = run_sah_command_in_process(&[
-            "issue",
-            "create",
-            name,
-            "--content",
-            "Test content with special name",
-        ])
+        // Use explicit working directory instead of global directory change to avoid race conditions
+        let result = run_sah_command_in_process_with_dir(
+            &[
+                "issue",
+                "create",
+                name,
+                "--content",
+                "Test content with special name",
+            ],
+            &temp_path,
+        )
         .await?;
 
         // Should either succeed (if name is sanitized) or fail gracefully
@@ -404,9 +395,6 @@ async fn test_malformed_input_handling() -> Result<()> {
         }
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
     Ok(())
 }
 
@@ -414,10 +402,6 @@ async fn test_malformed_input_handling() -> Result<()> {
 #[tokio::test]
 async fn test_exit_code_consistency() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
-
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
 
     // Test that similar error conditions produce consistent exit codes
     let error_commands = vec![
@@ -428,7 +412,8 @@ async fn test_exit_code_consistency() -> Result<()> {
 
     let mut exit_codes = vec![];
     for cmd in error_commands {
-        let result = run_sah_command_in_process(&cmd).await?;
+        // Use explicit working directory instead of global directory change to avoid race conditions
+        let result = run_sah_command_in_process_with_dir(&cmd, &temp_path).await?;
         assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
         exit_codes.push(result.exit_code);
     }
@@ -442,9 +427,6 @@ async fn test_exit_code_consistency() -> Result<()> {
         );
     }
 
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
-
     Ok(())
 }
 
@@ -453,13 +435,13 @@ async fn test_exit_code_consistency() -> Result<()> {
 async fn test_error_message_consistency() -> Result<()> {
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Change to temp directory for test
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
     // Test that error messages are consistent and informative
-    let result =
-        run_sah_command_in_process(&["issue", "show", "definitely_nonexistent_issue"]).await?;
+    // Use explicit working directory instead of global directory change to avoid race conditions
+    let result = run_sah_command_in_process_with_dir(
+        &["issue", "show", "definitely_nonexistent_issue"],
+        &temp_path,
+    )
+    .await?;
     assert_ne!(result.exit_code, 0, "Should fail for non-existent issue");
 
     // Error messages should be:
@@ -486,9 +468,6 @@ async fn test_error_message_consistency() -> Result<()> {
         "Error messages should be user-friendly, not technical: {}",
         result.stderr
     );
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir)?;
 
     Ok(())
 }

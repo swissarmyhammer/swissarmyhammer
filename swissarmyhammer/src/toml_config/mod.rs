@@ -274,7 +274,25 @@ mod module_tests {
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
+        // Ensure we have a valid current directory before proceeding
+        let original_dir = match std::env::current_dir() {
+            Ok(dir) => {
+                // Verify the directory still exists and is accessible
+                if !dir.exists() {
+                    // Fall back to temp directory if current dir was deleted by another test
+                    std::env::set_current_dir(temp_dir.path()).unwrap();
+                    temp_dir.path().to_path_buf()
+                } else {
+                    dir
+                }
+            }
+            Err(_) => {
+                // If current_dir fails, set to temp dir as a fallback
+                std::env::set_current_dir(temp_dir.path()).unwrap();
+                temp_dir.path().to_path_buf()
+            }
+        };
+
         std::env::set_current_dir(&sub_dir).unwrap();
 
         // Use panic::catch_unwind to ensure directory is restored even on panic

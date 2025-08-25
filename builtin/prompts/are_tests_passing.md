@@ -9,10 +9,12 @@ We want to know if unit tests are passing.
 
 ## Rules
 
-If you run tests, on any failure, respond only with NO.
-If you run tests, and they all pass, respond only with YES.
+If you run tests, on any failure, respond only with NO
+If you run tests, and they all pass, respond only with YES
+When you run tests, use notify_create to let the use know, including the command you used
+Write failing tests by name to TEST_FAILURES.md
 
 ### Rust
 
 - Run tests with `cargo nextest run --fail-fast`
-  -- do not try to pass this --timeout
+  -- do not try to pass --timeout

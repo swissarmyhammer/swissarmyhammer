@@ -7,7 +7,7 @@ use std::fs;
 use tempfile::TempDir;
 
 mod in_process_test_utils;
-use in_process_test_utils::run_sah_command_in_process;
+use in_process_test_utils::run_sah_command_in_process_with_dir;
 
 /// Test that memo commands require Git repository - DISABLED: Memo commands only available with dynamic-cli feature
 // #[tokio::test]
@@ -15,14 +15,12 @@ use in_process_test_utils::run_sah_command_in_process;
 async fn _test_memo_commands_require_git_repository_disabled() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["memo", "list"]).await;
+    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     assert_ne!(output.exit_code, 0, "Command should fail");
@@ -53,14 +51,12 @@ async fn _test_memo_commands_require_git_repository_disabled() {
 async fn test_issue_commands_require_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["issue", "list"]).await;
+    let result = run_sah_command_in_process_with_dir(&["issue", "list"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     // Issue commands currently succeed outside git repos and show "No issues found."
@@ -79,79 +75,19 @@ async fn test_issue_commands_require_git_repository() {
     );
 }
 
-/// Test that search commands have been migrated to dynamic CLI - DISABLED: Search commands only available with dynamic-cli feature
-#[tokio::test]
-#[ignore = "Search commands only available with dynamic-cli feature"]
-async fn test_search_commands_require_git_repository() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    // Without git repository, search commands should fail gracefully
-    let result = run_sah_command_in_process(&["search", "index", "**/*.rs"]).await;
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
-
-    let output = result.unwrap();
-    assert_eq!(
-        output.exit_code, 2,
-        "Command should fail with 'command not found' error"
-    );
-
-    assert!(
-        output.stderr.contains("unrecognized subcommand 'search'"),
-        "Should indicate search command error: {}",
-        output.stderr
-    );
-}
-
-/// Test that search query commands have been migrated to dynamic CLI - DISABLED: Search commands only available with dynamic-cli feature
-#[tokio::test]
-#[ignore = "Search commands only available with dynamic-cli feature"]
-async fn test_search_query_requires_git_repository() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    // Without git repository, search commands should fail gracefully
-    let result = run_sah_command_in_process(&["search", "query", "test"]).await;
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
-
-    let output = result.unwrap();
-    assert_eq!(
-        output.exit_code, 2,
-        "Command should fail with 'command not found' error"
-    );
-
-    assert!(
-        output.stderr.contains("unrecognized subcommand 'search'"),
-        "Should indicate search command error: {}",
-        output.stderr
-    );
-}
-
 /// Test error message format consistency - DISABLED: Memo commands only available with dynamic-cli feature
 // #[tokio::test]
 // #[ignore = "Memo commands only available with dynamic-cli feature"]
 async fn _test_error_message_format_consistency_disabled() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
     // Test memo command error format
-    let result = run_sah_command_in_process(&["memo", "create", "test"]).await;
+    let result = run_sah_command_in_process_with_dir(&["memo", "create", "test"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     assert_ne!(output.exit_code, 0, "Command should fail");
@@ -187,15 +123,13 @@ async fn test_commands_work_in_git_repository() {
     fs::create_dir_all(temp_dir.path().join(".swissarmyhammer"))
         .expect("Failed to create directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
     // Test that memo list command now works (or at least doesn't fail with Git repository error)
-    let result = run_sah_command_in_process(&["memo", "list"]).await;
+    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     // Should not contain Git repository requirement error
@@ -211,14 +145,12 @@ async fn test_commands_work_in_git_repository() {
 async fn test_git_repository_error_exit_codes() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["memo", "list"]).await;
+    let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     eprintln!(
@@ -237,38 +169,6 @@ async fn test_git_repository_error_exit_codes() {
     assert_eq!(output.exit_code, 0, "Memo commands currently succeed");
 }
 
-/// Test that file commands don't require Git repository (should work)
-#[tokio::test]
-#[ignore = "File commands available through dynamic CLI architecture"]
-async fn test_file_commands_work_without_git() {
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-
-    // Create a test file
-    let test_file = temp_dir.path().join("test.txt");
-    fs::write(&test_file, "Hello, world!").expect("Failed to create test file");
-
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
-
-    let result = run_sah_command_in_process(&["file", "read", test_file.to_str().unwrap()]).await;
-
-    // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
-
-    let output = result.unwrap();
-    assert_eq!(
-        output.exit_code, 0,
-        "Command should succeed. stderr: {}",
-        output.stderr
-    );
-    assert!(
-        output.stdout.contains("Hello, world!"),
-        "Should contain file content: {}",
-        output.stdout
-    );
-}
-
 // Removed test_shell_commands_work_without_git - shell command was migrated away from static CLI
 
 /// Test that web search commands don't require Git repository
@@ -279,14 +179,12 @@ async fn test_web_search_works_without_git() {
     // Note: This test might fail if web search is not available or has issues,
     // but it should not fail due to Git repository requirements
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["web-search", "search", "test"]).await;
+    let result = run_sah_command_in_process_with_dir(&["web-search", "search", "test"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     // Should not contain Git repository requirement error
@@ -302,22 +200,20 @@ async fn test_web_search_works_without_git() {
 async fn test_error_messages_are_actionable() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&[
+    let result = run_sah_command_in_process_with_dir(&[
         "issue",
         "create",
         "--name",
         "test",
         "--content",
         "Test issue content",
-    ])
+    ], temp_dir.path())
     .await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     eprintln!(
@@ -351,14 +247,12 @@ async fn test_error_messages_are_actionable() {
 async fn _test_error_context_preservation_disabled() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Save current directory and change to temp directory
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp_dir.path()).unwrap();
+    // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process(&["memo", "get", "invalid_id"]).await;
+    let result = run_sah_command_in_process_with_dir(&["memo", "get", "invalid_id"], temp_dir.path()).await;
 
     // Restore original directory
-    std::env::set_current_dir(original_dir).unwrap();
+
 
     let output = result.unwrap();
     assert_ne!(output.exit_code, 0, "Command should fail");

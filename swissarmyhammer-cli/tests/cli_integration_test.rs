@@ -710,6 +710,7 @@ async fn test_root_validate_help() -> Result<()> {
 /// Test validation with invalid YAML format
 #[tokio::test]
 async fn test_root_validate_invalid_yaml() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
@@ -731,7 +732,6 @@ Test content"#,
 
     std::env::set_var("HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate", "--quiet"]).await?;
-    std::env::remove_var("HOME");
 
     // Should have validation errors
     assert_ne!(
@@ -745,6 +745,7 @@ Test content"#,
 /// Test validation with missing required fields
 #[tokio::test]
 async fn test_root_validate_missing_fields() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
@@ -773,7 +774,6 @@ This is line 6 of content."#,
 
     std::env::set_var("HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate", "--format", "json"]).await?;
-    std::env::remove_var("HOME");
 
     // Should have validation errors
     assert_eq!(
@@ -793,6 +793,7 @@ This is line 6 of content."#,
 /// Test validation with undefined template variables
 #[tokio::test]
 async fn test_root_validate_undefined_variables() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
@@ -815,7 +816,6 @@ And this uses {{ another_undefined }} too."#,
 
     std::env::set_var("HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate"]).await?;
-    std::env::remove_var("HOME");
 
     // Should have validation errors
     assert_eq!(
@@ -934,6 +934,7 @@ async fn test_root_validate_empty_workflow_dirs() -> Result<()> {
 /// Test validation with mix of valid and invalid prompts
 #[tokio::test]
 async fn test_root_validate_mixed_valid_invalid_prompts() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
@@ -976,7 +977,6 @@ This uses {{ undefined }} variable."#,
 
     std::env::set_var("HOME", temp_dir.path());
     let result = run_sah_command_in_process(&["validate", "--format", "json"]).await?;
-    std::env::remove_var("HOME");
 
     // Should have errors due to invalid prompts
     assert_eq!(
@@ -1133,6 +1133,7 @@ async fn test_root_validate_special_chars_in_paths() -> Result<()> {
 /// Test validation quiet mode hides warnings from output and summary
 #[tokio::test]
 async fn test_root_validate_quiet_mode_warnings_behavior() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
@@ -1175,7 +1176,6 @@ This prompt uses {{ used_var | default: "default_value" }} but not unused_var, c
 
     // Test in normal mode - should show warnings and summary
     let normal_result = run_sah_command_in_process(&["validate"]).await?;
-    std::env::remove_var("HOME");
 
     // With warnings present, exit code should be 1 (warnings) not 0 (success) or 2 (errors)
     assert_eq!(
@@ -1206,6 +1206,7 @@ This prompt uses {{ used_var | default: "default_value" }} but not unused_var, c
 /// Test validation quiet mode behavior when both errors and warnings exist
 #[tokio::test]
 async fn test_root_validate_quiet_mode_with_errors_and_warnings() -> Result<()> {
+    let _guard = IsolatedTestEnvironment::new()?;
     let temp_dir = TempDir::new()?;
     let prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
@@ -1280,7 +1281,6 @@ And this uses {{ another_undefined }} too."#,
 
     // Test in normal mode for comparison - should show both errors and warnings
     let normal_result = run_sah_command_in_process(&["validate"]).await?;
-    std::env::remove_var("HOME");
 
     // Should also return exit code 2 (errors take precedence)
     assert_eq!(

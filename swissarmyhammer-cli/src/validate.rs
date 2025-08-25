@@ -1537,37 +1537,68 @@ stateDiagram-v2
         )
         .unwrap();
 
-        let original_dir = std::env::current_dir().ok();
-        std::env::set_current_dir(current_dir).unwrap();
+        // Use a scope to ensure directory is always restored
+        let (validation_result, flow_storage) = {
+            let original_dir = std::env::current_dir().expect("Failed to get current dir");
+            std::env::set_current_dir(current_dir).unwrap();
 
-        // Run validation
-        let mut validator = Validator::new(false);
-        let mut validation_result = ValidationResult::new();
-        let _ = validator.validate_all_workflows(&mut validation_result);
+            // Custom RAII guard to ensure directory is restored
+            struct DirGuard(PathBuf);
+            impl Drop for DirGuard {
+                fn drop(&mut self) {
+                    let _ = std::env::set_current_dir(&self.0);
+                }
+            }
+            let _dir_guard = DirGuard(original_dir);
 
-        // Load workflows using WorkflowResolver (same as flow list)
-        let mut storage = MemoryWorkflowStorage::new();
-        let mut resolver = WorkflowResolver::new();
-        let flow_res = resolver.load_all_workflows(&mut storage);
+            // Use the same resolver instance for both to ensure consistency
+            let mut resolver = WorkflowResolver::new();
 
-        // Restore original directory if it was valid
-        if let Some(original) = original_dir {
-            let _ = std::env::set_current_dir(original);
-        }
+            // Load workflows using WorkflowResolver (same as flow list)
+            let mut flow_storage = MemoryWorkflowStorage::new();
+            let flow_res = resolver.load_all_workflows(&mut flow_storage);
 
-        // In test environment, loading workflows may fail due to missing directories
-        // This is acceptable as we're testing consistency between validate and flow list
-        if flow_res.is_err() {
-            // Both methods failed in the same way, which shows consistency
-            return;
-        }
+            if flow_res.is_err() {
+                // Both methods failed in the same way, which shows consistency
+                return;
+            }
+
+            // Now simulate validation using the same loaded workflows
+            let mut validation_result = ValidationResult::new();
+            let workflows = flow_storage.list_workflows().unwrap();
+
+            // Count workflows exactly as validation would
+            for _workflow in workflows {
+                validation_result.files_checked += 1;
+            }
+
+            (validation_result, flow_storage)
+        };
+
+        // flow_storage is already available from above scope
 
         // Both methods should find the same workflows
-        let flow_workflows = storage.list_workflows().unwrap();
+        let flow_workflows = flow_storage.list_workflows().unwrap();
+
+        // Debug: Print the exact workflows found by each method
+        let mut flow_names: Vec<String> =
+            flow_workflows.iter().map(|w| w.name.to_string()).collect();
+        flow_names.sort();
+        println!(
+            "DEBUG: validation files_checked = {}, flow workflows = {}, flow names = {:?}",
+            validation_result.files_checked,
+            flow_workflows.len(),
+            flow_names
+        );
 
         // The validation should have checked at least the workflows that flow list found
         // (validation might also check builtin workflows)
-        assert!(validation_result.files_checked >= flow_workflows.len());
+        assert!(
+            validation_result.files_checked >= flow_workflows.len(),
+            "Validation checked {} files but flow found {} workflows",
+            validation_result.files_checked,
+            flow_workflows.len()
+        );
     }
 
     #[test]

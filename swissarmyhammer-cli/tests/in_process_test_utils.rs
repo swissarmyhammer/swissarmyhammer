@@ -17,14 +17,47 @@ pub struct CapturedOutput {
     pub exit_code: i32,
 }
 
+/// Execute any CLI command with explicit working directory
+///
+/// This version allows specifying the working directory explicitly to avoid global state issues
+#[allow(dead_code)] // Used by tests, false positive from compiler
+pub async fn run_sah_command_in_process_with_dir(
+    args: &[&str],
+    working_dir: &std::path::Path,
+) -> Result<CapturedOutput> {
+    match run_sah_command_in_process_inner_with_dir(args, working_dir).await {
+        Ok(output) => Ok(output),
+        Err(e) => Ok(CapturedOutput {
+            stdout: String::new(),
+            stderr: format!(
+                "Unexpected error in run_sah_command_in_process_with_dir: {}",
+                e
+            ),
+            exit_code: 125, // General error exit code
+        }),
+    }
+}
+
 /// Execute any CLI command, using in-process for supported commands, subprocess for others
 ///
 /// This is the single unified function all tests should use instead of spawning subprocesses
 pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput> {
-    eprintln!(
-        "DEBUG: run_sah_command_in_process called with args: {:?}",
-        args
-    );
+    // Wrap the entire function in error handling to ensure we never return Result::Err
+    let current_dir = std::env::current_dir()?;
+    match run_sah_command_in_process_inner_with_dir(args, &current_dir).await {
+        Ok(output) => Ok(output),
+        Err(e) => Ok(CapturedOutput {
+            stdout: String::new(),
+            stderr: format!("Unexpected error in run_sah_command_in_process: {}", e),
+            exit_code: 125, // General error exit code
+        }),
+    }
+}
+
+async fn run_sah_command_in_process_inner_with_dir(
+    args: &[&str],
+    working_dir: &std::path::Path,
+) -> Result<CapturedOutput> {
     use swissarmyhammer_cli::cli::Cli;
 
     // Create CLI with the provided arguments (skip program name)
@@ -41,12 +74,7 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
 
     // For dynamic commands, always use subprocess
     if is_dynamic_command {
-        eprintln!(
-            "DEBUG: Dynamic command detected: {}, going directly to subprocess",
-            args[0]
-        );
-        let can_run_in_process = false;
-        eprintln!("DEBUG: can_run_in_process: {}", can_run_in_process);
+        // Skip to subprocess execution
     } else {
         // Parse the CLI arguments for non-dynamic commands
         let cli = match Cli::try_parse_from(args_with_program.clone()) {
@@ -55,8 +83,6 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
                 use clap::error::ErrorKind;
                 // Handle help/version which are "successful" parse errors
                 let error_str = e.to_string();
-                eprintln!("DEBUG: CLI parsing failed: {}", error_str);
-                eprintln!("DEBUG: Error kind: {:?}", e.kind());
                 match e.kind() {
                     ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
                         return Ok(CapturedOutput {
@@ -78,7 +104,6 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
         };
 
         // Check if this is a command we can run in-process
-        eprintln!("DEBUG: Parsed CLI command: {:?}", cli.command);
         let can_run_in_process = matches!(
             cli.command,
             Some(Commands::Validate { .. }) |
@@ -88,10 +113,8 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
             Some(Commands::Prompt { .. }) |      // Add Prompt command support
             None
         );
-        eprintln!("DEBUG: can_run_in_process: {}", can_run_in_process);
 
         if can_run_in_process {
-            eprintln!("DEBUG: Running command in-process");
             // Execute in-process with stdout/stderr capture
             let (stdout, stderr, exit_code) = match execute_cli_command_with_capture(cli).await {
                 Ok(result) => result,
@@ -113,7 +136,6 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
     }
 
     // If we reach here, we need to use subprocess
-    eprintln!("DEBUG: Falling back to subprocess execution");
 
     // Fall back to subprocess for commands we can't run in-process with timeout
     use tokio::time::{timeout, Duration};
@@ -141,14 +163,35 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
                 env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
             )
         };
-        eprintln!("DEBUG: Using binary path: {}", binary_path);
-        let output = tokio::process::Command::new(binary_path)
+
+        // Validate that the binary exists before trying to execute it
+        let binary_path_buf = std::path::Path::new(&binary_path);
+        if !binary_path_buf.exists() {
+            return Ok::<_, anyhow::Error>(CapturedOutput {
+                stdout: String::new(),
+                stderr: format!("Binary not found at path: {}", binary_path),
+                exit_code: 127, // Command not found exit code
+            });
+        }
+
+        // Use explicit working directory instead of global current directory
+        let output = match tokio::process::Command::new(&binary_path)
             .args(args)
-            .current_dir(std::env::current_dir().unwrap()) // Inherit current working directory
+            .current_dir(working_dir) // Use explicit working directory parameter
             .kill_on_drop(true) // Ensure the process is killed if timeout occurs
             .output()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to execute subprocess: {}", e))?;
+        {
+            Ok(output) => output,
+            Err(e) => {
+                // Instead of propagating the error, return it as a failed command execution
+                return Ok::<_, anyhow::Error>(CapturedOutput {
+                    stdout: String::new(),
+                    stderr: format!("Failed to execute subprocess {}: {}", binary_path, e),
+                    exit_code: 126, // Cannot execute exit code
+                });
+            }
+        };
 
         Ok::<_, anyhow::Error>(CapturedOutput {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -158,7 +201,11 @@ pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput>
     };
 
     match timeout(Duration::from_secs(60), command_future).await {
-        Ok(result) => result,
+        Ok(result) => Ok(result.unwrap_or_else(|e| CapturedOutput {
+            stdout: String::new(),
+            stderr: format!("Command execution error: {}", e),
+            exit_code: 125, // General error exit code
+        })),
         Err(_) => {
             Ok(CapturedOutput {
                 stdout: String::new(),
@@ -378,7 +425,6 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             }
         }
         Some(Commands::Prompt { subcommand }) => {
-            eprintln!("DEBUG: Handling prompt command: {:?}", subcommand);
             // Mock implementation that simulates the expected behavior based on test requirements
             use swissarmyhammer_cli::cli::PromptSubcommand;
 
@@ -428,22 +474,15 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                                     let author = variables.get("author").unwrap_or(&empty_str);
                                     let version = variables.get("version").unwrap_or(&empty_str);
 
-                                    // Debug print to see what we're generating
-                                    eprintln!("DEBUG: variables = {:?}", variables);
-                                    let result = format!(
+                                    format!(
                                         "Content: {}\nAuthor: {}\nVersion: {}",
                                         content, author, version
-                                    );
-                                    eprintln!("DEBUG: output = {}", result);
-                                    result
+                                    )
                                 }
                                 "override-test" => {
                                     let empty_str = String::new();
                                     let message = variables.get("message").unwrap_or(&empty_str);
-                                    eprintln!("DEBUG: variables = {:?}", variables);
-                                    let result = format!("Message: {}", message);
-                                    eprintln!("DEBUG: output = {}", result);
-                                    result
+                                    format!("Message: {}", message)
                                 }
                                 _ => format!("Testing prompt: {}", name),
                             };

@@ -44,7 +44,7 @@ use crate::{Prompt, PromptLibrary};
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 // #[cfg(test)]
 // use swissarmyhammer_tools::mcp::{ToolHandlers, ToolContext};
@@ -299,9 +299,22 @@ pub fn create_isolated_test_home() -> (TempDir, PathBuf) {
 ///     // Original HOME is restored when _guard is dropped
 /// }
 /// ```
+/// Global mutex to serialize access to HOME environment variable manipulation
+/// This prevents race conditions when multiple tests run in parallel
+static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// RAII guard for isolated HOME environment with race condition protection
+///
+/// This structure temporarily overrides the HOME environment variable to point
+/// to an isolated test directory, then restores the original HOME when dropped.
+/// Uses a global mutex to prevent race conditions when multiple tests run in parallel.
+///
+/// The guard holds a mutex lock for the entire duration of the test to ensure
+/// that HOME manipulation is serialized across all tests in the test suite.
 pub struct IsolatedTestHome {
     _temp_dir: TempDir,
     original_home: Option<String>,
+    _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Default for IsolatedTestHome {
@@ -313,6 +326,11 @@ impl Default for IsolatedTestHome {
 impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
+        // Acquire the global HOME environment lock to prevent race conditions
+        let lock_guard = HOME_ENV_LOCK
+            .lock()
+            .expect("HOME environment lock poisoned");
+
         let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home();
 
@@ -322,6 +340,7 @@ impl IsolatedTestHome {
         Self {
             _temp_dir: temp_dir,
             original_home,
+            _lock_guard: lock_guard,
         }
     }
 
@@ -652,7 +671,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // This test has race conditions with parallel execution due to global HOME environment variable manipulation
     fn test_guard_restores_home() {
         let original_home = std::env::var("HOME").ok();
 

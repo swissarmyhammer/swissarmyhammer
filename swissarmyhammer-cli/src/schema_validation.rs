@@ -117,7 +117,7 @@ impl SchemaValidator {
     /// # Example
     /// ```rust
     /// use serde_json::json;
-    /// use schema_validation::SchemaValidator;
+    /// use swissarmyhammer_cli::schema_validation::SchemaValidator;
     ///
     /// let schema = json!({
     ///     "type": "object",
