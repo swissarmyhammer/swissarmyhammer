@@ -672,25 +672,31 @@ async fn test_mixed_workflow() -> Result<()> {
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Create test content
-        let issue_result = run_sah_command_in_process(&[
-            "issue",
-            "create",
-            "--name",
-            "mixed_test_issue",
-            "--content",
-            "# Mixed Workflow Test\nTesting integration",
-        ])
+        let issue_result = run_sah_command_in_process_with_dir(
+            &[
+                "issue",
+                "create",
+                "--name",
+                "mixed_test_issue",
+                "--content",
+                "# Mixed Workflow Test\nTesting integration",
+            ],
+            test_env.path(),
+        )
         .await?;
         assert_eq!(issue_result.exit_code, 0, "Issue creation should succeed");
 
-        let memo_result = run_sah_command_in_process(&[
-            "memo",
-            "create",
-            "--title",
-            "Mixed Test Memo",
-            "--content",
-            "# Mixed Test\nTesting memo creation",
-        ])
+        let memo_result = run_sah_command_in_process_with_dir(
+            &[
+                "memo",
+                "create",
+                "--title",
+                "Mixed Test Memo",
+                "--content",
+                "# Mixed Test\nTesting memo creation",
+            ],
+            test_env.path(),
+        )
         .await?;
         assert_eq!(memo_result.exit_code, 0, "Memo creation should succeed");
 

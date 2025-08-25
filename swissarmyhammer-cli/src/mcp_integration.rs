@@ -62,23 +62,7 @@ impl CliToolContext {
     ) -> Result<IssueStorageArc, Box<dyn std::error::Error>> {
         // Create storage with working directory - no global directory changes needed
         // This avoids race conditions in parallel test execution
-        let (storage, migration_result) =
-            swissarmyhammer::issues::FileSystemIssueStorage::new_default_in(working_dir)?;
-
-        // Log migration results for CLI users
-        if let Some(result) = migration_result {
-            match result {
-                swissarmyhammer::issues::filesystem::MigrationResult::Success(stats) => {
-                    eprintln!(
-                        "✅ Migrated {} issues to .swissarmyhammer/issues",
-                        stats.files_moved
-                    );
-                }
-                swissarmyhammer::issues::filesystem::MigrationResult::NotNeeded(_) => {
-                    // Silent for CLI - no need to inform about no migration
-                }
-            }
-        }
+        let storage = swissarmyhammer::issues::FileSystemIssueStorage::new_default_in(working_dir)?;
 
         Ok(Arc::new(RwLock::new(Box::new(storage))))
     }

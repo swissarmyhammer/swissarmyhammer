@@ -147,7 +147,7 @@ impl McpTool for ShowIssueTool {
         } else if request.name == "next" {
             // Get next pending issue and then get its info
             let issue_storage = context.issue_storage.read().await;
-            match issue_storage.get_next_issue().await {
+            match issue_storage.next_issue().await {
                 Ok(Some(next_issue)) => {
                     // Get the full issue info for the next issue
                     match issue_storage.get_issue_info(&next_issue.name).await {

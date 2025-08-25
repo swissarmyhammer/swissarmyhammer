@@ -46,7 +46,6 @@ struct CheckGroups<'a> {
     pub config_checks: Vec<&'a Check>,
     pub prompt_checks: Vec<&'a Check>,
     pub workflow_checks: Vec<&'a Check>,
-    pub migration_checks: Vec<&'a Check>,
 }
 
 /// Main diagnostic tool for SwissArmyHammer system health checks
@@ -67,7 +66,6 @@ impl Doctor {
     ///
     /// # Arguments
     ///
-    /// * `migration` - If true, include migration validation checks
     ///
     /// # Returns
     ///
@@ -75,7 +73,7 @@ impl Doctor {
     /// - 0: All checks passed
     /// - 1: Warnings detected
     /// - 2: Errors detected
-    pub fn run_diagnostics_with_options(&mut self, migration: bool) -> Result<i32> {
+    pub fn run_diagnostics_with_options(&mut self) -> Result<i32> {
         println!("{}", "🔨 SwissArmyHammer Doctor".bold().blue());
         println!("{}", "Running diagnostics...".dimmed());
         println!();
@@ -105,11 +103,6 @@ impl Doctor {
         self.run_configuration_checks()?;
         self.run_prompt_checks()?;
         self.run_workflow_checks()?;
-
-        // Run migration checks if requested
-        if migration {
-            self.run_migration_checks()?;
-        }
 
         // Print results
         self.print_results();
@@ -146,13 +139,6 @@ impl Doctor {
         checks::check_workflow_parsing(&mut self.checks)?;
         checks::check_workflow_run_storage(&mut self.checks)?;
         checks::check_workflow_dependencies(&mut self.checks)?;
-        Ok(())
-    }
-
-    /// Run migration validation checks
-    fn run_migration_checks(&mut self) -> Result<()> {
-        checks::check_migration_status(&mut self.checks)?;
-        checks::check_migration_conflicts(&mut self.checks)?;
         Ok(())
     }
 
@@ -264,7 +250,6 @@ impl Doctor {
         self.print_check_category(&check_groups.config_checks, "Configuration:", use_color);
         self.print_check_category(&check_groups.prompt_checks, "Prompts:", use_color);
         self.print_check_category(&check_groups.workflow_checks, "Workflows:", use_color);
-        self.print_check_category(&check_groups.migration_checks, "Migration:", use_color);
 
         // Print summary
         self.print_summary(use_color);
@@ -276,7 +261,6 @@ impl Doctor {
         let mut config_checks = Vec::new();
         let mut prompt_checks = Vec::new();
         let mut workflow_checks = Vec::new();
-        let mut migration_checks = Vec::new();
 
         for check in &self.checks {
             if check.name.contains("Installation")
@@ -297,8 +281,6 @@ impl Doctor {
                 prompt_checks.push(check);
             } else if check.name.contains("Workflow") || check.name.contains("workflow") {
                 workflow_checks.push(check);
-            } else if check.name.contains("Migration") || check.name.contains("migration") {
-                migration_checks.push(check);
             } else {
                 // Default to system checks
                 system_checks.push(check);
@@ -310,7 +292,6 @@ impl Doctor {
             config_checks,
             prompt_checks,
             workflow_checks,
-            migration_checks,
         }
     }
 
@@ -461,10 +442,10 @@ fn print_check(check: &Check, use_color: bool) {
 }
 
 /// Handle the doctor command
-pub async fn handle_command(migration: bool) -> i32 {
+pub async fn handle_command() -> i32 {
     let mut doctor = Doctor::new();
 
-    match doctor.run_diagnostics_with_options(migration) {
+    match doctor.run_diagnostics_with_options() {
         Ok(exit_code) => exit_code,
         Err(e) => {
             eprintln!("Doctor command failed: {}", e);
@@ -518,7 +499,7 @@ mod tests {
     #[test]
     fn test_run_diagnostics() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_with_options(false);
+        let result = doctor.run_diagnostics_with_options();
         assert!(result.is_ok());
 
         // Should have at least some checks
@@ -532,7 +513,7 @@ mod tests {
     #[test]
     fn test_workflow_diagnostics_in_run_diagnostics_with_options() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_with_options(false);
+        let result = doctor.run_diagnostics_with_options();
         assert!(result.is_ok());
 
         // Should have workflow-related checks in the full diagnostics

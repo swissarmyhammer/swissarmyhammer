@@ -143,7 +143,7 @@ async fn test_complete_issue_workflow() {
         .issue_storage
         .write()
         .await
-        .mark_complete(issue_name)
+        .complete_issue(issue_name)
         .await
         .unwrap();
 
@@ -208,9 +208,7 @@ async fn test_error_handling_scenarios() {
             "Valid content".to_string(),
         )
         .await;
-    assert!(result.is_ok());
-    let issue = result.unwrap();
-    assert_eq!(issue.name.as_str(), "path_traversal_attempted");
+    assert!(result.is_err()); // Should fail due to invalid characters
 
     // Test working on non-existent issue
     let result = env
@@ -226,7 +224,7 @@ async fn test_error_handling_scenarios() {
         .issue_storage
         .write()
         .await
-        .mark_complete("nonexistent_issue")
+        .complete_issue("nonexistent_issue")
         .await;
     assert!(result.is_err());
 }
@@ -408,7 +406,7 @@ async fn test_issue_file_structure() {
         .issue_storage
         .write()
         .await
-        .mark_complete(&issue.name)
+        .complete_issue(&issue.name)
         .await
         .unwrap();
 

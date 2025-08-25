@@ -108,9 +108,6 @@ pub mod file_loader;
 /// Directory traversal utilities
 pub mod directory_utils;
 
-/// Migration validation tools for SwissArmyHammer directory consolidation
-pub mod migration;
-
 /// Unified file system utilities for better error handling and testing
 pub mod fs_utils;
 
@@ -165,13 +162,6 @@ pub use memoranda::{
 pub use todo::{
     CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
     TodoStorage,
-};
-
-/// Migration validation types for directory consolidation
-pub use migration::{
-    scan_existing_directories, validate_migration_safety, ConflictInfo, ConflictSeverity,
-    ConflictType, ContentSummary, GitRepositoryInfo, MigrationAction, MigrationPlan,
-    MigrationScanResult,
 };
 
 /// Validation types and traits
@@ -242,13 +232,6 @@ pub mod prelude {
     pub use crate::todo::{
         CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
         TodoStorage,
-    };
-
-    // Migration validation types for convenient access
-    pub use crate::migration::{
-        scan_existing_directories, validate_migration_safety, ConflictInfo, ConflictSeverity,
-        ConflictType, ContentSummary, GitRepositoryInfo, MigrationAction, MigrationPlan,
-        MigrationScanResult,
     };
 
     // Semantic search types for convenient access

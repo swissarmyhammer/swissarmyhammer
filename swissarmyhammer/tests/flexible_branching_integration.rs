@@ -223,7 +223,7 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     // Mark issue as completed
     {
         let issue_storage = env.issue_storage.write().await;
-        issue_storage.mark_complete(&issue_name).await.unwrap();
+        issue_storage.complete_issue(&issue_name).await.unwrap();
     }
 
     // Merge back to feature branch
@@ -369,7 +369,7 @@ async fn test_release_branch_issue_workflow() {
     // Mark issue complete and merge back to release branch
     {
         let issue_storage = env.issue_storage.write().await;
-        issue_storage.mark_complete(&issue_name).await.unwrap();
+        issue_storage.complete_issue(&issue_name).await.unwrap();
     }
 
     {

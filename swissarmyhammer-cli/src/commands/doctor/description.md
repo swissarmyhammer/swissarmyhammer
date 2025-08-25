@@ -15,4 +15,3 @@ Exit codes:
 Example:
   swissarmyhammer doctor
   swissarmyhammer doctor --verbose    # Show detailed diagnostics
-  swissarmyhammer doctor --migration  # Check migration status and conflicts

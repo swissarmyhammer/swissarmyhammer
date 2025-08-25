@@ -94,7 +94,7 @@ impl McpTool for MarkCompleteIssueTool {
         };
 
         let issue_storage = context.issue_storage.write().await;
-        match issue_storage.mark_complete(&issue_name).await {
+        match issue_storage.complete_issue(&issue_name).await {
             Ok(issue) => {
                 tracing::info!("Successfully marked issue '{}' as complete", issue.name);
                 Ok(create_mark_complete_response(&issue))

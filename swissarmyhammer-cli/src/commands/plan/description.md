@@ -29,7 +29,7 @@ EXAMPLES:
   swissarmyhammer plan ./specification/user-authentication.md
   
   # Plan using absolute path
-  swissarmyhammer plan /home/user/projects/plans/database-migration.md
+  swissarmyhammer plan /home/user/projects/plans/feature-development.md
   
   # Plan a quick enhancement
   swissarmyhammer plan ./docs/bug-fixes.md
