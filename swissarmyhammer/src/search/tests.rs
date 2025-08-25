@@ -3,9 +3,42 @@
 #[cfg(test)]
 mod integration_tests {
     use crate::search::*;
+    use tempfile::TempDir;
+
+    /// Test isolation guard for semantic tests
+    struct SemanticTestGuard {
+        _temp_dir: TempDir,
+        original_db_path: Option<String>,
+    }
+
+    impl SemanticTestGuard {
+        fn new() -> Self {
+            let temp_dir = TempDir::new().expect("Failed to create temp dir for semantic test");
+            let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
+
+            let test_db_path = temp_dir.path().join("semantic_test.db");
+            std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &test_db_path);
+
+            Self {
+                _temp_dir: temp_dir,
+                original_db_path,
+            }
+        }
+    }
+
+    impl Drop for SemanticTestGuard {
+        fn drop(&mut self) {
+            match &self.original_db_path {
+                Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+                None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+            }
+        }
+    }
 
     #[test]
     fn test_semantic_module_imports() {
+        let _guard = SemanticTestGuard::new();
+
         // Test that all module exports are accessible
         let _config = SemanticConfig::default();
         let _language = Language::Rust;

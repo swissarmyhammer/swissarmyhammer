@@ -2,14 +2,14 @@
 //!
 //! Comprehensive integration tests for SwissArmyHammer's Git repository-centric
 //! directory system. This module provides the main entry point for testing
-//! the complete directory migration and integration system.
+//! the complete directory integration system.
 //!
 //! # Test Organization
 //!
 //! This integration test suite is organized into several focused areas:
 //!
 //! - **End-to-End Workflow Tests**: Complete workflows spanning multiple components
-//! - **Migration Scenario Tests**: Testing migration from legacy directory structures
+//! - **Error Scenario Tests**: Edge cases, error conditions, and boundary testing
 //! - **Error Scenario Tests**: Edge cases, error conditions, and boundary testing
 //! - **Performance Tests**: Performance validation and regression testing
 //! - **Concurrent Tests**: Thread safety and concurrent access validation
@@ -21,7 +21,7 @@
 //! - `GitRepositoryTestGuard`: Creates isolated Git repositories with proper cleanup
 //! - `IsolatedTestEnvironment`: Provides complete isolation for parallel testing
 //! - Performance measurement utilities for benchmarking operations
-//! - Legacy directory structure simulation for migration testing
+//! - Test environment isolation and cleanup utilities
 //!
 //! # Running the Tests
 //!
@@ -31,7 +31,7 @@
 //!
 //! # Run specific test modules
 //! cargo test directory_integration::end_to_end
-//! cargo test directory_integration::migration
+//! cargo test directory_integration::end_to_end
 //! cargo test directory_integration::performance
 //!
 //! # Run with output for debugging
@@ -48,7 +48,7 @@
 //! - Performance characteristics under various conditions
 //! - Error handling and graceful degradation
 //! - Thread safety and concurrent access patterns
-//! - Migration scenarios from legacy directory structures
+//! - End-to-end workflows and system integration scenarios
 //!
 //! # Platform Compatibility
 //!
@@ -70,7 +70,6 @@ pub use directory_integration::{
 // Import all test modules
 use directory_integration::{
     end_to_end_tests,
-    migration_tests,
     error_scenario_tests,
     performance_tests,
     concurrent_tests,

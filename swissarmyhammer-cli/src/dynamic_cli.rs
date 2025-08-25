@@ -577,16 +577,8 @@ Exit codes:
 
 Example:
   swissarmyhammer doctor
-  swissarmyhammer doctor --migration    # Check migration status and conflicts
+  swissarmyhammer doctor               # Check system health and configuration
                 ",
-                )
-                .arg(
-                    Arg::new("migration")
-                        .long("migration")
-                        .help(
-                            "Check migration status and validate directory consolidation readiness",
-                        )
-                        .action(ArgAction::SetTrue),
                 ),
         );
 
@@ -669,7 +661,7 @@ The planning workflow will:
 
 Examples:
   swissarmyhammer plan ./specification/user-authentication.md
-  swissarmyhammer plan /home/user/projects/plans/database-migration.md
+  swissarmyhammer plan /home/user/projects/plans/feature-development.md
                 ",
                 )
                 .arg(

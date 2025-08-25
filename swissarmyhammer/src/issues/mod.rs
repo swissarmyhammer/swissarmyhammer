@@ -222,12 +222,7 @@ pub mod metrics;
 pub mod utils;
 
 // Re-export main types from the filesystem module
-pub use filesystem::{
-    create_safe_filename, extract_issue_name_from_filename, format_issue_number,
-    get_issue_name_from_filename, is_issue_file, parse_issue_filename, parse_issue_number,
-    sanitize_issue_name, validate_issue_name, FileSystemIssueStorage, Issue, IssueInfo, IssueState,
-    IssueStorage,
-};
+pub use filesystem::{FileSystemIssueStorage, Issue, IssueInfo, IssueState, IssueStorage};
 
 // Export metrics types
 pub use metrics::{MetricsSnapshot, Operation, PerformanceMetrics};

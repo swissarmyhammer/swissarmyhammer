@@ -402,7 +402,7 @@ async fn test_issue_show_next_no_pending_issues() {
     env.issue_storage
         .write()
         .await
-        .mark_complete(&issue_name)
+        .complete_issue(&issue_name)
         .await
         .unwrap();
 

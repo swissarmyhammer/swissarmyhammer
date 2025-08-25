@@ -5,8 +5,9 @@ use tokio::runtime::Runtime;
 use tokio::time::Duration;
 
 use swissarmyhammer::issues::{
-    FileSystemIssueStorage, IssueStorage, Operation, PerformanceMetrics,
+    FileSystemIssueStorage, IssueStorage,
 };
+use swissarmyhammer::issues::metrics::{Operation, PerformanceMetrics};
 
 fn setup_fs_storage() -> (FileSystemIssueStorage, TempDir) {
     let temp_dir = TempDir::new().unwrap();
@@ -15,14 +16,14 @@ fn setup_fs_storage() -> (FileSystemIssueStorage, TempDir) {
     (storage, temp_dir)
 }
 
-fn benchmark_batch_operations(c: &mut Criterion) {
-    let mut group = c.benchmark_group("batch_operations");
+fn benchmark_sequential_operations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sequential_operations");
     let rt = Runtime::new().unwrap();
 
     let batch_sizes = vec![5, 10, 20, 50];
 
     for batch_size in batch_sizes {
-        // Compare individual operations vs batch operations
+        // Compare individual operations vs sequential operations
         group.bench_with_input(
             BenchmarkId::new("individual_creates", batch_size),
             &batch_size,
@@ -43,18 +44,19 @@ fn benchmark_batch_operations(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("batch_creates", batch_size),
+            BenchmarkId::new("sequential_creates", batch_size),
             &batch_size,
             |b, &batch_size| {
                 b.iter(|| {
                     rt.block_on(async {
                         let (storage, _temp) = setup_fs_storage();
 
-                        let batch_data: Vec<(String, String)> = (1..=batch_size)
-                            .map(|i| (format!("test_{i}"), format!("Content {i}")))
-                            .collect();
-
-                        let _issues = storage.create_issues_batch(batch_data).await.unwrap();
+                        for i in 1..=batch_size {
+                            let _issue = storage
+                                .create_issue(format!("test_{i}"), format!("Content {i}"))
+                                .await
+                                .unwrap();
+                        }
                     });
                 });
             },
@@ -87,7 +89,7 @@ fn benchmark_batch_operations(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("batch_gets", batch_size),
+            BenchmarkId::new("sequential_gets", batch_size),
             &batch_size,
             |b, &batch_size| {
                 b.iter(|| {
@@ -102,11 +104,11 @@ fn benchmark_batch_operations(c: &mut Criterion) {
                                 .unwrap();
                         }
 
-                        // Batch get
-                        let names: Vec<String> =
-                            (1..=batch_size).map(|i| format!("test_{i}")).collect();
-                        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-                        let _issues = storage.get_issues_batch(name_refs).await.unwrap();
+                        // Sequential gets
+                        for i in 1..=batch_size {
+                            let issue_name = format!("test_{i}");
+                            let _issue = storage.get_issue(&issue_name).await.unwrap();
+                        }
                     });
                 });
             },
@@ -295,7 +297,7 @@ fn benchmark_concurrent_operations(c: &mut Criterion) {
 
 criterion_group!(
     issue_performance_benches,
-    benchmark_batch_operations,
+    benchmark_sequential_operations,
     benchmark_metrics_collection,
     benchmark_filesystem_storage,
     benchmark_concurrent_operations

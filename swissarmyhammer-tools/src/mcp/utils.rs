@@ -63,8 +63,6 @@ where
 ///
 /// * `Result<String, McpError>` - The validated and trimmed name, or an error
 pub fn validate_issue_name(name: &str) -> std::result::Result<String, McpError> {
-    use swissarmyhammer::issues::validate_issue_name as validate_issue_name_internal;
-
     let trimmed = name.trim();
 
     if trimmed.is_empty() {
@@ -90,9 +88,13 @@ pub fn validate_issue_name(name: &str) -> std::result::Result<String, McpError> 
         ));
     }
 
-    // Use the existing validation function for additional checks
-    validate_issue_name_internal(trimmed)
-        .map_err(|e| McpError::invalid_params(format!("Invalid issue name: {e}"), None))?;
+    // Additional validation
+    if trimmed.contains('\0') {
+        return Err(McpError::invalid_params(
+            "Issue name contains null characters",
+            None,
+        ));
+    }
 
     Ok(trimmed.to_string())
 }

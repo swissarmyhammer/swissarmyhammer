@@ -105,28 +105,11 @@ impl McpServer {
                 })?;
             }
 
-            // Create storage with automatic migration and detailed logging
-            let storage_result =
-                FileSystemIssueStorage::new_default_with_migration_info().map_err(|e| {
-                    tracing::error!("Failed to create issue storage: {}", e);
-                    SwissArmyHammerError::Other(format!("Failed to create issue storage: {e}"))
-                });
-
-            // Log migration results for MCP server
-            let (storage, migration_result) = storage_result?;
-            if let Some(result) = migration_result {
-                match result {
-                    swissarmyhammer::issues::filesystem::MigrationResult::Success(stats) => {
-                        tracing::info!(
-                            "MCP server performed automatic migration: {} files moved to .swissarmyhammer/issues",
-                            stats.files_moved
-                        );
-                    }
-                    swissarmyhammer::issues::filesystem::MigrationResult::NotNeeded(_) => {
-                        tracing::debug!("No migration needed for MCP server");
-                    }
-                }
-            }
+            // Create storage
+            let storage = FileSystemIssueStorage::new_default().map_err(|e| {
+                tracing::error!("Failed to create issue storage: {}", e);
+                SwissArmyHammerError::Other(format!("Failed to create issue storage: {e}"))
+            })?;
 
             // Always restore original working directory if we changed it
             if needs_dir_change {

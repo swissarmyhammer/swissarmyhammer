@@ -7,11 +7,13 @@ use anyhow::Result;
 use swissarmyhammer::test_utils::IsolatedTestHome;
 use tempfile::TempDir;
 
-mod test_utils;
-use test_utils::setup_git_repo;
-
 mod in_process_test_utils;
-use in_process_test_utils::{run_sah_command_in_process, run_sah_command_in_process_with_dir};
+mod test_utils;
+
+use in_process_test_utils::{
+    run_sah_command_in_process, run_sah_command_in_process_with_dir, CapturedOutput,
+};
+use test_utils::setup_git_repo;
 
 /// Setup function for error scenario testing using IsolatedTestHome
 fn setup_error_test_environment() -> Result<(IsolatedTestHome, TempDir, std::path::PathBuf)> {
@@ -249,29 +251,55 @@ async fn test_invalid_command_arguments() -> Result<()> {
     Ok(())
 }
 
-/// Test storage backend errors
+/// Test storage backend errors when .swissarmyhammer directory is read-only
 #[tokio::test]
-async fn test_storage_backend_errors() -> Result<()> {
+async fn test_storage_backend_permissions() -> Result<()> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+    
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
-    // Create a file where issues directory should be to cause storage errors
-    let issues_path = temp_path.join("issues");
-    std::fs::remove_dir_all(&issues_path).ok(); // Remove existing directory
-    std::fs::write(&issues_path, "This is a file, not a directory")?;
+    // Create a read-only parent directory to cause storage errors
+    let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
+    std::fs::remove_dir_all(&swissarmyhammer_dir).ok(); // Remove existing directory structure
+    
+    // Create the directory first
+    if let Err(e) = std::fs::create_dir_all(&swissarmyhammer_dir) {
+        println!("Failed to create swissarmyhammer dir: {}", e);
+        return Ok(());
+    }
+
+    // Make the .swissarmyhammer directory read-only to prevent issues directory creation
+    if let Err(e) = std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o555)) {
+        println!("Failed to set permissions: {}", e);
+        return Ok(());
+    }
 
     // Test operations that require issues directory
-    // Use explicit working directory instead of global directory change to avoid race conditions
-    let result = run_sah_command_in_process_with_dir(&["issue", "list"], &temp_path).await?;
+    let result = run_sah_command_in_process_with_dir(&["issue", "list"], &temp_path)
+        .await
+        .unwrap_or_else(|e| {
+            CapturedOutput {
+                stdout: String::new(),
+                stderr: format!("Function error: {}", e),
+                exit_code: 1,
+            }
+        });
+
+    // Restore permissions for cleanup before assertions (to avoid test cleanup issues)
+    std::fs::set_permissions(&swissarmyhammer_dir, Permissions::from_mode(0o755))?;
+
+    // Assert that the command failed with a permission error
     assert_ne!(
         result.exit_code, 0,
-        "Should fail when issues directory is not accessible"
+        "Should fail when issues directory is not accessible. Exit code: {}, Stderr: {}",
+        result.exit_code, result.stderr
     );
     assert!(
-        result.stderr.contains("Error")
-            || result.stderr.contains("error")
-            || result.stderr.contains("directory")
-            || result.stderr.contains("storage"),
-        "Should show storage-related error: {}",
+        result.stderr.contains("Permission denied") 
+            || result.stderr.contains("permission denied")
+            || result.stderr.contains("IO error"),
+        "Should show permission-related error: {}",
         result.stderr
     );
 

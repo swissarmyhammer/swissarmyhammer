@@ -171,7 +171,7 @@ async fn test_source_branch_deleted_mid_workflow() {
     // Mark issue complete
     {
         let issue_storage = env.issue_storage.write().await;
-        issue_storage.mark_complete(&issue_name).await.unwrap();
+        issue_storage.complete_issue(&issue_name).await.unwrap();
     }
 
     // Try to merge - this should fail and create an abort file
@@ -270,7 +270,7 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     // Mark issue complete
     {
         let issue_storage = env.issue_storage.write().await;
-        issue_storage.mark_complete(&issue_name).await.unwrap();
+        issue_storage.complete_issue(&issue_name).await.unwrap();
     }
 
     // Try to merge - should fail due to conflict
@@ -468,7 +468,7 @@ async fn test_uncommitted_changes_during_merge() {
     // Mark issue complete
     {
         let issue_storage = env.issue_storage.write().await;
-        issue_storage.mark_complete(&issue_name).await.unwrap();
+        issue_storage.complete_issue(&issue_name).await.unwrap();
     }
 
     // Try to merge with uncommitted changes - behavior depends on implementation

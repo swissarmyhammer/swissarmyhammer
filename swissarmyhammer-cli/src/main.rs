@@ -358,9 +358,8 @@ fn extract_clap_value(
     }
 }
 
-async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
-    let migration = matches.get_flag("migration");
-    commands::doctor::handle_command(migration).await
+async fn handle_doctor_command(_matches: &clap::ArgMatches) -> i32 {
+    commands::doctor::handle_command().await
 }
 
 async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {

@@ -1174,7 +1174,8 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Create and switch to a feature branch
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
         Command::new("git")
             .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature/new-feature"])
@@ -1465,7 +1466,8 @@ mod tests {
             .unwrap();
 
         // Switch back to main
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
 
         // Create issue branch from feature branch (by switching first)
         git_ops.checkout_branch("feature/awesome").unwrap();
@@ -1560,7 +1562,8 @@ mod tests {
         git_ops.create_work_branch("existing_issue").unwrap();
 
         // Switch to main
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
 
         // Try to switch to existing issue branch (should work)
         let result = git_ops.create_work_branch("existing_issue");
@@ -1672,7 +1675,8 @@ mod tests {
             .unwrap();
 
         // Switch to main and create different content
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
         std::fs::write(temp_dir.path().join("conflict.txt"), "main content").unwrap();
         Command::new("git")
             .current_dir(temp_dir.path())
@@ -1848,7 +1852,8 @@ mod tests {
 
         // The original method should still work exactly as before
         // Switch back and create another issue from main
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
         let result = git_ops.create_work_branch("main_issue");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "issue/main_issue");
@@ -1879,7 +1884,8 @@ mod tests {
         git_ops.create_work_branch("delete-test").unwrap();
 
         // Switch back to main so we can delete the branch
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
 
         // Verify the branch exists
         assert!(git_ops.branch_exists("issue/delete-test").unwrap());
@@ -1912,7 +1918,8 @@ mod tests {
             .unwrap();
 
         // Switch back to main
-        git_ops.checkout_branch("main").unwrap();
+        let main_branch = git_ops.main_branch().unwrap();
+        git_ops.checkout_branch(&main_branch).unwrap();
 
         // Delete the now-existing branch - should succeed
         let result = git_ops.delete_branch("test-branch", false);

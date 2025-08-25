@@ -106,11 +106,7 @@ Example:
     Serve,
     /// Diagnose configuration and setup issues
     #[command(long_about = commands::doctor::DESCRIPTION)]
-    Doctor {
-        /// Check migration status and validate directory consolidation readiness
-        #[arg(long)]
-        migration: bool,
-    },
+    Doctor {},
     /// Manage and test prompts
     #[command(long_about = commands::prompt::DESCRIPTION)]
     Prompt {
@@ -610,10 +606,7 @@ mod tests {
         assert!(result.is_ok());
 
         let cli = result.unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Doctor { migration: _ })
-        ));
+        assert!(matches!(cli.command, Some(Commands::Doctor {})));
     }
 
     #[test]
