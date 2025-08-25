@@ -19,7 +19,7 @@ pub async fn create_test_context() -> ToolContext {
     // Create temporary directory for test to avoid conflicts
     let temp_dir = tempfile::tempdir().unwrap();
     let test_issues_dir = temp_dir.path().join("test_issues");
-    
+
     let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
         FileSystemIssueStorage::new(test_issues_dir).unwrap(),
     )));

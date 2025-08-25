@@ -358,7 +358,10 @@ impl GitOperations {
         match repo.head() {
             Ok(_) => Ok(true),
             Err(e) if e.code() == git2::ErrorCode::UnbornBranch => Ok(false),
-            Err(e) => Err(git2_utils::convert_git2_error("check HEAD for branching", e)),
+            Err(e) => Err(git2_utils::convert_git2_error(
+                "check HEAD for branching",
+                e,
+            )),
         }
     }
 
@@ -451,14 +454,9 @@ impl GitOperations {
             .map_err(|e| git2_utils::convert_git2_error("get HEAD commit", e))?;
 
         // Create new branch pointing to HEAD commit
-        let branch = repo
-            .branch(branch_name, &head_commit, false)
-            .map_err(|e| {
-                git2_utils::convert_git2_error(
-                    &format!("create branch '{}'", branch_name),
-                    e,
-                )
-            })?;
+        let branch = repo.branch(branch_name, &head_commit, false).map_err(|e| {
+            git2_utils::convert_git2_error(&format!("create branch '{}'", branch_name), e)
+        })?;
 
         // Get branch reference name
         let branch_ref = branch.get();
@@ -470,13 +468,9 @@ impl GitOperations {
         })?;
 
         // Set HEAD to point to new branch
-        repo.set_head(branch_ref_name)
-            .map_err(|e| {
-                git2_utils::convert_git2_error(
-                    &format!("checkout branch '{}'", branch_name),
-                    e,
-                )
-            })?;
+        repo.set_head(branch_ref_name).map_err(|e| {
+            git2_utils::convert_git2_error(&format!("checkout branch '{}'", branch_name), e)
+        })?;
 
         // Update working directory to match new HEAD
         repo.checkout_head(Some(
@@ -501,12 +495,7 @@ impl GitOperations {
         // Find the branch reference
         let branch_ref = repo
             .find_branch(branch, git2::BranchType::Local)
-            .map_err(|e| {
-                git2_utils::convert_git2_error(
-                    &format!("find branch '{}'", branch),
-                    e,
-                )
-            })?;
+            .map_err(|e| git2_utils::convert_git2_error(&format!("find branch '{}'", branch), e))?;
 
         // Get branch reference name
         let reference = branch_ref.get();
@@ -519,12 +508,7 @@ impl GitOperations {
 
         // Set HEAD to point to the branch
         repo.set_head(branch_ref_name)
-            .map_err(|e| {
-                git2_utils::convert_git2_error(
-                    &format!("set HEAD to '{}'", branch),
-                    e,
-                )
-            })?;
+            .map_err(|e| git2_utils::convert_git2_error(&format!("set HEAD to '{}'", branch), e))?;
 
         // Update working directory to match branch
         repo.checkout_head(Some(
@@ -685,22 +669,29 @@ impl GitOperations {
         }
 
         let repo = self.get_git2_repo()?;
-        
+
         // Get reflog for HEAD
-        let reflog = repo.reflog("HEAD")
+        let reflog = repo
+            .reflog("HEAD")
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("get HEAD reflog", e))?;
-        
+
         // Iterate through reflog entries looking for branch creation
         for i in 0..reflog.len() {
             if let Some(entry) = reflog.get(i) {
                 if let Some(message) = entry.message() {
                     // Look for checkout messages indicating branch creation
-                    if let Some(target_branch) = self.parse_checkout_message(message, &branch_name)? {
+                    if let Some(target_branch) =
+                        self.parse_checkout_message(message, &branch_name)?
+                    {
                         // Verify the target branch still exists and is valid
-                        if self.branch_exists(&target_branch)? && !self.is_issue_branch(&target_branch) {
+                        if self.branch_exists(&target_branch)?
+                            && !self.is_issue_branch(&target_branch)
+                        {
                             tracing::debug!(
                                 "Found merge target '{}' for issue '{}' via reflog at entry {}",
-                                target_branch, issue_name, i
+                                target_branch,
+                                issue_name,
+                                i
                             );
                             return Ok(target_branch);
                         }
@@ -708,15 +699,17 @@ impl GitOperations {
                 }
             }
         }
-        
+
         // If no valid target found, create abort file
         create_abort_file(&self.work_dir, &format!(
             "Cannot determine merge target for issue '{issue_name}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally"
         ))?;
-        
+
         Err(SwissArmyHammerError::git2_operation_failed(
             "determine merge target",
-            git2::Error::from_str(&format!("no reflog entry found for issue branch '{branch_name}'"))
+            git2::Error::from_str(&format!(
+                "no reflog entry found for issue branch '{branch_name}'"
+            )),
         ))
     }
 
@@ -727,14 +720,14 @@ impl GitOperations {
             if let Some((from_branch, to_branch)) = checkout_part.split_once(" to ") {
                 let to_branch = to_branch.trim();
                 let from_branch = from_branch.trim();
-                
+
                 // If we moved TO our target branch, the FROM branch is our source
                 if to_branch == target_branch {
                     return Ok(Some(from_branch.to_string()));
                 }
             }
         }
-        
+
         Ok(None)
     }
 
@@ -1129,12 +1122,13 @@ impl GitOperations {
     /// Get recent branch operations from reflog for diagnostics
     pub fn get_recent_branch_operations(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
         let repo = self.get_git2_repo()?;
-        let reflog = repo.reflog("HEAD")
+        let reflog = repo
+            .reflog("HEAD")
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("get HEAD reflog", e))?;
-        
+
         let mut entries = Vec::new();
         let count = std::cmp::min(limit, reflog.len());
-        
+
         for i in 0..count {
             if let Some(entry) = reflog.get(i) {
                 let reflog_entry = ReflogEntry {
@@ -1147,17 +1141,20 @@ impl GitOperations {
                 entries.push(reflog_entry);
             }
         }
-        
+
         Ok(entries)
     }
 
     /// Find branch creation point for better merge target detection
-    pub fn find_branch_creation_point(&self, branch_name: &str) -> Result<Option<(String, String)>> {
+    pub fn find_branch_creation_point(
+        &self,
+        branch_name: &str,
+    ) -> Result<Option<(String, String)>> {
         // First try to find in reflog
         if let Ok(target) = self.find_merge_target_branch_using_reflog_internal(branch_name) {
             return Ok(Some((target, "reflog".to_string())));
         }
-        
+
         // Fall back to configuration if available
         if let Some(issue_name) = branch_name.strip_prefix("issue/") {
             if let Ok(Some(source)) = self.get_issue_source_branch(issue_name) {
@@ -1166,18 +1163,20 @@ impl GitOperations {
                 }
             }
         }
-        
+
         Ok(None)
     }
 
     /// Internal helper for find_branch_creation_point
     fn find_merge_target_branch_using_reflog_internal(&self, branch_name: &str) -> Result<String> {
         // Extract issue name from branch name
-        let issue_name = branch_name.strip_prefix("issue/")
-            .ok_or_else(|| SwissArmyHammerError::git2_operation_failed(
+        let issue_name = branch_name.strip_prefix("issue/").ok_or_else(|| {
+            SwissArmyHammerError::git2_operation_failed(
                 "extract issue name",
-                git2::Error::from_str("Branch name does not match issue pattern")))?;
-        
+                git2::Error::from_str("Branch name does not match issue pattern"),
+            )
+        })?;
+
         self.find_merge_target_branch_using_reflog(issue_name)
     }
 
@@ -1186,6 +1185,361 @@ impl GitOperations {
         // TODO: Implement configuration-based source branch tracking
         // This would read from .swissarmyhammer/config or similar
         Ok(None)
+    }
+
+    /// Merge branches using git2-rs for improved performance and reliability
+    ///
+    /// This is the git2 implementation of merge operations, providing direct
+    /// git object manipulation without subprocess overhead.
+    ///
+    /// # Arguments
+    /// * `source_branch` - Branch to merge from
+    /// * `target_branch` - Branch to merge into
+    /// * `message` - Commit message for the merge
+    ///
+    /// # Returns
+    /// * `Ok(())` if merge completed successfully
+    /// * `Err(SwissArmyHammerError)` if merge failed or conflicts detected
+    pub fn merge_branches_git2(
+        &self,
+        source_branch: &str,
+        target_branch: &str,
+        message: &str,
+    ) -> Result<()> {
+        let repo = self.open_git2_repository()?;
+
+        // Ensure we're on the target branch
+        self.checkout_branch(target_branch)?;
+
+        // Get the source branch reference and create annotated commit
+        let source_ref = repo
+            .find_branch(source_branch, git2::BranchType::Local)
+            .map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed(
+                    &format!("find source branch '{}'", source_branch),
+                    e,
+                )
+            })?;
+
+        let source_oid = source_ref.get().target().ok_or_else(|| {
+            SwissArmyHammerError::git2_operation_failed(
+                &format!("get source branch OID for '{}'", source_branch),
+                git2::Error::from_str("Branch has no target OID"),
+            )
+        })?;
+
+        // Create annotated commit for merge analysis
+        let source_annotated = repo.find_annotated_commit(source_oid).map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed(
+                &format!("create annotated commit for '{}'", source_branch),
+                e,
+            )
+        })?;
+
+        // Get actual commit objects for later use
+        let source_commit = repo.find_commit(source_oid).map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed(
+                &format!("get source commit for '{}'", source_branch),
+                e,
+            )
+        })?;
+
+        // Get current HEAD commit (target branch)
+        let target_commit = repo
+            .head()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get target HEAD", e))?
+            .peel_to_commit()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get target commit", e))?;
+
+        // Perform merge analysis using annotated commit
+        let merge_analysis = repo
+            .merge_analysis(&[&source_annotated])
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("analyze merge", e))?;
+
+        self.handle_merge_analysis_with_repo(
+            &repo,
+            merge_analysis,
+            &source_commit,
+            &target_commit,
+            source_branch,
+            target_branch,
+            message,
+        )
+    }
+
+
+
+    /// Handle merge analysis with provided repository instance
+    fn handle_merge_analysis_with_repo(
+        &self,
+        repo: &git2::Repository,
+        analysis: (git2::MergeAnalysis, git2::MergePreference),
+        source_commit: &git2::Commit,
+        target_commit: &git2::Commit,
+        source_branch: &str,
+        target_branch: &str,
+        message: &str,
+    ) -> Result<()> {
+        let (merge_analysis, _merge_pref) = analysis;
+
+        if merge_analysis.is_fast_forward() {
+            // Force non-fast-forward merge as per original shell behavior
+            self.create_merge_commit_with_repo(
+                repo,
+                source_commit,
+                target_commit,
+                source_branch,
+                target_branch,
+                message,
+            )
+        } else if merge_analysis.is_normal() {
+            // Normal merge - may have conflicts
+            self.perform_normal_merge_with_repo(
+                repo,
+                source_commit,
+                target_commit,
+                source_branch,
+                target_branch,
+                message,
+            )
+        } else if merge_analysis.is_up_to_date() {
+            // Nothing to merge
+            tracing::info!(
+                "Branch '{}' is already up to date with '{}'",
+                target_branch,
+                source_branch
+            );
+            Ok(())
+        } else {
+            // Unmerged state or other issues
+            create_abort_file(
+                &self.work_dir,
+                &format!(
+                "Cannot merge '{}' into '{}': repository is in an unmerged state or has conflicts",
+                source_branch, target_branch
+            ),
+            )?;
+
+            Err(SwissArmyHammerError::git2_operation_failed(
+                "merge analysis",
+                git2::Error::from_str("Repository in unmerged state"),
+            ))
+        }
+    }
+
+
+
+    /// Perform normal merge with provided repository instance
+    fn perform_normal_merge_with_repo(
+        &self,
+        repo: &git2::Repository,
+        source_commit: &git2::Commit,
+        target_commit: &git2::Commit,
+        source_branch: &str,
+        target_branch: &str,
+        message: &str,
+    ) -> Result<()> {
+        // Get merge base for 3-way merge
+        let merge_base = repo
+            .merge_base(source_commit.id(), target_commit.id())
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("find merge base", e))?;
+
+        let merge_base_commit = repo
+            .find_commit(merge_base)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get merge base commit", e))?;
+
+        // Create trees for 3-way merge
+        let ancestor_tree = merge_base_commit
+            .tree()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get ancestor tree", e))?;
+        let our_tree = target_commit
+            .tree()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get target tree", e))?;
+        let their_tree = source_commit
+            .tree()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get source tree", e))?;
+
+        // Perform merge
+        let mut index = repo
+            .merge_trees(&ancestor_tree, &our_tree, &their_tree, None)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("merge trees", e))?;
+
+        // Check for conflicts
+        if index.has_conflicts() {
+            self.handle_merge_conflicts(&index, source_branch, target_branch)?;
+            return Err(SwissArmyHammerError::git2_operation_failed(
+                "merge",
+                git2::Error::from_str("Merge conflicts detected"),
+            ));
+        }
+
+        // Write the merged index to the repository index and working directory
+        let mut repo_index = repo
+            .index()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get repository index", e))?;
+        
+        // Create the merged tree and get the Tree object
+        let tree_oid = index
+            .write_tree_to(repo)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("write merge tree", e))?;
+        let merge_tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("find merge tree", e))?;
+        
+        // Write the merged tree to the repository index
+        repo_index
+            .read_tree(&merge_tree)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("read tree to index", e))?;
+        
+        // Write index to working directory
+        repo_index
+            .write()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("write index", e))?;
+
+        // Checkout the index to working directory
+        repo.checkout_index(Some(&mut repo_index), None)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("checkout index", e))?;
+
+        // Create merge commit
+        let tree_oid = index
+            .write_tree_to(repo)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("write merge tree", e))?;
+        let tree = repo
+            .find_tree(tree_oid)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("find merge tree", e))?;
+
+        self.create_commit_with_parents_internal(
+            repo,
+            &tree,
+            &[target_commit, source_commit],
+            message,
+        )
+    }
+
+    /// Handle merge conflicts by collecting detailed information and creating abort file
+    ///
+    /// # Arguments
+    /// * `index` - Git index containing conflict information
+    /// * `source_branch` - Source branch name
+    /// * `target_branch` - Target branch name
+    fn handle_merge_conflicts(
+        &self,
+        index: &git2::Index,
+        source_branch: &str,
+        target_branch: &str,
+    ) -> Result<()> {
+        let mut conflicts = Vec::new();
+
+        // Collect conflict information
+        let conflicts_iter = index.conflicts().map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed("get conflicts iterator", e)
+        })?;
+
+        for conflict in conflicts_iter {
+            let conflict = conflict.map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("read conflict entry", e)
+            })?;
+
+            if let Some(ours) = conflict.our {
+                if let Ok(path) = std::str::from_utf8(&ours.path) {
+                    conflicts.push(path.to_string());
+                }
+            }
+        }
+
+        // Create detailed abort message
+        let conflict_details = if conflicts.is_empty() {
+            "Unknown conflicts detected".to_string()
+        } else {
+            format!("Conflicts in files: {}", conflicts.join(", "))
+        };
+
+        create_abort_file(&self.work_dir, &format!(
+            "Merge conflicts detected while merging '{}' into '{}'. {}. Manual conflict resolution required.",
+            source_branch, target_branch, conflict_details
+        ))?;
+
+        Ok(())
+    }
+
+
+
+    /// Create merge commit with provided repository instance
+    fn create_merge_commit_with_repo(
+        &self,
+        repo: &git2::Repository,
+        source_commit: &git2::Commit,
+        target_commit: &git2::Commit,
+        source_branch: &str,
+        target_branch: &str,
+        message: &str,
+    ) -> Result<()> {
+        // Use source tree for fast-forward case, but create explicit merge commit
+        let tree = source_commit
+            .tree()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get source tree", e))?;
+
+        // Update repository index and working directory to match the source tree
+        let mut repo_index = repo
+            .index()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get repository index", e))?;
+        
+        // Read the source tree into the index
+        repo_index
+            .read_tree(&tree)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("read tree to index", e))?;
+        
+        // Write index to disk
+        repo_index
+            .write()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("write index", e))?;
+
+        // Checkout the index to working directory
+        repo.checkout_index(Some(&mut repo_index), None)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("checkout index", e))?;
+
+        let full_message = format!(
+            "Merge {} into {}\n\n{}",
+            source_branch, target_branch, message
+        );
+        self.create_commit_with_parents_internal(
+            repo,
+            &tree,
+            &[target_commit, source_commit],
+            &full_message,
+        )
+    }
+
+
+
+    /// Internal helper to create commit with parents using provided repository
+    fn create_commit_with_parents_internal(
+        &self,
+        repo: &git2::Repository,
+        tree: &git2::Tree,
+        parents: &[&git2::Commit],
+        message: &str,
+    ) -> Result<()> {
+        // Get signature for commit
+        let signature = repo
+            .signature()
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get signature", e))?;
+
+        // Create commit
+        let commit_oid = repo
+            .commit(Some("HEAD"), &signature, &signature, message, tree, parents)
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("create merge commit", e))?;
+
+        tracing::info!("Created merge commit: {}", commit_oid);
+        Ok(())
+    }
+
+    /// Open git2 repository with proper error handling
+    ///
+    /// Helper function to get the git2 repository instance with
+    /// consistent error handling across all git2 merge operations.
+    fn open_git2_repository(&self) -> Result<Repository> {
+        git2_utils::open_repository(&self.work_dir)
     }
 }
 
@@ -2506,7 +2860,7 @@ mod tests {
         // Test with nonexistent issue branch
         let result = git_ops.find_merge_target_branch_using_reflog("nonexistent");
         assert!(result.is_err());
-        
+
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("does not exist"));
     }
@@ -2529,11 +2883,11 @@ mod tests {
         // Test finding merge target - should fail and create abort file
         let result = git_ops.find_merge_target_branch_using_reflog("manual-branch");
         assert!(result.is_err());
-        
+
         // Verify abort file was created
         let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
         assert!(abort_file.exists());
-        
+
         let abort_content = std::fs::read_to_string(&abort_file).unwrap();
         assert!(abort_content.contains("Cannot determine merge target"));
         assert!(abort_content.contains("manual-branch"));
@@ -2559,10 +2913,10 @@ mod tests {
         // Test finding branch creation point
         let result = git_ops.find_branch_creation_point("issue/creation-test");
         assert!(result.is_ok());
-        
+
         let creation_point = result.unwrap();
         assert!(creation_point.is_some());
-        
+
         let (source_branch, method) = creation_point.unwrap();
         assert_eq!(source_branch, "feature/source");
         assert_eq!(method, "reflog");
@@ -2595,5 +2949,399 @@ mod tests {
         assert_eq!(entry.committer, "test-user");
         assert_eq!(entry.message, "checkout: moving from main to issue/test");
         assert_eq!(entry.time, 1234567890);
+    }
+
+    #[test]
+    fn test_merge_branches_git2_fast_forward() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Create a feature branch and make a commit
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature"])
+            .output()
+            .unwrap();
+
+        fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
+
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "feature.txt"])
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add feature"])
+            .output()
+            .unwrap();
+
+        // Switch back to main and merge
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "main"])
+            .output()
+            .unwrap();
+
+        // Test git2 merge (should create explicit merge commit despite fast-forward possibility)
+        let result = git_ops.merge_branches_git2("feature", "main", "Merge feature branch");
+        assert!(
+            result.is_ok(),
+            "Fast-forward merge should succeed: {:?}",
+            result
+        );
+
+        // Verify merge commit was created
+        let log_output = Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["log", "--oneline", "-3"])
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&log_output.stdout);
+        assert!(
+            log.contains("Merge feature into main"),
+            "Should create explicit merge commit"
+        );
+    }
+
+    #[test]
+    fn test_merge_branches_git2_normal_merge() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Create feature branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature"])
+            .output()
+            .unwrap();
+
+        fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "feature.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add feature"])
+            .output()
+            .unwrap();
+
+        // Switch back to main and make a different commit
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "main"])
+            .output()
+            .unwrap();
+        fs::write(temp_dir.path().join("main.txt"), "main content").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "main.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Add main feature"])
+            .output()
+            .unwrap();
+
+        // Test git2 merge (should perform 3-way merge)
+        let result = git_ops.merge_branches_git2("feature", "main", "Merge feature branch");
+        assert!(result.is_ok(), "Normal merge should succeed: {:?}", result);
+
+        // Verify both files exist after merge
+        assert!(
+            temp_dir.path().join("feature.txt").exists(),
+            "Feature file should exist"
+        );
+        assert!(
+            temp_dir.path().join("main.txt").exists(),
+            "Main file should exist"
+        );
+
+        // Verify merge commit was created
+        let log_output = Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["log", "--oneline", "-1"])
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&log_output.stdout);
+        assert!(
+            log.contains("Merge feature branch"),
+            "Should create merge commit with message"
+        );
+    }
+
+    #[test]
+    fn test_merge_branches_git2_conflict_detection() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Create initial commit with a file
+        fs::write(temp_dir.path().join("conflict.txt"), "original content\n").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "conflict.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Initial commit"])
+            .output()
+            .unwrap();
+
+        // Create feature branch and modify the file
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature"])
+            .output()
+            .unwrap();
+        fs::write(temp_dir.path().join("conflict.txt"), "feature content\n").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "conflict.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Feature change"])
+            .output()
+            .unwrap();
+
+        // Switch back to main and modify the same file differently
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "main"])
+            .output()
+            .unwrap();
+        fs::write(temp_dir.path().join("conflict.txt"), "main content\n").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "conflict.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Main change"])
+            .output()
+            .unwrap();
+
+        // Test git2 merge (should detect conflicts)
+        let result = git_ops.merge_branches_git2("feature", "main", "Merge feature branch");
+        assert!(result.is_err(), "Conflicting merge should fail");
+
+        // Verify abort file was created
+        let abort_file = temp_dir.path().join(".swissarmyhammer").join(".abort");
+        assert!(
+            abort_file.exists(),
+            "Abort file should be created on conflict"
+        );
+
+        let abort_content = std::fs::read_to_string(abort_file).unwrap();
+        assert!(
+            abort_content.contains("Merge conflicts detected"),
+            "Abort file should contain conflict message"
+        );
+        assert!(
+            abort_content.contains("conflict.txt"),
+            "Abort file should list conflicted files"
+        );
+    }
+
+    #[test]
+    fn test_merge_branches_git2_up_to_date() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Create branch but don't make any changes
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "identical"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "main"])
+            .output()
+            .unwrap();
+
+        // Test git2 merge (should be up to date)
+        let result = git_ops.merge_branches_git2("identical", "main", "Merge identical branch");
+        assert!(
+            result.is_ok(),
+            "Up-to-date merge should succeed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_merge_branches_git2_nonexistent_source_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Test git2 merge with nonexistent branch
+        let result = git_ops.merge_branches_git2("nonexistent", "main", "Merge nonexistent branch");
+        assert!(
+            result.is_err(),
+            "Merge with nonexistent source branch should fail"
+        );
+
+        // Verify error contains meaningful information
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("find source branch"),
+            "Error should mention source branch issue"
+        );
+    }
+
+    #[test]
+    fn test_create_commit_with_parents() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Create a file and commit on main
+        fs::write(temp_dir.path().join("file1.txt"), "content1").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "file1.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "First parent"])
+            .output()
+            .unwrap();
+
+        // Create second parent on a branch
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "branch"])
+            .output()
+            .unwrap();
+        fs::write(temp_dir.path().join("file2.txt"), "content2").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "file2.txt"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Second parent"])
+            .output()
+            .unwrap();
+
+        // Switch back to main for merge commit
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "main"])
+            .output()
+            .unwrap();
+
+        // Test the git2 merge functionality using merge_branches_git2
+        // This will internally test create_commit_with_parents indirectly
+        let result = git_ops.merge_branches_git2("branch", "main", "Test merge commit");
+        assert!(
+            result.is_ok(),
+            "Merge should succeed and create proper merge commit: {:?}",
+            result
+        );
+
+        // Verify the commit has two parents using shell commands (more reliable)
+        let log_output = Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["log", "--format=%P", "-1"])
+            .output()
+            .unwrap();
+        let parents = String::from_utf8_lossy(&log_output.stdout);
+        let parent_count = parents.trim().split_whitespace().count();
+        assert_eq!(parent_count, 2, "Merge commit should have two parents");
+    }
+
+    #[test]
+    fn test_handle_merge_conflicts_detailed_reporting() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        git_ops.init_git2().unwrap();
+
+        // Create initial commit with conflicting files
+        fs::write(temp_dir.path().join("file1.txt"), "original\n").unwrap();
+        fs::write(temp_dir.path().join("file2.txt"), "original\n").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Initial"])
+            .output()
+            .unwrap();
+
+        // Create conflicting changes on both branches
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "branch1"])
+            .output()
+            .unwrap();
+        fs::write(temp_dir.path().join("file1.txt"), "branch1 change\n").unwrap();
+        fs::write(temp_dir.path().join("file2.txt"), "branch1 change\n").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Branch1 changes"])
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "main"])
+            .output()
+            .unwrap();
+        fs::write(temp_dir.path().join("file1.txt"), "main change\n").unwrap();
+        fs::write(temp_dir.path().join("file2.txt"), "main change\n").unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["add", "."])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["commit", "-m", "Main changes"])
+            .output()
+            .unwrap();
+
+        // Attempt merge that should produce conflicts
+        let result = git_ops.merge_branches_git2("branch1", "main", "Test merge");
+        assert!(result.is_err(), "Merge should fail due to conflicts");
+
+        // Verify detailed conflict reporting in abort file
+        let abort_file = temp_dir.path().join(".swissarmyhammer").join(".abort");
+        assert!(abort_file.exists(), "Abort file should exist");
+
+        let abort_content = std::fs::read_to_string(abort_file).unwrap();
+        assert!(
+            abort_content.contains("file1.txt"),
+            "Should list first conflicted file"
+        );
+        assert!(
+            abort_content.contains("file2.txt"),
+            "Should list second conflicted file"
+        );
+        assert!(
+            abort_content.contains("Manual conflict resolution required"),
+            "Should provide resolution guidance"
+        );
     }
 }
