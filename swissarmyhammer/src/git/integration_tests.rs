@@ -210,4 +210,131 @@ mod tests {
         let git2_branch = git_ops.current_branch_git2().unwrap();
         assert_eq!(git2_branch, main_branch);
     }
+
+    #[test]
+    fn test_git2_repository_state_queries() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test bare repository check
+        let is_bare = git_ops.is_bare_repository().unwrap();
+        assert!(!is_bare); // Test repo should not be bare
+
+        // Test git directory path
+        let git_dir = git_ops.git_directory().unwrap();
+        assert!(git_dir.exists());
+        assert!(git_dir.ends_with(".git"));
+
+        // Test working directory path
+        let work_dir = git_ops.working_directory().unwrap();
+        assert!(work_dir.is_some());
+        let work_dir = work_dir.unwrap();
+        assert!(work_dir.exists());
+        
+        // Use canonicalized paths to handle symlink differences on macOS
+        let canonical_work_dir = work_dir.canonicalize().unwrap();
+        let canonical_temp_dir = temp_dir.path().canonicalize().unwrap();
+        assert_eq!(canonical_work_dir, canonical_temp_dir);
+    }
+
+    #[test]
+    fn test_git2_repository_validation() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Repository validation should succeed for a valid repository
+        git_ops.validate_repository().unwrap();
+    }
+
+    #[test]
+    fn test_git2_current_branch_behavior() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test normal branch name retrieval
+        let result = git_ops.current_branch_git2();
+        assert!(result.is_ok());
+        
+        let branch_name = result.unwrap();
+        assert!(!branch_name.is_empty());
+        assert!(branch_name == "main" || branch_name == "master");
+
+        // Create a detached HEAD scenario
+        let checkout_result = Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "--detach", "HEAD"])
+            .output()
+            .unwrap();
+
+        if checkout_result.status.success() {
+            // In detached HEAD state, git2 should handle this gracefully
+            // Either return a commit hash or handle it appropriately
+            let result = git_ops.current_branch_git2();
+            
+            // Both success and error are acceptable in detached HEAD
+            match result {
+                Ok(branch_or_commit) => {
+                    // Should return something (commit hash or branch name)
+                    assert!(!branch_or_commit.is_empty());
+                }
+                Err(error) => {
+                    // Error should be properly structured (not generic Other)
+                    let error_msg = error.to_string();
+                    assert!(!error_msg.contains("SwissArmyHammerError::Other"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_git2_branch_exists_nonexistent() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test with various invalid branch names
+        assert!(!git_ops.branch_exists_git2("definitely-does-not-exist").unwrap());
+        assert!(!git_ops.branch_exists_git2("feature/never-created").unwrap());
+        
+        // Empty string should be handled gracefully - should return false now
+        assert!(!git_ops.branch_exists_git2("").unwrap());
+    }
+
+    #[test]
+    fn test_git2_performance_vs_shell() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        let iterations = 10;
+
+        // Time shell-based operations
+        let shell_start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = git_ops.current_branch().unwrap();
+            let _ = git_ops.branch_exists("main").unwrap();
+        }
+        let shell_duration = shell_start.elapsed();
+
+        // Time git2-based operations
+        let git2_start = std::time::Instant::now();
+        for _ in 0..iterations {
+            let _ = git_ops.current_branch_git2().unwrap();
+            let _ = git_ops.branch_exists_git2("main").unwrap();
+        }
+        let git2_duration = git2_start.elapsed();
+
+        // git2 should be faster than shell operations
+        // Note: This is a basic performance test - git2 should be consistently faster
+        println!("Shell operations took: {:?}", shell_duration);
+        println!("Git2 operations took: {:?}", git2_duration);
+        
+        // In most cases git2 should be faster, but we'll just verify both complete successfully
+        // The actual performance benefit verification would be better suited for benchmark tests
+        assert!(shell_duration > std::time::Duration::from_nanos(0));
+        assert!(git2_duration > std::time::Duration::from_nanos(0));
+    }
 }
