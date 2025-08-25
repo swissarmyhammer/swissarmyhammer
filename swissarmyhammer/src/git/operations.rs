@@ -4,8 +4,10 @@
 //! including creating work branches, switching branches, and merging
 //! completed work back to the source branch.
 
+use super::git2_utils;
 use crate::common::create_abort_file;
 use crate::{Result, SwissArmyHammerError};
+use git2::Repository;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,6 +15,8 @@ use std::process::Command;
 pub struct GitOperations {
     /// Working directory for git operations
     work_dir: PathBuf,
+    /// Git2 repository handle for native operations (optional for gradual migration)
+    git2_repo: Option<Repository>,
 }
 
 impl GitOperations {
@@ -23,7 +27,10 @@ impl GitOperations {
         // Verify this is a git repository
         Self::verify_git_repo(&work_dir)?;
 
-        Ok(Self { work_dir })
+        Ok(Self {
+            work_dir,
+            git2_repo: None,
+        })
     }
 
     /// Create git operations handler with explicit work directory
@@ -31,7 +38,10 @@ impl GitOperations {
         // Verify this is a git repository
         Self::verify_git_repo(&work_dir)?;
 
-        Ok(Self { work_dir })
+        Ok(Self {
+            work_dir,
+            git2_repo: None,
+        })
     }
 
     /// Verify directory is a git repository
@@ -49,6 +59,70 @@ impl GitOperations {
         }
 
         Ok(())
+    }
+
+    /// Initialize git2 repository handle for native operations
+    ///
+    /// This method opens a git2::Repository handle for the working directory,
+    /// enabling native git operations alongside the existing shell commands.
+    /// This supports gradual migration from shell to native operations.
+    pub fn init_git2(&mut self) -> Result<()> {
+        if self.git2_repo.is_none() {
+            let repo = git2_utils::open_repository(&self.work_dir)?;
+            self.git2_repo = Some(repo);
+        }
+        Ok(())
+    }
+
+    /// Get reference to git2 repository (initializing if needed)
+    ///
+    /// This method provides access to the git2::Repository handle,
+    /// automatically initializing it if it hasn't been opened yet.
+    pub fn git2_repo(&mut self) -> Result<&Repository> {
+        if self.git2_repo.is_none() {
+            self.init_git2()?;
+        }
+        Ok(self.git2_repo.as_ref().unwrap())
+    }
+
+    /// Check if git2 repository is initialized
+    pub fn has_git2_repo(&self) -> bool {
+        self.git2_repo.is_some()
+    }
+
+    /// Get current branch name using git2 (example of git2-based operation)
+    ///
+    /// This method demonstrates how to implement git operations using git2-rs
+    /// instead of shell commands. It can be used alongside the existing shell-based
+    /// current_branch() method for testing and validation.
+    pub fn current_branch_git2(&mut self) -> Result<String> {
+        let repo = self.git2_repo()?;
+
+        let head = repo
+            .head()
+            .map_err(|e| git2_utils::convert_git2_error("get HEAD reference", e))?;
+
+        if let Some(branch_name) = head.shorthand() {
+            Ok(branch_name.to_string())
+        } else {
+            Err(SwissArmyHammerError::Other(
+                "Could not determine branch name from HEAD".to_string(),
+            ))
+        }
+    }
+
+    /// Check if a branch exists using git2 (example of git2-based operation)
+    ///
+    /// This method demonstrates branch checking using git2-rs.
+    /// It can be used alongside the existing shell-based branch_exists() method.
+    pub fn branch_exists_git2(&mut self, branch: &str) -> Result<bool> {
+        let repo = self.git2_repo()?;
+
+        match repo.find_branch(branch, git2::BranchType::Local) {
+            Ok(_) => Ok(true),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
+            Err(e) => Err(git2_utils::convert_git2_error("check branch existence", e)),
+        }
     }
 
     /// Get current branch name

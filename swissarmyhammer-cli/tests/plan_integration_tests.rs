@@ -300,7 +300,9 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
     // Test that the plan command starts execution (it should begin processing before timing out)
-    let result = run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // The command should start executing (showing log output)
     // We're not testing full execution here due to AI service calls, so we accept either success or timeout
@@ -315,8 +317,6 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
         result.stdout,
         result.stderr
     );
-
-
 
     Ok(())
 }
@@ -333,13 +333,16 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
     // Execute plan workflow in test mode using flow test
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -368,8 +371,6 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
         "Should achieve high coverage: {stdout}"
     );
 
-
-
     Ok(())
 }
 
@@ -387,13 +388,16 @@ async fn test_plan_command_relative_path() -> Result<()> {
     let _plan_file = create_test_plan_file(&plans_dir, "relative-test.md", "Relative Path Test")?;
 
     // Test using flow test mode with relative path
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        "plan_filename=./specification/relative-test.md",
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            "plan_filename=./specification/relative-test.md",
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -407,8 +411,6 @@ async fn test_plan_command_relative_path() -> Result<()> {
         stdout.contains("Test mode") && stdout.contains("Coverage Report"),
         "Should execute workflow in test mode: {stdout}"
     );
-
-
 
     Ok(())
 }
@@ -425,13 +427,16 @@ async fn test_plan_command_absolute_path() -> Result<()> {
     let plan_file = create_test_plan_file(&temp_path, "absolute-test.md", "Absolute Path Test")?;
 
     // Test using flow test mode with absolute path
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -445,8 +450,6 @@ async fn test_plan_command_absolute_path() -> Result<()> {
         stdout.contains("Test mode") && stdout.contains("100.0%"),
         "Should execute workflow successfully: {stdout}"
     );
-
-
 
     Ok(())
 }
@@ -463,13 +466,16 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
     let plan_file = create_complex_plan_file(&temp_path, "advanced-feature.md")?;
 
     // Test complex plan using flow test mode
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -489,8 +495,6 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
         "Should show coverage report: {stdout}"
     );
 
-
-
     Ok(())
 }
 
@@ -502,7 +506,8 @@ async fn test_plan_command_file_not_found() -> Result<()> {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent-plan.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "nonexistent-plan.md"], &temp_path).await?;
 
     assert!(
         result.exit_code != 0,
@@ -516,8 +521,6 @@ async fn test_plan_command_file_not_found() -> Result<()> {
             || stderr.contains("No such file"),
         "Should show file not found error: {stderr}"
     );
-
-
 
     Ok(())
 }
@@ -534,7 +537,9 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
     let dir_path = temp_path.join("directory-not-file");
     fs::create_dir_all(&dir_path)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path)
+            .await?;
 
     assert!(
         result.exit_code != 0,
@@ -546,8 +551,6 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
         stderr.contains("directory") || stderr.contains("not a file") || stderr.contains("invalid"),
         "Should show appropriate error for directory: {stderr}"
     );
-
-
 
     Ok(())
 }
@@ -564,7 +567,9 @@ async fn test_plan_command_empty_file() -> Result<()> {
     let empty_file = temp_path.join("empty-plan.md");
     fs::write(&empty_file, "")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // Empty file might still be processed, but should not create meaningful issues
     // The important thing is the command completes without crashing
@@ -572,8 +577,6 @@ async fn test_plan_command_empty_file() -> Result<()> {
         result.exit_code >= 0,
         "Plan command should complete even with empty file"
     );
-
-
 
     Ok(())
 }
@@ -600,13 +603,16 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
     // Create and test plan workflow in test mode
     let plan_file = create_test_plan_file(&temp_path, "new-feature.md", "New Feature Plan")?;
 
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -632,8 +638,6 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
         "Should preserve existing issues: {existing_files:?}"
     );
 
-
-
     Ok(())
 }
 
@@ -652,13 +656,16 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         "Special Characters Test",
     )?;
 
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -672,8 +679,6 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         stdout.contains("Test mode") && stdout.contains("Coverage Report"),
         "Should execute workflow successfully: {stdout}"
     );
-
-
 
     Ok(())
 }
@@ -699,13 +704,16 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
             .unwrap();
 
             // Use explicit working directory instead of global directory change
-            let result = run_sah_command_in_process_with_dir(&[
-                "flow",
-                "test",
-                "plan",
-                "--var",
-                &format!("plan_filename={}", plan_file.display()),
-            ], &temp_path)
+            let result = run_sah_command_in_process_with_dir(
+                &[
+                    "flow",
+                    "test",
+                    "plan",
+                    "--var",
+                    &format!("plan_filename={}", plan_file.display()),
+                ],
+                &temp_path,
+            )
             .await
             .expect("Failed to run plan workflow test");
 
@@ -733,7 +741,11 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["plan", "definitely-nonexistent-plan.md"], &temp_path).await?;
+    let result = run_sah_command_in_process_with_dir(
+        &["plan", "definitely-nonexistent-plan.md"],
+        &temp_path,
+    )
+    .await?;
 
     assert!(
         result.exit_code != 0,
@@ -759,8 +771,6 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
         "Should include actionable suggestions: {stderr}"
     );
 
-
-
     Ok(())
 }
 
@@ -776,7 +786,9 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
     let empty_file = temp_path.join("empty-plan.md");
     fs::write(&empty_file, "")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // Empty file should trigger enhanced error handling
     let stderr = &result.stderr;
@@ -796,8 +808,6 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
@@ -813,7 +823,11 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
     let whitespace_file = temp_path.join("whitespace-plan.md");
     fs::write(&whitespace_file, "   \n\t  \n  ")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", whitespace_file.to_str().unwrap()], &temp_path).await?;
+    let result = run_sah_command_in_process_with_dir(
+        &["plan", whitespace_file.to_str().unwrap()],
+        &temp_path,
+    )
+    .await?;
 
     let stderr = &result.stderr;
 
@@ -830,8 +844,6 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
@@ -847,7 +859,9 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
     let dir_path = temp_path.join("directory-not-file");
     fs::create_dir_all(&dir_path)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path)
+            .await?;
 
     assert!(
         result.exit_code != 0,
@@ -869,8 +883,6 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
         "Should provide specific guidance for directory error: {stderr}"
     );
 
-
-
     Ok(())
 }
 
@@ -887,7 +899,9 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
     let large_content = "x".repeat(11 * 1024 * 1024); // 11MB - over default 10MB limit
     fs::write(&large_file, large_content)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", large_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", large_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -903,8 +917,6 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
             "Should suggest breaking large plans into smaller files: {stderr}"
         );
     }
-
-
 
     Ok(())
 }
@@ -922,7 +934,9 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
     let binary_content = b"# Plan with\0null bytes\0in content";
     fs::write(&binary_file, binary_content)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", binary_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", binary_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -944,8 +958,6 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
@@ -959,7 +971,8 @@ async fn test_plan_enhanced_error_color_output() -> Result<()> {
 
     // Test with explicit NO_COLOR environment variable
     std::env::set_var("NO_COLOR", "1");
-    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
     std::env::remove_var("NO_COLOR");
 
     let stderr = &result.stderr;
@@ -973,8 +986,6 @@ async fn test_plan_enhanced_error_color_output() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
@@ -987,7 +998,8 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
     // Use explicit working directory instead of global directory change
 
     // Test file not found exit code
-    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
 
     assert_eq!(
         result.exit_code,
@@ -999,7 +1011,9 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
     let empty_file = temp_path.join("empty.md");
     fs::write(&empty_file, "")?;
 
-    let result2 = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
+    let result2 =
+        run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // Empty file should return warning exit code if detected as empty
     let stderr = &result2.stderr;
@@ -1010,8 +1024,6 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
             "Should return exit code 1 for empty file warning"
         );
     }
-
-
 
     Ok(())
 }
@@ -1043,7 +1055,9 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
     let issues_file = temp_path.join("issues");
     fs::write(&issues_file, "not a directory")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -1060,8 +1074,6 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
@@ -1073,7 +1085,9 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["plan", "structured-error-test.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "structured-error-test.md"], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -1097,8 +1111,6 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
             "Should have bulleted suggestions: {stderr}"
         );
     }
-
-
 
     Ok(())
 }
