@@ -1,6 +1,7 @@
 // Re-export modules for use in tests
 pub mod cli;
 pub mod commands;
+pub mod dynamic_cli;
 pub mod dynamic_execution;
 pub mod error;
 pub mod exit_codes;

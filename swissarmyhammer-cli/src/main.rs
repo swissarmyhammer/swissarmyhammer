@@ -636,8 +636,9 @@ async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
         .get_many::<String>("workflow-dirs")
         .map(|vals| vals.cloned().collect())
         .unwrap_or_default();
+    let validate_tools = matches.get_flag("validate-tools");
 
-    commands::validate::handle_command(quiet, format, workflow_dirs)
+    commands::validate::handle_command(quiet, format, workflow_dirs, validate_tools).await
 }
 
 async fn handle_plan_command(matches: &clap::ArgMatches) -> i32 {

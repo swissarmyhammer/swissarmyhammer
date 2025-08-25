@@ -163,6 +163,10 @@ Examples:
         /// \[DEPRECATED\] This parameter is ignored. Workflows are now only loaded from standard locations.
         #[arg(long = "workflow-dir", value_name = "DIR", hide = true)]
         workflow_dirs: Vec<String>,
+
+        /// Validate MCP tool schemas for CLI compatibility
+        #[arg(long)]
+        validate_tools: bool,
     },
 
     /// Plan a specific specification file
@@ -1015,6 +1019,7 @@ mod tests {
             quiet,
             format,
             workflow_dirs,
+            validate_tools: _,
         }) = cli.command
         {
             assert!(!quiet);
@@ -1043,6 +1048,7 @@ mod tests {
             quiet,
             format,
             workflow_dirs,
+            validate_tools: _,
         }) = cli.command
         {
             assert!(quiet);

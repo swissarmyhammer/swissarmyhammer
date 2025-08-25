@@ -642,6 +642,12 @@ Examples:
                         .help("[DEPRECATED] This parameter is ignored. Workflows are now only loaded from standard locations.")
                         .action(ArgAction::Append)
                         .hide(true),
+                )
+                .arg(
+                    Arg::new("validate-tools")
+                        .long("validate-tools")
+                        .help("Validate MCP tool schemas for CLI compatibility")
+                        .action(ArgAction::SetTrue),
                 ),
         );
 
