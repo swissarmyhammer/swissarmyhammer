@@ -3,6 +3,66 @@
 //! This module provides git integration for managing issue branches,
 //! including creating work branches, switching branches, and merging
 //! completed work back to the source branch.
+//!
+//! ## Git2-rs Migration Strategy
+//!
+//! This module is undergoing a gradual migration from shell-based git commands
+//! to native git2-rs operations for improved performance and reliability.
+//!
+//! ### Migration Timeline
+//!
+//! **Phase 1: Foundation and Repository Operations** ✅ (Current)
+//! - Repository verification and initialization
+//! - Basic repository state queries
+//! - Error handling infrastructure
+//! - git2 utility functions
+//!
+//! **Phase 2: Branch Operations** (Next)
+//! - Branch creation and deletion
+//! - Branch switching and checkout
+//! - Branch listing and status
+//!
+//! **Phase 3: Commit and Status Operations** (Future)
+//! - Working directory status
+//! - Commit operations
+//! - Diff and change detection
+//!
+//! **Phase 4: Advanced Operations** (Future)
+//! - Merge operations
+//! - Remote operations
+//! - Complex git workflows
+//!
+//! ### API Design Principles
+//!
+//! - **Backward Compatibility**: Existing shell-based methods remain available
+//! - **Gradual Migration**: New git2 methods are added alongside shell methods
+//! - **Performance**: git2 methods eliminate subprocess overhead
+//! - **Error Handling**: Structured error types replace generic errors
+//! - **Testing**: Comprehensive integration tests ensure equivalence
+//!
+//! ### When to Use Git2 vs Shell Methods
+//!
+//! **Use git2 methods (`*_git2`) when:**
+//! - Performance is critical
+//! - You're building new functionality
+//! - You need structured error information
+//! - You want to minimize system calls
+//!
+//! **Use shell methods when:**
+//! - Maintaining existing code that works
+//! - You need functionality not yet migrated
+//! - Integration with external shell scripts
+//!
+//! ### Current Status
+//!
+//! - ✅ Repository verification migrated to git2
+//! - ✅ Branch existence checking available in both formats  
+//! - ✅ Current branch name available in both formats
+//! - ✅ Repository state queries (bare, directories) via git2
+//! - ⏳ Most complex operations still use shell commands
+//!
+//! The migration prioritizes reliability and maintainability while providing
+//! performance improvements for commonly used operations.
 
 use super::git2_utils;
 use crate::common::create_abort_file;
@@ -10,6 +70,9 @@ use crate::{Result, SwissArmyHammerError};
 use git2::Repository;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Exit code used when a command's exit status cannot be determined
+const UNKNOWN_EXIT_CODE: i32 = -1;
 
 /// Git operations for issue management
 pub struct GitOperations {
@@ -24,41 +87,37 @@ impl GitOperations {
     pub fn new() -> Result<Self> {
         let work_dir = std::env::current_dir()?;
 
-        // Verify this is a git repository
+        // Verify this is a git repository and initialize git2 repository
         Self::verify_git_repo(&work_dir)?;
+        let git2_repo = Some(git2_utils::discover_repository(&work_dir)?);
 
         Ok(Self {
             work_dir,
-            git2_repo: None,
+            git2_repo,
         })
     }
 
     /// Create git operations handler with explicit work directory
     pub fn with_work_dir(work_dir: PathBuf) -> Result<Self> {
-        // Verify this is a git repository
+        // Verify this is a git repository and initialize git2 repository
         Self::verify_git_repo(&work_dir)?;
+        let git2_repo = Some(git2_utils::discover_repository(&work_dir)?);
 
         Ok(Self {
             work_dir,
-            git2_repo: None,
+            git2_repo,
         })
     }
 
-    /// Verify directory is a git repository
+    /// Verify directory is a git repository using git2
     fn verify_git_repo(path: &Path) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(path)
-            .args(["rev-parse", "--git-dir"])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(SwissArmyHammerError::git_operation_failed(
+        match git2_utils::discover_repository(path) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(SwissArmyHammerError::git_operation_failed(
                 "check repository",
                 "Not in a git repository",
-            ));
+            )),
         }
-
-        Ok(())
     }
 
     /// Initialize git2 repository handle for native operations
@@ -66,9 +125,11 @@ impl GitOperations {
     /// This method opens a git2::Repository handle for the working directory,
     /// enabling native git operations alongside the existing shell commands.
     /// This supports gradual migration from shell to native operations.
+    /// Uses discover for better robustness with subdirectories and worktrees.
     pub fn init_git2(&mut self) -> Result<()> {
         if self.git2_repo.is_none() {
-            let repo = git2_utils::open_repository(&self.work_dir)?;
+            let repo = git2_utils::discover_repository(&self.work_dir)?;
+            git2_utils::validate_repository_state(&repo)?;
             self.git2_repo = Some(repo);
         }
         Ok(())
@@ -78,6 +139,8 @@ impl GitOperations {
     ///
     /// This method provides access to the git2::Repository handle,
     /// automatically initializing it if it hasn't been opened yet.
+    /// The repository handle is cached for subsequent calls, ensuring
+    /// optimal performance for repeated git operations.
     pub fn git2_repo(&mut self) -> Result<&Repository> {
         if self.git2_repo.is_none() {
             self.init_git2()?;
@@ -90,11 +153,24 @@ impl GitOperations {
         self.git2_repo.is_some()
     }
 
-    /// Get current branch name using git2 (example of git2-based operation)
+    /// Get current branch name using git2-rs native operations
     ///
-    /// This method demonstrates how to implement git operations using git2-rs
-    /// instead of shell commands. It can be used alongside the existing shell-based
-    /// current_branch() method for testing and validation.
+    /// This method uses git2-rs to determine the current branch name without
+    /// spawning shell processes. It provides better performance and more structured
+    /// error handling compared to the shell-based current_branch() method.
+    ///
+    /// # Returns
+    /// - `Ok(String)` containing the current branch name
+    /// - `Err(SwissArmyHammerError)` if the repository is not initialized, HEAD
+    ///   cannot be read, or the current branch name cannot be determined
+    ///
+    /// # Performance
+    /// This method is significantly faster than shell-based alternatives as it
+    /// eliminates subprocess creation overhead and directly accesses git repository data.
+    ///
+    /// # Usage
+    /// Use this method when you need high-performance branch name retrieval or when
+    /// working in environments where subprocess creation should be minimized.
     pub fn current_branch_git2(&mut self) -> Result<String> {
         let repo = self.git2_repo()?;
 
@@ -105,17 +181,40 @@ impl GitOperations {
         if let Some(branch_name) = head.shorthand() {
             Ok(branch_name.to_string())
         } else {
-            Err(SwissArmyHammerError::Other(
-                "Could not determine branch name from HEAD".to_string(),
-            ))
+            // Create a mock git2::Error for consistency with git2 error patterns
+            let git2_error = git2::Error::from_str("HEAD reference does not point to a valid branch name");
+            Err(git2_utils::convert_git2_error("determine branch name from HEAD", git2_error))
         }
     }
 
-    /// Check if a branch exists using git2 (example of git2-based operation)
+    /// Check if a local branch exists using git2-rs native operations
     ///
-    /// This method demonstrates branch checking using git2-rs.
-    /// It can be used alongside the existing shell-based branch_exists() method.
+    /// This method uses git2-rs to check for branch existence without spawning
+    /// shell processes. It provides better performance and more structured error
+    /// handling compared to shell-based alternatives.
+    ///
+    /// # Arguments
+    /// * `branch` - The name of the branch to check for existence
+    ///
+    /// # Returns
+    /// - `Ok(true)` if the branch exists as a local branch
+    /// - `Ok(false)` if the branch does not exist
+    /// - `Err(SwissArmyHammerError)` if the repository is not initialized or
+    ///   other git2 errors occur during branch lookup
+    ///
+    /// # Performance
+    /// This method is faster than shell-based alternatives and provides immediate
+    /// feedback without subprocess overhead.
+    ///
+    /// # Usage
+    /// Use this method when you need to verify branch existence in performance-critical
+    /// code paths or when minimizing system calls.
     pub fn branch_exists_git2(&mut self, branch: &str) -> Result<bool> {
+        // Handle empty or whitespace-only branch names
+        if branch.trim().is_empty() {
+            return Ok(false);
+        }
+        
         let repo = self.git2_repo()?;
 
         match repo.find_branch(branch, git2::BranchType::Local) {
@@ -136,7 +235,7 @@ impl GitOperations {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SwissArmyHammerError::git_command_failed(
                 "rev-parse --abbrev-ref HEAD",
-                output.status.code().unwrap_or(-1),
+                output.status.code().unwrap_or(UNKNOWN_EXIT_CODE),
                 &stderr,
             ));
         }
@@ -267,7 +366,7 @@ impl GitOperations {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SwissArmyHammerError::git_command_failed(
                 "checkout -b",
-                output.status.code().unwrap_or(-1),
+                output.status.code().unwrap_or(UNKNOWN_EXIT_CODE),
                 &stderr,
             ));
         }
@@ -286,7 +385,7 @@ impl GitOperations {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SwissArmyHammerError::git_command_failed(
                 "checkout",
-                output.status.code().unwrap_or(-1),
+                output.status.code().unwrap_or(UNKNOWN_EXIT_CODE),
                 &stderr,
             ));
         }
@@ -649,6 +748,66 @@ impl GitOperations {
     /// Get the work directory path
     pub fn work_dir(&self) -> &std::path::Path {
         &self.work_dir
+    }
+
+    /// Check if repository is bare using git2-rs native operations
+    ///
+    /// A bare repository is one that does not have a working directory,
+    /// typically used for sharing and hosting git repositories.
+    ///
+    /// # Returns
+    /// - `Ok(true)` if the repository is bare (no working directory)
+    /// - `Ok(false)` if the repository has a working directory
+    /// - `Err(SwissArmyHammerError)` if the repository cannot be accessed
+    pub fn is_bare_repository(&mut self) -> Result<bool> {
+        let repo = self.git2_repo()?;
+        Ok(git2_utils::is_bare_repository(repo))
+    }
+
+    /// Get git directory path using git2-rs native operations
+    ///
+    /// Returns the path to the git directory (typically `.git/`) for this repository.
+    /// For bare repositories, this is the repository root. For normal repositories,
+    /// this is the `.git` subdirectory.
+    ///
+    /// # Returns
+    /// - `Ok(PathBuf)` containing the absolute path to the git directory
+    /// - `Err(SwissArmyHammerError)` if the repository cannot be accessed
+    pub fn git_directory(&mut self) -> Result<std::path::PathBuf> {
+        let repo = self.git2_repo()?;
+        git2_utils::get_git_dir(repo)
+    }
+
+    /// Get working directory path using git2-rs native operations
+    ///
+    /// Returns the path to the repository's working directory. For bare repositories,
+    /// this will return None since bare repositories have no working directory.
+    ///
+    /// # Returns
+    /// - `Ok(Some(PathBuf))` containing the absolute path to the working directory
+    /// - `Ok(None)` if the repository is bare (no working directory)
+    /// - `Err(SwissArmyHammerError)` if the repository cannot be accessed
+    pub fn working_directory(&mut self) -> Result<Option<std::path::PathBuf>> {
+        let repo = self.git2_repo()?;
+        git2_utils::get_work_dir(repo)
+    }
+
+    /// Validate repository consistency using git2-rs native operations
+    ///
+    /// Performs comprehensive validation of the repository state to ensure it
+    /// is in a consistent, usable condition. This includes checking repository
+    /// integrity and basic structural consistency.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the repository passes all validation checks
+    /// - `Err(SwissArmyHammerError)` if validation fails or repository is inconsistent
+    ///
+    /// # Usage
+    /// Use this method before performing critical operations or after repository
+    /// modifications to ensure the repository remains in a valid state.
+    pub fn validate_repository(&mut self) -> Result<()> {
+        let repo = self.git2_repo()?;
+        git2_utils::validate_repository_state(repo)
     }
 
     /// Validate source branch state for merge operations
