@@ -10,8 +10,15 @@ use crate::validate;
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the validate command
-pub fn handle_command(quiet: bool, format: ValidateFormat, workflow_dirs: Vec<String>) -> i32 {
-    match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs) {
+pub async fn handle_command(
+    quiet: bool,
+    format: ValidateFormat,
+    workflow_dirs: Vec<String>,
+    validate_tools: bool,
+) -> i32 {
+    match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs, validate_tools)
+        .await
+    {
         Ok(exit_code) => exit_code,
         Err(e) => {
             eprintln!("Validate command failed: {}", e);

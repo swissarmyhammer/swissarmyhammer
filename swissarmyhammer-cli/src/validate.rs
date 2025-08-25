@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use swissarmyhammer::sah_config::validate_config_file;
 use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
@@ -12,7 +13,9 @@ use swissarmyhammer::workflow::{
 };
 
 use crate::cli::ValidateFormat;
+use crate::dynamic_cli::CliBuilder;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
+use crate::mcp_integration::CliToolContext;
 
 #[derive(Debug, Serialize)]
 struct JsonValidationResult {
@@ -49,7 +52,10 @@ impl Validator {
         }
     }
 
-    pub fn validate_all_with_options(&mut self) -> Result<ValidationResult> {
+    pub async fn validate_all_with_options(
+        &mut self,
+        validate_tools: bool,
+    ) -> Result<ValidationResult> {
         let mut result = ValidationResult::new();
 
         // Load all prompts using the centralized PromptResolver
@@ -111,12 +117,18 @@ impl Validator {
         // Validate sah.toml configuration file
         self.validate_sah_config(&mut result)?;
 
+        // Validate tools if requested
+        if validate_tools {
+            self.validate_tools(&mut result).await?;
+        }
+
         Ok(result)
     }
 
-    pub fn validate_with_custom_dirs(
+    pub async fn validate_with_custom_dirs(
         &mut self,
         workflow_dirs: Vec<String>,
+        validate_tools: bool,
     ) -> Result<ValidationResult> {
         let mut result = ValidationResult::new();
 
@@ -178,6 +190,11 @@ impl Validator {
 
         // Validate sah.toml configuration file
         self.validate_sah_config(&mut result)?;
+
+        // Validate tools if requested
+        if validate_tools {
+            self.validate_tools(&mut result).await?;
+        }
 
         Ok(result)
     }
@@ -822,20 +839,87 @@ impl Validator {
 
         Ok(())
     }
+
+    /// Validate MCP tool schemas for CLI compatibility
+    async fn validate_tools(&mut self, result: &mut ValidationResult) -> Result<()> {
+        // Initialize tool context for validation
+        let cli_tool_context = match CliToolContext::new().await {
+            Ok(context) => Arc::new(context),
+            Err(e) => {
+                result.add_issue(ValidationIssue {
+                    level: ValidationLevel::Error,
+                    file_path: PathBuf::from("MCP Tools"),
+                    content_title: Some("Tool Context".to_string()),
+                    line: None,
+                    column: None,
+                    message: format!("Failed to initialize tool context: {}", e),
+                    suggestion: Some(
+                        "Check MCP server configuration and accessibility".to_string(),
+                    ),
+                });
+                return Ok(());
+            }
+        };
+
+        let tool_registry = cli_tool_context.get_tool_registry_arc();
+        let cli_builder = CliBuilder::new(tool_registry.clone());
+
+        let validation_stats = cli_builder.get_validation_stats();
+        let validation_errors = cli_builder.validate_all_tools();
+
+        // Convert tool validation results to ValidationIssues
+        if !validation_stats.is_all_valid() {
+            for error in validation_errors {
+                let level = if error.to_string().contains("Error") {
+                    ValidationLevel::Error
+                } else {
+                    ValidationLevel::Warning
+                };
+
+                result.add_issue(ValidationIssue {
+                    level,
+                    file_path: PathBuf::from("MCP Tools"),
+                    content_title: Some("Tool Validation".to_string()),
+                    line: None,
+                    column: None,
+                    message: error.to_string(),
+                    suggestion: error.suggestion().map(|s| s.to_string()),
+                });
+            }
+        }
+
+        // Add a success info message if all tools passed validation (in non-quiet mode)
+        if validation_stats.is_all_valid() && !self.quiet {
+            result.add_issue(ValidationIssue {
+                level: ValidationLevel::Info,
+                file_path: PathBuf::from("MCP Tools"),
+                content_title: Some("Tool Validation".to_string()),
+                line: None,
+                column: None,
+                message: format!("All {} tools passed validation", validation_stats.summary()),
+                suggestion: None,
+            });
+        }
+
+        Ok(())
+    }
 }
 
-pub fn run_validate_command_with_dirs(
+pub async fn run_validate_command_with_dirs(
     quiet: bool,
     format: ValidateFormat,
     workflow_dirs: Vec<String>,
+    validate_tools: bool,
 ) -> Result<i32> {
     let mut validator = Validator::new(quiet);
 
     // Validate with custom workflow directories if provided
     let result = if workflow_dirs.is_empty() {
-        validator.validate_all_with_options()?
+        validator.validate_all_with_options(validate_tools).await?
     } else {
-        validator.validate_with_custom_dirs(workflow_dirs)?
+        validator
+            .validate_with_custom_dirs(workflow_dirs, validate_tools)
+            .await?
     };
 
     validator.print_results(&result, format)?;
@@ -853,18 +937,21 @@ pub fn run_validate_command_with_dirs(
 /// Run validation command and return the output as a string and exit code
 /// This is used for in-process testing where we need to capture the output
 #[allow(dead_code)] // Used by test infrastructure
-pub fn run_validate_command_with_dirs_captured(
+pub async fn run_validate_command_with_dirs_captured(
     quiet: bool,
     format: ValidateFormat,
     workflow_dirs: Vec<String>,
+    validate_tools: bool,
 ) -> Result<(String, i32)> {
     let mut validator = Validator::new(quiet);
 
     // Validate with custom workflow directories if provided
     let result = if workflow_dirs.is_empty() {
-        validator.validate_all_with_options()?
+        validator.validate_all_with_options(validate_tools).await?
     } else {
-        validator.validate_with_custom_dirs(workflow_dirs)?
+        validator
+            .validate_with_custom_dirs(workflow_dirs, validate_tools)
+            .await?
     };
 
     let output = validator.format_results(&result, format)?;
@@ -884,6 +971,7 @@ pub fn run_validate_command_with_dirs_captured(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dynamic_cli::CliValidationStats;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -987,8 +1075,8 @@ mod tests {
         assert!(quiet_validator.quiet);
     }
 
-    #[test]
-    fn test_validate_all_handles_partial_templates() {
+    #[tokio::test]
+    async fn test_validate_all_handles_partial_templates() {
         // This test verifies that .liquid files with {% partial %} marker
         // don't generate errors for missing title/description
         let mut validator = Validator::new(false);
@@ -998,7 +1086,7 @@ mod tests {
 
         // In test environment, validate_all may fail due to missing directories
         // We allow this to fail gracefully as we're testing partial template handling
-        let result = match validator.validate_all_with_options() {
+        let result = match validator.validate_all_with_options(false).await {
             Ok(r) => r,
             Err(_) => {
                 // In test environment, we may not have standard directories
@@ -1907,5 +1995,106 @@ Neither of these should cause validation errors."#;
 
         // The fix ensures that in quiet mode, when only warnings exist,
         // no summary is shown at all (tested in integration tests)
+    }
+
+    #[tokio::test]
+    async fn test_validate_tools_functionality() {
+        let mut validator = Validator::new(false);
+
+        let mut result = ValidationResult::new();
+
+        // Test validate_tools method directly
+        // This should not panic even if no MCP tools are available
+        let validation_result = validator.validate_tools(&mut result).await;
+
+        // The method should complete without error
+        assert!(
+            validation_result.is_ok(),
+            "validate_tools should not fail even without MCP tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_all_with_tools_flag() {
+        let mut validator = Validator::new(false);
+
+        // Test validation with validate_tools = false
+        let result_without_tools = validator.validate_all_with_options(false).await;
+        assert!(
+            result_without_tools.is_ok(),
+            "Validation without tools should succeed"
+        );
+
+        // Test validation with validate_tools = true
+        let result_with_tools = validator.validate_all_with_options(true).await;
+        assert!(
+            result_with_tools.is_ok(),
+            "Validation with tools should succeed even if no tools available"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_tools_error_handling() {
+        let mut validator = Validator::new(false);
+
+        let mut result = ValidationResult::new();
+
+        // Test that validation continues even if tool context fails
+        let validation_result = validator.validate_tools(&mut result).await;
+
+        // Should handle gracefully when MCP tool context cannot be created
+        assert!(
+            validation_result.is_ok(),
+            "validate_tools should handle MCP context errors gracefully"
+        );
+    }
+
+    #[test]
+    fn test_cli_validation_stats_default() {
+        let stats = CliValidationStats::default();
+
+        assert_eq!(stats.total_tools, 0);
+        assert_eq!(stats.valid_tools, 0);
+        assert_eq!(stats.invalid_tools, 0);
+        assert_eq!(stats.validation_errors, 0);
+        assert!(stats.is_all_valid());
+        assert_eq!(stats.success_rate(), 100.0);
+    }
+
+    #[test]
+    fn test_cli_validation_stats_calculations() {
+        let mut stats = CliValidationStats::new();
+        stats.total_tools = 10;
+        stats.valid_tools = 8;
+        stats.invalid_tools = 2;
+        stats.validation_errors = 1;
+
+        assert!(!stats.is_all_valid());
+        assert_eq!(stats.success_rate(), 80.0);
+
+        let summary = stats.summary();
+        assert!(summary.contains("8 of 10"));
+        assert!(summary.contains("80.0%"));
+        assert!(summary.contains("1 validation errors"));
+    }
+
+    #[test]
+    fn test_cli_validation_stats_edge_cases() {
+        // Test with zero tools
+        let mut stats = CliValidationStats::new();
+        assert_eq!(stats.success_rate(), 100.0);
+        assert!(stats.is_all_valid());
+
+        // Test with all valid tools
+        stats.total_tools = 5;
+        stats.valid_tools = 5;
+        stats.invalid_tools = 0;
+        stats.validation_errors = 0;
+
+        assert!(stats.is_all_valid());
+        assert_eq!(stats.success_rate(), 100.0);
+
+        let summary = stats.summary();
+        assert!(summary.contains("All 5 CLI tools are valid"));
     }
 }

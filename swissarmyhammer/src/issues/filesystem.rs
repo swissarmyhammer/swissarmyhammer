@@ -5065,7 +5065,7 @@ mod tests {
             let _test_env = IsolatedTestEnvironment::new().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
-            let storage = FileSystemIssueStorage::new_default().unwrap();
+            let (storage, _) = FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
 
             // Verify the storage uses .swissarmyhammer path by checking the path contains it
             assert!(storage
@@ -5107,7 +5107,7 @@ mod tests {
                 std::fs::remove_dir_all(&swissarmyhammer_dir).unwrap();
             }
 
-            let storage = FileSystemIssueStorage::new_default().unwrap();
+            let (storage, _) = FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
 
             // Restore original directory
             let _ = std::env::set_current_dir(original_dir);
@@ -5143,13 +5143,13 @@ mod tests {
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
             // Test without .swissarmyhammer
-            let dir = FileSystemIssueStorage::default_directory().unwrap();
+            let dir = FileSystemIssueStorage::default_directory_in(temp_dir.path()).unwrap();
             assert!(dir.ends_with("issues"));
             assert!(!dir.to_string_lossy().contains(".swissarmyhammer"));
 
             // Create .swissarmyhammer and test again
             std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer")).unwrap();
-            let dir = FileSystemIssueStorage::default_directory().unwrap();
+            let dir = FileSystemIssueStorage::default_directory_in(temp_dir.path()).unwrap();
             assert!(dir.ends_with("issues"));
             assert!(dir.to_string_lossy().contains(".swissarmyhammer"));
         }
@@ -5165,7 +5165,7 @@ mod tests {
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
             // Create storage - should create the required directories
-            let storage = FileSystemIssueStorage::new_default().unwrap();
+            let (storage, _) = FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
 
             // Directories should now exist - check the actual storage paths
             assert!(storage.state.issues_dir.exists());
@@ -5209,7 +5209,7 @@ mod tests {
                 std::fs::remove_dir_all(&new_issues).unwrap();
             }
 
-            assert!(FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
         }
 
         #[test]
@@ -5223,7 +5223,7 @@ mod tests {
             std::fs::create_dir_all(temp_dir.path().join("issues")).unwrap();
             std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer/issues")).unwrap();
 
-            assert!(!FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(!FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
         }
 
         #[test]
@@ -5233,7 +5233,7 @@ mod tests {
             let _test_env = IsolatedTestEnvironment::new().unwrap();
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
-            assert!(!FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(!FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
         }
 
         #[test]
@@ -5258,7 +5258,7 @@ mod tests {
                 std::fs::remove_dir_all(&new_issues).unwrap();
             }
 
-            let info = FileSystemIssueStorage::migration_info().unwrap();
+            let info = FileSystemIssueStorage::migration_info_in(temp_dir.path()).unwrap();
 
             assert!(info.should_migrate);
             assert!(info.source_exists);
@@ -5309,7 +5309,7 @@ mod tests {
             }
 
             // Should still migrate empty directories
-            assert!(FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
         }
 
         #[test]
@@ -5541,11 +5541,12 @@ mod tests {
             std::fs::write(&issues_path, "this is a file, not a directory").unwrap();
 
             // Should not migrate because "issues" is not a directory
-            let should_migrate = FileSystemIssueStorage::should_migrate().unwrap();
+            let should_migrate =
+                FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap();
             assert!(!should_migrate);
 
             // Migration info should reflect this
-            let info = FileSystemIssueStorage::migration_info().unwrap();
+            let info = FileSystemIssueStorage::migration_info_in(temp_dir.path()).unwrap();
             assert!(!info.should_migrate);
             assert!(info.source_exists); // File exists
             assert!(!info.destination_exists);
@@ -5611,7 +5612,7 @@ mod tests {
             std::env::set_current_dir(temp_dir.path()).unwrap();
 
             // Initially no migration needed
-            assert!(!FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(!FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
 
             // Create legacy directory
             let issues_dir = temp_dir.path().join("issues");
@@ -5619,11 +5620,11 @@ mod tests {
             std::fs::write(issues_dir.join("test.md"), "content").unwrap();
 
             // Now migration should be needed
-            assert!(FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
 
             // Create new directory - migration no longer needed
             std::fs::create_dir_all(temp_dir.path().join(".swissarmyhammer/issues")).unwrap();
-            assert!(!FileSystemIssueStorage::should_migrate().unwrap());
+            assert!(!FileSystemIssueStorage::should_migrate_in(temp_dir.path()).unwrap());
         }
 
         #[test]
@@ -5682,7 +5683,7 @@ mod tests {
             std::fs::create_dir_all(temp_dir.path().join("target")).unwrap();
 
             // Storage should detect .swissarmyhammer and use it
-            let storage = FileSystemIssueStorage::new_default().unwrap();
+            let (storage, _) = FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
             assert!(storage
                 .state
                 .issues_dir
@@ -5693,7 +5694,7 @@ mod tests {
             std::fs::remove_dir_all(&swissarmyhammer_dir).unwrap();
 
             // Storage should fall back to legacy issues directory
-            let storage2 = FileSystemIssueStorage::new_default().unwrap();
+            let (storage2, _) = FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
             assert!(!storage2
                 .state
                 .issues_dir
@@ -6177,7 +6178,7 @@ mod tests {
         assert!(status.contains("1 files"));
 
         // Perform migration
-        let _storage = FileSystemIssueStorage::new_default().unwrap();
+        let _storage = FileSystemIssueStorage::new_default_in(temp_dir.path()).unwrap();
 
         // Test: No migration needed after migration
         let status = FileSystemIssueStorage::migration_status().unwrap();

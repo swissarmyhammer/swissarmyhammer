@@ -185,9 +185,17 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             quiet,
             format,
             workflow_dirs,
+            validate_tools,
         }) => {
             // Use the captured version that returns output as a string
-            match validate::run_validate_command_with_dirs_captured(quiet, format, workflow_dirs) {
+            match validate::run_validate_command_with_dirs_captured(
+                quiet,
+                format,
+                workflow_dirs,
+                validate_tools,
+            )
+            .await
+            {
                 Ok((output, exit_code)) => (output, String::new(), exit_code),
                 Err(e) => {
                     let stderr_str = format!("{}", e);
