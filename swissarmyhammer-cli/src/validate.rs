@@ -971,6 +971,7 @@ pub async fn run_validate_command_with_dirs_captured(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dynamic_cli::CliValidationStats;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -1994,5 +1995,94 @@ Neither of these should cause validation errors."#;
 
         // The fix ensures that in quiet mode, when only warnings exist,
         // no summary is shown at all (tested in integration tests)
+    }
+
+    #[tokio::test]
+    async fn test_validate_tools_functionality() {
+        let mut validator = Validator::new(false);
+
+        let mut result = ValidationResult::new();
+
+        // Test validate_tools method directly
+        // This should not panic even if no MCP tools are available
+        let validation_result = validator.validate_tools(&mut result).await;
+        
+        // The method should complete without error
+        assert!(validation_result.is_ok(), "validate_tools should not fail even without MCP tools");
+    }
+
+    #[tokio::test]
+    async fn test_validate_all_with_tools_flag() {
+        let mut validator = Validator::new(false);
+
+        // Test validation with validate_tools = false
+        let result_without_tools = validator.validate_all_with_options(false).await;
+        assert!(result_without_tools.is_ok(), "Validation without tools should succeed");
+
+        // Test validation with validate_tools = true
+        let result_with_tools = validator.validate_all_with_options(true).await;
+        assert!(result_with_tools.is_ok(), "Validation with tools should succeed even if no tools available");
+    }
+
+    #[tokio::test]
+    async fn test_validate_tools_error_handling() {
+        let mut validator = Validator::new(false);
+
+        let mut result = ValidationResult::new();
+
+        // Test that validation continues even if tool context fails
+        let validation_result = validator.validate_tools(&mut result).await;
+        
+        // Should handle gracefully when MCP tool context cannot be created
+        assert!(validation_result.is_ok(), "validate_tools should handle MCP context errors gracefully");
+    }
+
+    #[test]
+    fn test_cli_validation_stats_default() {
+        let stats = CliValidationStats::default();
+        
+        assert_eq!(stats.total_tools, 0);
+        assert_eq!(stats.valid_tools, 0);
+        assert_eq!(stats.invalid_tools, 0);
+        assert_eq!(stats.validation_errors, 0);
+        assert!(stats.is_all_valid());
+        assert_eq!(stats.success_rate(), 100.0);
+    }
+
+    #[test]
+    fn test_cli_validation_stats_calculations() {
+        let mut stats = CliValidationStats::new();
+        stats.total_tools = 10;
+        stats.valid_tools = 8;
+        stats.invalid_tools = 2;
+        stats.validation_errors = 1;
+
+        assert!(!stats.is_all_valid());
+        assert_eq!(stats.success_rate(), 80.0);
+        
+        let summary = stats.summary();
+        assert!(summary.contains("8 of 10"));
+        assert!(summary.contains("80.0%"));
+        assert!(summary.contains("1 validation errors"));
+    }
+
+    #[test]
+    fn test_cli_validation_stats_edge_cases() {
+        // Test with zero tools
+        let mut stats = CliValidationStats::new();
+        assert_eq!(stats.success_rate(), 100.0);
+        assert!(stats.is_all_valid());
+
+        // Test with all valid tools
+        stats.total_tools = 5;
+        stats.valid_tools = 5;
+        stats.invalid_tools = 0;
+        stats.validation_errors = 0;
+        
+        assert!(stats.is_all_valid());
+        assert_eq!(stats.success_rate(), 100.0);
+        
+        let summary = stats.summary();
+        assert!(summary.contains("All 5 CLI tools are valid"));
     }
 }

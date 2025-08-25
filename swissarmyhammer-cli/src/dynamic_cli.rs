@@ -42,7 +42,7 @@ enum ArgType {
 }
 
 /// Statistics about CLI tool validation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CliValidationStats {
     pub total_tools: usize,
     pub valid_tools: usize,
