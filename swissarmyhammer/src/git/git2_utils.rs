@@ -75,7 +75,7 @@ pub fn open_repository<P: AsRef<Path>>(path: P) -> Result<Repository> {
                 )
             }
         };
-        
+
         warn!("Repository open failed: {}", error_msg);
         convert_git2_repository_error(&error_msg, e)
     })

@@ -1402,7 +1402,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
-
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
         use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
@@ -1414,8 +1413,7 @@ mod tests {
 
         // Create mock storage and handlers for context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(test_issues_dir)
-                .unwrap(),
+            swissarmyhammer::issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
