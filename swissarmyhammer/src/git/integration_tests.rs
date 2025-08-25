@@ -218,7 +218,7 @@ mod tests {
         assert!(work_dir.is_some());
         let work_dir = work_dir.unwrap();
         assert!(work_dir.exists());
-        
+
         // Use canonicalized paths to handle symlink differences on macOS
         let canonical_work_dir = work_dir.canonicalize().unwrap();
         let canonical_temp_dir = temp_dir.path().canonicalize().unwrap();
@@ -244,7 +244,7 @@ mod tests {
         // Test normal branch name retrieval
         let result = git_ops.current_branch();
         assert!(result.is_ok());
-        
+
         let branch_name = result.unwrap();
         assert!(!branch_name.is_empty());
         assert!(branch_name == "main" || branch_name == "master");
@@ -260,7 +260,7 @@ mod tests {
             // In detached HEAD state, git2 should handle this gracefully
             // Either return a commit hash or handle it appropriately
             let result = git_ops.current_branch();
-            
+
             // Both success and error are acceptable in detached HEAD
             match result {
                 Ok(branch_or_commit) => {
@@ -285,7 +285,7 @@ mod tests {
         // Test with various invalid branch names
         assert!(!git_ops.branch_exists("definitely-does-not-exist").unwrap());
         assert!(!git_ops.branch_exists("feature/never-created").unwrap());
-        
+
         // Empty string should be handled gracefully - should return false now
         assert!(!git_ops.branch_exists("").unwrap());
     }
@@ -308,7 +308,7 @@ mod tests {
 
         // git2 operations should complete successfully and be reasonably fast
         println!("Git2 operations took: {:?}", git2_duration);
-        
+
         // Verify git2 operations complete successfully
         assert!(git2_duration > std::time::Duration::from_nanos(0));
         assert!(git2_duration < std::time::Duration::from_secs(5)); // Should be much faster than 5 seconds

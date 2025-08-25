@@ -74,6 +74,58 @@ use std::process::Command;
 /// Exit code used when a command's exit status cannot be determined
 const UNKNOWN_EXIT_CODE: i32 = -1;
 
+/// Detailed status summary for git repository state
+#[derive(Debug, Default)]
+pub struct StatusSummary {
+    /// Files that are staged and modified
+    pub staged_modified: Vec<String>,
+    /// Files that are unstaged and modified
+    pub unstaged_modified: Vec<String>,
+    /// Files that are untracked
+    pub untracked: Vec<String>,
+    /// Files that are staged for addition
+    pub staged_new: Vec<String>,
+    /// Files that are staged for deletion
+    pub staged_deleted: Vec<String>,
+    /// Files that are deleted but not staged
+    pub unstaged_deleted: Vec<String>,
+    /// Files that are renamed
+    pub renamed: Vec<String>,
+    /// Files that have type changes
+    pub typechange: Vec<String>,
+}
+
+impl StatusSummary {
+    /// Create a new empty status summary
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if the repository is clean (no changes)
+    pub fn is_clean(&self) -> bool {
+        self.staged_modified.is_empty()
+            && self.unstaged_modified.is_empty()
+            && self.untracked.is_empty()
+            && self.staged_new.is_empty()
+            && self.staged_deleted.is_empty()
+            && self.unstaged_deleted.is_empty()
+            && self.renamed.is_empty()
+            && self.typechange.is_empty()
+    }
+
+    /// Get total count of all changes
+    pub fn total_changes(&self) -> usize {
+        self.staged_modified.len()
+            + self.unstaged_modified.len()
+            + self.untracked.len()
+            + self.staged_new.len()
+            + self.staged_deleted.len()
+            + self.unstaged_deleted.len()
+            + self.renamed.len()
+            + self.typechange.len()
+    }
+}
+
 /// Git operations for issue management
 pub struct GitOperations {
     /// Working directory for git operations
@@ -166,14 +218,10 @@ impl GitOperations {
         self.git2_repo.as_ref().ok_or_else(|| {
             SwissArmyHammerError::git_operation_failed(
                 "access repository",
-                "Git2 repository not initialized"
+                "Git2 repository not initialized",
             )
         })
     }
-
-
-
-
 
     /// Get current branch name using git2-rs native operations
     pub fn current_branch(&self) -> Result<String> {
@@ -187,8 +235,12 @@ impl GitOperations {
             Ok(branch_name.to_string())
         } else {
             // Create a mock git2::Error for consistency with git2 error patterns
-            let git2_error = git2::Error::from_str("HEAD reference does not point to a valid branch name");
-            Err(git2_utils::convert_git2_error("determine branch name from HEAD", git2_error))
+            let git2_error =
+                git2::Error::from_str("HEAD reference does not point to a valid branch name");
+            Err(git2_utils::convert_git2_error(
+                "determine branch name from HEAD",
+                git2_error,
+            ))
         }
     }
 
@@ -229,20 +281,23 @@ impl GitOperations {
     pub fn list_branches(&self) -> Result<Vec<String>> {
         let repo = self.get_git2_repo()?;
         let mut branch_names = Vec::new();
-        
-        let branches = repo.branches(Some(git2::BranchType::Local))
+
+        let branches = repo
+            .branches(Some(git2::BranchType::Local))
             .map_err(|e| git2_utils::convert_git2_error("list branches", e))?;
-            
+
         for branch_result in branches {
-            let (branch, _) = branch_result
-                .map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
-            
-            if let Some(name) = branch.name()
-                .map_err(|e| git2_utils::convert_git2_error("get branch name", e))? {
+            let (branch, _) =
+                branch_result.map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
+
+            if let Some(name) = branch
+                .name()
+                .map_err(|e| git2_utils::convert_git2_error("get branch name", e))?
+            {
                 branch_names.push(name.to_string());
             }
         }
-        
+
         Ok(branch_names)
     }
 
@@ -252,7 +307,7 @@ impl GitOperations {
         if branch.trim().is_empty() {
             return Ok(false);
         }
-        
+
         let repo = self.get_git2_repo()?;
 
         match repo.find_branch(branch, git2::BranchType::Local) {
@@ -719,6 +774,77 @@ impl GitOperations {
     pub fn has_uncommitted_changes(&self) -> Result<bool> {
         let changes = self.is_working_directory_clean()?;
         Ok(!changes.is_empty())
+    }
+
+    /// Get detailed status summary with categorized changes
+    pub fn get_status_summary(&self) -> Result<StatusSummary> {
+        let repo = self.get_git2_repo()?;
+
+        let statuses = repo
+            .statuses(Some(
+                git2::StatusOptions::new()
+                    .include_untracked(true)
+                    .include_ignored(false),
+            ))
+            .map_err(|e| git2_utils::convert_git2_error("get status summary", e))?;
+
+        let mut summary = StatusSummary::new();
+
+        for status_entry in statuses.iter() {
+            let flags = status_entry.status();
+            let path = status_entry.path().unwrap_or("<unknown>");
+
+            // Handle index (staged) changes
+            if flags.contains(git2::Status::INDEX_MODIFIED) {
+                summary.staged_modified.push(path.to_string());
+            }
+            if flags.contains(git2::Status::INDEX_NEW) {
+                summary.staged_new.push(path.to_string());
+            }
+            if flags.contains(git2::Status::INDEX_DELETED) {
+                summary.staged_deleted.push(path.to_string());
+            }
+            if flags.contains(git2::Status::INDEX_RENAMED) {
+                summary.renamed.push(path.to_string());
+            }
+            if flags.contains(git2::Status::INDEX_TYPECHANGE) {
+                summary.typechange.push(path.to_string());
+            }
+
+            // Handle working tree (unstaged) changes
+            if flags.contains(git2::Status::WT_MODIFIED) {
+                summary.unstaged_modified.push(path.to_string());
+            }
+            if flags.contains(git2::Status::WT_NEW) {
+                summary.untracked.push(path.to_string());
+            }
+            if flags.contains(git2::Status::WT_DELETED) {
+                summary.unstaged_deleted.push(path.to_string());
+            }
+            if flags.contains(git2::Status::WT_RENAMED) {
+                summary.renamed.push(path.to_string());
+            }
+            if flags.contains(git2::Status::WT_TYPECHANGE) {
+                summary.typechange.push(path.to_string());
+            }
+        }
+
+        Ok(summary)
+    }
+
+    /// Refresh the git index to ensure it's up to date
+    pub fn refresh_index(&self) -> Result<()> {
+        let repo = self.get_git2_repo()?;
+
+        let mut index = repo
+            .index()
+            .map_err(|e| git2_utils::convert_git2_error("get repository index", e))?;
+
+        index
+            .read(true)
+            .map_err(|e| git2_utils::convert_git2_error("refresh index", e))?;
+
+        Ok(())
     }
 
     /// Get the work directory path
