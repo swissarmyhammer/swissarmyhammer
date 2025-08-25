@@ -161,8 +161,6 @@ impl GitOperations {
                 current_branch
             );
             self.checkout_branch(&branch_name)?;
-            // Store the source branch information for existing branches too
-            let _ = self.store_issue_source_branch(issue_name, &current_branch);
             return Ok(branch_name);
         }
 
@@ -173,9 +171,6 @@ impl GitOperations {
             current_branch
         );
         self.create_and_checkout_branch(&branch_name)?;
-
-        // Store the source branch information for the newly created issue branch
-        let _ = self.store_issue_source_branch(issue_name, &current_branch);
 
         Ok(branch_name)
     }
@@ -351,29 +346,6 @@ impl GitOperations {
                 &branch_name,
                 &format!("Failed to merge to source branch '{target_branch}': {stderr}"),
             ));
-        }
-
-        Ok(())
-    }
-
-    /// Determine the original branch point for an issue branch using git merge-base
-    ///
-    /// This method uses git's merge-base to find the common ancestor commit between
-    /// the issue branch and potential target branches, determining where the issue
-    /// branch was originally created from.
-    /// Store the source branch for an issue using git config
-    pub fn store_issue_source_branch(&self, issue_name: &str, source_branch: &str) -> Result<()> {
-        let config_key = format!("swissarmyhammer.issue.{issue_name}.source");
-
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args(["config", &config_key, source_branch])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(SwissArmyHammerError::Other(format!(
-                "Failed to store source branch for issue '{issue_name}'"
-            )));
         }
 
         Ok(())
