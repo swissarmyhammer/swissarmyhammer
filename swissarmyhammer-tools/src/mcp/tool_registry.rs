@@ -1408,9 +1408,13 @@ mod tests {
         use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
+        // Create temporary directory for test
+        let _temp_dir = tempfile::tempdir().unwrap();
+        let test_issues_dir = _temp_dir.path().join("test_issues");
+
         // Create mock storage and handlers for context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+            swissarmyhammer::issues::FileSystemIssueStorage::new(test_issues_dir)
                 .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));

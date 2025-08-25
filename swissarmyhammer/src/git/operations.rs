@@ -72,8 +72,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Exit code used when a command's exit status cannot be determined
-
-
 /// Detailed status summary for git repository state
 #[derive(Debug, Default)]
 pub struct StatusSummary {
