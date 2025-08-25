@@ -124,6 +124,21 @@ impl StatusSummary {
     }
 }
 
+/// Reflog entry representation for enhanced git2-based operations
+#[derive(Debug, Clone)]
+pub struct ReflogEntry {
+    /// Old object ID (before the operation)
+    pub old_oid: String,
+    /// New object ID (after the operation)
+    pub new_oid: String,
+    /// Committer name who performed the operation
+    pub committer: String,
+    /// Reflog message describing the operation
+    pub message: String,
+    /// Unix timestamp when the operation occurred
+    pub time: i64,
+}
+
 /// Git operations for issue management
 pub struct GitOperations {
     /// Working directory for git operations
@@ -658,7 +673,7 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Find merge target branch using git reflog analysis (simple and reliable)
+    /// Find merge target branch using git2 reflog analysis (native git2 implementation)
     fn find_merge_target_branch_using_reflog(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
 
@@ -669,54 +684,58 @@ impl GitOperations {
             )));
         }
 
-        // Use git reflog to find the last checkout operation to this issue branch
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args(["reflog", "--date=local"])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(SwissArmyHammerError::git_operation_failed(
-                "reflog",
-                "failed to read git reflog",
-            ));
-        }
-
-        let reflog_output = String::from_utf8_lossy(&output.stdout);
-
-        // Find the first reflog entry that shows "checkout: moving from X to <our_branch>"
-        for line in reflog_output.lines() {
-            if let Some(checkout_part) = line.split("checkout: moving from ").nth(1) {
-                if let Some((from_branch, to_branch)) = checkout_part.split_once(" to ") {
-                    // If we moved TO our issue branch, the FROM branch is our target
-                    if to_branch.trim() == branch_name {
-                        let source_branch = from_branch.trim().to_string();
-
-                        // Verify the source branch still exists and is not an issue branch
-                        if self.branch_exists(&source_branch)?
-                            && !self.is_issue_branch(&source_branch)
-                        {
+        let repo = self.get_git2_repo()?;
+        
+        // Get reflog for HEAD
+        let reflog = repo.reflog("HEAD")
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get HEAD reflog", e))?;
+        
+        // Iterate through reflog entries looking for branch creation
+        for i in 0..reflog.len() {
+            if let Some(entry) = reflog.get(i) {
+                if let Some(message) = entry.message() {
+                    // Look for checkout messages indicating branch creation
+                    if let Some(target_branch) = self.parse_checkout_message(message, &branch_name)? {
+                        // Verify the target branch still exists and is valid
+                        if self.branch_exists(&target_branch)? && !self.is_issue_branch(&target_branch) {
                             tracing::debug!(
-                                "Found merge target '{}' for issue '{}' via reflog",
-                                source_branch,
-                                issue_name
+                                "Found merge target '{}' for issue '{}' via reflog at entry {}",
+                                target_branch, issue_name, i
                             );
-                            return Ok(source_branch);
+                            return Ok(target_branch);
                         }
                     }
                 }
             }
         }
-
-        // If no reflog entry found, create abort file and return error
+        
+        // If no valid target found, create abort file
         create_abort_file(&self.work_dir, &format!(
             "Cannot determine merge target for issue '{issue_name}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally"
         ))?;
-
-        Err(SwissArmyHammerError::git_operation_failed(
+        
+        Err(SwissArmyHammerError::git2_operation_failed(
             "determine merge target",
-            &format!("no reflog entry found for issue branch '{branch_name}'"),
+            git2::Error::from_str(&format!("no reflog entry found for issue branch '{branch_name}'"))
         ))
+    }
+
+    /// Parse checkout message to find source branch for branch creation
+    fn parse_checkout_message(&self, message: &str, target_branch: &str) -> Result<Option<String>> {
+        // Parse messages like "checkout: moving from source_branch to target_branch"
+        if let Some(checkout_part) = message.strip_prefix("checkout: moving from ") {
+            if let Some((from_branch, to_branch)) = checkout_part.split_once(" to ") {
+                let to_branch = to_branch.trim();
+                let from_branch = from_branch.trim();
+                
+                // If we moved TO our target branch, the FROM branch is our source
+                if to_branch == target_branch {
+                    return Ok(Some(from_branch.to_string()));
+                }
+            }
+        }
+        
+        Ok(None)
     }
 
     /// Merge issue branch using git merge-base to determine target
@@ -1105,6 +1124,68 @@ impl GitOperations {
         }
 
         Ok(())
+    }
+
+    /// Get recent branch operations from reflog for diagnostics
+    pub fn get_recent_branch_operations(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
+        let repo = self.get_git2_repo()?;
+        let reflog = repo.reflog("HEAD")
+            .map_err(|e| SwissArmyHammerError::git2_operation_failed("get HEAD reflog", e))?;
+        
+        let mut entries = Vec::new();
+        let count = std::cmp::min(limit, reflog.len());
+        
+        for i in 0..count {
+            if let Some(entry) = reflog.get(i) {
+                let reflog_entry = ReflogEntry {
+                    old_oid: entry.id_old().to_string(),
+                    new_oid: entry.id_new().to_string(),
+                    committer: entry.committer().name().unwrap_or("unknown").to_string(),
+                    message: entry.message().unwrap_or("").to_string(),
+                    time: entry.committer().when().seconds(),
+                };
+                entries.push(reflog_entry);
+            }
+        }
+        
+        Ok(entries)
+    }
+
+    /// Find branch creation point for better merge target detection
+    pub fn find_branch_creation_point(&self, branch_name: &str) -> Result<Option<(String, String)>> {
+        // First try to find in reflog
+        if let Ok(target) = self.find_merge_target_branch_using_reflog_internal(branch_name) {
+            return Ok(Some((target, "reflog".to_string())));
+        }
+        
+        // Fall back to configuration if available
+        if let Some(issue_name) = branch_name.strip_prefix("issue/") {
+            if let Ok(Some(source)) = self.get_issue_source_branch(issue_name) {
+                if self.branch_exists(&source)? {
+                    return Ok(Some((source, "config".to_string())));
+                }
+            }
+        }
+        
+        Ok(None)
+    }
+
+    /// Internal helper for find_branch_creation_point
+    fn find_merge_target_branch_using_reflog_internal(&self, branch_name: &str) -> Result<String> {
+        // Extract issue name from branch name
+        let issue_name = branch_name.strip_prefix("issue/")
+            .ok_or_else(|| SwissArmyHammerError::git2_operation_failed(
+                "extract issue name",
+                git2::Error::from_str("Branch name does not match issue pattern")))?;
+        
+        self.find_merge_target_branch_using_reflog(issue_name)
+    }
+
+    /// Get issue source branch from configuration (placeholder for future implementation)
+    fn get_issue_source_branch(&self, _issue_name: &str) -> Result<Option<String>> {
+        // TODO: Implement configuration-based source branch tracking
+        // This would read from .swissarmyhammer/config or similar
+        Ok(None)
     }
 }
 
@@ -2334,5 +2415,185 @@ mod tests {
             result.is_ok(),
             "Second deletion of now-nonexistent branch should succeed"
         );
+    }
+
+    #[test]
+    fn test_get_recent_branch_operations() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Initialize git2 repo
+        git_ops.init_git2().unwrap();
+
+        // Create some branch operations to populate reflog
+        git_ops.create_work_branch("test-reflog").unwrap();
+        git_ops.checkout_branch("main").unwrap();
+        git_ops.create_work_branch("another-test").unwrap();
+
+        // Get recent branch operations
+        let result = git_ops.get_recent_branch_operations(10);
+        assert!(result.is_ok());
+
+        let entries = result.unwrap();
+        assert!(!entries.is_empty());
+
+        // Verify entry structure
+        for entry in &entries {
+            assert!(!entry.old_oid.is_empty());
+            assert!(!entry.new_oid.is_empty());
+            assert!(!entry.committer.is_empty());
+            assert!(entry.time > 0);
+        }
+    }
+
+    #[test]
+    fn test_parse_checkout_message() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test valid checkout message
+        let message = "checkout: moving from main to issue/test-branch";
+        let result = git_ops.parse_checkout_message(message, "issue/test-branch");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some("main".to_string()));
+
+        // Test invalid checkout message (wrong target)
+        let result = git_ops.parse_checkout_message(message, "issue/other-branch");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+
+        // Test non-checkout message
+        let message = "commit: add new feature";
+        let result = git_ops.parse_checkout_message(message, "issue/test-branch");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+
+        // Test malformed checkout message
+        let message = "checkout: moving from";
+        let result = git_ops.parse_checkout_message(message, "issue/test-branch");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_find_merge_target_branch_using_reflog_git2() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Initialize git2 repo
+        git_ops.init_git2().unwrap();
+
+        // Create feature branch and issue branch from it
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/test-feature"])
+            .output()
+            .unwrap();
+
+        git_ops.create_work_branch("reflog-test").unwrap();
+
+        // Test finding merge target via reflog
+        let result = git_ops.find_merge_target_branch_using_reflog("reflog-test");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "feature/test-feature");
+    }
+
+    #[test]
+    fn test_find_merge_target_branch_nonexistent_issue() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test with nonexistent issue branch
+        let result = git_ops.find_merge_target_branch_using_reflog("nonexistent");
+        assert!(result.is_err());
+        
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_find_merge_target_branch_no_reflog_entry() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Initialize git2 repo
+        git_ops.init_git2().unwrap();
+
+        // Create branch manually without going through normal checkout flow
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["branch", "issue/manual-branch"])
+            .output()
+            .unwrap();
+
+        // Test finding merge target - should fail and create abort file
+        let result = git_ops.find_merge_target_branch_using_reflog("manual-branch");
+        assert!(result.is_err());
+        
+        // Verify abort file was created
+        let abort_file = temp_dir.path().join(".swissarmyhammer/.abort");
+        assert!(abort_file.exists());
+        
+        let abort_content = std::fs::read_to_string(&abort_file).unwrap();
+        assert!(abort_content.contains("Cannot determine merge target"));
+        assert!(abort_content.contains("manual-branch"));
+    }
+
+    #[test]
+    fn test_find_branch_creation_point() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let mut git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Initialize git2 repo
+        git_ops.init_git2().unwrap();
+
+        // Create feature branch and issue branch from it
+        Command::new("git")
+            .current_dir(temp_dir.path())
+            .args(["checkout", "-b", "feature/source"])
+            .output()
+            .unwrap();
+
+        git_ops.create_work_branch("creation-test").unwrap();
+
+        // Test finding branch creation point
+        let result = git_ops.find_branch_creation_point("issue/creation-test");
+        assert!(result.is_ok());
+        
+        let creation_point = result.unwrap();
+        assert!(creation_point.is_some());
+        
+        let (source_branch, method) = creation_point.unwrap();
+        assert_eq!(source_branch, "feature/source");
+        assert_eq!(method, "reflog");
+    }
+
+    #[test]
+    fn test_find_branch_creation_point_non_issue_branch() {
+        let temp_dir = create_test_git_repo().unwrap();
+        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+
+        // Test with non-issue branch
+        let result = git_ops.find_branch_creation_point("main");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_reflog_entry_structure() {
+        // Test ReflogEntry creation and field access
+        let entry = ReflogEntry {
+            old_oid: "abc123".to_string(),
+            new_oid: "def456".to_string(),
+            committer: "test-user".to_string(),
+            message: "checkout: moving from main to issue/test".to_string(),
+            time: 1234567890,
+        };
+
+        assert_eq!(entry.old_oid, "abc123");
+        assert_eq!(entry.new_oid, "def456");
+        assert_eq!(entry.committer, "test-user");
+        assert_eq!(entry.message, "checkout: moving from main to issue/test");
+        assert_eq!(entry.time, 1234567890);
     }
 }

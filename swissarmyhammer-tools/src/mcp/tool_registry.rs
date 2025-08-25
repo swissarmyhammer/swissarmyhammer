@@ -1402,7 +1402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
-        use std::path::PathBuf;
+
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
         use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
