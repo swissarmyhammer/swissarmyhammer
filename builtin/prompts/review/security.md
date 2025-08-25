@@ -19,9 +19,6 @@ Please review the all code in this project with a focus on: {{context}}
 
 ## Security Analysis
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ### 1. Vulnerability Scan
 
 Analyzing for common security vulnerabilities:

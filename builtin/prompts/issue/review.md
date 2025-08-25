@@ -3,9 +3,6 @@ title: "review code"
 description: "Improved the current code changes"
 ---
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Rules
 
 DO NOT code now, the goal is just to create `./CODE_REVIEW.md` todo items.
@@ -21,8 +18,12 @@ DO NOT code now, the goal is just to create `./CODE_REVIEW.md` todo items.
 - For each file in the working set
   - Keep track of each file in this working set in your
   - Think deeply about the issue, does the file do a good job resolving the issue?
-  - Are there any placeholders that need to be actually coded, if so add them to ./CODE_REVIEW.md
-  - Are there any TODO commments that need to be actually coded, if so add them to ./CODE_REVIEW.md
+  - Are there any placeholders/TODO/not yet implemented that need to be actually coded, if so add them to ./CODE_REVIEW.md
+  - Are there any violations of coding standards, if so add them to ./CODE_REVIEW.md
+  - Are there any missing tests, if so add them to ./CODE_REVIEW.md
+  - Are there any missing documentation comments, if so add them to ./CODE_REVIEW.md
+  - Are there any missing comments, if so add them to ./CODE_REVIEW.md
+  - Were any tests ignored, commented out, featured flagged away, or otherwise not run, if so add them to ./CODE_REVIEW.md
   - Append any improvement ideas to do to ./CODE_REVIEW.md
   - Run a language appropriate lint
     - Append any lint warnings or errors to do to ./CODE_REVIEW.md

@@ -21,9 +21,6 @@ parameters:
 
 Review all code in the current project.
 
-{% render "principals" %}
-{% render "coding_standards" %}
-
 ## Review Parameters
 
 - **WCAG Level**: {{wcag_level}}

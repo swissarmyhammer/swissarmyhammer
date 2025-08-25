@@ -9,8 +9,6 @@ The goal is to have:
 
 - ALL tests pass
 
-{% render "principals" %}
-{% render "coding_standards" %}
 
 ## Rules
 

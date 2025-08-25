@@ -48,15 +48,6 @@ fn validate_specification_content(content: &str, path: &str) -> Result<(), PlanC
         });
     }
 
-    // Check for basic markdown headers
-    if !content.contains('#') {
-        return Err(PlanCommandError::NoHeaders {
-            path: path.to_string(),
-            suggestion: "Add markdown headers (# ## ###) to structure your specification"
-                .to_string(),
-        });
-    }
-
     // Look for common specification sections (case-insensitive)
     let content_lower = content.to_lowercase();
     let has_overview = content_lower.contains("overview")
@@ -451,21 +442,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_specification_content_no_headers() {
-        let content = "This is a long specification document that contains plenty of text but unfortunately lacks any markdown headers to structure the content properly. It has more than 100 characters.";
-        let result = validate_specification_content(content, "test.md");
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            PlanCommandError::NoHeaders { path, suggestion } => {
-                assert_eq!(path, "test.md");
-                assert!(suggestion.contains("markdown headers"));
-            }
-            _ => panic!("Expected NoHeaders error"),
-        }
-    }
-
-    #[test]
     fn test_validate_specification_content_with_overview() {
         let content = "# Project Plan\n\n## Goal\n\nThis project aims to implement new functionality that will improve user experience.";
         let result = validate_specification_content(content, "test.md");
@@ -525,28 +501,6 @@ mod tests {
                 assert_eq!(length, 7);
             }
             _ => panic!("Expected InsufficientContent error"),
-        }
-    }
-
-    #[test]
-    fn test_validate_plan_file_with_no_headers() {
-        let mock_fs = Arc::new(MockFileSystem::new());
-
-        let path = Path::new("no-headers.md");
-        let content = "This is a long specification document without headers that contains plenty of text but unfortunately lacks any markdown headers to structure the content properly and make it readable.";
-        mock_fs
-            .write(path, content)
-            .expect("Failed to write file without headers");
-
-        let config = PlanValidationConfig::default();
-        let result = validate_plan_file_with_fs("no-headers.md", &config, mock_fs.as_ref());
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            PlanCommandError::NoHeaders { path, .. } => {
-                assert_eq!(path, "no-headers.md");
-            }
-            _ => panic!("Expected NoHeaders error"),
         }
     }
 

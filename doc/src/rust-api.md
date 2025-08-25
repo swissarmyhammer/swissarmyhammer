@@ -7,6 +7,7 @@ SwissArmyHammer provides a comprehensive Rust API for building custom tools, int
 The SwissArmyHammer crate provides:
 - **Prompt Management**: Load, store, and organize prompts from various sources
 - **Template Engine**: Powerful Liquid-based template processing with custom filters
+- **System Prompt**: Automatic Claude Code integration with centralized coding standards
 - **Semantic Search**: Vector-based code search with TreeSitter parsing
 - **Issue Tracking**: Git-integrated issue management system
 - **Memoranda**: Note-taking and knowledge management
@@ -139,6 +140,89 @@ let engine = TemplateEngine::new()
 
 let template = engine.parse("{{ code | highlight: 'rust' | trim }}")?;
 let result = template.render(&context)?;
+```
+
+### System Prompt (`system_prompt`)
+
+The system prompt module provides automatic integration with Claude Code through centralized coding standards and guidelines.
+
+#### System Prompt Rendering
+
+```rust
+use swissarmyhammer::system_prompt::{render_system_prompt, clear_cache, SystemPromptError};
+
+// Render the system prompt with caching
+let rendered_prompt = render_system_prompt()?;
+println!("System prompt ({} characters)", rendered_prompt.len());
+
+// Clear the cache to force re-render
+clear_cache();
+let fresh_prompt = render_system_prompt()?;
+```
+
+#### Error Handling
+
+```rust
+use swissarmyhammer::system_prompt::{render_system_prompt, SystemPromptError};
+
+match render_system_prompt() {
+    Ok(content) => println!("System prompt loaded successfully"),
+    Err(SystemPromptError::FileNotFound(path)) => {
+        println!("System prompt not found at: {}", path);
+        // Continue without system prompt
+    }
+    Err(SystemPromptError::TemplateError(e)) => {
+        eprintln!("Template rendering failed: {}", e);
+        return Err(e.into());
+    }
+    Err(e) => {
+        eprintln!("System prompt error: {}", e);
+        return Err(e.into());
+    }
+}
+```
+
+#### Claude Code Integration
+
+```rust
+use swissarmyhammer::claude_code_integration::{
+    execute_claude_code_with_system_prompt, 
+    ClaudeCodeConfig, 
+    ClaudeCodeError
+};
+
+// Configure system prompt integration (always enabled)
+let config = ClaudeCodeConfig {
+    system_prompt_debug: false,
+};
+
+// Execute Claude Code with automatic system prompt injection
+let args = vec!["prompt".to_string(), "render".to_string(), "my-prompt".to_string()];
+let result = execute_claude_code_with_system_prompt(&args, None, config, false).await?;
+
+println!("Claude Code output: {}", String::from_utf8_lossy(&result.stdout));
+```
+
+#### Custom System Prompt Implementation
+
+```rust
+use swissarmyhammer::system_prompt::SystemPromptRenderer;
+use std::path::PathBuf;
+
+// Create a custom renderer with specific paths
+let renderer = SystemPromptRenderer::new();
+
+// Render with custom template context
+let custom_context = std::collections::HashMap::new();
+let rendered = renderer.render_with_context(&custom_context)?;
+
+// Check cache validity manually
+let system_prompt_path = PathBuf::from("builtin/prompts/.system.md");
+if renderer.is_cache_valid(&cached_entry, &system_prompt_path) {
+    println!("Cache is valid, using cached content");
+} else {
+    println!("Cache is stale, will re-render");
+}
 ```
 
 #### Custom Filters
