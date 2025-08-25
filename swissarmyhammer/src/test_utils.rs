@@ -327,9 +327,14 @@ impl IsolatedTestHome {
     /// Create a new isolated test home environment
     pub fn new() -> Self {
         // Acquire the global HOME environment lock to prevent race conditions
-        let lock_guard = HOME_ENV_LOCK
-            .lock()
-            .expect("HOME environment lock poisoned");
+        // Handle poisoned mutex by clearing the poison and continuing
+        let lock_guard = match HOME_ENV_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Clear the poison by taking the guard from the poisoned error
+                poisoned.into_inner()
+            }
+        };
 
         let original_home = std::env::var("HOME").ok();
         let (temp_dir, home_path) = create_isolated_test_home();

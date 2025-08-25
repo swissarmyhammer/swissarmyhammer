@@ -95,6 +95,26 @@ pub enum SwissArmyHammerError {
         details: String,
     },
 
+    /// Git2 operation failed
+    #[error("Git2 operation failed: {operation}")]
+    Git2OperationFailed {
+        /// The git2 operation that failed
+        operation: String,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
+    /// Git2 repository error
+    #[error("Git2 repository error: {message}")]
+    Git2RepositoryError {
+        /// Error message providing context
+        message: String,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
     /// Memo not found
     #[error("Memo not found: {0}")]
     MemoNotFound(String),
@@ -933,6 +953,22 @@ impl SwissArmyHammerError {
     /// Create a memo validation error
     pub fn memo_validation_failed(reason: &str) -> Self {
         SwissArmyHammerError::MemoValidationFailed(reason.to_string())
+    }
+
+    /// Create a git2 operation error
+    pub fn git2_operation_failed(operation: &str, source: git2::Error) -> Self {
+        SwissArmyHammerError::Git2OperationFailed {
+            operation: operation.to_string(),
+            source,
+        }
+    }
+
+    /// Create a git2 repository error
+    pub fn git2_repository_error(message: &str, source: git2::Error) -> Self {
+        SwissArmyHammerError::Git2RepositoryError {
+            message: message.to_string(),
+            source,
+        }
     }
 }
 
