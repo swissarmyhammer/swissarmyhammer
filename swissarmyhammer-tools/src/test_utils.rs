@@ -16,8 +16,12 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// but available for testing MCP tools in swissarmyhammer-tools
 #[cfg(test)]
 pub async fn create_test_context() -> ToolContext {
+    // Create temporary directory for test to avoid conflicts
+    let temp_dir = tempfile::tempdir().unwrap();
+    let test_issues_dir = temp_dir.path().join("test_issues");
+    
     let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-        FileSystemIssueStorage::new(PathBuf::from("./.swissarmyhammer/test_issues")).unwrap(),
+        FileSystemIssueStorage::new(test_issues_dir).unwrap(),
     )));
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =

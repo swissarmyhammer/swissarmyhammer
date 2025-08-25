@@ -72,8 +72,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Exit code used when a command's exit status cannot be determined
-const UNKNOWN_EXIT_CODE: i32 = -1;
-
 /// Detailed status summary for git repository state
 #[derive(Debug, Default)]
 pub struct StatusSummary {
@@ -317,6 +315,38 @@ impl GitOperations {
         }
     }
 
+    /// Validate branch name using git2-rs reference validation
+    pub fn validate_branch_name(&self, branch_name: &str) -> Result<()> {
+        // Check branch name validity using git2 reference validation
+        if git2::Reference::is_valid_name(&format!("refs/heads/{}", branch_name)) {
+            Ok(())
+        } else {
+            Err(SwissArmyHammerError::git2_operation_failed(
+                "validate branch name",
+                git2::Error::from_str(&format!("Invalid branch name: '{}'", branch_name)),
+            ))
+        }
+    }
+
+    /// Check if we can create a branch with the given name
+    pub fn can_create_branch(&self, branch_name: &str) -> Result<bool> {
+        // Validate branch name format
+        self.validate_branch_name(branch_name)?;
+
+        // Check if branch already exists
+        if self.branch_exists(branch_name)? {
+            return Ok(false);
+        }
+
+        // Check if we have a valid HEAD to branch from
+        let repo = self.get_git2_repo()?;
+        match repo.head() {
+            Ok(_) => Ok(true),
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => Ok(false),
+            Err(e) => Err(git2_utils::convert_git2_error("check HEAD for branching", e)),
+        }
+    }
+
     /// Check if a branch name follows the issue branch pattern
     fn is_issue_branch(&self, branch: &str) -> bool {
         branch.starts_with("issue/")
@@ -386,40 +416,113 @@ impl GitOperations {
         self.create_work_branch(issue_name)
     }
 
-    /// Create and checkout a new branch
+    /// Create and checkout a new branch using git2-rs
     fn create_and_checkout_branch(&self, branch_name: &str) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args(["checkout", "-b", branch_name])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(SwissArmyHammerError::git_command_failed(
-                "checkout -b",
-                output.status.code().unwrap_or(UNKNOWN_EXIT_CODE),
-                &stderr,
+        // Validate that we can create the branch
+        if !self.can_create_branch(branch_name)? {
+            return Err(SwissArmyHammerError::git2_operation_failed(
+                "create work branch",
+                git2::Error::from_str(&format!("Cannot create branch '{}'", branch_name)),
             ));
         }
+
+        let repo = self.get_git2_repo()?;
+
+        // Get current HEAD commit
+        let head_commit = repo
+            .head()
+            .map_err(|e| git2_utils::convert_git2_error("get HEAD reference", e))?
+            .peel_to_commit()
+            .map_err(|e| git2_utils::convert_git2_error("get HEAD commit", e))?;
+
+        // Create new branch pointing to HEAD commit
+        let branch = repo
+            .branch(branch_name, &head_commit, false)
+            .map_err(|e| {
+                git2_utils::convert_git2_error(
+                    &format!("create branch '{}'", branch_name),
+                    e,
+                )
+            })?;
+
+        // Get branch reference name
+        let branch_ref = branch.get();
+        let branch_ref_name = branch_ref.name().ok_or_else(|| {
+            SwissArmyHammerError::git2_operation_failed(
+                "get branch reference name",
+                git2::Error::from_str("Invalid branch reference"),
+            )
+        })?;
+
+        // Set HEAD to point to new branch
+        repo.set_head(branch_ref_name)
+            .map_err(|e| {
+                git2_utils::convert_git2_error(
+                    &format!("checkout branch '{}'", branch_name),
+                    e,
+                )
+            })?;
+
+        // Update working directory to match new HEAD
+        repo.checkout_head(Some(
+            git2::build::CheckoutBuilder::new()
+                .force()
+                .remove_untracked(false),
+        ))
+        .map_err(|e| {
+            git2_utils::convert_git2_error(
+                &format!("update working directory for '{}'", branch_name),
+                e,
+            )
+        })?;
 
         Ok(())
     }
 
-    /// Switch to existing branch
+    /// Switch to existing branch using git2-rs
     pub fn checkout_branch(&self, branch: &str) -> Result<()> {
-        let output = Command::new("git")
-            .current_dir(&self.work_dir)
-            .args(["checkout", branch])
-            .output()?;
+        let repo = self.get_git2_repo()?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(SwissArmyHammerError::git_command_failed(
-                "checkout",
-                output.status.code().unwrap_or(UNKNOWN_EXIT_CODE),
-                &stderr,
-            ));
-        }
+        // Find the branch reference
+        let branch_ref = repo
+            .find_branch(branch, git2::BranchType::Local)
+            .map_err(|e| {
+                git2_utils::convert_git2_error(
+                    &format!("find branch '{}'", branch),
+                    e,
+                )
+            })?;
+
+        // Get branch reference name
+        let reference = branch_ref.get();
+        let branch_ref_name = reference.name().ok_or_else(|| {
+            SwissArmyHammerError::git2_operation_failed(
+                "get branch reference name",
+                git2::Error::from_str("Invalid branch reference"),
+            )
+        })?;
+
+        // Set HEAD to point to the branch
+        repo.set_head(branch_ref_name)
+            .map_err(|e| {
+                git2_utils::convert_git2_error(
+                    &format!("set HEAD to '{}'", branch),
+                    e,
+                )
+            })?;
+
+        // Update working directory to match branch
+        repo.checkout_head(Some(
+            git2::build::CheckoutBuilder::new()
+                .force()
+                .remove_untracked(false),
+        ))
+        .map_err(|e| {
+            git2_utils::convert_git2_error(
+                &format!("checkout working directory for '{}'", branch),
+                e,
+            )
+        })?;
 
         Ok(())
     }
