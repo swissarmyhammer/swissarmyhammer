@@ -256,13 +256,13 @@ async fn test_invalid_command_arguments() -> Result<()> {
 async fn test_storage_backend_permissions() -> Result<()> {
     use std::fs::Permissions;
     use std::os::unix::fs::PermissionsExt;
-    
+
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Create a read-only parent directory to cause storage errors
     let swissarmyhammer_dir = temp_path.join(".swissarmyhammer");
     std::fs::remove_dir_all(&swissarmyhammer_dir).ok(); // Remove existing directory structure
-    
+
     // Create the directory first
     if let Err(e) = std::fs::create_dir_all(&swissarmyhammer_dir) {
         println!("Failed to create swissarmyhammer dir: {}", e);
@@ -278,12 +278,10 @@ async fn test_storage_backend_permissions() -> Result<()> {
     // Test operations that require issues directory
     let result = run_sah_command_in_process_with_dir(&["issue", "list"], &temp_path)
         .await
-        .unwrap_or_else(|e| {
-            CapturedOutput {
-                stdout: String::new(),
-                stderr: format!("Function error: {}", e),
-                exit_code: 1,
-            }
+        .unwrap_or_else(|e| CapturedOutput {
+            stdout: String::new(),
+            stderr: format!("Function error: {}", e),
+            exit_code: 1,
         });
 
     // Restore permissions for cleanup before assertions (to avoid test cleanup issues)
@@ -296,7 +294,7 @@ async fn test_storage_backend_permissions() -> Result<()> {
         result.exit_code, result.stderr
     );
     assert!(
-        result.stderr.contains("Permission denied") 
+        result.stderr.contains("Permission denied")
             || result.stderr.contains("permission denied")
             || result.stderr.contains("IO error"),
         "Should show permission-related error: {}",

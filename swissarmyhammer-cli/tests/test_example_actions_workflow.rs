@@ -160,7 +160,8 @@ async fn test_failure_branch_execution() -> Result<()> {
     println!("Transitions from BranchDecision:");
     for transition in &transitions {
         println!("  -> {}: {:?}", transition.to_state, transition.condition);
-        let condition_result = executor.evaluate_condition(&transition.condition, &run.context.to_workflow_hashmap());
+        let condition_result =
+            executor.evaluate_condition(&transition.condition, &run.context.to_workflow_hashmap());
         println!("    Evaluates to: {condition_result:?}");
     }
 
@@ -484,7 +485,8 @@ async fn test_branch1_liquid_template_rendering() -> Result<()> {
         ("example_var".to_string(), json!("Hello from workflow")),
         ("is_error".to_string(), json!(false)),
     ]);
-    let mut context = swissarmyhammer::workflow::WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+    let mut context =
+        swissarmyhammer::workflow::WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.set_workflow_vars(workflow_vars);
 
     // Execute the log action

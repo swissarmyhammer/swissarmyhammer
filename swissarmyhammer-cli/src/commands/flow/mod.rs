@@ -137,18 +137,18 @@ pub async fn run_flow_command(
 }
 
 /// Configuration for running a workflow command
-struct WorkflowCommandConfig {
-    workflow_name: String,
-    vars: Vec<String>,
-    interactive: bool,
-    dry_run: bool,
-    test_mode: bool,
-    timeout_str: Option<String>,
-    quiet: bool,
+pub struct WorkflowCommandConfig {
+    pub workflow_name: String,
+    pub vars: Vec<String>,
+    pub interactive: bool,
+    pub dry_run: bool,
+    pub test_mode: bool,
+    pub timeout_str: Option<String>,
+    pub quiet: bool,
 }
 
 /// Execute a workflow
-async fn run_workflow_command(
+pub async fn run_workflow_command(
     config: WorkflowCommandConfig,
     _template_context: &swissarmyhammer_config::TemplateContext,
 ) -> Result<()> {

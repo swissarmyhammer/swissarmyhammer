@@ -7,10 +7,13 @@ use crate::workflow::WorkflowTemplateContext;
 async fn test_action_execution_context_preservation() {
     // Test that actions properly preserve and modify context
     let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
-    
+
     // Set initial value as workflow variable
     let mut initial_vars = HashMap::new();
-    initial_vars.insert("initial_value".to_string(), Value::String("initial".to_string()));
+    initial_vars.insert(
+        "initial_value".to_string(),
+        Value::String("initial".to_string()),
+    );
     context.set_workflow_vars(initial_vars);
 
     // Execute a set variable action

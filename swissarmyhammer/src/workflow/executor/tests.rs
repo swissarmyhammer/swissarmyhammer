@@ -1139,7 +1139,6 @@ async fn test_retry_with_exponential_backoff() {
     assert!(!history.iter().any(|e| e.details.contains("waiting")));
 }
 
-
 #[tokio::test]
 async fn test_fallback_state_on_error() {
     let mut executor = WorkflowExecutor::new();
