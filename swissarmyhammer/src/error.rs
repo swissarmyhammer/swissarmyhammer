@@ -1222,7 +1222,9 @@ impl SwissArmyHammerError {
             SwissArmyHammerError::Git2AuthenticationError { context, .. } => {
                 context.recovery_hint.clone()
             }
-            SwissArmyHammerError::Git2ReferenceError { context, .. } => context.recovery_hint.clone(),
+            SwissArmyHammerError::Git2ReferenceError { context, .. } => {
+                context.recovery_hint.clone()
+            }
             SwissArmyHammerError::Git2IndexError { context, .. } => context.recovery_hint.clone(),
             SwissArmyHammerError::Git2MergeError { context, .. } => context.recovery_hint.clone(),
             _ => None,
@@ -1407,10 +1409,7 @@ impl SwissArmyHammerError {
     /// Get formatted error message with recovery suggestions
     pub fn display_with_suggestions(&self) -> String {
         match self {
-            SwissArmyHammerError::Git2AuthenticationError {
-                context,
-                ..
-            } => {
+            SwissArmyHammerError::Git2AuthenticationError { context, .. } => {
                 let mut output = format!("🔐 Authentication Error: {}\n", context.message);
                 output.push_str(&format!("   Operation: {}\n", context.operation));
                 output.push_str(&format!("   Context: {}\n", context.context));
@@ -1419,10 +1418,7 @@ impl SwissArmyHammerError {
                 }
                 output
             }
-            SwissArmyHammerError::Git2MergeError {
-                context,
-                ..
-            } => {
+            SwissArmyHammerError::Git2MergeError { context, .. } => {
                 let mut output = format!("🔀 Merge Error: {}\n", context.message);
                 output.push_str(&format!("   Operation: {}\n", context.operation));
                 output.push_str(&format!("   Context: {}\n", context.context));
@@ -1431,10 +1427,7 @@ impl SwissArmyHammerError {
                 }
                 output
             }
-            SwissArmyHammerError::Git2ReferenceError {
-                context,
-                ..
-            } => {
+            SwissArmyHammerError::Git2ReferenceError { context, .. } => {
                 let mut output = format!("🏷️  Reference Error: {}\n", context.message);
                 output.push_str(&format!("   Operation: {}\n", context.operation));
                 output.push_str(&format!("   Context: {}\n", context.context));
@@ -1443,10 +1436,7 @@ impl SwissArmyHammerError {
                 }
                 output
             }
-            SwissArmyHammerError::Git2IndexError {
-                context,
-                ..
-            } => {
+            SwissArmyHammerError::Git2IndexError { context, .. } => {
                 let mut output = format!("📁 Index Error: {}\n", context.message);
                 output.push_str(&format!("   Operation: {}\n", context.operation));
                 output.push_str(&format!("   Context: {}\n", context.context));

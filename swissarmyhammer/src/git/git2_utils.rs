@@ -386,10 +386,30 @@ pub fn collect_repository_state(repo: &Repository) -> crate::error::RepositorySt
     state
 }
 
+/// Extract git2 crate version from build environment
+fn get_git2_version() -> String {
+    // Try to get version from Cargo.toml at build time
+    const CARGO_TOML: &str = include_str!("../../Cargo.toml");
+
+    // Parse git2 version from Cargo.toml
+    for line in CARGO_TOML.lines() {
+        if line.trim().starts_with("git2") && line.contains("=") {
+            // Extract version from line like: git2 = "0.19"
+            if let Some(version_part) = line.split('=').nth(1) {
+                let version = version_part.trim().trim_matches('"').trim_matches('\'');
+                return format!("git2 {}", version);
+            }
+        }
+    }
+
+    // Fallback to known version if parsing fails
+    "git2 0.19.0".to_string()
+}
+
 /// Collect environment information for error context
 pub fn collect_environment_info(work_dir: &std::path::Path) -> crate::error::EnvironmentInfo {
     crate::error::EnvironmentInfo {
-        git2_version: "0.19.0".to_string(), // Hard-coded for now, could use build-time detection
+        git2_version: get_git2_version(), // Use dynamic git2 version detection
         working_directory: work_dir.to_path_buf(),
         user_config: collect_user_config(),
         git_config_locations: find_git_config_files(),
