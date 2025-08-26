@@ -268,9 +268,7 @@ impl WorkflowTemplateContext {
         if let Some(template_vars) = template_vars_to_flatten {
             for (key, value) in template_vars {
                 // Don't overwrite if key already exists at top level
-                if !context.contains_key(&key) {
-                    context.insert(key, value);
-                }
+                context.entry(key).or_insert(value);
             }
         }
         

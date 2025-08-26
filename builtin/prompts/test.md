@@ -11,6 +11,7 @@ The goal is to have:
 
 ## Rules
 
+- NEVER ignore tests. NEVER ignore tests. NEVER ignore tests.
 - Always run tests using a command line tool appropriate for the project
   - start with a 5 minute timeout
 - YOU MUST debug the code to make all tests pass, only change tests as a last resort
