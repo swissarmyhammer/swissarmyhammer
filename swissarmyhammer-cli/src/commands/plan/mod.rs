@@ -2,7 +2,7 @@
 //!
 //! Executes planning workflow for specific specification files
 
-use crate::cli::FlowSubcommand;
+use crate::commands::flow::{run_workflow_command, WorkflowCommandConfig};
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use swissarmyhammer::error::{ErrorSeverity, PlanCommandError};
 use swissarmyhammer::plan_utils::{validate_issues_directory, validate_plan_file_comprehensive};
@@ -56,16 +56,16 @@ async fn run_plan(plan_filename: String) -> i32 {
         }
     }
 
-    // Create a FlowSubcommand::Run with the validated plan_filename variable
+    // Create a plan_filename variable with the validated file path
     let plan_var = format!("plan_filename={}", validated_file.path.display());
 
-    let subcommand = FlowSubcommand::Run {
-        workflow: "plan".to_string(),
+    let config = WorkflowCommandConfig {
+        workflow_name: "plan".to_string(),
         vars: vec![plan_var],
         interactive: false,
         dry_run: false,
-        test: false,
-        timeout: None,
+        test_mode: false,
+        timeout_str: None,
         quiet: false,
     };
 
@@ -73,9 +73,13 @@ async fn run_plan(plan_filename: String) -> i32 {
     tracing::debug!("Plan file path: {}", validated_file.path.display());
     tracing::debug!("Plan file size: {} bytes", validated_file.size);
 
-    // Execute the flow command with the plan workflow
+    // Execute the workflow directly without unnecessary indirection
     let temp_context = swissarmyhammer_config::TemplateContext::new(); // Plan command doesn't need configuration
-    let exit_code = crate::commands::flow::handle_command(subcommand, &temp_context).await;
+    let result = run_workflow_command(config, &temp_context).await;
+    let exit_code = match result {
+        Ok(()) => EXIT_SUCCESS,
+        Err(_) => EXIT_ERROR,
+    };
 
     if exit_code == EXIT_SUCCESS {
         tracing::info!("Plan workflow execution completed successfully");
