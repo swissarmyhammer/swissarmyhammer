@@ -764,15 +764,15 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
     } else {
         // Check if we should enable debug logging to NDJSON for flow commands
         let enable_debug_ndjson = debug && std::env::args().any(|arg| arg == "flow");
-
+        
         let registry = registry()
             .with(create_filter())
             .with(fmt::layer().with_writer(std::io::stderr));
-
+            
         if enable_debug_ndjson {
             // Add NDJSON layer for workflow debug logging
             use crate::ndjson_layer::{NdjsonLayer, WorkflowDebugWriter};
-
+            
             let debug_writer = WorkflowDebugWriter::new();
             registry.with(NdjsonLayer::new(debug_writer)).init();
         } else {

@@ -7,82 +7,37 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{field::Visit, layer::Context, Layer};
 
-/// Writer that routes debug logs to workflow-specific directories
-pub struct WorkflowDebugWriter {
-    current_file: Arc<Mutex<Option<std::fs::File>>>,
-}
+/// Writer that writes debug logs directly to the workflow-specific file
+pub struct WorkflowDebugWriter;
 
 impl WorkflowDebugWriter {
     pub fn new() -> Self {
-        Self {
-            current_file: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    fn setup_workflow_file(&self, run_id: &str) -> std::io::Result<()> {
-        let workflow_runs_path = PathBuf::from(".swissarmyhammer/workflow-runs");
-        let run_dir = workflow_runs_path
-            .join("runs")
-            .join(format!("WorkflowRunId({run_id})"));
-
-        std::fs::create_dir_all(&run_dir)?;
-        let debug_log_path = run_dir.join("run_logs.ndjson");
-
-        let debug_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&debug_log_path)?;
-
-        *self.current_file.lock().unwrap() = Some(debug_file);
-        Ok(())
+        Self
     }
 }
 
 impl Write for WorkflowDebugWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // Look for debug setup message to extract run_id and setup proper file
-        if let Ok(content) = std::str::from_utf8(buf) {
-            if content.contains("Debug logging enabled for workflow run") {
-                if let Ok(json) = serde_json::from_str::<Value>(content.trim()) {
-                    if let Some(fields) = json.get("fields") {
-                        if let Some(run_id) = fields.get("run_id") {
-                            if let Some(run_id_str) = run_id.as_str() {
-                                let _ = self.setup_workflow_file(run_id_str);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Write to workflow-specific file if available, otherwise fallback
-        if let Ok(mut file_opt) = self.current_file.lock() {
-            if let Some(ref mut file) = *file_opt {
+        // Get the global debug file if it exists
+        if let Some(debug_file) = crate::commands::flow::DEBUG_FILE.get() {
+            if let Ok(mut file) = debug_file.lock() {
                 return file.write(buf);
             }
         }
-
-        // Fallback: write to .swissarmyhammer/debug.ndjson
-        let fallback_path = PathBuf::from(".swissarmyhammer/debug.ndjson");
-        if let Some(parent) = fallback_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut fallback_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(fallback_path)?;
-        fallback_file.write(buf)
+        
+        // If no debug file is set up, just return success (don't write anything)
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        if let Ok(mut file_opt) = self.current_file.lock() {
-            if let Some(ref mut file) = *file_opt {
+        // Get the global debug file if it exists
+        if let Some(debug_file) = crate::commands::flow::DEBUG_FILE.get() {
+            if let Ok(mut file) = debug_file.lock() {
                 return file.flush();
             }
         }

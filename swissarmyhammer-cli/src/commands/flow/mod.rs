@@ -28,25 +28,34 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// Default timeout for workflow test mode execution in seconds
 const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 5;
 
-/// Setup debug logging for a specific workflow run
+/// Setup debug logging for a specific workflow run - follows same pattern as run.json  
 fn setup_workflow_debug_logging(run_id: &WorkflowRunId) -> Result<()> {
     use std::fs;
 
-    // Create debug log file in proper workflow run directory
+    // Create debug log file in proper workflow run directory (same pattern as run.json)
     let workflow_runs_path = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
     let run_dir = workflow_runs_path.join("runs").join(format!("{run_id:?}"));
 
-    // Ensure directory exists
+    // Ensure directory exists (same as run.json creation)
     fs::create_dir_all(&run_dir).map_err(|e| {
         SwissArmyHammerError::Other(format!("Failed to create workflow run directory: {e}"))
     })?;
 
     let debug_log_path = run_dir.join("run_logs.ndjson");
 
-    // Create debug log file that will be populated by the NDJSON layer
-    fs::File::create(&debug_log_path).map_err(|e| {
-        SwissArmyHammerError::Other(format!("Failed to create debug log file: {e}"))
-    })?;
+    // Create debug log file and store path for later use
+    let debug_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&debug_log_path)
+        .map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to create debug log file: {e}"))
+        })?;
+
+    // Store the file handle globally for the NDJSON writer to use
+    if let Err(_) = DEBUG_FILE.set(std::sync::Arc::new(std::sync::Mutex::new(debug_file))) {
+        return Err(SwissArmyHammerError::Other("Debug file already initialized".to_string()));
+    }
 
     tracing::info!(
         run_id = %run_id,
@@ -56,6 +65,9 @@ fn setup_workflow_debug_logging(run_id: &WorkflowRunId) -> Result<()> {
 
     Ok(())
 }
+
+/// Global debug file handle for current workflow run
+pub static DEBUG_FILE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
 
 /// Handle the flow command
 pub async fn handle_command(
@@ -351,6 +363,7 @@ async fn run_workflow_command(
     run.context.set_workflow_vars(variables.clone());
 
     // Setup debug logging in proper workflow run directory if enabled
+    // Follow the same pattern as run.json - create file directly where we need it
     if config.debug {
         setup_workflow_debug_logging(&run.id)?;
     }
