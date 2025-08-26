@@ -32,9 +32,9 @@ Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_
 - DO provide context in the step files that will help when it is time to code
 - DO make sure that each step builds on the previous prompts
 - DO NOT leave hanging or orphaned code that isn't integrated into a previous step
-- DO NOT plan security features unless specifically asked
-- DO NOT plan performance features unless specifically asked
-- DO NOT plan backward compatibility features unless specifically asked
+- DO NOT plan security features unless specifically asked by the user
+- DO NOT plan performance features unless specifically asked by the user
+- DO NOT plan backward compatibility features unless specifically asked by the user
 {% if plan_filename %}
 - Each issue you create that is a step in the plan should include the phrase "Refer to {{ plan_filename }}"
 {% else %}
@@ -49,7 +49,6 @@ Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_
 {% else %}
 - Review the existing `./specification` directory and determine what is to be planned.
 {% endif %}
-- Use git to determine what has changed in the specification compared to what has already been planned.
 - Review the existing memos and think deeply about how they apply to the plan.
 - Review the existing code to determine what parts of the specification might already be implemented.  Unless explicitly instructed otherwise in the specification, do not add new systems/services when existing patterns and systems can be extended to achieve the goals.
 - Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory.

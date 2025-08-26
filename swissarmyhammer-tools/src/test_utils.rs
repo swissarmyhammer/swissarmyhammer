@@ -17,20 +17,12 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// Each call creates a unique test directory to prevent conflicts between parallel tests.
 #[cfg(test)]
 pub async fn create_test_context() -> ToolContext {
-    // Create a unique test directory for each context to prevent conflicts
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let thread_id = std::thread::current().id();
-    let unique_path = format!("./.swissarmyhammer/test_issues_{}_{:?}", timestamp, thread_id);
-    
-    // Ensure the directory exists
-    std::fs::create_dir_all(&unique_path).unwrap();
-    
+    // Use system temp directory to avoid path issues
+    let test_issues_dir = std::env::temp_dir()
+        .join("sah_test_issues")
+        .join(format!("{}", std::process::id()));
     let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-        FileSystemIssueStorage::new(PathBuf::from(unique_path)).unwrap(),
+        FileSystemIssueStorage::new(test_issues_dir).unwrap(),
     )));
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =

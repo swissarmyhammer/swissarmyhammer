@@ -23,6 +23,7 @@ Swiss Army Hammer is a flexible prompt management library and CLI tool for AI as
 ## Key Features
 - **Prompt Management**: Load, store, and organize prompts from various sources
 - **Template Engine**: Powerful Liquid-based template processing with custom filters
+- **Configuration**: Multi-format configuration (TOML, YAML, JSON) with environment variables
 - **Search**: Full-text and semantic search capabilities for finding prompts
 - **MCP Support**: Model Context Protocol server integration
 - **Workflows**: State-based execution system for complex tasks
@@ -35,7 +36,8 @@ Swiss Army Hammer is a flexible prompt management library and CLI tool for AI as
 - `sah run <prompt>` - Run a specific prompt
 - `sah search <query>` - Search for prompts
 - `sah serve` - Start MCP server
-- `sah doctor` - Run diagnostics
+- `sah doctor` - Run diagnostics and show configuration
+- `sah validate` - Validate configuration files
 
 ### Template Variables
 You can use these variables in your prompts:
@@ -56,6 +58,25 @@ Workflows allow you to create state-based execution flows with transitions, cond
 {% elsif topic == "search" %}
 ## Search
 Use full-text search or semantic search to find relevant prompts in your library.
+{% elsif topic == "configuration" %}
+## Configuration
+Swiss Army Hammer supports flexible configuration through multiple sources:
+- **File formats**: TOML, YAML, and JSON
+- **Locations**: `~/.swissarmyhammer/` (global) and `./.swissarmyhammer/` (project)  
+- **Environment variables**: `SAH_*` and `SWISSARMYHAMMER_*` prefixes
+- **Precedence**: defaults → global → project → environment → CLI args
+
+Create a configuration file like `~/.swissarmyhammer/sah.toml`:
+```toml
+[app]
+name = "MyProject"
+debug = true
+
+[variables]
+author = "Your Name"
+```
+
+All configuration values are available in templates: `{{app.name}}`, `{{variables.author}}`
 {% endif %}
 
 ## Getting Help

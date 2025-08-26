@@ -11,7 +11,10 @@ use swissarmyhammer::plan_utils::{validate_issues_directory, validate_plan_file_
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the plan command
-pub async fn handle_command(plan_filename: String) -> i32 {
+pub async fn handle_command(
+    plan_filename: String,
+    _template_context: &swissarmyhammer_config::TemplateContext,
+) -> i32 {
     run_plan(plan_filename).await
 }
 
@@ -71,7 +74,8 @@ async fn run_plan(plan_filename: String) -> i32 {
     tracing::debug!("Plan file size: {} bytes", validated_file.size);
 
     // Execute the flow command with the plan workflow
-    let exit_code = crate::commands::flow::handle_command(subcommand).await;
+    let temp_context = swissarmyhammer_config::TemplateContext::new(); // Plan command doesn't need configuration
+    let exit_code = crate::commands::flow::handle_command(subcommand, &temp_context).await;
 
     if exit_code == EXIT_SUCCESS {
         tracing::info!("Plan workflow execution completed successfully");

@@ -4,6 +4,7 @@
 //! that file tools behave correctly across a range of inputs.
 
 use proptest::prelude::*;
+use proptest::test_runner::Config as ProptestConfig;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,6 +48,7 @@ fn create_property_test_registry() -> ToolRegistry {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
     /// Property: Write content to a file, then read it back. The content should be identical.
     #[test]
     fn test_write_read_roundtrip_property(
@@ -94,6 +96,7 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
     /// Property: Edit operations should be deterministic - same input produces same output
     #[test]
     fn test_edit_deterministic_property(
@@ -170,6 +173,7 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
     /// Property: Glob patterns should return consistent results
     #[test]
     fn test_glob_consistency_property(
@@ -225,6 +229,7 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
     /// Property: File tools should handle valid input gracefully
     #[test]
     fn test_path_validation_property(

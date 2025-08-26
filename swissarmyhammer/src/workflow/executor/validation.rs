@@ -169,7 +169,8 @@ impl WorkflowExecutor {
         let mut matching_transitions = Vec::new();
 
         for transition in &transitions {
-            if self.evaluate_condition(&transition.condition, &run.context)? {
+            let context_hashmap = run.context.to_workflow_hashmap();
+            if self.evaluate_condition(&transition.condition, &context_hashmap)? {
                 self.log_event(
                     ExecutionEventType::ConditionEvaluated,
                     format!(

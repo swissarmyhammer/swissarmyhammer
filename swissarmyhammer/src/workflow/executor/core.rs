@@ -174,7 +174,7 @@ impl WorkflowExecutor {
         let state_error = self.execute_state_and_capture_errors(run).await?;
 
         // Check if abort was requested via context variable (after state execution)
-        if let Some(abort_reason_value) = run.context.get("__ABORT_REQUESTED__") {
+        if let Some(abort_reason_value) = run.context.get_workflow_var("__ABORT_REQUESTED__") {
             if let Some(abort_reason) = abort_reason_value.as_str() {
                 // Create abort file for external detection
                 if let Err(e) = std::fs::create_dir_all(".swissarmyhammer") {
@@ -497,8 +497,9 @@ impl WorkflowExecutor {
         state_description: &str,
     ) -> ExecutorResult<bool> {
         // Parse action from state description with liquid template rendering
+        let context_hashmap = run.context.to_workflow_hashmap();
         if let Some(action) =
-            parse_action_from_description_with_context(state_description, &run.context)?
+            parse_action_from_description_with_context(state_description, &context_hashmap)?
         {
             self.log_event(
                 ExecutionEventType::StateExecution,
@@ -520,6 +521,7 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         action: Box<dyn crate::workflow::Action>,
     ) -> Result<Value, ActionError> {
+        // Execute action with mutable WorkflowTemplateContext directly
         action.execute(&mut run.context).await
     }
 
@@ -629,8 +631,7 @@ impl WorkflowExecutor {
     fn capture_error_context(&mut self, run: &mut WorkflowRun, action_error: &ActionError) {
         let error_context = ErrorContext::new(action_error.to_string(), run.current_state.clone());
         let error_context_json = serde_json::to_value(&error_context).unwrap_or(Value::Null);
-        run.context
-            .insert(ErrorContext::CONTEXT_KEY.to_string(), error_context_json);
+        run.context.insert(ErrorContext::CONTEXT_KEY.to_string(), error_context_json);
     }
 
     /// Format action error for logging
@@ -719,10 +720,10 @@ impl WorkflowExecutor {
         // Find all compensation states stored in context
         let mut compensation_states: Vec<(String, StateId)> = Vec::new();
 
-        for (key, value) in &run.context {
+        for (key, value) in run.context.iter() {
             if CompensationKey::is_compensation_key(key) {
                 if let Value::String(comp_state) = value {
-                    compensation_states.push((key.clone(), StateId::new(comp_state)));
+                    compensation_states.push((key.to_string(), StateId::new(comp_state)));
                 }
             }
         }

@@ -27,7 +27,8 @@ async fn run_workflow_with_vars_in_process(
         quiet: true,
     };
 
-    let result = run_flow_command(subcommand).await;
+    let test_context = swissarmyhammer_config::TemplateContext::new();
+    let result = run_flow_command(subcommand, &test_context).await;
 
     Ok(result.is_ok())
 }

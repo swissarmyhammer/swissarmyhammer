@@ -3,14 +3,16 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
-use crate::sah_config;
 use crate::shell_security::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
 };
 
 use crate::workflow::action_parser::ActionParser;
 use crate::workflow::mcp_integration::{response_processing, WorkflowShellContext};
-use crate::workflow::{WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage};
+use crate::workflow::{
+    WorkflowExecutor, WorkflowName, WorkflowRunStatus, WorkflowStorage, WorkflowTemplateContext,
+};
+
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -192,8 +194,8 @@ const WORKFLOW_STACK_KEY: &str = "_workflow_stack";
 /// Trait for all workflow actions
 #[async_trait::async_trait]
 pub trait Action: Send + Sync {
-    /// Execute the action with the given context
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value>;
+    /// Execute the action with the given template context
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value>;
 
     /// Get a description of what this action does
     fn description(&self) -> String;
@@ -209,7 +211,7 @@ pub trait Action: Send + Sync {
 /// Trait for actions that support variable substitution
 pub trait VariableSubstitution {
     /// Substitute variables in a single string value
-    fn substitute_string(&self, value: &str, context: &HashMap<String, Value>) -> String {
+    fn substitute_string(&self, value: &str, context: &WorkflowTemplateContext) -> String {
         substitute_variables_in_string(value, context)
     }
 
@@ -217,7 +219,7 @@ pub trait VariableSubstitution {
     fn substitute_map(
         &self,
         values: &HashMap<String, String>,
-        context: &HashMap<String, Value>,
+        context: &WorkflowTemplateContext,
     ) -> HashMap<String, String> {
         let mut substituted = HashMap::new();
         for (key, value) in values {
@@ -286,7 +288,7 @@ impl PromptAction {
     }
 
     /// Substitute variables in arguments using the context
-    fn substitute_variables(&self, context: &HashMap<String, Value>) -> HashMap<String, String> {
+    fn substitute_variables(&self, context: &WorkflowTemplateContext) -> HashMap<String, String> {
         self.substitute_map(&self.arguments, context)
     }
 }
@@ -295,7 +297,7 @@ impl VariableSubstitution for PromptAction {}
 
 #[async_trait::async_trait]
 impl Action for PromptAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         self.execute_once_internal(context).await
     }
 
@@ -317,7 +319,7 @@ impl PromptAction {
     /// Render both user prompt and system prompt using the same library instance
     async fn render_prompts_directly(
         &self,
-        context: &HashMap<String, Value>,
+        context: &WorkflowTemplateContext,
     ) -> ActionResult<(String, Option<String>)> {
         // Substitute variables in arguments
         let args = self.substitute_variables(context);
@@ -381,7 +383,7 @@ impl PromptAction {
     }
 
     /// Get Claude CLI path from context or environment
-    fn get_claude_path(&self, context: &HashMap<String, Value>) -> String {
+    fn get_claude_path(&self, context: &WorkflowTemplateContext) -> String {
         context
             .get("claude_path")
             .and_then(|v| v.as_str())
@@ -481,7 +483,7 @@ impl PromptAction {
     /// * `Err(ActionError)` - Various errors including rate limits
     async fn execute_once_internal(
         &self,
-        context: &mut HashMap<String, Value>,
+        context: &mut WorkflowTemplateContext,
     ) -> ActionResult<Value> {
         tracing::info!(
             "Executing prompt '{}' with context: {:?}",
@@ -585,7 +587,7 @@ impl WaitAction {
 
 #[async_trait::async_trait]
 impl Action for WaitAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         match self.duration {
             Some(duration) => {
                 if let Some(message) = &self.message {
@@ -698,9 +700,9 @@ impl VariableSubstitution for LogAction {}
 
 #[async_trait::async_trait]
 impl Action for LogAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Render message with liquid templating (supports {{variable}} syntax)
-        let message = render_with_liquid_template(&self.message, context);
+        let message = render_with_liquid_template(&self.message, &context.to_workflow_hashmap());
 
         match self.level {
             LogLevel::Info => tracing::info!("{}", message),
@@ -713,6 +715,8 @@ impl Action for LogAction {
 
         Ok(Value::String(message))
     }
+
+
 
     fn description(&self) -> String {
         format!("Log message: {}", self.message)
@@ -768,7 +772,7 @@ impl VariableSubstitution for SetVariableAction {}
 
 #[async_trait::async_trait]
 impl Action for SetVariableAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Substitute variables in value
         let substituted_value = self.substitute_string(&self.value, context);
 
@@ -809,7 +813,7 @@ impl VariableSubstitution for AbortAction {}
 
 #[async_trait::async_trait]
 impl Action for AbortAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Substitute variables in message
         let message = self.substitute_string(&self.message, context);
 
@@ -849,10 +853,11 @@ fn is_valid_argument_key(key: &str) -> bool {
 
 /// Helper function to substitute variables in a string
 /// Variables are referenced as ${variable_name}
-fn substitute_variables_in_string(input: &str, context: &HashMap<String, Value>) -> String {
+fn substitute_variables_in_string(input: &str, context: &WorkflowTemplateContext) -> String {
     let parser = ActionParser::new().expect("Failed to create ActionParser");
+    let context_map = context.to_workflow_hashmap();
     parser
-        .substitute_variables_safe(input, context)
+        .substitute_variables_safe(input, &context_map)
         .unwrap_or_else(|_| input.to_string())
 }
 
@@ -885,8 +890,12 @@ fn render_with_liquid_template(input: &str, context: &HashMap<String, Value>) ->
     };
 
     // Apply fallback variable substitution for any remaining ${variable} syntax
-    substitute_variables_in_string(&liquid_rendered, context)
+    let parser = ActionParser::new().expect("Failed to create ActionParser");
+    parser
+        .substitute_variables_safe(&liquid_rendered, context)
+        .unwrap_or_else(|_| liquid_rendered)
 }
+
 
 impl SubWorkflowAction {
     /// Create a new sub-workflow action
@@ -919,7 +928,7 @@ impl SubWorkflowAction {
     }
 
     /// Substitute variables in input values using the context
-    fn substitute_variables(&self, context: &HashMap<String, Value>) -> HashMap<String, String> {
+    fn substitute_variables(&self, context: &WorkflowTemplateContext) -> HashMap<String, String> {
         self.substitute_map(&self.input_variables, context)
     }
 }
@@ -1115,7 +1124,7 @@ impl ShellAction {
         &self,
         result: Value,
         command: &str,
-        context: &mut HashMap<String, Value>,
+        context: &mut WorkflowTemplateContext,
     ) -> ActionResult<Value> {
         // Extract shell execution result from enhanced shell response
         let json_data = response_processing::extract_json_data(&result)
@@ -1178,7 +1187,7 @@ impl ShellAction {
 
 #[async_trait::async_trait]
 impl Action for ShellAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Substitute variables in command and other parameters
         let resolved_command = self.substitute_string(&self.command, context);
         let resolved_working_dir = self
@@ -1256,7 +1265,7 @@ impl Action for ShellAction {
 
 #[async_trait::async_trait]
 impl Action for SubWorkflowAction {
-    async fn execute(&self, context: &mut HashMap<String, Value>) -> ActionResult<Value> {
+    async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Check for circular dependencies
         let workflow_stack = context
             .get(WORKFLOW_STACK_KEY)
@@ -1382,8 +1391,9 @@ impl Action for SubWorkflowAction {
                 // Extract the context as the result
                 let result = Value::Object(
                     run.context
-                        .into_iter()
+                        .iter()
                         .filter(|(k, _)| !k.starts_with('_')) // Filter out internal variables
+                        .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
                 );
 
@@ -1711,11 +1721,12 @@ pub fn parse_action_from_description_with_context(
     let mut enhanced_context = context.clone();
 
     // Load and merge sah.toml configuration variables into the context
-    // This uses the existing template integration infrastructure
-    if let Err(e) = sah_config::load_and_merge_repo_config(&mut enhanced_context) {
+    // This uses the new TemplateContext infrastructure
+    if let Ok(template_context) = swissarmyhammer_config::load_configuration() {
+        template_context.merge_into_workflow_context(&mut enhanced_context);
+    } else {
         tracing::debug!(
-            "Failed to load sah.toml configuration: {}. Continuing without config variables.",
-            e
+            "Failed to load configuration via TemplateContext. Continuing without config variables."
         );
     }
 
@@ -1809,7 +1820,7 @@ mod tests {
 
     #[test]
     fn test_variable_substitution() {
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("file".to_string(), Value::String("test.rs".to_string()));
         context.insert("count".to_string(), Value::Number(42.into()));
 
@@ -1904,7 +1915,7 @@ mod tests {
     #[tokio::test]
     async fn test_log_action_execution() {
         let action = LogAction::info("Test message".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
         assert_eq!(result, Value::String("Test message".to_string()));
@@ -1920,7 +1931,7 @@ mod tests {
         const TEST_VALUE: &str = "test_value";
 
         let action = SetVariableAction::new(TEST_VAR.to_string(), TEST_VALUE.to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
         assert_eq!(result, Value::String(TEST_VALUE.to_string()));
@@ -1944,7 +1955,7 @@ mod tests {
     #[tokio::test]
     async fn test_sub_workflow_circular_dependency_detection() {
         let action = SubWorkflowAction::new("workflow-a".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         // Simulate that workflow-a is already in the execution stack
         let workflow_stack = vec![
@@ -1977,7 +1988,7 @@ mod tests {
             .input_variables
             .insert("mode".to_string(), "strict".to_string());
 
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "current_file".to_string(),
             Value::String("test.rs".to_string()),
@@ -2034,7 +2045,7 @@ mod tests {
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
         let action = AbortAction::new("Test abort message".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
         assert!(result.is_err());
@@ -2058,7 +2069,7 @@ mod tests {
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
         let action = AbortAction::new("Error in ${file}: ${error}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("file".to_string(), Value::String("test.rs".to_string()));
         context.insert(
             "error".to_string(),
@@ -2219,7 +2230,7 @@ mod tests {
     #[test]
     fn test_shell_action_variable_substitution() {
         let action = ShellAction::new("echo ${name}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("name".to_string(), Value::String("world".to_string()));
 
         let substituted_command = action.substitute_string(&action.command, &context);
@@ -2234,7 +2245,7 @@ mod tests {
 
         let action = ShellAction::new("env".to_string()).with_environment(env);
 
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "custom_path".to_string(),
             Value::String("/opt/bin".to_string()),
@@ -2257,7 +2268,7 @@ mod tests {
         let action = ShellAction::new("ls".to_string())
             .with_working_dir("/home/${username}/projects".to_string());
 
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("username".to_string(), Value::String("alice".to_string()));
 
         let substituted_dir =
@@ -2347,7 +2358,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_execution_success() {
         let action = ShellAction::new("echo hello world".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2394,7 +2405,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_execution_failure() {
         let action = ShellAction::new("exit 42".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2420,7 +2431,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_with_variable_substitution_execution() {
         let action = ShellAction::new("echo ${greeting} ${name}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("greeting".to_string(), Value::String("Hello".to_string()));
         context.insert("name".to_string(), Value::String("World".to_string()));
 
@@ -2438,7 +2449,7 @@ mod tests {
     async fn test_shell_action_with_result_variable() {
         let action = ShellAction::new("echo test output".to_string())
             .with_result_variable("command_output".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2466,7 +2477,7 @@ mod tests {
 
         let action = ShellAction::new("pwd".to_string())
             .with_working_dir(temp_path.to_string_lossy().to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2489,7 +2500,7 @@ mod tests {
 
         let action =
             ShellAction::new("echo $TEST_VAR $ANOTHER_VAR".to_string()).with_environment(env);
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2508,7 +2519,7 @@ mod tests {
         env.insert("TEST_VAR".to_string(), "${dynamic_value}".to_string());
 
         let action = ShellAction::new("echo $TEST_VAR".to_string()).with_environment(env);
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "dynamic_value".to_string(),
             Value::String("substituted".to_string()),
@@ -2530,7 +2541,7 @@ mod tests {
 
         // Create an action with a short timeout (1 second to ensure proper timeout behavior)
         let action = ShellAction::new("sleep 10".to_string()).with_timeout(Duration::from_secs(1));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2582,7 +2593,7 @@ mod tests {
         let action = ShellAction::new("sleep 5".to_string())
             .with_timeout(Duration::from_millis(100))
             .with_result_variable("output".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2605,7 +2616,7 @@ mod tests {
     async fn test_shell_action_no_timeout_by_default() {
         // Test that commands without explicit timeout still work
         let action = ShellAction::new("echo no timeout test".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2631,7 +2642,7 @@ mod tests {
         // Command that completes quickly within timeout
         let action =
             ShellAction::new("echo quick command".to_string()).with_timeout(Duration::from_secs(5));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2665,7 +2676,7 @@ mod tests {
         // If the process cleanup didn't work, this test would hang for 30 seconds
         let action =
             ShellAction::new("sleep 30".to_string()).with_timeout(Duration::from_millis(150));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let start_time = std::time::Instant::now();
         let _result = action.execute(&mut context).await.unwrap();
@@ -2694,7 +2705,7 @@ mod tests {
     async fn test_shell_action_windows_command_format() {
         // Test that Windows uses cmd /C for shell commands
         let action = ShellAction::new("echo windows test".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2709,7 +2720,7 @@ mod tests {
     async fn test_shell_action_unix_command_format() {
         // Test that Unix systems use sh -c for shell commands
         let action = ShellAction::new("echo unix test".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2717,5 +2728,106 @@ mod tests {
         assert_eq!(context.get("success"), Some(&Value::Bool(true)));
         let stdout = context.get("stdout").unwrap().as_str().unwrap();
         assert!(stdout.contains("unix test"));
+    }
+
+    #[tokio::test]
+    async fn test_log_action_template_context_integration() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Create a WorkflowTemplateContext with configuration values
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        
+        let mut workflow_vars = HashMap::new();
+        workflow_vars.insert("project_name".to_string(), json!("SwissArmyHammer"));
+        workflow_vars.insert("version".to_string(), json!("2.0.0"));
+        workflow_vars.insert("debug".to_string(), json!(true));
+        workflow_vars.insert("workflow_step".to_string(), json!("initialization"));
+        
+        context.set_workflow_vars(workflow_vars);
+
+        // Create a LogAction with liquid template syntax
+        let log_action =
+            LogAction::info("Project {{project_name}} v{{version}} (Debug: {{debug}})".to_string());
+
+        // Execute with the context
+        let result = log_action
+            .execute(&mut context)
+            .await
+            .unwrap();
+
+        // Verify the template was rendered correctly using configuration values
+        assert_eq!(
+            result.as_str().unwrap(),
+            "Project SwissArmyHammer v2.0.0 (Debug: true)"
+        );
+
+        // Verify the action marked itself as successful
+        assert_eq!(
+            context.get(LAST_ACTION_RESULT_KEY),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_log_action_template_context_with_workflow_vars() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Create a WorkflowTemplateContext with all variables
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        
+        let mut all_vars = HashMap::new();
+        all_vars.insert("app_name".to_string(), json!("TestApp"));
+        all_vars.insert("current_file".to_string(), json!("main.rs"));
+        all_vars.insert("line_count".to_string(), json!(42));
+
+        context.set_workflow_vars(all_vars);
+
+        // Create a LogAction that uses both template and workflow variables
+        let log_action =
+            LogAction::info("App: {{app_name}}, Current file: {{current_file}}".to_string());
+
+        // Execute with the context
+        let result = log_action
+            .execute(&mut context)
+            .await
+            .unwrap();
+
+        // Verify both template and workflow variables were used
+        assert_eq!(
+            result.as_str().unwrap(),
+            "App: TestApp, Current file: main.rs"
+        );
+
+        // Verify workflow variables are preserved
+        assert_eq!(
+            context.get("current_file"),
+            Some(&json!("main.rs"))
+        );
+        assert_eq!(context.get("line_count"), Some(&json!(42)));
+    }
+
+    #[tokio::test]
+    async fn test_backward_compatibility_with_execute() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Test that the old execute() method still works
+        let log_action = LogAction::info("Simple message: {{var1}}".to_string());
+
+        // Create traditional HashMap context
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        context.insert("var1".to_string(), json!("test_value"));
+
+        // Execute with old method
+        let result = log_action.execute(&mut context).await.unwrap();
+
+        // Verify it works as before
+        assert_eq!(result.as_str().unwrap(), "Simple message: test_value");
+        assert_eq!(
+            context.get(LAST_ACTION_RESULT_KEY),
+            Some(&Value::Bool(true))
+        );
     }
 }

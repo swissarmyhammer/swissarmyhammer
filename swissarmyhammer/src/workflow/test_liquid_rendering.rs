@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod tests {
     use crate::workflow::parse_action_from_description_with_context;
+    use crate::workflow::WorkflowTemplateContext;
     use serde_json::{json, Value};
     use std::collections::HashMap;
 
@@ -43,7 +44,7 @@ mod tests {
         );
 
         // Create context with the branch_value variable
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("branch_value".to_string(), json!("Hello from workflow"));
 
         // Execute the action
@@ -67,7 +68,7 @@ mod tests {
         );
 
         // Create context with variables
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("liquid_var".to_string(), json!("liquid_value"));
         context.insert("fallback_var".to_string(), json!("fallback_value"));
 

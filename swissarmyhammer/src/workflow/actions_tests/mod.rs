@@ -15,28 +15,29 @@ mod common;
 
 // Re-export common test utilities from parent module
 use crate::workflow::actions::*;
+use crate::workflow::WorkflowTemplateContext;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
 /// Helper function to create a test context with common variables
-pub fn create_test_context() -> HashMap<String, Value> {
-    let mut context = HashMap::new();
-    context.insert(
+pub fn create_test_context() -> WorkflowTemplateContext {
+    let mut vars = HashMap::new();
+    vars.insert(
         "test_var".to_string(),
         Value::String("test_value".to_string()),
     );
-    context.insert("number_var".to_string(), Value::Number(42.into()));
-    context.insert("bool_var".to_string(), Value::Bool(true));
-    context.insert(
+    vars.insert("number_var".to_string(), Value::Number(42.into()));
+    vars.insert("bool_var".to_string(), Value::Bool(true));
+    vars.insert(
         "current_file".to_string(),
         Value::String("test.rs".to_string()),
     );
-    context.insert(
+    vars.insert(
         "user_name".to_string(),
         Value::String("testuser".to_string()),
     );
-    context
+    WorkflowTemplateContext::with_vars(vars).unwrap()
 }
 
 /// Helper function to create a test context with special characters

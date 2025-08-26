@@ -22,6 +22,9 @@ mod parser;
 mod run;
 mod state;
 mod storage;
+mod template_context;
+#[cfg(test)]
+mod template_context_integration_test;
 #[cfg(test)]
 mod test_helpers;
 #[cfg(test)]
@@ -67,6 +70,7 @@ pub use storage::{
     MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowResolver, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,
 };
+pub use template_context::WorkflowTemplateContext;
 pub use transition::{ConditionType, Transition, TransitionCondition};
 pub use transition_key::TransitionKey;
 pub use visualization::{

@@ -11,7 +11,7 @@
 //! - **Workflow Integration**: Tests that the plan workflow executes correctly in test mode
 //! - **Path Handling**: Tests relative and absolute path processing
 //!
-//! ### 2. Error Scenario Tests  
+//! ### 2. Error Scenario Tests
 //! - **File Not Found**: Tests behavior when plan file doesn't exist
 //! - **Directory as File**: Tests error handling when path points to directory
 //! - **Empty Files**: Tests handling of empty plan files
@@ -67,7 +67,7 @@
 //!
 //! These tests require:
 //! - `assert_cmd` for CLI command execution
-//! - `tempfile` for isolated test environments  
+//! - `tempfile` for isolated test environments
 //! - `tokio` for async test execution
 //! - Built `sah` binary (automatically handled by `cargo_bin`)
 //!
@@ -89,7 +89,7 @@ use in_process_test_utils::run_sah_command_in_process_with_dir;
 mod test_utils;
 use test_utils::{create_temp_dir, setup_git_repo};
 
-use test_utils::create_test_home_guard;
+use swissarmyhammer::test_utils::IsolatedTestHome;
 
 /// Create a simple test plan file with basic content
 fn create_test_plan_file(
@@ -106,7 +106,7 @@ This is a test specification for integration testing of the plan command.
 
 ## Requirements
 1. Create a simple component for data processing
-2. Add basic validation functionality  
+2. Add basic validation functionality
 3. Write comprehensive unit tests
 4. Add integration tests
 5. Update documentation
@@ -291,7 +291,7 @@ fn setup_plan_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
 /// Test plan command CLI argument parsing and initial validation
 #[tokio::test]
 async fn test_plan_command_argument_parsing() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -324,7 +324,7 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
 /// Test plan workflow execution in test mode (no external service calls)
 #[tokio::test]
 async fn test_plan_workflow_test_mode() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -377,7 +377,7 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
 /// Test plan command with relative path
 #[tokio::test]
 async fn test_plan_command_relative_path() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -415,10 +415,10 @@ async fn test_plan_command_relative_path() -> Result<()> {
     Ok(())
 }
 
-/// Test plan command with absolute path  
+/// Test plan command with absolute path
 #[tokio::test]
 async fn test_plan_command_absolute_path() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -457,7 +457,7 @@ async fn test_plan_command_absolute_path() -> Result<()> {
 /// Test plan workflow with complex specification in test mode
 #[tokio::test]
 async fn test_plan_workflow_complex_specification() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -501,7 +501,7 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
 /// Test error scenario: file not found
 #[tokio::test]
 async fn test_plan_command_file_not_found() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -528,7 +528,7 @@ async fn test_plan_command_file_not_found() -> Result<()> {
 /// Test error scenario: directory instead of file
 #[tokio::test]
 async fn test_plan_command_directory_as_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -558,7 +558,7 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
 /// Test error scenario: empty file
 #[tokio::test]
 async fn test_plan_command_empty_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -584,7 +584,7 @@ async fn test_plan_command_empty_file() -> Result<()> {
 /// Test plan workflow with existing issues (test mode)
 #[tokio::test]
 async fn test_plan_workflow_with_existing_issues() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -644,7 +644,7 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
 /// Test plan workflow with files containing spaces and special characters
 #[tokio::test]
 async fn test_plan_workflow_special_characters() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -683,50 +683,39 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
     Ok(())
 }
 
-/// Test concurrent plan workflow executions in test mode
+/// Test sequential plan workflow executions in test mode
+/// Note: Running sequentially due to IsolatedTestHome requiring exclusive access
 #[tokio::test]
-async fn test_concurrent_plan_workflow_executions() -> Result<()> {
-    use tokio::task::JoinSet;
-
-    let mut tasks = JoinSet::new();
-
-    // Run multiple plan workflows concurrently in test mode
+async fn test_sequential_plan_workflow_executions() -> Result<()> {
+    // Run multiple plan workflows sequentially in test mode
     for i in 0..3 {
-        tasks.spawn(async move {
-            let _guard = create_test_home_guard();
-            let (_temp_dir, temp_path) = setup_plan_test_environment().unwrap();
+        let _guard = IsolatedTestHome::new();
+        let (_temp_dir, temp_path) = setup_plan_test_environment().unwrap();
 
-            let plan_file = create_test_plan_file(
-                &temp_path,
-                &format!("concurrent-test-{i}.md"),
-                &format!("Concurrent Test {i}"),
-            )
-            .unwrap();
+        let plan_file = create_test_plan_file(
+            &temp_path,
+            &format!("sequential-test-{i}.md"),
+            &format!("Sequential Test {i}"),
+        )
+        .unwrap();
 
-            // Use explicit working directory instead of global directory change
-            let result = run_sah_command_in_process_with_dir(
-                &[
-                    "flow",
-                    "test",
-                    "plan",
-                    "--var",
-                    &format!("plan_filename={}", plan_file.display()),
-                ],
-                &temp_path,
-            )
-            .await
-            .expect("Failed to run plan workflow test");
+        // Use explicit working directory instead of global directory change
+        let result = run_sah_command_in_process_with_dir(
+            &[
+                "flow",
+                "test",
+                "plan",
+                "--var",
+                &format!("plan_filename={}", plan_file.display()),
+            ],
+            &temp_path,
+        )
+        .await
+        .expect("Failed to run plan workflow test");
 
-            (i, result.exit_code == 0)
-        });
-    }
-
-    // All commands should succeed
-    while let Some(result) = tasks.join_next().await {
-        let (i, success) = result?;
         assert!(
-            success,
-            "Concurrent plan workflow execution {i} should succeed"
+            result.exit_code == 0,
+            "Sequential plan workflow execution {i} should succeed"
         );
     }
 
@@ -736,7 +725,7 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
 /// Test enhanced error handling: comprehensive file validation
 #[tokio::test]
 async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -777,7 +766,7 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
 /// Test enhanced error handling: empty file validation
 #[tokio::test]
 async fn test_plan_enhanced_error_empty_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -814,7 +803,7 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
 /// Test enhanced error handling: whitespace-only file
 #[tokio::test]
 async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -850,7 +839,7 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
 /// Test enhanced error handling: directory instead of file
 #[tokio::test]
 async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -889,7 +878,7 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
 /// Test enhanced error handling: file too large
 #[tokio::test]
 async fn test_plan_enhanced_error_large_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -924,7 +913,7 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
 /// Test enhanced error handling: invalid binary content
 #[tokio::test]
 async fn test_plan_enhanced_error_binary_content() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -964,7 +953,7 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
 /// Test enhanced error handling: color output detection
 #[tokio::test]
 async fn test_plan_enhanced_error_color_output() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -992,7 +981,7 @@ async fn test_plan_enhanced_error_color_output() -> Result<()> {
 /// Test enhanced error handling: exit codes
 #[tokio::test]
 async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -1031,7 +1020,7 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
 /// Test enhanced error handling: issues directory validation
 #[tokio::test]
 async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     // Create minimal test environment WITHOUT issues directory
     let _temp_dir = create_temp_dir()?;
     let temp_path = _temp_dir.path().to_path_buf();
@@ -1080,7 +1069,7 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
 /// Test enhanced error handling: comprehensive error message structure
 #[tokio::test]
 async fn test_plan_enhanced_error_message_structure() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change

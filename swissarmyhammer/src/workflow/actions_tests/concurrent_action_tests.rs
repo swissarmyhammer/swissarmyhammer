@@ -1,6 +1,7 @@
 //! Tests for concurrent action execution
 
 use super::*;
+use crate::workflow::WorkflowTemplateContext;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -297,7 +298,7 @@ async fn test_concurrent_action_context_consistency() {
     let shared_key = "shared_counter";
     let initial_value = 0;
 
-    let context = Arc::new(Mutex::new(HashMap::new()));
+    let context = Arc::new(Mutex::new(WorkflowTemplateContext::with_vars(HashMap::new()).unwrap()));
     context
         .lock()
         .await

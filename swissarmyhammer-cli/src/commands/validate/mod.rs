@@ -15,6 +15,7 @@ pub async fn handle_command(
     format: ValidateFormat,
     workflow_dirs: Vec<String>,
     validate_tools: bool,
+    _template_context: &swissarmyhammer_config::TemplateContext,
 ) -> i32 {
     match validate::run_validate_command_with_dirs(quiet, format, workflow_dirs, validate_tools)
         .await

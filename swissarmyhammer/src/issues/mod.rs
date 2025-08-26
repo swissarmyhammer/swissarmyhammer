@@ -83,6 +83,11 @@ impl IssueName {
     /// Intended for user-provided input through the MCP interface.
     /// Empty names are allowed for nameless issues, but whitespace-only strings are rejected.
     pub fn new(name: String) -> Result<Self, String> {
+        Self::new_with_config(name, Config::global())
+    }
+
+    /// Create a new issue name with custom config (for testing)
+    pub fn new_with_config(name: String, config: &Config) -> Result<Self, String> {
         let trimmed = name.trim();
 
         // Allow truly empty names for nameless issues, but reject whitespace-only strings
@@ -90,7 +95,6 @@ impl IssueName {
             return Err("Issue name cannot be empty".to_string());
         }
 
-        let config = Config::global();
         if trimmed.len() > config.max_issue_name_length {
             return Err(format!(
                 "Issue name cannot exceed {} characters",

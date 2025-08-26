@@ -70,9 +70,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::{
-    plugins::PluginRegistry, sah_config, security, PromptLibrary, Result, SwissArmyHammerError,
-};
+use crate::{plugins::PluginRegistry, security, PromptLibrary, Result, SwissArmyHammerError};
 use liquid::{Object, Parser};
 use liquid_core::{Language, ParseTag, Renderable, Runtime, TagReflection, TagTokenIter};
 use std::borrow::Cow;
@@ -80,6 +78,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+use swissarmyhammer_config::TemplateContext;
 
 /// Custom partial tag that acts as a no-op marker for liquid partial files
 #[derive(Clone, Debug, Default)]
@@ -471,6 +470,53 @@ impl Template {
         self.render_with_timeout(args, timeout)
     }
 
+    /// Render the template with TemplateContext
+    pub fn render_with_context(&self, context: &TemplateContext) -> Result<String> {
+        let template = self
+            .parser
+            .parse(&self.template_str)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
+
+        // Convert TemplateContext to liquid::Object
+        let liquid_context = context.to_liquid_context();
+
+        template
+            .render(&liquid_context)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))
+    }
+
+    /// Render the template with TemplateContext and custom timeout
+    pub fn render_with_context_and_timeout(
+        &self,
+        context: &TemplateContext,
+        _timeout: Duration,
+    ) -> Result<String> {
+        let template = self
+            .parser
+            .parse(&self.template_str)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
+
+        // Convert TemplateContext to liquid::Object
+        let liquid_context = context.to_liquid_context();
+
+        // Render with timeout protection
+        let render_result = std::thread::scope(|s| {
+            let handle = s.spawn(|| template.render(&liquid_context));
+
+            match handle.join() {
+                Ok(result) => result.map_err(|e| SwissArmyHammerError::Template(e.to_string())),
+                Err(_) => Err(SwissArmyHammerError::Template(
+                    "Template rendering panicked".to_string(),
+                )),
+            }
+        });
+
+        // Note: We can't easily implement actual timeout without async context
+        // In a real implementation, you'd want to use tokio::time::timeout
+        // For now, we rely on the security validation to prevent complex templates
+        render_result
+    }
+
     /// Preprocess template string to handle custom filters
     fn preprocess_custom_filters(
         &self,
@@ -643,8 +689,8 @@ impl Template {
 
         // Load and merge sah.toml configuration variables (second lowest priority)
         let mut config_vars = std::collections::HashSet::new();
-        if let Ok(Some(config)) = sah_config::load_repo_config_for_cli() {
-            let config_object = config.to_liquid_object();
+        if let Ok(template_context) = swissarmyhammer_config::load_configuration_for_cli() {
+            let config_object = template_context.to_liquid_context();
             for (key, value) in config_object.iter() {
                 config_vars.insert(key.clone());
                 object.insert(key.clone(), value.clone());
@@ -755,6 +801,25 @@ impl TemplateEngine {
         template.render(args)
     }
 
+    /// Render a template string with TemplateContext
+    pub fn render_with_context(
+        &self,
+        template_str: &str,
+        context: &TemplateContext,
+    ) -> Result<String> {
+        let template = self
+            .parser
+            .parse(template_str)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))?;
+
+        // Convert TemplateContext to liquid::Object
+        let liquid_context = context.to_liquid_context();
+
+        template
+            .render(&liquid_context)
+            .map_err(|e| SwissArmyHammerError::Template(e.to_string()))
+    }
+
     /// Preprocess template string to handle custom filters (for TemplateEngine)
     fn preprocess_custom_filters(
         &self,
@@ -861,6 +926,11 @@ impl Default for TemplateEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Global mutex to serialize environment variable tests
+    /// This prevents race conditions when multiple tests modify environment variables
+    static ENV_VAR_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_simple_template() {
@@ -1112,6 +1182,12 @@ mod tests {
     fn test_render_with_env() {
         use std::env;
 
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
         // Set a test environment variable
         env::set_var("TEST_ENV_VAR", "test_value");
 
@@ -1131,6 +1207,12 @@ mod tests {
     #[test]
     fn test_render_with_env_args_override() {
         use std::env;
+
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
 
         // Set a test environment variable
         env::set_var("TEST_OVERRIDE", "env_value");
@@ -1299,6 +1381,12 @@ mod tests {
         use std::env;
         use std::sync::atomic::{AtomicU64, Ordering};
 
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
         // Generate unique env var name to avoid race conditions between tests
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -1366,5 +1454,162 @@ mod tests {
         // Should be a string value
         let issues_dir_value = vars.get("issues_directory").unwrap();
         assert!(matches!(issues_dir_value, liquid::model::Value::Scalar(_)));
+    }
+
+    #[test]
+    fn test_template_render_with_context() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Create a TemplateContext with some test data, handle potential config loading failures gracefully
+        let mut template_vars = HashMap::new();
+        template_vars.insert("name".to_string(), json!("World"));
+        template_vars.insert("version".to_string(), json!("2.0.0"));
+        template_vars.insert("enabled".to_string(), json!(true));
+
+        let context = match TemplateContext::with_template_vars(template_vars) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                // If config loading fails (e.g., no working directory), create a simple context
+                let mut ctx = TemplateContext::new();
+                ctx.set("name".to_string(), json!("World"));
+                ctx.set("version".to_string(), json!("2.0.0"));
+                ctx.set("enabled".to_string(), json!(true));
+                ctx
+            }
+        };
+
+        // Create a simple template
+        let template = Template::new(
+            "Hello {{name}}! Version: {{version}} {% if enabled %}(enabled){% endif %}",
+        )
+        .unwrap();
+
+        // Render with TemplateContext
+        let result = template.render_with_context(&context).unwrap();
+
+        assert_eq!(result, "Hello World! Version: 2.0.0 (enabled)");
+    }
+
+    #[test]
+    fn test_template_engine_render_with_context() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Create a TemplateContext with test data, handle config loading failures gracefully
+        let mut template_vars = HashMap::new();
+        template_vars.insert("user".to_string(), json!("Alice"));
+        template_vars.insert("count".to_string(), json!(42));
+
+        let context = match TemplateContext::with_template_vars(template_vars) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                // If config loading fails, create a simple context
+                let mut ctx = TemplateContext::new();
+                ctx.set("user".to_string(), json!("Alice"));
+                ctx.set("count".to_string(), json!(42));
+                ctx
+            }
+        };
+
+        // Create template engine
+        let engine = TemplateEngine::new();
+
+        // Render with TemplateContext
+        let result = engine
+            .render_with_context("{{user}} has {{count}} items", &context)
+            .unwrap();
+
+        assert_eq!(result, "Alice has 42 items");
+    }
+
+    #[test]
+    fn test_template_context_with_complex_data() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Create complex template data
+        let mut template_vars = HashMap::new();
+        template_vars.insert(
+            "app".to_string(),
+            json!({
+                "name": "TestApp",
+                "config": {
+                    "debug": true,
+                    "max_users": 100
+                },
+                "features": ["auth", "api", "web"]
+            }),
+        );
+
+        let context = match TemplateContext::with_template_vars(template_vars.clone()) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                // If config loading fails, create a simple context with the template vars
+                let mut ctx = TemplateContext::new();
+                for (key, value) in template_vars {
+                    ctx.set(key, value);
+                }
+                ctx
+            }
+        };
+
+        let template_source = r#"
+Application: {{app.name}}
+Debug: {% if app.config.debug %}ON{% else %}OFF{% endif %}
+Max Users: {{app.config.max_users}}
+Features:
+{%- for feature in app.features %}
+- {{feature}}
+{%- endfor %}
+        "#
+        .trim();
+
+        let template = Template::new(template_source).unwrap();
+        let result = template.render_with_context(&context).unwrap();
+
+        assert!(result.contains("Application: TestApp"));
+        assert!(result.contains("Debug: ON"));
+        assert!(result.contains("Max Users: 100"));
+        assert!(result.contains("- auth"));
+        assert!(result.contains("- api"));
+        assert!(result.contains("- web"));
+    }
+
+    #[test]
+    fn test_template_context_compatibility_with_hashmap() {
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        // Test that TemplateContext and HashMap produce same results
+        let mut hash_args = HashMap::new();
+        hash_args.insert("greeting".to_string(), "Hello".to_string());
+        hash_args.insert("name".to_string(), "Bob".to_string());
+
+        let mut template_vars = HashMap::new();
+        template_vars.insert("greeting".to_string(), json!("Hello"));
+        template_vars.insert("name".to_string(), json!("Bob"));
+
+        let context = match TemplateContext::with_template_vars(template_vars.clone()) {
+            Ok(ctx) => ctx,
+            Err(_) => {
+                // If config loading fails, create a simple context
+                let mut ctx = TemplateContext::new();
+                for (key, value) in template_vars {
+                    ctx.set(key, value);
+                }
+                ctx
+            }
+        };
+
+        let template_str = "{{greeting}} {{name}}!";
+        let template = Template::new(template_str).unwrap();
+
+        // Render with both methods
+        let hash_result = template.render(&hash_args).unwrap();
+        let context_result = template.render_with_context(&context).unwrap();
+
+        assert_eq!(hash_result, context_result);
+        assert_eq!(context_result, "Hello Bob!");
     }
 }

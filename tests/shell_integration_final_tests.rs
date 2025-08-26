@@ -9,10 +9,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::{
-    sah_config::{
-        loader::ConfigurationLoader,
-        types::{ShellToolConfig, ShellSecurityConfig, ShellExecutionConfig, ShellOutputConfig, ShellAuditConfig, TruncationStrategy},
-    },
     shell_security::{CommandValidator, SecurityPolicy},
     workflow::{
         context::WorkflowContext,
@@ -89,18 +85,16 @@ mod integration_validation {
     }
 
     #[tokio::test]
-    async fn test_configuration_system_integration() {
+    async fn test_shell_security_integration() {
         let _guard = IsolatedTestEnvironment::new();
         
-        // Test configuration loading and validation
-        let loader = ConfigurationLoader::new();
-        let config = loader.load_shell_config().unwrap();
+        // Test that shell security system is working with default configuration
+        let policy = SecurityPolicy::default();
+        let validator = CommandValidator::new(policy);
         
-        // Verify default configuration is valid
-        assert!(config.execution.default_timeout > 0);
-        assert!(config.execution.max_timeout >= config.execution.default_timeout);
-        assert!(config.security.enable_validation);
-        assert!(!config.output.max_output_size.is_empty());
+        // Verify basic command validation works
+        assert!(validator.validate_command("echo test", Path::new("/tmp")).is_ok());
+        assert!(validator.validate_command("rm -rf /", Path::new("/tmp")).is_err());
     }
 
     #[tokio::test]
@@ -266,12 +260,7 @@ mod security_validation {
     async fn test_access_control_enforcement() {
         let _guard = IsolatedTestEnvironment::new();
         
-        // Test directory restrictions
-        let mut config = ShellToolConfig::default();
-        config.security.allowed_directories = Some(vec!["/tmp".to_string()]);
-        
-        // This would require integration with actual command execution
-        // For now, test the validation logic
+        // Test directory restrictions with default security policy
         let policy = SecurityPolicy {
             enable_validation: true,
             allowed_directories: Some(vec!["/tmp".to_string()]),
@@ -310,21 +299,21 @@ mod security_validation {
     async fn test_security_configuration_defaults() {
         let _guard = IsolatedTestEnvironment::new();
         
-        let config = ShellToolConfig::default();
+        // Note: ShellToolConfig was removed - now using hardcoded DefaultShellConfig
+        // Verify that hardcoded defaults are appropriate for production
         
-        // Verify security defaults are appropriate for production
-        assert!(config.security.enable_validation);
-        assert!(config.security.max_command_length > 0);
-        assert!(!config.security.blocked_commands.is_empty());
+        // Verify execution defaults using the new DefaultShellConfig
+        use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
         
-        // Verify execution defaults
-        assert!(config.execution.default_timeout > 0);
-        assert!(config.execution.max_timeout >= config.execution.default_timeout);
-        assert!(config.execution.cleanup_process_tree);
+        assert!(DefaultShellConfig::default_timeout() > 0);
+        assert!(DefaultShellConfig::max_timeout() >= DefaultShellConfig::default_timeout());
+        assert!(DefaultShellConfig::min_timeout() > 0);
+        assert!(DefaultShellConfig::max_output_size() > 0);
+        assert!(DefaultShellConfig::max_line_length() > 0);
         
-        // Verify audit defaults
-        assert!(config.audit.enable_audit_logging);
-        assert!(!config.audit.log_level.is_empty());
+        // Note: Security features (validation, blocked commands, etc.) and audit features
+        // were part of the removed configurable system. The shell tool now uses 
+        // simpler hardcoded limits for output size and timeouts only.
     }
 }
 
@@ -428,41 +417,22 @@ mod production_readiness {
     async fn test_production_configuration_validation() {
         let _guard = IsolatedTestEnvironment::new();
         
-        // Test production-like configuration
-        let prod_config = ShellToolConfig {
-            security: ShellSecurityConfig {
-                enable_validation: true,
-                blocked_commands: vec![
-                    "rm".to_string(),
-                    "format".to_string(),
-                    "dd".to_string(),
-                ],
-                allowed_directories: Some(vec!["/app".to_string()]),
-                max_command_length: 500,
-            },
-            execution: ShellExecutionConfig {
-                default_timeout: 300,
-                max_timeout: 1800,
-                min_timeout: 1,
-                cleanup_process_tree: true,
-            },
-            output: ShellOutputConfig {
-                max_output_size: "5MB".to_string(),
-                max_line_length: 1000,
-                detect_binary_content: true,
-                truncation_strategy: TruncationStrategy::PreserveStructure,
-            },
-            audit: ShellAuditConfig {
-                enable_audit_logging: true,
-                log_level: "info".to_string(),
-                log_command_output: false,
-                max_audit_entry_size: 10000,
-            },
-        };
+        // Note: ShellToolConfig and ConfigurationLoader were removed with sah_config
+        // The shell tool now uses hardcoded DefaultShellConfig values
         
-        // Validate configuration is consistent and valid
-        let loader = ConfigurationLoader::new();
-        assert!(loader.validate_shell_config(&prod_config).is_ok());
+        // Test that the hardcoded production defaults are reasonable
+        use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+        
+        // Verify the hardcoded values match production requirements
+        assert_eq!(DefaultShellConfig::default_timeout(), 300); // 5 minutes default
+        assert_eq!(DefaultShellConfig::max_timeout(), 1800);    // 30 minutes max
+        assert_eq!(DefaultShellConfig::min_timeout(), 1);       // 1 second min
+        assert_eq!(DefaultShellConfig::max_output_size(), 10_485_760); // 10MB
+        assert_eq!(DefaultShellConfig::max_line_length(), 2000);       // 2000 chars
+        
+        // The new approach trades configurability for simplicity and reliability
+        // Security features like blocked commands would need to be implemented
+        // at a different layer if required in production
     }
 
     #[tokio::test]
@@ -494,12 +464,18 @@ mod production_readiness {
         // Test that shell tool works in constrained environments
         // This simulates deployment scenarios
         
-        // Test with minimal configuration
-        let minimal_config = ShellToolConfig::default();
-        let loader = ConfigurationLoader::new();
-        assert!(loader.validate_shell_config(&minimal_config).is_ok());
+        // Note: ShellToolConfig and ConfigurationLoader were removed with sah_config
+        // The shell tool now uses hardcoded DefaultShellConfig which eliminates
+        // configuration validation complexity in deployment scenarios
         
-        // Test basic functionality works
+        use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+        
+        // Verify hardcoded configuration is deployment-ready
+        assert!(DefaultShellConfig::default_timeout() >= 1);
+        assert!(DefaultShellConfig::max_timeout() > DefaultShellConfig::default_timeout());
+        assert!(DefaultShellConfig::max_output_size() > 0);
+        
+        // Test basic functionality works with hardcoded defaults
         let mut context = WorkflowContext::new();
         let shell_action = ShellAction::new("echo 'deployment test'")
             .with_timeout(5);

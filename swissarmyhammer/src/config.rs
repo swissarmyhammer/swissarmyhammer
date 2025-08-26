@@ -104,6 +104,11 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Global mutex to serialize environment variable tests
+    /// This prevents race conditions when multiple tests modify environment variables
+    static ENV_VAR_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_default_config() {
@@ -163,7 +168,14 @@ mod tests {
 
     #[test]
     fn test_config_with_env_vars() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
+        // DO NOT use IsolatedTestEnvironment here as it can trigger Config::global() initialization
+        // during HOME env var manipulation, which would contaminate the global config
 
         // Clean up any environment variables first
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
@@ -188,6 +200,8 @@ mod tests {
             "# Test Issue\n\nTest content here.",
         );
 
+        // CRITICAL: Use Config::new() instead of Config::global() to avoid contaminating
+        // the global singleton. This test specifically verifies environment variable loading.
         let config = Config::new();
         assert_eq!(config.issue_branch_prefix, "feature/");
         assert_eq!(config.issue_number_width, 8);

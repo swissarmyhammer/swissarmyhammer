@@ -1,15 +1,17 @@
 //! Integration tests for actions module
 
 use super::*;
+use crate::workflow::WorkflowTemplateContext;
 
 #[tokio::test]
 async fn test_action_execution_context_preservation() {
     // Test that actions properly preserve and modify context
-    let mut context = HashMap::new();
-    context.insert(
-        "initial_value".to_string(),
-        Value::String("initial".to_string()),
-    );
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+    
+    // Set initial value as workflow variable
+    let mut initial_vars = HashMap::new();
+    initial_vars.insert("initial_value".to_string(), Value::String("initial".to_string()));
+    context.set_workflow_vars(initial_vars);
 
     // Execute a set variable action
     let set_action = SetVariableAction::new("new_var".to_string(), "new_value".to_string());
@@ -36,7 +38,7 @@ async fn test_action_execution_context_preservation() {
 
 #[tokio::test]
 async fn test_multiple_actions_sequence() {
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Execute sequence of actions
     let actions: Vec<Box<dyn Action>> = vec![
@@ -70,7 +72,7 @@ async fn test_multiple_actions_sequence() {
 
 #[tokio::test]
 async fn test_action_error_propagation() {
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Test that parse errors are properly propagated
     let action = SetVariableAction::new("test".to_string(), "value".to_string());
@@ -96,7 +98,7 @@ async fn test_action_error_propagation() {
 async fn test_action_timeout_behavior() {
     // Test timeout behavior with wait action
     let action = WaitAction::new_duration(Duration::from_millis(50));
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let start = std::time::Instant::now();
     let result = action.execute(&mut context).await;
@@ -109,7 +111,7 @@ async fn test_action_timeout_behavior() {
 
 #[tokio::test]
 async fn test_action_context_key_constants() {
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Test that actions use the correct context keys
     let action = LogAction::info("Test message".to_string());

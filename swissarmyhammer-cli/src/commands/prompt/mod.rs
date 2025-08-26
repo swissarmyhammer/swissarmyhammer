@@ -7,13 +7,17 @@ use crate::error::{CliError, CliResult};
 use crate::exit_codes::EXIT_SUCCESS;
 use std::collections::HashMap;
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
+use swissarmyhammer_config::TemplateContext;
 
 /// Help text for the prompt command
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the prompt command
-pub async fn handle_command(subcommand: PromptSubcommand) -> i32 {
-    match run_prompt_command(subcommand).await {
+pub async fn handle_command(
+    subcommand: PromptSubcommand,
+    template_context: &TemplateContext,
+) -> i32 {
+    match run_prompt_command(subcommand, template_context).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             eprintln!("Prompt command failed: {}", e);
@@ -23,7 +27,10 @@ pub async fn handle_command(subcommand: PromptSubcommand) -> i32 {
 }
 
 /// Main entry point for prompt command
-async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
+async fn run_prompt_command(
+    subcommand: PromptSubcommand,
+    template_context: &TemplateContext,
+) -> CliResult<()> {
     match subcommand {
         PromptSubcommand::List {
             format,
@@ -41,9 +48,20 @@ async fn run_prompt_command(subcommand: PromptSubcommand) -> CliResult<()> {
             copy,
             save,
             debug,
-        } => run_test_command(prompt_name, file, vars, raw, copy, save, debug)
-            .await
-            .map_err(|e| CliError::new(e.to_string(), 1)),
+        } => run_test_command(
+            TestCommandConfig {
+                prompt_name,
+                _file: file,
+                vars,
+                _raw: raw,
+                _copy: copy,
+                _save: save,
+                _debug: debug,
+            },
+            template_context,
+        )
+        .await
+        .map_err(|e| CliError::new(e.to_string(), 1)),
         PromptSubcommand::Search { .. } => Err(CliError::new(
             "Search functionality has been removed as part of infrastructure cleanup".to_string(),
             1,
@@ -149,8 +167,8 @@ fn run_list_command(
     Ok(())
 }
 
-/// Run the test command
-async fn run_test_command(
+/// Configuration for the test command
+struct TestCommandConfig {
     prompt_name: Option<String>,
     _file: Option<String>,
     vars: Vec<String>,
@@ -158,25 +176,46 @@ async fn run_test_command(
     _copy: bool,
     _save: Option<String>,
     _debug: bool,
+}
+
+/// Run the test command
+async fn run_test_command(
+    config: TestCommandConfig,
+    template_context: &TemplateContext,
 ) -> Result<(), anyhow::Error> {
-    let prompt_name = prompt_name.ok_or_else(|| anyhow::anyhow!("Prompt name is required"))?;
+    let prompt_name = config
+        .prompt_name
+        .ok_or_else(|| anyhow::anyhow!("Prompt name is required"))?;
 
     // Load all prompts
     let mut library = PromptLibrary::new();
     let mut resolver = PromptResolver::new();
     resolver.load_all_prompts(&mut library)?;
 
-    // Parse variables
+    // Parse variables from command line arguments
     let mut arguments = HashMap::new();
-    for var in vars {
+    for var in config.vars {
         let parts: Vec<&str> = var.splitn(2, '=').collect();
         if parts.len() == 2 {
             arguments.insert(parts[0].to_string(), parts[1].to_string());
         }
     }
 
-    // Render the prompt
-    let rendered = library.render_prompt(&prompt_name, &arguments)?;
+    // Create a template context with CLI arguments having highest precedence
+    let mut final_context = template_context.clone();
+    for (key, value) in &arguments {
+        final_context.set(key.clone(), serde_json::Value::String(value.clone()));
+    }
+
+    // Render the prompt with the merged context
+    // The library's render_prompt_with_env_and_context method will use both the context and arguments,
+    // but since we've already merged CLI args into the context with highest precedence, we can pass empty arguments
+    let empty_arguments = HashMap::new();
+    let rendered = library.render_prompt_with_env_and_context(
+        &prompt_name,
+        &final_context,
+        &empty_arguments,
+    )?;
     println!("{}", rendered);
 
     Ok(())
@@ -199,7 +238,8 @@ mod tests {
         };
 
         // Run the command - we expect it to succeed
-        let result = run_prompt_command(subcommand).await;
+        let test_context = TemplateContext::new();
+        let result = run_prompt_command(subcommand, &test_context).await;
         assert!(result.is_ok());
     }
 
@@ -222,7 +262,8 @@ mod tests {
         };
 
         // Run the command - should return an error since search was removed
-        let result = run_prompt_command(subcommand).await;
+        let test_context = TemplateContext::new();
+        let result = run_prompt_command(subcommand, &test_context).await;
         assert!(result.is_err());
     }
 
@@ -240,7 +281,8 @@ mod tests {
         };
 
         // Run the command - should return an error
-        let result = run_prompt_command(subcommand).await;
+        let test_context = TemplateContext::new();
+        let result = run_prompt_command(subcommand, &test_context).await;
         assert!(result.is_err());
 
         // Verify the error has the expected exit code

@@ -1,0 +1,43 @@
+[package]
+name = "swissarmyhammer-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configuration management for SwissArmyHammer using Figment"
+documentation = "https://docs.rs/swissarmyhammer-config"
+readme = "../README.md"
+keywords = ["config", "figment", "toml", "yaml", "json"]
+categories = ["config", "development-tools"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Configuration management
+figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# File system utilities
+dirs = { workspace = true }
+walkdir = { workspace = true }
+
+# Regex for environment variable substitution
+regex = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Template engine integration
+liquid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = "3.1"

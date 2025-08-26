@@ -442,7 +442,7 @@ fn print_check(check: &Check, use_color: bool) {
 }
 
 /// Handle the doctor command
-pub async fn handle_command() -> i32 {
+pub async fn handle_command(_template_context: &swissarmyhammer_config::TemplateContext) -> i32 {
     let mut doctor = Doctor::new();
 
     match doctor.run_diagnostics_with_options() {

@@ -1,10 +1,10 @@
 use swissarmyhammer::prompts::PromptLoader;
 
-use swissarmyhammer::test_utils::create_test_home_guard;
+use swissarmyhammer::test_utils::IsolatedTestHome;
 
 #[test]
 fn test_comprehensive_prompt_library() {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     
     let mut loader = PromptLoader::new();
     let result = loader.load_all();
