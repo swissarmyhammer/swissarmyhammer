@@ -893,7 +893,7 @@ fn render_with_liquid_template(input: &str, context: &HashMap<String, Value>) ->
     let parser = ActionParser::new().expect("Failed to create ActionParser");
     parser
         .substitute_variables_safe(&liquid_rendered, context)
-        .unwrap_or_else(|_| liquid_rendered)
+        .unwrap_or(liquid_rendered)
 }
 
 

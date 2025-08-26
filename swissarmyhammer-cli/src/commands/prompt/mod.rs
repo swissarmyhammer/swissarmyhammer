@@ -237,8 +237,49 @@ async fn run_test_command(
     Ok(())
 }
 
-/// Custom parameter collection for CLI testing that prompts for missing parameters
-/// This uses simple stdin/stdout prompting for CLI testing
+/// Collects missing parameters for prompt testing with support for interactive and non-interactive modes.
+///
+/// This function handles parameter collection for the CLI `prompt test` command, supporting both
+/// interactive terminal environments and non-interactive environments (like CI/CD or MCP execution).
+///
+/// # Arguments
+///
+/// * `_interactive_prompts` - The InteractivePrompts instance (currently unused, reserved for future enhancement)
+/// * `parameters` - Slice of parameter definitions from the prompt
+/// * `existing_values` - HashMap of parameter values already provided via CLI `--var` arguments
+///
+/// # Returns
+///
+/// Returns `Ok(HashMap<String, serde_json::Value>)` with all resolved parameter values, or
+/// `Err(ParameterError)` if required parameters are missing and cannot be resolved.
+///
+/// # Behavior
+///
+/// ## Non-Interactive Mode (CI/CD, MCP, etc.)
+/// - Uses default values for optional parameters when available
+/// - Returns error for required parameters without defaults
+/// - Determined by `std::io::IsTerminal` check on stdin
+///
+/// ## Interactive Mode (Terminal)
+/// - Prompts user for missing parameters using stdin/stdout
+/// - Shows default values in prompts when available
+/// - Supports all parameter types: String, Boolean, Number, Choice, MultiChoice
+/// - Validates input according to parameter constraints
+/// - Allows empty input for optional parameters
+///
+/// # Examples
+///
+/// ```rust
+/// // In non-interactive mode with defaults
+/// let params = vec![Parameter { name: "greeting".to_string(), default: Some(json!("Hello")), ..Default::default() }];
+/// let existing = HashMap::new();
+/// let result = prompt_for_all_missing_parameters(&prompts, &params, &existing)?;
+/// // result["greeting"] == "Hello"
+/// 
+/// // In interactive mode (would prompt user)
+/// // User input: "Hi there!"
+/// // result["greeting"] == "Hi there!"
+/// ```
 fn prompt_for_all_missing_parameters(
     _interactive_prompts: &InteractivePrompts,
     parameters: &[Parameter],
@@ -477,5 +518,180 @@ mod tests {
             metadata: Default::default(),
         };
         assert!(!is_partial_template(&regular_prompt));
+    }
+
+    #[test]
+    fn test_prompt_for_all_missing_parameters_non_interactive_with_defaults() {
+        use serde_json::json;
+        
+        let interactive_prompts = InteractivePrompts::new(false);
+        
+        // Test parameters with defaults
+        let parameters = vec![
+            Parameter {
+                name: "greeting".to_string(),
+                description: "A greeting message".to_string(),
+                parameter_type: ParameterType::String,
+                required: false,
+                default: Some(json!("Hello")),
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+            Parameter {
+                name: "count".to_string(),
+                description: "Number of items".to_string(),
+                parameter_type: ParameterType::Number,
+                required: false,
+                default: Some(json!(5)),
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+        ];
+        
+        let existing_values = HashMap::new();
+        let result = prompt_for_all_missing_parameters(&interactive_prompts, &parameters, &existing_values);
+        
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert_eq!(resolved.get("greeting").unwrap(), &json!("Hello"));
+        assert_eq!(resolved.get("count").unwrap(), &json!(5));
+    }
+
+    #[test]
+    fn test_prompt_for_all_missing_parameters_non_interactive_missing_required() {
+        let interactive_prompts = InteractivePrompts::new(false);
+        
+        // Test with required parameter without default
+        let parameters = vec![
+            Parameter {
+                name: "required_param".to_string(),
+                description: "A required parameter".to_string(),
+                parameter_type: ParameterType::String,
+                required: true,
+                default: None,
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+        ];
+        
+        let existing_values = HashMap::new();
+        let result = prompt_for_all_missing_parameters(&interactive_prompts, &parameters, &existing_values);
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ParameterError::MissingRequired { name } => {
+                assert_eq!(name, "required_param");
+            }
+            _ => panic!("Expected MissingRequired error"),
+        }
+    }
+
+    #[test]
+    fn test_prompt_for_all_missing_parameters_existing_values_preserved() {
+        use serde_json::json;
+        
+        let interactive_prompts = InteractivePrompts::new(false);
+        
+        let parameters = vec![
+            Parameter {
+                name: "greeting".to_string(),
+                description: "A greeting message".to_string(),
+                parameter_type: ParameterType::String,
+                required: false,
+                default: Some(json!("Hello")),
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+        ];
+        
+        let mut existing_values = HashMap::new();
+        existing_values.insert("greeting".to_string(), json!("Hi there!"));
+        
+        let result = prompt_for_all_missing_parameters(&interactive_prompts, &parameters, &existing_values);
+        
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        // Should preserve existing value, not use default
+        assert_eq!(resolved.get("greeting").unwrap(), &json!("Hi there!"));
+    }
+
+    #[test]
+    fn test_prompt_for_all_missing_parameters_optional_without_default() {
+        let interactive_prompts = InteractivePrompts::new(false);
+        
+        // Test optional parameter without default (should be skipped)
+        let parameters = vec![
+            Parameter {
+                name: "optional_param".to_string(),
+                description: "An optional parameter".to_string(),
+                parameter_type: ParameterType::String,
+                required: false,
+                default: None,
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+        ];
+        
+        let existing_values = HashMap::new();
+        let result = prompt_for_all_missing_parameters(&interactive_prompts, &parameters, &existing_values);
+        
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        // Should not contain the optional parameter without default
+        assert!(!resolved.contains_key("optional_param"));
+    }
+
+    #[test]
+    fn test_prompt_for_all_missing_parameters_mixed_parameters() {
+        use serde_json::json;
+        
+        let interactive_prompts = InteractivePrompts::new(false);
+        
+        let parameters = vec![
+            Parameter {
+                name: "required_with_default".to_string(),
+                description: "Required with default".to_string(),
+                parameter_type: ParameterType::String,
+                required: true,
+                default: Some(json!("default_value")),
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+            Parameter {
+                name: "optional_with_default".to_string(),
+                description: "Optional with default".to_string(),
+                parameter_type: ParameterType::Boolean,
+                required: false,
+                default: Some(json!(true)),
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+            Parameter {
+                name: "optional_without_default".to_string(),
+                description: "Optional without default".to_string(),
+                parameter_type: ParameterType::String,
+                required: false,
+                default: None,
+                choices: None,
+                validation: None,
+                condition: None,
+            },
+        ];
+        
+        let existing_values = HashMap::new();
+        let result = prompt_for_all_missing_parameters(&interactive_prompts, &parameters, &existing_values);
+        
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert_eq!(resolved.get("required_with_default").unwrap(), &json!("default_value"));
+        assert_eq!(resolved.get("optional_with_default").unwrap(), &json!(true));
+        assert!(!resolved.contains_key("optional_without_default"));
     }
 }
