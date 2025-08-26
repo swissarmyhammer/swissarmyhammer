@@ -6,7 +6,9 @@ use crate::cli::PromptSubcommand;
 use crate::error::{CliError, CliResult};
 use crate::exit_codes::EXIT_SUCCESS;
 use std::collections::HashMap;
+
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
+use swissarmyhammer::common::{InteractivePrompts, Parameter, ParameterError, ParameterProvider, ParameterType};
 use swissarmyhammer_config::TemplateContext;
 
 /// Help text for the prompt command
@@ -192,19 +194,33 @@ async fn run_test_command(
     let mut resolver = PromptResolver::new();
     resolver.load_all_prompts(&mut library)?;
 
-    // Parse variables from command line arguments
-    let mut arguments = HashMap::new();
+    // Get the specific prompt to access its parameter definitions
+    let prompt = library.get(&prompt_name)
+        .map_err(|e| anyhow::anyhow!("Failed to get prompt '{}': {}", prompt_name, e))?;
+
+    // Parse variables from command line arguments  
+    let mut cli_arguments = HashMap::new();
     for var in config.vars {
         let parts: Vec<&str> = var.splitn(2, '=').collect();
         if parts.len() == 2 {
-            arguments.insert(parts[0].to_string(), parts[1].to_string());
+            cli_arguments.insert(parts[0].to_string(), serde_json::Value::String(parts[1].to_string()));
         }
     }
 
+    // Use InteractivePrompts to collect any missing parameters
+    // For CLI testing, we want to be more interactive and prompt for optional parameters too
+    // Force interactive mode for CLI testing by creating with explicit non_interactive=false
+    let interactive_prompts = InteractivePrompts::with_max_attempts(false, 3);
+    let all_arguments = prompt_for_all_missing_parameters(
+        &interactive_prompts,
+        prompt.get_parameters(),
+        &cli_arguments
+    ).map_err(|e| anyhow::anyhow!("Failed to collect parameters: {}", e))?;
+
     // Create a template context with CLI arguments having highest precedence
     let mut final_context = template_context.clone();
-    for (key, value) in &arguments {
-        final_context.set(key.clone(), serde_json::Value::String(value.clone()));
+    for (key, value) in &all_arguments {
+        final_context.set(key.clone(), value.clone());
     }
 
     // Render the prompt with the merged context
@@ -219,6 +235,134 @@ async fn run_test_command(
     println!("{}", rendered);
 
     Ok(())
+}
+
+/// Custom parameter collection for CLI testing that prompts for missing parameters
+/// This uses simple stdin/stdout prompting for CLI testing
+fn prompt_for_all_missing_parameters(
+    _interactive_prompts: &InteractivePrompts,
+    parameters: &[Parameter],
+    existing_values: &HashMap<String, serde_json::Value>,
+) -> Result<HashMap<String, serde_json::Value>, ParameterError> {
+    use std::io::{self, Write, IsTerminal};
+    
+
+    
+    let mut resolved = existing_values.clone();
+    
+    // Check if we're in a terminal - if not, just use defaults
+    if !io::stdin().is_terminal() {
+        // Non-interactive mode - use defaults for optional parameters
+        for param in parameters {
+            if !resolved.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    resolved.insert(param.name.clone(), default.clone());
+                } else if param.required {
+                    return Err(ParameterError::MissingRequired {
+                        name: param.name.clone(),
+                    });
+                }
+            }
+        }
+        return Ok(resolved);
+    }
+    
+    for param in parameters {
+        if resolved.contains_key(&param.name) {
+            // Parameter already provided via CLI, skip
+            continue;
+        }
+        
+        // For CLI testing, prompt for parameters (both required and optional)
+        // Show a simple prompt with default value if available
+        let prompt_text = if let Some(default) = &param.default {
+            let default_str = match default {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => default.to_string(),
+            };
+            format!("Enter {} ({}) [{}]: ", param.name, param.description, default_str)
+        } else {
+            format!("Enter {} ({}): ", param.name, param.description)
+        };
+        
+        print!("{}", prompt_text);
+        io::stdout().flush().unwrap();
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).map_err(|e| ParameterError::ValidationFailed {
+            message: format!("Failed to read input: {}", e),
+        })?;
+        
+        let input = input.trim();
+        
+        let value = if input.is_empty() {
+            // Use default if available
+            if let Some(default) = &param.default {
+                default.clone()
+            } else if param.required {
+                return Err(ParameterError::MissingRequired {
+                    name: param.name.clone(),
+                });
+            } else {
+                // Optional parameter with no default - skip
+                continue;
+            }
+        } else {
+            // Convert input to appropriate type based on parameter type
+            match param.parameter_type {
+                ParameterType::String => serde_json::Value::String(input.to_string()),
+                ParameterType::Boolean => {
+                    let bool_val = input.to_lowercase();
+                    match bool_val.as_str() {
+                        "true" | "t" | "yes" | "y" | "1" => serde_json::Value::Bool(true),
+                        "false" | "f" | "no" | "n" | "0" => serde_json::Value::Bool(false),
+                        _ => return Err(ParameterError::ValidationFailed {
+                            message: format!("Invalid boolean value: '{}'. Use true/false, yes/no, or 1/0.", input),
+                        }),
+                    }
+                }
+                ParameterType::Number => {
+                    let num: f64 = input.parse().map_err(|_| ParameterError::ValidationFailed {
+                        message: format!("Invalid number: '{}'", input),
+                    })?;
+                    serde_json::Value::Number(serde_json::Number::from_f64(num).unwrap())
+                }
+                ParameterType::Choice => {
+                    if let Some(choices) = &param.choices {
+                        if choices.contains(&input.to_string()) {
+                            serde_json::Value::String(input.to_string())
+                        } else {
+                            return Err(ParameterError::ValidationFailed {
+                                message: format!("Invalid choice '{}'. Valid options: {}", input, choices.join(", ")),
+                            });
+                        }
+                    } else {
+                        serde_json::Value::String(input.to_string())
+                    }
+                }
+                ParameterType::MultiChoice => {
+                    // For simplicity, accept comma-separated values
+                    let selected: Vec<String> = input.split(',').map(|s| s.trim().to_string()).collect();
+                    if let Some(choices) = &param.choices {
+                        for choice in &selected {
+                            if !choices.contains(choice) {
+                                return Err(ParameterError::ValidationFailed {
+                                    message: format!("Invalid choice '{}'. Valid options: {}", choice, choices.join(", ")),
+                                });
+                            }
+                        }
+                    }
+                    serde_json::Value::Array(selected.into_iter().map(serde_json::Value::String).collect())
+                }
+            }
+        };
+        
+        resolved.insert(param.name.clone(), value);
+    }
+    
+    Ok(resolved)
 }
 
 #[cfg(test)]
