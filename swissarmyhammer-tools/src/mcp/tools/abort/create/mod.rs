@@ -154,15 +154,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        // Change to temp directory for test
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         let reason = "Test abort reason";
         let result = create_abort_file(temp_path, reason);
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
 
@@ -208,9 +201,6 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         // Create multiple threads trying to create abort file simultaneously
         let temp_path = temp_path.to_path_buf();
         let handles: Vec<_> = (0..5)
@@ -225,8 +215,6 @@ mod tests {
 
         // Wait for all threads to complete
         let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-
-        std::env::set_current_dir(original_dir).unwrap();
 
         // All threads should succeed
         for result in results {
@@ -348,9 +336,6 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         // Pre-create the .swissarmyhammer directory
         let sah_dir = temp_path.join(".swissarmyhammer");
         std::fs::create_dir(&sah_dir).unwrap();
@@ -358,8 +343,6 @@ mod tests {
 
         let reason = "Test with existing directory";
         let result = create_abort_file(temp_path, reason);
-
-        std::env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
 

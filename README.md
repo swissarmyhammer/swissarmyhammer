@@ -48,6 +48,7 @@ claude mcp add --scope user sah sah serve
 - **🎨 Liquid Templates** - Use Liquid templating with variables, conditionals, loops, and custom filters to make templates and workflows
 - **⚡ MCP Integration** - Works seamlessly with Claude Code via Model Context Protocol with comprehensive tool suite
 - **🗂️ Organized Hierarchy** - Built-in, user, and local prompt directories with override precedence
+- **⚙️ Flexible Configuration** - Multi-format configuration (TOML, YAML, JSON) with environment variables and precedence rules
 - **🛠️ Developer Tools** - Rich CLI with diagnostics, validation, and shell completions
 - **📚 Rust Library** - Use as a dependency in your own Rust projects with comprehensive API
 - **🔍 Built-in Prompts** - 20+ ready-to-use prompts for common development tasks
@@ -96,6 +97,214 @@ sah files write --file-path ./output.txt --content "Hello World"
 # Validate configurations
 sah validate
 ```
+
+## ⚙️ Configuration System
+
+SwissArmyHammer uses a powerful, multi-format configuration system that supports TOML, YAML, and JSON formats with proper precedence handling and environment variable substitution.
+
+### Configuration File Discovery
+
+SwissArmyHammer automatically discovers configuration files in the following locations and formats:
+
+**Supported file names:**
+- `sah.{toml,yaml,yml,json}`
+- `swissarmyhammer.{toml,yaml,yml,json}`
+
+**Search locations (in precedence order):**
+1. **Global Configuration** - `~/.swissarmyhammer/`
+2. **Project Configuration** - `./.swissarmyhammer/`
+
+### Precedence Order
+
+Configuration values are merged with the following precedence (later sources override earlier ones):
+
+1. **Default values** (built into the application)
+2. **Global config files** (`~/.swissarmyhammer/sah.*`)
+3. **Project config files** (`./.swissarmyhammer/sah.*`)
+4. **Environment variables** (`SAH_*` and `SWISSARMYHAMMER_*` prefixes)
+5. **CLI arguments** (highest priority)
+
+### Configuration Formats
+
+#### TOML Example (`sah.toml`)
+```toml
+# Application settings
+[app]
+name = "MyProject"
+version = "1.0.0"
+debug = false
+
+# Database configuration
+[database]
+host = "localhost"
+port = 5432
+ssl_enabled = true
+
+[database.credentials]
+username = "admin"
+database = "production"
+
+# Feature flags
+[features]
+experimental = false
+telemetry = true
+
+# Custom template variables
+[variables]
+project_root = "/path/to/project"
+author = "Your Name"
+```
+
+#### YAML Example (`sah.yaml`)
+```yaml
+# Application settings
+app:
+  name: MyProject
+  version: "1.0.0"
+  debug: false
+
+# Database configuration
+database:
+  host: localhost
+  port: 5432
+  ssl_enabled: true
+  credentials:
+    username: admin
+    database: production
+
+# Feature flags
+features:
+  experimental: false
+  telemetry: true
+
+# Custom template variables
+variables:
+  project_root: /path/to/project
+  author: "Your Name"
+```
+
+#### JSON Example (`sah.json`)
+```json
+{
+  "app": {
+    "name": "MyProject",
+    "version": "1.0.0",
+    "debug": false
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "ssl_enabled": true,
+    "credentials": {
+      "username": "admin",
+      "database": "production"
+    }
+  },
+  "features": {
+    "experimental": false,
+    "telemetry": true
+  },
+  "variables": {
+    "project_root": "/path/to/project",
+    "author": "Your Name"
+  }
+}
+```
+
+### Environment Variables
+
+Configuration values can be set via environment variables using either prefix:
+
+```bash
+# SAH_ prefix (shorter)
+export SAH_APP_NAME="MyProject"
+export SAH_DATABASE_HOST="localhost"
+export SAH_DATABASE_PORT="5432"
+export SAH_DEBUG="true"
+
+# SWISSARMYHAMMER_ prefix (explicit)
+export SWISSARMYHAMMER_APP_NAME="MyProject"
+export SWISSARMYHAMMER_DATABASE_HOST="localhost"
+export SWISSARMYHAMMER_DATABASE_PORT="5432"
+export SWISSARMYHAMMER_DEBUG="true"
+```
+
+**Environment Variable Mapping:**
+- `SAH_APP_NAME` → `app.name`
+- `SAH_DATABASE_HOST` → `database.host`
+- `SAH_DATABASE_CREDENTIALS_USERNAME` → `database.credentials.username`
+
+### Environment Variable Substitution
+
+Configuration files support environment variable substitution:
+
+```toml
+# With default values
+database_url = "${DATABASE_URL:-postgresql://localhost:5432/mydb}"
+api_key = "${API_KEY}"
+debug = "${DEBUG:-false}"
+
+# In nested structures
+[app]
+name = "${APP_NAME:-SwissArmyHammer}"
+version = "${VERSION:-1.0.0}"
+```
+
+### Using Configuration in Templates
+
+Configuration values are automatically available in all Liquid templates:
+
+```liquid
+# Application Configuration
+
+**Project:** {{app.name}} v{{app.version}}
+**Debug Mode:** {% if debug %}enabled{% else %}disabled{% endif %}
+
+## Database Connection
+
+```
+Host: {{database.host}}:{{database.port}}
+Database: {{database.credentials.database}}
+SSL: {% if database.ssl_enabled %}enabled{% else %}disabled{% endif %}
+```
+
+## Features
+
+{% for feature in features -%}
+- {{feature[0] | capitalize}}: {% if feature[1] %}✓{% else %}✗{% endif %}
+{% endfor %}
+
+Connection: postgresql://{{database.credentials.username}}@{{database.host}}:{{database.port}}/{{database.credentials.database}}
+```
+
+### Configuration in Different Contexts
+
+- **CLI Usage** - Configuration loaded automatically when using `sah` commands
+- **MCP Integration** - Configuration available in all MCP tools and workflows
+- **Template Rendering** - All config values accessible via `{{config.key}}` syntax
+- **Workflow Execution** - Configuration merged with workflow variables
+
+### Quick Configuration Setup
+
+Create a basic configuration:
+
+```bash
+# Create global config directory
+mkdir -p ~/.swissarmyhammer
+
+# Create a basic TOML config
+cat > ~/.swissarmyhammer/sah.toml << 'EOF'
+[app]
+name = "MyApp"
+debug = true
+
+[variables]
+author = "Your Name"
+project_type = "web"
+EOF
+```
+
+Your configuration is now available in all templates and workflows!
 
 ### Standard Locations
 

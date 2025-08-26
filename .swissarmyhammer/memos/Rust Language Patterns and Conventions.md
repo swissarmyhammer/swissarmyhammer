@@ -10,6 +10,10 @@ pub struct WorkflowName(String);    // Workflow identifiers
 pub struct StateId(String);         // State identifiers
 ```
 
+** Avoid HashMap in function signatures **
+
+You almost certainly need to be using an appropriate Context type instead. Any HashMap in a function signature is highly suspect.
+
 **Type Aliases for Clarity**
 ```rust
 pub type Result<T> = std::result::Result<T, SwissArmyHammerError>;

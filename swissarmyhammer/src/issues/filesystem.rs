@@ -1194,33 +1194,35 @@ impl FileSystemIssueStorage {
     #[cfg(unix)]
     fn check_directory_permissions(source: &Path, destination: &Path) -> Result<bool> {
         use std::os::unix::fs::PermissionsExt;
-        
+
         if !source.exists() || !destination.exists() {
             return Ok(false);
         }
 
         let source_dirs = Self::collect_directory_list(source)?;
-        
+
         for dir_path in source_dirs {
             let source_dir = source.join(&dir_path);
             let dest_dir = destination.join(&dir_path);
-            
+
             if dest_dir.exists() {
-                let source_perms = source_dir.metadata()
+                let source_perms = source_dir
+                    .metadata()
                     .map_err(SwissArmyHammerError::Io)?
                     .permissions()
                     .mode();
-                let dest_perms = dest_dir.metadata()
+                let dest_perms = dest_dir
+                    .metadata()
                     .map_err(SwissArmyHammerError::Io)?
                     .permissions()
                     .mode();
-                    
+
                 if source_perms != dest_perms {
                     return Ok(false);
                 }
             }
         }
-        
+
         Ok(true)
     }
 
@@ -1307,14 +1309,16 @@ impl FileSystemIssueStorage {
         destination: &Path,
     ) -> Result<MetadataPreservationCheck> {
         let permissions_preserved = Self::check_file_permissions(source, destination)?;
-        let (timestamps_preserved, timestamp_differences) = Self::check_file_timestamps(source, destination)?;
-        
+        let (timestamps_preserved, timestamp_differences) =
+            Self::check_file_timestamps(source, destination)?;
+
         let mut metadata_differences = Vec::new();
         if !permissions_preserved {
-            metadata_differences.push("File permissions differ between source and destination".to_string());
+            metadata_differences
+                .push("File permissions differ between source and destination".to_string());
         }
         metadata_differences.extend(timestamp_differences);
-        
+
         Ok(MetadataPreservationCheck {
             permissions_preserved,
             timestamps_preserved,
@@ -1326,33 +1330,35 @@ impl FileSystemIssueStorage {
     #[cfg(unix)]
     fn check_file_permissions(source: &Path, destination: &Path) -> Result<bool> {
         use std::os::unix::fs::PermissionsExt;
-        
+
         if !source.exists() || !destination.exists() {
             return Ok(false);
         }
 
         let source_files = Self::collect_file_list(source)?;
-        
+
         for file_path in source_files {
             let source_file = source.join(&file_path);
             let dest_file = destination.join(&file_path);
-            
+
             if dest_file.exists() {
-                let source_perms = source_file.metadata()
+                let source_perms = source_file
+                    .metadata()
                     .map_err(SwissArmyHammerError::Io)?
                     .permissions()
                     .mode();
-                let dest_perms = dest_file.metadata()
+                let dest_perms = dest_file
+                    .metadata()
                     .map_err(SwissArmyHammerError::Io)?
                     .permissions()
                     .mode();
-                    
+
                 if source_perms != dest_perms {
                     return Ok(false);
                 }
             }
         }
-        
+
         Ok(true)
     }
 
@@ -1367,36 +1373,53 @@ impl FileSystemIssueStorage {
     /// Check file timestamps between source and destination files
     fn check_file_timestamps(source: &Path, destination: &Path) -> Result<(bool, Vec<String>)> {
         if !source.exists() || !destination.exists() {
-            return Ok((false, vec!["Source or destination directory does not exist".to_string()]));
+            return Ok((
+                false,
+                vec!["Source or destination directory does not exist".to_string()],
+            ));
         }
 
         let source_files = Self::collect_file_list(source)?;
         let mut differences = Vec::new();
         let mut all_timestamps_match = true;
-        
+
         for file_path in source_files {
             let source_file = source.join(&file_path);
             let dest_file = destination.join(&file_path);
-            
+
             if dest_file.exists() {
-                let source_modified = source_file.metadata()
+                let source_modified = source_file
+                    .metadata()
                     .map_err(SwissArmyHammerError::Io)?
                     .modified()
                     .map_err(SwissArmyHammerError::Io)?;
-                let dest_modified = dest_file.metadata()
+                let dest_modified = dest_file
+                    .metadata()
                     .map_err(SwissArmyHammerError::Io)?
                     .modified()
                     .map_err(SwissArmyHammerError::Io)?;
-                    
+
                 // Allow for small timestamp differences (1 second tolerance)
-                if source_modified.duration_since(dest_modified).unwrap_or_default().as_secs() > 1 
-                   || dest_modified.duration_since(source_modified).unwrap_or_default().as_secs() > 1 {
+                if source_modified
+                    .duration_since(dest_modified)
+                    .unwrap_or_default()
+                    .as_secs()
+                    > 1
+                    || dest_modified
+                        .duration_since(source_modified)
+                        .unwrap_or_default()
+                        .as_secs()
+                        > 1
+                {
                     all_timestamps_match = false;
-                    differences.push(format!("Timestamp mismatch for file: {}", file_path.display()));
+                    differences.push(format!(
+                        "Timestamp mismatch for file: {}",
+                        file_path.display()
+                    ));
                 }
             }
         }
-        
+
         Ok((all_timestamps_match, differences))
     }
 

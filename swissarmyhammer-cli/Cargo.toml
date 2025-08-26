@@ -20,6 +20,7 @@ path = "src/main.rs"
 # Library dependencies
 swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
 # CLI dependencies
 clap = { workspace = true }

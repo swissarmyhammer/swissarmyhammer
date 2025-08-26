@@ -33,6 +33,7 @@ mcp.log
 # Scratch files
 CODE_REVIEW.md
 TEST_FAILURES.md
+TEST_RESULTS.md
 TEST_RESULTS_SUMMARY.md
 
 # Test issue files

@@ -3,10 +3,9 @@
 use super::core::WorkflowExecutor;
 use super::{ExecutionEventType, ExecutorError, ExecutorResult, LAST_ACTION_RESULT_KEY};
 use crate::workflow::{
-    parse_action_from_description_with_context, StateId, StateType, Workflow, WorkflowRun,
+    parse_action_from_description_with_context, StateId, StateType, Workflow, WorkflowRun, WorkflowTemplateContext,
 };
 use serde_json::Value;
-use std::collections::HashMap;
 
 /// Represents a parallel execution branch
 #[derive(Debug)]
@@ -14,7 +13,7 @@ pub struct ParallelBranch {
     /// The state this branch is currently in
     pub current_state: StateId,
     /// The execution context for this branch
-    pub context: HashMap<String, Value>,
+    pub context: WorkflowTemplateContext,
     /// History for this branch
     pub history: Vec<(StateId, chrono::DateTime<chrono::Utc>)>,
 }
@@ -336,7 +335,7 @@ impl WorkflowExecutor {
             // Execute state action if one can be parsed from the description with liquid template rendering
             if let Some(action) = parse_action_from_description_with_context(
                 &current_state.description,
-                &branch.context,
+                &branch.context.to_workflow_hashmap(),
             )? {
                 self.log_event(
                     ExecutionEventType::StateExecution,
@@ -442,10 +441,10 @@ impl WorkflowExecutor {
         // Simple merge strategy: combine all variables from all branches
         // In case of conflicts, later branches override earlier ones
         for branch in branches {
-            for (key, value) in branch.context {
+            for (key, value) in branch.context.iter() {
                 // Skip the last_action_result key as it's execution-specific
                 if key != LAST_ACTION_RESULT_KEY {
-                    run.context.insert(key, value);
+                    run.context.insert(key.clone(), value.clone());
                 }
             }
 

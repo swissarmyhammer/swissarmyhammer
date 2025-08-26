@@ -53,9 +53,10 @@ impl McpServer {
     ///
     /// Returns an error if workflow storage, issue storage, or git operations fail to initialize.
     pub fn new(library: PromptLibrary) -> Result<Self> {
-        let work_dir = std::env::current_dir().map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to get current directory: {e}"))
-        })?;
+        let work_dir = std::env::current_dir().unwrap_or_else(|_| {
+            // Fallback to a temporary directory if current directory is not accessible
+            std::env::temp_dir()
+        });
         Self::new_with_work_dir(library, work_dir)
     }
 
@@ -92,11 +93,8 @@ impl McpServer {
 
         // Initialize issue storage using new storage defaults with working directory context
         let issue_storage = {
-            let original_dir = std::env::current_dir().map_err(|e| {
-                SwissArmyHammerError::Other(format!("Failed to get current directory: {e}"))
-            })?;
-
-            let needs_dir_change = work_dir != original_dir;
+            let original_dir = std::env::current_dir().ok();
+            let needs_dir_change = original_dir.as_ref().map_or(true, |dir| work_dir != *dir);
 
             // Set working directory context for storage creation if different from current
             if needs_dir_change {
@@ -128,10 +126,12 @@ impl McpServer {
                 }
             }
 
-            // Always restore original working directory if we changed it
+            // Always restore original working directory if we changed it and it still exists
             if needs_dir_change {
-                if let Err(e) = std::env::set_current_dir(&original_dir) {
-                    tracing::warn!("Failed to restore original working directory: {}", e);
+                if let Some(ref original_dir) = original_dir {
+                    if let Err(e) = std::env::set_current_dir(original_dir) {
+                        tracing::warn!("Failed to restore original working directory: {}", e);
+                    }
                 }
             }
 

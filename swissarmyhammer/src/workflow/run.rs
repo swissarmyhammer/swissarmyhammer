@@ -1,7 +1,7 @@
 //! Workflow runtime execution types
 
 use crate::common::generate_monotonic_ulid;
-use crate::workflow::{StateId, Workflow};
+use crate::workflow::{StateId, Workflow, WorkflowTemplateContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ulid::Ulid;
@@ -63,7 +63,7 @@ pub struct WorkflowRun {
     /// Execution history (state_id, timestamp)
     pub history: Vec<(StateId, chrono::DateTime<chrono::Utc>)>,
     /// Variables/context for this run
-    pub context: HashMap<String, serde_json::Value>,
+    pub context: WorkflowTemplateContext,
     /// Run status
     pub status: WorkflowRunStatus,
     /// When the run started
@@ -104,12 +104,14 @@ impl WorkflowRun {
 
         let now = chrono::Utc::now();
         let initial_state = workflow.initial_state.clone();
+        let context = WorkflowTemplateContext::load()
+            .unwrap_or_else(|_| WorkflowTemplateContext::with_vars(Default::default()).unwrap());
         Self {
             id: WorkflowRunId::new(),
             workflow,
             current_state: initial_state.clone(),
             history: vec![(initial_state, now)],
-            context: Default::default(),
+            context,
             status: WorkflowRunStatus::Running,
             started_at: now,
             completed_at: None,

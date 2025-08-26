@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
-use swissarmyhammer::test_utils::create_test_home_guard;
+use swissarmyhammer::test_utils::IsolatedTestHome;
 
 #[test]
 fn test_help_command() {
@@ -27,7 +27,7 @@ fn test_version_command() {
 
 #[test]
 fn test_doctor_command() {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("doctor")
@@ -58,7 +58,7 @@ fn test_invalid_command() {
 
 #[test]
 fn test_quiet_flag() {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("--quiet")
@@ -70,7 +70,7 @@ fn test_quiet_flag() {
 
 #[test]
 fn test_verbose_flag() {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     
     let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
     cmd.arg("--verbose")

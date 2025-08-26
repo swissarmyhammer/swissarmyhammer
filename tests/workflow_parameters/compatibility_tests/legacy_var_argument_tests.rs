@@ -74,7 +74,7 @@ mod legacy_var_argument_compatibility_tests {
             
             // Numeric values
             ("integer=42", "integer", json!(42.0)),
-            ("float=3.14159", "float", json!(3.14159)),
+            (&format!("float={}", std::f64::consts::PI), "float", json!(std::f64::consts::PI)),
             ("negative=-10", "negative", json!(-10.0)),
             ("zero=0", "zero", json!(0.0)),
             

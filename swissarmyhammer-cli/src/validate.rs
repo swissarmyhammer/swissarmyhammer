@@ -3,7 +3,7 @@ use colored::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer::sah_config::validate_config_file;
+
 use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
     ValidationResult,
@@ -747,7 +747,6 @@ impl Validator {
     /// Validate sah.toml configuration file if it exists
     fn validate_sah_config(&self, result: &mut ValidationResult) -> Result<()> {
         use std::path::Path;
-        use swissarmyhammer::sah_config::ValidationError as ConfigValidationError;
 
         // Check for sah.toml in the current directory
         let config_path = Path::new("sah.toml");
@@ -758,9 +757,9 @@ impl Validator {
 
         result.files_checked += 1;
 
-        // Try to validate the configuration file
-        match validate_config_file(config_path) {
-            Ok(()) => {
+        // Try to validate the configuration by loading it with the new system
+        match swissarmyhammer_config::load_configuration() {
+            Ok(_template_context) => {
                 if !self.quiet {
                     let issue = ValidationIssue {
                         level: ValidationLevel::Info,
@@ -775,54 +774,12 @@ impl Validator {
                 }
             }
             Err(e) => {
-                // Convert configuration validation error to validation issue
-                let (level, message, suggestion) = match &e {
-                    ConfigValidationError::InvalidVariableName { name, reason } => (
-                        ValidationLevel::Error,
-                        format!("Invalid variable name '{name}': {reason}"),
-                        Some("Variable names must be valid Liquid identifiers (letters, numbers, underscores, starting with letter/underscore)".to_string()),
-                    ),
-                    ConfigValidationError::ReservedVariableName { name } => (
-                        ValidationLevel::Error,
-                        format!("Variable name '{name}' is reserved and cannot be used"),
-                        Some("Choose a different variable name that doesn't conflict with Liquid template keywords or SwissArmyHammer internals".to_string()),
-                    ),
-                    ConfigValidationError::StringTooLong { length, max_length } => (
-                        ValidationLevel::Error,
-                        format!("String value too long: {length} characters (max: {max_length})"),
-                        Some("Consider breaking long strings into smaller parts or storing them in external files".to_string()),
-                    ),
-                    ConfigValidationError::ArrayTooLarge { length, max_elements } => (
-                        ValidationLevel::Error,
-                        format!("Array too large: {length} elements (max: {max_elements})"),
-                        Some("Consider reducing the number of array elements or using nested structures".to_string()),
-                    ),
-                    ConfigValidationError::NestingTooDeep { depth, max_depth } => (
-                        ValidationLevel::Error,
-                        format!("Configuration nesting too deep: {depth} levels (max: {max_depth})"),
-                        Some("Flatten the configuration structure to reduce nesting levels".to_string()),
-                    ),
-                    ConfigValidationError::TooManyVariables { count, max_count } => (
-                        ValidationLevel::Error,
-                        format!("Too many configuration variables: {count} (max: {max_count})"),
-                        Some("Consider grouping related variables into tables or reducing the number of variables".to_string()),
-                    ),
-                    ConfigValidationError::RuleFailed { rule, message } => (
-                        ValidationLevel::Error,
-                        format!("Validation rule '{rule}' failed: {message}"),
-                        None,
-                    ),
-                    ConfigValidationError::InsufficientPermissions { path, reason } => (
-                        ValidationLevel::Warning,
-                        format!("File permission issue for '{path}': {reason}"),
-                        Some("Check file permissions and ownership".to_string()),
-                    ),
-                    ConfigValidationError::LoadError(msg) => (
-                        ValidationLevel::Error,
-                        format!("Configuration loading error: {msg}"),
-                        Some("Check TOML syntax and file accessibility".to_string()),
-                    ),
-                };
+                // Convert configuration loading error to validation issue
+                let (level, message, suggestion) = (
+                    ValidationLevel::Error,
+                    format!("Configuration loading failed: {}", e),
+                    Some("Check the configuration file syntax and structure".to_string()),
+                );
 
                 let issue = ValidationIssue {
                     level,

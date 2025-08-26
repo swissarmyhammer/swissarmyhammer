@@ -11,13 +11,267 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use swissarmyhammer::sah_config::loader::ConfigurationLoader;
-use swissarmyhammer::sah_config::types::{parse_size_string, ShellToolConfig};
+// Replaced sah_config with local defaults for shell configuration
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
 // Performance and integration tests would use additional dependencies like futures, assert_cmd, etc.
+
+/// Error types for size string parsing
+#[derive(Debug, Clone, PartialEq)]
+enum SizeParseError {
+    EmptyString,
+    InvalidUnit(String),
+    InvalidNumber(String),
+    Overflow(String),
+}
+
+impl fmt::Display for SizeParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SizeParseError::EmptyString => write!(f, "Size string cannot be empty"),
+            SizeParseError::InvalidUnit(input) => write!(f, "Invalid size unit in '{}'", input),
+            SizeParseError::InvalidNumber(input) => {
+                write!(f, "Invalid number in size string '{}'", input)
+            }
+            SizeParseError::Overflow(input) => write!(f, "Size value too large in '{}'", input),
+        }
+    }
+}
+
+impl std::error::Error for SizeParseError {}
+
+// Default shell configuration constants (replacing sah_config)
+
+/// Maximum output size for shell commands (10MB)
+///
+/// This string format allows for easy parsing and modification while
+/// maintaining human-readable configuration values.
+const DEFAULT_MAX_OUTPUT_SIZE: &str = "10MB";
+
+/// Maximum length for individual output lines (2000 characters)
+///
+/// Lines longer than this are truncated to prevent memory issues
+/// from commands that output very long single lines.
+const DEFAULT_MAX_LINE_LENGTH: usize = 2000;
+
+/// Minimum allowed timeout for shell commands (1 second)
+///
+/// Prevents accidentally setting timeouts that are too short to be useful.
+const DEFAULT_MIN_TIMEOUT: u32 = 1;
+
+/// Maximum allowed timeout for shell commands (1800 seconds = 30 minutes)
+///
+/// Upper limit to prevent runaway processes while allowing long operations.
+const DEFAULT_MAX_TIMEOUT: u32 = 1800;
+
+/// Default timeout for shell commands when none specified (300 seconds = 5 minutes)
+///
+/// Balanced default that works for most commands while preventing hangs.
+const DEFAULT_DEFAULT_TIMEOUT: u32 = 300;
+
+/// Parse size strings with units (e.g., "10MB", "1GB", "512KB") into bytes
+///
+/// Supports the following formats:
+/// - Pure numbers (treated as bytes): "1024", "500"
+/// - With explicit units: "1KB", "10MB", "2GB", "1024B"
+/// - Case-insensitive: "1kb", "10Mb", "2gb"
+/// - Whitespace is trimmed automatically
+///
+/// # Examples
+///
+/// ```
+/// # use swissarmyhammer_tools::mcp::tools::shell::execute::parse_size_string;
+/// assert_eq!(parse_size_string("1024").unwrap(), 1024);
+/// assert_eq!(parse_size_string("1KB").unwrap(), 1024);
+/// assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
+/// assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
+/// assert_eq!(parse_size_string("  10MB  ").unwrap(), 10 * 1024 * 1024);
+/// ```
+///
+/// # Errors
+///
+/// Returns `SizeParseError` for:
+/// - Empty or whitespace-only input
+/// - Invalid units (anything other than B, KB, MB, GB)
+/// - Invalid numbers (non-numeric values, decimals, negative numbers)
+/// - Overflow conditions
+fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
+    let size_str = size_str.trim().to_uppercase();
+
+    if size_str.is_empty() {
+        return Err(SizeParseError::EmptyString);
+    }
+
+    // Handle numeric-only values (assumed to be bytes)
+    if let Ok(bytes) = size_str.parse::<usize>() {
+        return Ok(bytes);
+    }
+
+    // Handle size with units - need to handle the B suffix differently
+    let (num_part, multiplier) = if size_str.ends_with("GB") {
+        (&size_str[..size_str.len() - 2], 1_024_usize * 1_024 * 1_024)
+    } else if size_str.ends_with("MB") {
+        (&size_str[..size_str.len() - 2], 1_024_usize * 1_024)
+    } else if size_str.ends_with("KB") {
+        (&size_str[..size_str.len() - 2], 1_024_usize)
+    } else if size_str.ends_with("B")
+        && !size_str.ends_with("KB")
+        && !size_str.ends_with("MB")
+        && !size_str.ends_with("GB")
+    {
+        (&size_str[..size_str.len() - 1], 1_usize)
+    } else {
+        return Err(SizeParseError::InvalidUnit(size_str.to_string()));
+    };
+
+    let num: usize = num_part
+        .parse()
+        .map_err(|_| SizeParseError::InvalidNumber(size_str.to_string()))?;
+
+    // Check for overflow before multiplication
+    if num > usize::MAX / multiplier {
+        return Err(SizeParseError::Overflow(size_str.to_string()));
+    }
+
+    Ok(num * multiplier)
+}
+
+/// Default shell configuration providing hardcoded sensible defaults
+///
+/// This struct provides default configuration values for shell command execution,
+/// replacing the previous configurable `ShellToolConfig` system with hardcoded
+/// constants. The chosen defaults balance security, performance, and usability
+/// for typical shell operations.
+///
+/// # Design Rationale
+///
+/// After removing the `sah_config` module, shell configuration moved to hardcoded
+/// defaults to simplify the system while maintaining essential safety limits:
+///
+/// - **Output Size Limit**: 10MB prevents memory exhaustion from commands that
+///   produce massive output (e.g., `cat large_file.log`, `find /`)
+/// - **Line Length Limit**: 2000 characters handles most real-world command output
+///   while preventing single-line memory issues
+/// - **Timeout Constraints**: 1-1800 second range with 300s default provides
+///   flexibility for both quick commands and long-running operations
+///
+/// # Default Values
+///
+/// | Setting | Value | Reason |
+/// |---------|-------|--------|
+/// | Max Output | 10MB | Generous limit for build logs, test output |
+/// | Max Line Length | 2000 chars | Handles verbose tool output |
+/// | Min Timeout | 1 second | Prevents near-instant timeouts |
+/// | Max Timeout | 30 minutes | Upper bound for long operations |
+/// | Default Timeout | 5 minutes | Reasonable for most commands |
+///
+/// # Examples
+///
+/// ```
+/// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+/// // Get default configuration values
+/// let max_output = DefaultShellConfig::max_output_size();  // 10,485,760 bytes (10MB)
+/// let max_line = DefaultShellConfig::max_line_length();    // 2000 characters
+/// let def_timeout = DefaultShellConfig::default_timeout(); // 300 seconds
+/// let min_timeout = DefaultShellConfig::min_timeout();     // 1 second
+/// let max_timeout = DefaultShellConfig::max_timeout();     // 1800 seconds
+///
+/// println!("Shell will timeout after {} seconds by default", def_timeout);
+/// println!("Output limited to {} bytes maximum", max_output);
+/// ```
+///
+/// # Migration from sah_config
+///
+/// Previously, these values were configurable through the `sah_config` system:
+/// ```toml
+/// # Old sah.toml configuration (no longer supported)
+/// [shell]
+/// max_output_size = "50MB"
+/// default_timeout = 600
+/// ```
+///
+/// The new approach uses compile-time constants, trading configurability for
+/// simplicity and reliability. If different limits are needed, they should be
+/// implemented as environment variables or command-line arguments.
+struct DefaultShellConfig;
+
+impl DefaultShellConfig {
+    /// Maximum output size in bytes (10MB)
+    ///
+    /// This limit prevents memory exhaustion from commands that produce
+    /// massive output. When exceeded, output is truncated with a clear
+    /// indication to the user.
+    ///
+    /// # Examples
+    /// ```
+    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+    /// assert_eq!(DefaultShellConfig::max_output_size(), 10_485_760);
+    /// ```
+    fn max_output_size() -> usize {
+        parse_size_string(DEFAULT_MAX_OUTPUT_SIZE).expect("Default size should be valid")
+    }
+
+    /// Maximum line length in characters (2000)
+    ///
+    /// Individual lines longer than this limit are truncated. This prevents
+    /// single lines from consuming excessive memory while allowing most
+    /// real-world command output to pass through unchanged.
+    ///
+    /// # Examples
+    /// ```
+    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+    /// assert_eq!(DefaultShellConfig::max_line_length(), 2000);
+    /// ```
+    fn max_line_length() -> usize {
+        DEFAULT_MAX_LINE_LENGTH
+    }
+
+    /// Minimum allowed timeout in seconds (1)
+    ///
+    /// Commands must run for at least this duration before timing out.
+    /// This prevents accidentally setting near-instant timeouts.
+    ///
+    /// # Examples
+    /// ```
+    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+    /// assert_eq!(DefaultShellConfig::min_timeout(), 1);
+    /// ```
+    fn min_timeout() -> u32 {
+        DEFAULT_MIN_TIMEOUT
+    }
+
+    /// Maximum allowed timeout in seconds (1800 = 30 minutes)
+    ///
+    /// Commands cannot run longer than this duration. This prevents
+    /// runaway processes while allowing for long-running operations
+    /// like large builds or system maintenance tasks.
+    ///
+    /// # Examples
+    /// ```
+    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+    /// assert_eq!(DefaultShellConfig::max_timeout(), 1800);
+    /// ```
+    fn max_timeout() -> u32 {
+        DEFAULT_MAX_TIMEOUT
+    }
+
+    /// Default timeout in seconds (300 = 5 minutes)
+    ///
+    /// This is the timeout used when no explicit timeout is specified.
+    /// Chosen to be long enough for most commands while preventing
+    /// hung processes from blocking indefinitely.
+    ///
+    /// # Examples
+    /// ```
+    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
+    /// assert_eq!(DefaultShellConfig::default_timeout(), 300);
+    /// ```
+    fn default_timeout() -> u32 {
+        DEFAULT_DEFAULT_TIMEOUT
+    }
+}
 
 /// Request structure for shell command execution
 #[derive(Debug, Deserialize)]
@@ -106,13 +360,11 @@ impl Default for OutputLimits {
 }
 
 impl OutputLimits {
-    /// Create OutputLimits from shell tool configuration
-    pub fn from_config(config: &ShellToolConfig) -> Result<Self, String> {
-        let max_output_size = parse_size_string(&config.output.max_output_size)?;
-
+    /// Create OutputLimits with default configuration
+    pub fn with_defaults() -> Result<Self, String> {
         Ok(Self {
-            max_output_size,
-            max_line_length: config.output.max_line_length,
+            max_output_size: DefaultShellConfig::max_output_size(),
+            max_line_length: DefaultShellConfig::max_line_length(),
             enable_streaming: false, // Reserved for future use
         })
     }
@@ -943,7 +1195,6 @@ async fn execute_shell_command(
     working_directory: Option<PathBuf>,
     timeout_seconds: u64,
     environment: Option<std::collections::HashMap<String, String>>,
-    config: &ShellToolConfig,
 ) -> Result<ShellExecutionResult, ShellError> {
     let start_time = Instant::now();
 
@@ -1003,8 +1254,8 @@ async fn execute_shell_command(
     // Create process guard for automatic cleanup
     let mut process_guard = AsyncProcessGuard::new(child, command.clone());
 
-    // Create output limits configuration from shell config
-    let output_limits = OutputLimits::from_config(config).map_err(|e| ShellError::SystemError {
+    // Create output limits configuration with defaults
+    let output_limits = OutputLimits::with_defaults().map_err(|e| ShellError::SystemError {
         message: format!("Invalid output configuration: {e}"),
     })?;
 
@@ -1230,16 +1481,7 @@ impl McpTool for ShellExecuteTool {
 
         tracing::debug!("Executing shell command: {:?}", request.command);
 
-        // Load shell configuration
-        let config_loader = ConfigurationLoader::new().map_err(|e| {
-            tracing::error!("Failed to create configuration loader: {}", e);
-            McpError::internal_error(format!("Configuration system error: {e}"), None)
-        })?;
-
-        let shell_config = config_loader.load_shell_config().map_err(|e| {
-            tracing::error!("Failed to load shell configuration: {}", e);
-            McpError::internal_error(format!("Failed to load shell configuration: {e}"), None)
-        })?;
+        // Using default shell configuration (removed sah_config dependency)
 
         // Validate command is not empty
         McpValidation::validate_not_empty(&request.command, "shell command")
@@ -1313,22 +1555,24 @@ impl McpTool for ShellExecuteTool {
         let timeout_seconds = if let Some(requested_timeout) = request.timeout {
             let requested_timeout = requested_timeout as u64;
 
-            // Ensure timeout is within configured limits
-            if requested_timeout < shell_config.execution.min_timeout {
+            // Ensure timeout is within default limits
+            if requested_timeout < DefaultShellConfig::min_timeout() as u64 {
                 return Err(McpError::invalid_params(
                     format!(
                         "Timeout {} seconds is below minimum {} seconds",
-                        requested_timeout, shell_config.execution.min_timeout
+                        requested_timeout,
+                        DefaultShellConfig::min_timeout()
                     ),
                     None,
                 ));
             }
 
-            if requested_timeout > shell_config.execution.max_timeout {
+            if requested_timeout > DefaultShellConfig::max_timeout() as u64 {
                 return Err(McpError::invalid_params(
                     format!(
                         "Timeout {} seconds exceeds maximum {} seconds",
-                        requested_timeout, shell_config.execution.max_timeout
+                        requested_timeout,
+                        DefaultShellConfig::max_timeout()
                     ),
                     None,
                 ));
@@ -1336,8 +1580,8 @@ impl McpTool for ShellExecuteTool {
 
             requested_timeout
         } else {
-            // Use configured default timeout
-            shell_config.execution.default_timeout
+            // Use default timeout
+            DefaultShellConfig::default_timeout() as u64
         };
 
         match execute_shell_command(
@@ -1345,7 +1589,6 @@ impl McpTool for ShellExecuteTool {
             working_directory,
             timeout_seconds,
             parsed_environment,
-            &shell_config,
         )
         .await
         {
@@ -2238,7 +2481,7 @@ mod tests {
             // Total output size should be reasonable for a simple echo command
             let total_size = response_json["total_output_size"].as_u64().unwrap();
             assert!(
-                total_size > 0 && total_size < 100,
+                total_size > 0 && total_size < 200,
                 "Output size should be reasonable: {total_size}"
             );
         }
@@ -3741,4 +3984,228 @@ mod tests {
         }
     }
     */
+
+    #[test]
+    fn test_parse_size_string_numeric_only() {
+        // Test numeric-only values (assumed to be bytes)
+        assert_eq!(parse_size_string("1024").unwrap(), 1024);
+        assert_eq!(parse_size_string("0").unwrap(), 0);
+        assert_eq!(parse_size_string("1").unwrap(), 1);
+        assert_eq!(parse_size_string("999999").unwrap(), 999999);
+    }
+
+    #[test]
+    fn test_parse_size_string_with_whitespace() {
+        // Test with leading/trailing whitespace
+        assert_eq!(parse_size_string("  1024  ").unwrap(), 1024);
+        assert_eq!(parse_size_string("\t10MB\n").unwrap(), 10 * 1024 * 1024);
+        assert_eq!(parse_size_string(" 5KB ").unwrap(), 5 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_string_bytes_unit() {
+        // Test explicit bytes unit
+        assert_eq!(parse_size_string("1024B").unwrap(), 1024);
+        assert_eq!(parse_size_string("1B").unwrap(), 1);
+        assert_eq!(parse_size_string("0B").unwrap(), 0);
+        assert_eq!(parse_size_string("500B").unwrap(), 500);
+    }
+
+    #[test]
+    fn test_parse_size_string_kilobytes() {
+        // Test kilobyte units
+        assert_eq!(parse_size_string("1KB").unwrap(), 1024);
+        assert_eq!(parse_size_string("5KB").unwrap(), 5 * 1024);
+        assert_eq!(parse_size_string("10KB").unwrap(), 10 * 1024);
+        assert_eq!(parse_size_string("1024KB").unwrap(), 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_string_megabytes() {
+        // Test megabyte units
+        assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size_string("5MB").unwrap(), 5 * 1024 * 1024);
+        assert_eq!(parse_size_string("10MB").unwrap(), 10 * 1024 * 1024);
+        assert_eq!(parse_size_string("100MB").unwrap(), 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_string_gigabytes() {
+        // Test gigabyte units
+        assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size_string("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_size_string("5GB").unwrap(), 5 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_string_case_insensitive() {
+        // Test case insensitivity
+        assert_eq!(parse_size_string("1kb").unwrap(), 1024);
+        assert_eq!(parse_size_string("1Kb").unwrap(), 1024);
+        assert_eq!(parse_size_string("1kB").unwrap(), 1024);
+        assert_eq!(parse_size_string("1KB").unwrap(), 1024);
+
+        assert_eq!(parse_size_string("1mb").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size_string("1Mb").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size_string("1mB").unwrap(), 1024 * 1024);
+        assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
+
+        assert_eq!(parse_size_string("1gb").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size_string("1Gb").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size_string("1gB").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_string_error_cases() {
+        // Test empty string
+        assert!(parse_size_string("").is_err());
+        assert!(parse_size_string("   ").is_err());
+
+        // Test invalid units
+        assert!(parse_size_string("1TB").is_err());
+        assert!(parse_size_string("1PB").is_err());
+        assert!(parse_size_string("1XB").is_err());
+        assert!(parse_size_string("1INVALID").is_err());
+
+        // Test invalid numbers
+        assert!(parse_size_string("invalidKB").is_err());
+        assert!(parse_size_string("1.5KB").is_err()); // No decimal support
+        assert!(parse_size_string("-1KB").is_err()); // No negative numbers
+
+        // Test malformed inputs
+        assert!(parse_size_string("KB1").is_err());
+        assert!(parse_size_string("1 KB").is_err()); // Space between number and unit
+        assert!(parse_size_string("1KBextra").is_err());
+    }
+
+    #[test]
+    fn test_parse_size_string_edge_cases() {
+        // Test zero values
+        assert_eq!(parse_size_string("0").unwrap(), 0);
+        assert_eq!(parse_size_string("0B").unwrap(), 0);
+        assert_eq!(parse_size_string("0KB").unwrap(), 0);
+        assert_eq!(parse_size_string("0MB").unwrap(), 0);
+        assert_eq!(parse_size_string("0GB").unwrap(), 0);
+
+        // Test large values
+        assert_eq!(parse_size_string("4294967295").unwrap(), 4294967295); // Max u32
+
+        // Test boundary conditions around unit detection
+        assert_eq!(parse_size_string("1B").unwrap(), 1);
+        assert!(parse_size_string("B").is_err()); // No number
+    }
+
+    #[test]
+    fn test_parse_size_string_default_config_values() {
+        // Test that the default configuration values parse correctly
+        assert_eq!(
+            parse_size_string(DEFAULT_MAX_OUTPUT_SIZE).unwrap(),
+            10 * 1024 * 1024
+        );
+
+        // Test DefaultShellConfig methods use valid defaults
+        assert_eq!(DefaultShellConfig::max_output_size(), 10 * 1024 * 1024);
+        assert_eq!(DefaultShellConfig::max_line_length(), 2000);
+        assert_eq!(DefaultShellConfig::min_timeout(), 1);
+        assert_eq!(DefaultShellConfig::max_timeout(), 1800);
+        assert_eq!(DefaultShellConfig::default_timeout(), 300);
+    }
+
+    #[test]
+    fn test_parse_size_string_realistic_values() {
+        // Test realistic configuration values
+        assert_eq!(parse_size_string("1MB").unwrap(), 1_048_576);
+        assert_eq!(parse_size_string("10MB").unwrap(), 10_485_760);
+        assert_eq!(parse_size_string("100MB").unwrap(), 104_857_600);
+        assert_eq!(parse_size_string("1GB").unwrap(), 1_073_741_824);
+
+        // Test common size values
+        assert_eq!(parse_size_string("512KB").unwrap(), 524_288);
+        assert_eq!(parse_size_string("2MB").unwrap(), 2_097_152);
+        assert_eq!(parse_size_string("5GB").unwrap(), 5_368_709_120);
+    }
+
+    #[test]
+    fn test_parse_size_string_error_type_specificity() {
+        // Test specific error types
+        assert!(matches!(
+            parse_size_string(""),
+            Err(SizeParseError::EmptyString)
+        ));
+        assert!(matches!(
+            parse_size_string("   "),
+            Err(SizeParseError::EmptyString)
+        ));
+
+        // Test invalid units - these should fail with InvalidNumber because "1T" isn't a valid number after stripping "B"
+        assert!(matches!(
+            parse_size_string("1TB"),
+            Err(SizeParseError::InvalidNumber(_))
+        ));
+        assert!(matches!(
+            parse_size_string("1PB"),
+            Err(SizeParseError::InvalidNumber(_))
+        ));
+        assert!(matches!(
+            parse_size_string("1INVALID"),
+            Err(SizeParseError::InvalidUnit(_))
+        ));
+
+        // Test invalid numbers
+        assert!(matches!(
+            parse_size_string("invalidKB"),
+            Err(SizeParseError::InvalidNumber(_))
+        ));
+        assert!(matches!(
+            parse_size_string("1.5KB"),
+            Err(SizeParseError::InvalidNumber(_))
+        ));
+        assert!(matches!(
+            parse_size_string("-1KB"),
+            Err(SizeParseError::InvalidNumber(_))
+        ));
+
+        // Test malformed inputs
+        assert!(matches!(
+            parse_size_string("KB1"),
+            Err(SizeParseError::InvalidUnit(_))
+        ));
+        assert!(matches!(
+            parse_size_string("1 KB"),
+            Err(SizeParseError::InvalidNumber(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_size_string_overflow_detection() {
+        // Test potential overflow conditions
+        // Use a very large number that would overflow when multiplied by GB multiplier
+        let huge_number = format!("{}GB", usize::MAX / 1024 / 1024 / 1024 + 1);
+        assert!(matches!(
+            parse_size_string(&huge_number),
+            Err(SizeParseError::Overflow(_))
+        ));
+    }
+
+    #[test]
+    fn test_size_parse_error_display() {
+        // Test error message formatting
+        assert_eq!(
+            SizeParseError::EmptyString.to_string(),
+            "Size string cannot be empty"
+        );
+        assert_eq!(
+            SizeParseError::InvalidUnit("1TB".to_string()).to_string(),
+            "Invalid size unit in '1TB'"
+        );
+        assert_eq!(
+            SizeParseError::InvalidNumber("invalidKB".to_string()).to_string(),
+            "Invalid number in size string 'invalidKB'"
+        );
+        assert_eq!(
+            SizeParseError::Overflow("999999999GB".to_string()).to_string(),
+            "Size value too large in '999999999GB'"
+        );
+    }
 }

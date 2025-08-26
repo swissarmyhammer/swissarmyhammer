@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_config::TemplateContext;
 
 /// Represents a single prompt with metadata and template content.
 ///
@@ -476,6 +477,180 @@ impl Prompt {
         template.render_with_config(&render_args)
     }
 
+    /// Renders the prompt with configuration context and user arguments.
+    ///
+    /// This method combines configuration values from TemplateContext with user-provided
+    /// arguments. User arguments take precedence over configuration values.
+    ///
+    /// # Arguments
+    ///
+    /// * `template_context` - Configuration context from config files and environment
+    /// * `args` - User-provided template arguments (highest precedence)
+    /// * `library` - The prompt library for resolving partials
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use swissarmyhammer::{Prompt, PromptLibrary};
+    /// use swissarmyhammer_config::TemplateContext;
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    ///
+    /// let mut template_context = TemplateContext::new();
+    /// let mut library = PromptLibrary::new();
+    ///
+    /// let prompt = Prompt::new("greeting", "Hello {{name}} from {{project}}!");
+    /// let mut args = HashMap::new();
+    /// args.insert("name".to_string(), "World".to_string());
+    /// // project value would come from template_context
+    ///
+    /// let result = prompt.render_with_context(&template_context, &args, Arc::new(library)).unwrap();
+    /// ```
+    pub fn render_with_context(
+        &self,
+        template_context: &TemplateContext,
+        args: &HashMap<String, String>,
+        library: Arc<PromptLibrary>,
+    ) -> Result<String> {
+        let template = crate::Template::with_partials(&self.template, library)?;
+
+        // Validate required parameters
+        for param in &self.parameters {
+            if param.required
+                && !args.contains_key(&param.name)
+                && template_context.get(&param.name).is_none()
+            {
+                return Err(SwissArmyHammerError::Template(format!(
+                    "Required parameter '{}' not provided in arguments or configuration",
+                    param.name
+                )));
+            }
+        }
+
+        // Start with configuration context (lowest precedence)
+        let mut render_args = HashMap::new();
+
+        // Add config values as strings for template rendering
+        for (key, value) in template_context.variables() {
+            let value_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => value.to_string(),
+            };
+            render_args.insert(key.clone(), value_str);
+        }
+
+        // Add user-provided arguments (highest precedence)
+        for (key, value) in args {
+            render_args.insert(key.clone(), value.clone());
+        }
+
+        // Add defaults for missing parameters
+        for param in &self.parameters {
+            if !render_args.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    render_args.insert(param.name.clone(), default_str);
+                }
+            }
+        }
+
+        template.render_with_config(&render_args)
+    }
+
+    /// Renders the prompt with configuration context, environment variables, and user arguments.
+    ///
+    /// This method combines configuration values, environment variables, and user-provided
+    /// arguments with proper precedence: config < env < user arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `template_context` - Configuration context from config files
+    /// * `args` - User-provided template arguments (highest precedence)  
+    /// * `library` - The prompt library for resolving partials
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use swissarmyhammer::{Prompt, PromptLibrary};
+    /// use swissarmyhammer_config::TemplateContext;
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    ///
+    /// let mut template_context = TemplateContext::new();
+    /// let mut library = PromptLibrary::new();
+    ///
+    /// let prompt = Prompt::new("deploy", "Deploying {{app}} to {{ENV}} environment");
+    /// let mut args = HashMap::new();
+    /// args.insert("app".to_string(), "myapp".to_string());
+    /// // ENV var from environment will be available
+    ///
+    /// let result = prompt.render_with_partials_and_env_and_context(&template_context, &args, Arc::new(library)).unwrap();
+    /// ```
+    pub fn render_with_partials_and_env_and_context(
+        &self,
+        template_context: &TemplateContext,
+        args: &HashMap<String, String>,
+        library: Arc<PromptLibrary>,
+    ) -> Result<String> {
+        let template = crate::Template::with_partials(&self.template, library)?;
+
+        // Validate required parameters
+        for param in &self.parameters {
+            if param.required
+                && !args.contains_key(&param.name)
+                && template_context.get(&param.name).is_none()
+            {
+                return Err(SwissArmyHammerError::Template(format!(
+                    "Required parameter '{}' not provided in arguments or configuration",
+                    param.name
+                )));
+            }
+        }
+
+        // Start with configuration context (lowest precedence)
+        let mut render_args = HashMap::new();
+
+        // Add config values as strings for template rendering
+        for (key, value) in template_context.variables() {
+            let value_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => value.to_string(),
+            };
+            render_args.insert(key.clone(), value_str);
+        }
+
+        // Add user-provided arguments (highest precedence)
+        for (key, value) in args {
+            render_args.insert(key.clone(), value.clone());
+        }
+
+        // Add defaults for missing parameters
+        for param in &self.parameters {
+            if !render_args.contains_key(&param.name) {
+                if let Some(default) = &param.default {
+                    let default_str = match default {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Number(n) => n.to_string(),
+                        serde_json::Value::Bool(b) => b.to_string(),
+                        _ => default.to_string(),
+                    };
+                    render_args.insert(param.name.clone(), default_str);
+                }
+            }
+        }
+
+        template.render_with_env(&render_args)
+    }
+
     /// Adds a parameter specification to the prompt.
     ///
     /// Parameters define what inputs the template expects, whether they're required,
@@ -743,8 +918,8 @@ impl Prompt {
 
         // Also include variables from sah.toml configuration
         let mut defined_config_vars = std::collections::HashSet::new();
-        if let Ok(Some(config)) = crate::sah_config::load_repo_config_for_cli() {
-            for key in config.values().keys() {
+        if let Ok(template_context) = swissarmyhammer_config::load_configuration_for_cli() {
+            for key in template_context.variables().keys() {
                 defined_config_vars.insert(key.clone());
             }
         }
@@ -1061,6 +1236,89 @@ impl PromptLibrary {
     ) -> Result<String> {
         let prompt = self.get(name)?;
         prompt.render_with_partials_and_env(
+            args,
+            Arc::new(Self {
+                storage: self.storage.clone_box(),
+            }),
+        )
+    }
+
+    /// Renders a prompt with configuration context and user arguments.
+    ///
+    /// This method combines configuration values from TemplateContext with user-provided
+    /// arguments. User arguments take precedence over configuration values.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the prompt to render
+    /// * `template_context` - Configuration context from config files and environment
+    /// * `args` - User-provided template arguments (highest precedence)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use swissarmyhammer::PromptLibrary;
+    /// use swissarmyhammer_config::TemplateContext;
+    /// use std::collections::HashMap;
+    ///
+    /// let library = PromptLibrary::new();
+    /// let template_context = TemplateContext::new();
+    /// let mut args = HashMap::new();
+    /// args.insert("name".to_string(), "World".to_string());
+    ///
+    /// let result = library.render_prompt_with_context("greeting", &template_context, &args).unwrap();
+    /// ```
+    pub fn render_prompt_with_context(
+        &self,
+        name: &str,
+        template_context: &TemplateContext,
+        args: &HashMap<String, String>,
+    ) -> Result<String> {
+        let prompt = self.get(name)?;
+        prompt.render_with_context(
+            template_context,
+            args,
+            Arc::new(Self {
+                storage: self.storage.clone_box(),
+            }),
+        )
+    }
+
+    /// Renders a prompt with configuration context, environment variables, and user arguments.
+    ///
+    /// This method combines configuration values, environment variables, and user-provided
+    /// arguments with proper precedence: config < env < user arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the prompt to render
+    /// * `template_context` - Configuration context from config files
+    /// * `args` - User-provided template arguments (highest precedence)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use swissarmyhammer::PromptLibrary;
+    /// use swissarmyhammer_config::TemplateContext;
+    /// use std::collections::HashMap;
+    ///
+    /// let library = PromptLibrary::new();
+    /// let template_context = TemplateContext::new();
+    /// let mut args = HashMap::new();
+    /// args.insert("app".to_string(), "myapp".to_string());
+    /// // Environment variables like USER will be available automatically
+    ///
+    /// let result = library.render_prompt_with_env_and_context("deploy", &template_context, &args).unwrap();
+    /// ```
+    pub fn render_prompt_with_env_and_context(
+        &self,
+        name: &str,
+        template_context: &TemplateContext,
+        args: &HashMap<String, String>,
+    ) -> Result<String> {
+        let prompt = self.get(name)?;
+        prompt.render_with_partials_and_env_and_context(
+            template_context,
             args,
             Arc::new(Self {
                 storage: self.storage.clone_box(),
@@ -1805,5 +2063,151 @@ This is another prompt.
                 prompt.name
             );
         }
+    }
+
+    #[test]
+    fn test_prompt_render_with_context() {
+        use serde_json::json;
+        use std::sync::Arc;
+
+        // Create a test template context with config values
+        let mut template_context = TemplateContext::new();
+        template_context.set("project_name".to_string(), json!("MyProject"));
+        template_context.set("version".to_string(), json!("1.0.0"));
+        template_context.set("author".to_string(), json!("Test User"));
+
+        let library = PromptLibrary::new();
+        let prompt = Prompt::new(
+            "project_info",
+            "Project: {{project_name}} v{{version}} by {{author}}",
+        );
+
+        // Test with empty user args - should use config values
+        let args = HashMap::new();
+        let result = prompt
+            .render_with_context(&template_context, &args, Arc::new(library))
+            .unwrap();
+        assert_eq!(result, "Project: MyProject v1.0.0 by Test User");
+    }
+
+    #[test]
+    fn test_prompt_render_with_context_user_override() {
+        use serde_json::json;
+        use std::sync::Arc;
+
+        // Create a test template context with config values
+        let mut template_context = TemplateContext::new();
+        template_context.set("project_name".to_string(), json!("ConfigProject"));
+        template_context.set("version".to_string(), json!("1.0.0"));
+
+        let library = PromptLibrary::new();
+        let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}");
+
+        // User args should override config values
+        let mut args = HashMap::new();
+        args.insert("project_name".to_string(), "UserProject".to_string());
+
+        let result = prompt
+            .render_with_context(&template_context, &args, Arc::new(library))
+            .unwrap();
+        assert_eq!(result, "Project: UserProject v1.0.0"); // User override + config fallback
+    }
+
+    #[test]
+    fn test_prompt_render_with_context_required_param_validation() {
+        use serde_json::json;
+        use std::sync::Arc;
+
+        // Create context missing a required parameter
+        let mut template_context = TemplateContext::new();
+        template_context.set("version".to_string(), json!("1.0.0"));
+
+        let library = PromptLibrary::new();
+        let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}")
+            .add_parameter(
+                Parameter::new("project_name", "Project name", ParameterType::String)
+                    .required(true),
+            );
+
+        // Should fail because required parameter is not provided in args or config
+        let args = HashMap::new();
+        let result = prompt.render_with_context(&template_context, &args, Arc::new(library));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Required parameter 'project_name' not provided"));
+    }
+
+    #[test]
+    fn test_prompt_render_with_context_required_param_from_config() {
+        use serde_json::json;
+        use std::sync::Arc;
+
+        // Create context with required parameter
+        let mut template_context = TemplateContext::new();
+        template_context.set("project_name".to_string(), json!("ConfigProject"));
+        template_context.set("version".to_string(), json!("1.0.0"));
+
+        let library = PromptLibrary::new();
+        let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}")
+            .add_parameter(
+                Parameter::new("project_name", "Project name", ParameterType::String)
+                    .required(true),
+            );
+
+        // Should succeed because required parameter is provided via config
+        let args = HashMap::new();
+        let result = prompt
+            .render_with_context(&template_context, &args, Arc::new(library))
+            .unwrap();
+        assert_eq!(result, "Project: ConfigProject v1.0.0");
+    }
+
+    #[test]
+    fn test_prompt_library_render_with_context() {
+        use serde_json::json;
+
+        // Create library and add test prompt
+        let mut library = PromptLibrary::new();
+        let prompt = Prompt::new("test_prompt", "Hello {{name}} from {{project}}!");
+        library.add(prompt).unwrap();
+
+        // Create template context
+        let mut template_context = TemplateContext::new();
+        template_context.set("project".to_string(), json!("SwissArmyHammer"));
+        template_context.set("name".to_string(), json!("Config"));
+
+        // Test rendering with context
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "User".to_string()); // Override config
+
+        let result = library
+            .render_prompt_with_context("test_prompt", &template_context, &args)
+            .unwrap();
+        assert_eq!(result, "Hello User from SwissArmyHammer!"); // User arg + config fallback
+    }
+
+    #[test]
+    fn test_prompt_library_render_with_env_and_context() {
+        use serde_json::json;
+
+        // Create library and add test prompt
+        let mut library = PromptLibrary::new();
+        let prompt = Prompt::new("env_prompt", "App: {{app_name}} User: {{USER}}");
+        library.add(prompt).unwrap();
+
+        // Create template context
+        let mut template_context = TemplateContext::new();
+        template_context.set("app_name".to_string(), json!("MyApp"));
+
+        let args = HashMap::new(); // No user overrides
+
+        // This should work with environment variables
+        let result = library
+            .render_prompt_with_env_and_context("env_prompt", &template_context, &args)
+            .unwrap();
+        assert!(result.contains("App: MyApp"));
+        // USER environment variable should be available too
     }
 }

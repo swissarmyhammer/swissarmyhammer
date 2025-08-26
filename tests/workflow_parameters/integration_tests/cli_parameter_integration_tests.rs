@@ -54,7 +54,7 @@ mod cli_argument_parsing_tests {
         
         // Should contain parsed parameters even if workflow doesn't exist
         // (graceful handling)
-        assert!(resolved.len() >= 0); // May be empty or contain parameters
+        // Function should return successfully (may be empty or contain parameters)
     }
 
     #[test]

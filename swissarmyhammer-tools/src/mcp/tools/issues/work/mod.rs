@@ -119,7 +119,7 @@ impl McpTool for WorkIssueTool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use swissarmyhammer::common::abort_utils::create_abort_file;
     use swissarmyhammer::test_utils::IsolatedTestHome;
     use tempfile::TempDir;
 
@@ -129,15 +129,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
-        // Change to temp directory for test
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_path).unwrap();
-
         let reason = "Test abort reason for issue branching";
-        create_abort_file_current_dir(reason);
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        create_abort_file(temp_path, reason).unwrap();
 
         let abort_file = temp_path.join(".swissarmyhammer/.abort");
         assert!(abort_file.exists());

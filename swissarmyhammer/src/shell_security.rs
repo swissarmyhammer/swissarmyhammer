@@ -3,7 +3,6 @@
 //! This module provides comprehensive security controls for shell command execution,
 //! including blocked command prevention, directory access controls, and audit logging.
 
-use crate::sah_config::{load_config, ConfigValue};
 use crate::{Result, SwissArmyHammerError};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -446,20 +445,14 @@ pub fn get_validator() -> &'static ShellSecurityValidator {
 
 /// Load security policy from configuration, failing fast on invalid configuration
 fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
-    // Try to load from default sah.toml location
-    let config_path = std::path::Path::new("sah.toml");
-    if !config_path.exists() {
-        return Ok(None);
-    }
-
-    match load_config(config_path) {
-        Ok(config) => {
+    // Try to load configuration from all sources
+    match swissarmyhammer_config::load_configuration() {
+        Ok(template_context) => {
             // Try to extract shell security policy from config
-            match config.get("shell_security") {
+            match template_context.get("shell_security") {
                 Some(value) => {
-                    // Convert ConfigValue to JSON Value for deserialization
-                    let json_value = config_value_to_json(value);
-                    match serde_json::from_value(json_value) {
+                    // The TemplateContext uses serde_json::Value internally, so we can use it directly
+                    match serde_json::from_value(value.clone()) {
                         Ok(policy) => Ok(Some(policy)),
                         Err(e) => {
                             let error_msg = format!("Invalid shell security policy configuration: {e}. Security configuration must be valid to prevent security vulnerabilities.");
@@ -472,33 +465,11 @@ fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
             }
         }
         Err(e) => {
-            // Config file exists but can't be loaded - this could indicate corruption or permission issues
-            let error_msg = format!("Failed to load configuration from '{}': {}. This could indicate a corrupted config file or permission issues.", 
-                                   config_path.display(), e);
+            // Config loading failed - this could indicate corruption or permission issues
+            let error_msg = format!("Failed to load configuration: {}. This could indicate a corrupted config file or permission issues.", e);
             error!(target: "shell_security", "Failed to load configuration: {}", e);
             Err(SwissArmyHammerError::Other(error_msg))
         }
-    }
-}
-
-/// Convert ConfigValue to serde_json::Value for deserialization
-fn config_value_to_json(value: &ConfigValue) -> serde_json::Value {
-    match value {
-        ConfigValue::String(s) => serde_json::Value::String(s.clone()),
-        ConfigValue::Integer(i) => serde_json::Value::Number(serde_json::Number::from(*i)),
-        ConfigValue::Float(f) => serde_json::Number::from_f64(*f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        ConfigValue::Boolean(b) => serde_json::Value::Bool(*b),
-        ConfigValue::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(config_value_to_json).collect())
-        }
-        ConfigValue::Table(table) => serde_json::Value::Object(
-            table
-                .iter()
-                .map(|(k, v)| (k.clone(), config_value_to_json(v)))
-                .collect(),
-        ),
     }
 }
 

@@ -164,8 +164,9 @@ fn test_never_condition() {
         expression: None,
     };
 
+    let context_hashmap = run.context.to_workflow_hashmap();
     let result = executor
-        .evaluate_condition(&condition, &run.context)
+        .evaluate_condition(&condition, &context_hashmap)
         .unwrap();
     assert!(!result);
 }
@@ -180,7 +181,8 @@ fn test_custom_condition_without_expression() {
         expression: None,
     };
 
-    let result = executor.evaluate_condition(&condition, &run.context);
+    let context_hashmap = run.context.to_workflow_hashmap();
+    let result = executor.evaluate_condition(&condition, &context_hashmap);
     assert!(
         matches!(result, Err(ExecutorError::ExpressionError(msg)) if msg.contains("requires an expression"))
     );
@@ -1136,6 +1138,7 @@ async fn test_retry_with_exponential_backoff() {
     // Should not have any backoff timing messages
     assert!(!history.iter().any(|e| e.details.contains("waiting")));
 }
+
 
 #[tokio::test]
 async fn test_fallback_state_on_error() {

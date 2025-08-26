@@ -16,9 +16,33 @@ use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
 use mcp_integration::CliToolContext;
 use std::sync::Arc;
+use swissarmyhammer_config::TemplateContext;
+
+/// Load configuration for CLI usage with graceful error handling
+///
+/// This function loads configuration from all standard sources (global, project, environment)
+/// and handles errors gracefully to ensure the CLI remains functional even with invalid config.
+fn load_cli_configuration() -> TemplateContext {
+    match swissarmyhammer_config::load_configuration_for_cli() {
+        Ok(context) => {
+            tracing::debug!("Loaded configuration with {} variables", context.len());
+            context
+        }
+        Err(e) => {
+            // Log the error but don't fail the CLI - configuration is optional for many operations
+            tracing::warn!("Failed to load configuration: {}", e);
+            eprintln!("Warning: Configuration loading failed: {}", e);
+            eprintln!("Continuing with default configuration...");
+            TemplateContext::new()
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
+    // Load configuration early for CLI operations
+    let template_context = load_cli_configuration();
+
     // Initialize tool context and registry for dynamic CLI
     let cli_tool_context = match CliToolContext::new().await {
         Ok(context) => Arc::new(context),
@@ -79,7 +103,7 @@ async fn main() {
     };
 
     // Handle dynamic command dispatch
-    let exit_code = handle_dynamic_matches(matches, cli_tool_context).await;
+    let exit_code = handle_dynamic_matches(matches, cli_tool_context, template_context).await;
     process::exit(exit_code);
 }
 
@@ -149,6 +173,7 @@ async fn handle_tool_validation(cli_tool_context: Arc<CliToolContext>, verbose: 
 async fn handle_dynamic_matches(
     matches: clap::ArgMatches,
     cli_tool_context: Arc<CliToolContext>,
+    template_context: TemplateContext,
 ) -> i32 {
     // Handle global verbose/debug/quiet flags
     let verbose = matches.get_flag("verbose");
@@ -192,13 +217,19 @@ async fn handle_dynamic_matches(
 
     // Handle subcommands
     match matches.subcommand() {
-        Some(("serve", sub_matches)) => handle_serve_command(sub_matches).await,
-        Some(("doctor", sub_matches)) => handle_doctor_command(sub_matches).await,
-        Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches).await,
-        Some(("flow", sub_matches)) => handle_flow_command(sub_matches).await,
-        Some(("validate", sub_matches)) => handle_validate_command(sub_matches).await,
-        Some(("plan", sub_matches)) => handle_plan_command(sub_matches).await,
-        Some(("implement", _sub_matches)) => handle_implement_command().await,
+        Some(("serve", sub_matches)) => handle_serve_command(sub_matches, &template_context).await,
+        Some(("doctor", sub_matches)) => {
+            handle_doctor_command(sub_matches, &template_context).await
+        }
+        Some(("prompt", sub_matches)) => {
+            handle_prompt_command(sub_matches, &template_context).await
+        }
+        Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &template_context).await,
+        Some(("validate", sub_matches)) => {
+            handle_validate_command(sub_matches, &template_context).await
+        }
+        Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &template_context).await,
+        Some(("implement", _sub_matches)) => handle_implement_command(&template_context).await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
             Some((tool_name, tool_matches)) => {
                 handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
@@ -216,8 +247,11 @@ async fn handle_dynamic_matches(
     }
 }
 
-async fn handle_serve_command(matches: &clap::ArgMatches) -> i32 {
-    commands::serve::handle_command(matches).await
+async fn handle_serve_command(
+    matches: &clap::ArgMatches,
+    template_context: &TemplateContext,
+) -> i32 {
+    commands::serve::handle_command(matches, template_context).await
 }
 
 async fn handle_dynamic_tool_command(
@@ -358,12 +392,18 @@ fn extract_clap_value(
     }
 }
 
-async fn handle_doctor_command(matches: &clap::ArgMatches) -> i32 {
+async fn handle_doctor_command(
+    matches: &clap::ArgMatches,
+    template_context: &TemplateContext,
+) -> i32 {
     let migration = matches.get_flag("migration");
-    commands::doctor::handle_command(migration).await
+    commands::doctor::handle_command(migration, template_context).await
 }
 
-async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
+async fn handle_prompt_command(
+    matches: &clap::ArgMatches,
+    template_context: &TemplateContext,
+) -> i32 {
     use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
 
     let subcommand = match matches.subcommand() {
@@ -465,10 +505,13 @@ async fn handle_prompt_command(matches: &clap::ArgMatches) -> i32 {
         }
     };
 
-    commands::prompt::handle_command(subcommand).await
+    commands::prompt::handle_command(subcommand, template_context).await
 }
 
-async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
+async fn handle_flow_command(
+    matches: &clap::ArgMatches,
+    template_context: &TemplateContext,
+) -> i32 {
     use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
 
     let subcommand = match matches.subcommand() {
@@ -621,10 +664,13 @@ async fn handle_flow_command(matches: &clap::ArgMatches) -> i32 {
         }
     };
 
-    commands::flow::handle_command(subcommand).await
+    commands::flow::handle_command(subcommand, template_context).await
 }
 
-async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
+async fn handle_validate_command(
+    matches: &clap::ArgMatches,
+    template_context: &TemplateContext,
+) -> i32 {
     use crate::cli::ValidateFormat;
 
     let quiet = matches.get_flag("quiet");
@@ -638,16 +684,26 @@ async fn handle_validate_command(matches: &clap::ArgMatches) -> i32 {
         .unwrap_or_default();
     let validate_tools = matches.get_flag("validate-tools");
 
-    commands::validate::handle_command(quiet, format, workflow_dirs, validate_tools).await
+    commands::validate::handle_command(
+        quiet,
+        format,
+        workflow_dirs,
+        validate_tools,
+        template_context,
+    )
+    .await
 }
 
-async fn handle_plan_command(matches: &clap::ArgMatches) -> i32 {
+async fn handle_plan_command(
+    matches: &clap::ArgMatches,
+    template_context: &TemplateContext,
+) -> i32 {
     let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
-    commands::plan::handle_command(plan_filename).await
+    commands::plan::handle_command(plan_filename, template_context).await
 }
 
-async fn handle_implement_command() -> i32 {
-    commands::implement::handle_command().await
+async fn handle_implement_command(template_context: &TemplateContext) -> i32 {
+    commands::implement::handle_command(template_context).await
 }
 
 async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {

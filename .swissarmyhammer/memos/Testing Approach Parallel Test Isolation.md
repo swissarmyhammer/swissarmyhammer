@@ -31,13 +31,6 @@ The `IsolatedTestEnvironment` RAII guard pattern:
 - Provides complete test isolation
 - Has methods like `.home_path()` and `.swissarmyhammer_dir()` for accessing paths
 
-## Benefits
-- True parallel test execution
-- No race conditions or deadlocks
-- Each test is completely isolated
-- Faster test execution
-- More reliable CI/CD
-- Clean RAII pattern with automatic cleanup
 
 ### `run_sah_command_in_process`
 

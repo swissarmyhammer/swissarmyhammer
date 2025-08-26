@@ -554,7 +554,11 @@ mod tests {
 
         let tool = OutlineGenerateTool::new();
         let mut args = serde_json::Map::new();
-        args.insert("patterns".to_string(), json!(["**/*.rs"]));
+        // Use a more targeted pattern to avoid scanning thousands of files
+        args.insert(
+            "patterns".to_string(),
+            json!(["swissarmyhammer-tools/src/lib.rs"]),
+        );
         args.insert("output_format".to_string(), json!("yaml"));
 
         let result = tool.execute(args, &context).await;

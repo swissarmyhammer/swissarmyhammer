@@ -35,7 +35,10 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// - 0: Server started and stopped successfully
 /// - 1: Server encountered warnings or stopped unexpectedly
 /// - 2: Server failed to start or encountered critical errors
-pub async fn handle_command(_matches: &clap::ArgMatches) -> i32 {
+pub async fn handle_command(
+    _matches: &clap::ArgMatches,
+    _template_context: &swissarmyhammer_config::TemplateContext,
+) -> i32 {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
     use swissarmyhammer::PromptLibrary;
@@ -119,7 +122,8 @@ mod tests {
 
         // We can't easily test the actual async function without a full MCP setup,
         // but we can verify the signature compiles and matches expected pattern
+        let test_context = swissarmyhammer_config::TemplateContext::new();
         let _result: std::pin::Pin<Box<dyn std::future::Future<Output = i32>>> =
-            Box::pin(handle_command(&matches));
+            Box::pin(handle_command(&matches, &test_context));
     }
 }

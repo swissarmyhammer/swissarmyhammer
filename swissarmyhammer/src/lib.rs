@@ -177,14 +177,7 @@ pub use migration::{
 /// Validation types and traits
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
 
-/// sah.toml configuration types and functionality
-pub use sah_config::{ConfigValue, Configuration, ConfigurationError, ValidationError};
-
-/// Core configuration data structures and TOML parsing
-pub use toml_config::{
-    ConfigError, ConfigParser, ConfigValue as CoreConfigValue, Configuration as CoreConfiguration,
-    ValidationLimits,
-};
+// sah.toml configuration types removed (migrated to swissarmyhammer-config)
 
 /// New core data structures for sah.toml configuration  
 pub use toml_core::{
@@ -203,11 +196,7 @@ pub mod error;
 /// Configuration management
 pub mod config;
 
-/// sah.toml configuration support
-pub mod sah_config;
-
-/// Core TOML configuration data structures and parsing
-pub mod toml_config;
+// sah.toml configuration support removed (migrated to swissarmyhammer-config)
 
 /// Core TOML configuration data structures (new implementation)
 pub mod toml_core;
@@ -262,19 +251,7 @@ pub mod prelude {
         DiscoveredFile, FileDiscovery, FileDiscoveryConfig, FileDiscoveryReport, OutlineError,
     };
 
-    // sah.toml configuration types for convenient access
-    pub use crate::sah_config::{
-        load_and_merge_repo_config, load_config, load_repo_config, merge_config_into_context,
-        validate_config_file, ConfigValue, Configuration, ConfigurationError, ValidationError,
-    };
-
-    // Core configuration data structures for convenient access
-    pub use crate::toml_config::{
-        load_config as load_core_config, load_repo_config_wrapper as load_core_repo_config,
-        parse_toml_string, validate_config_file as validate_core_config_file, ConfigError,
-        ConfigParser, ConfigValue as CoreConfigValue, Configuration as CoreConfiguration,
-        ValidationLimits,
-    };
+    // sah.toml configuration types removed (migrated to swissarmyhammer-config)
 
     // New core TOML configuration data structures for convenient access
     pub use crate::toml_core::{

@@ -163,7 +163,7 @@ async fn test_action_context_cleanup_on_panic() {
     // Record initial state
     let initial_keys: Vec<String> = {
         let ctx = context.read().await;
-        ctx.keys().cloned().collect()
+        ctx.to_workflow_hashmap().keys().cloned().collect()
     };
 
     // Try to execute an action that panics
@@ -186,7 +186,7 @@ async fn test_action_context_cleanup_on_panic() {
     // Context should still be accessible (not poisoned)
     let final_keys: Vec<String> = {
         let ctx = context.read().await;
-        ctx.keys().cloned().collect()
+        ctx.to_workflow_hashmap().keys().cloned().collect()
     };
 
     // Note: In this case, changes might persist unless we implement

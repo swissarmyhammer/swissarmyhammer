@@ -89,7 +89,7 @@ use in_process_test_utils::run_sah_command_in_process_with_dir;
 mod test_utils;
 use test_utils::{create_temp_dir, setup_git_repo};
 
-use test_utils::create_test_home_guard;
+use swissarmyhammer::test_utils::IsolatedTestHome;
 
 /// Create a simple test plan file with basic content
 fn create_test_plan_file(
@@ -291,7 +291,7 @@ fn setup_plan_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
 /// Test plan command CLI argument parsing and initial validation
 #[tokio::test]
 async fn test_plan_command_argument_parsing() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -300,7 +300,9 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
     // Test that the plan command starts execution (it should begin processing before timing out)
-    let result = run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // The command should start executing (showing log output)
     // We're not testing full execution here due to AI service calls, so we accept either success or timeout
@@ -316,15 +318,13 @@ async fn test_plan_command_argument_parsing() -> Result<()> {
         result.stderr
     );
 
-
-
     Ok(())
 }
 
 /// Test plan workflow execution in test mode (no external service calls)
 #[tokio::test]
 async fn test_plan_workflow_test_mode() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -333,13 +333,16 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
     let plan_file = create_test_plan_file(&temp_path, "test-plan.md", "Test Plan")?;
 
     // Execute plan workflow in test mode using flow test
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -368,15 +371,13 @@ async fn test_plan_workflow_test_mode() -> Result<()> {
         "Should achieve high coverage: {stdout}"
     );
 
-
-
     Ok(())
 }
 
 /// Test plan command with relative path
 #[tokio::test]
 async fn test_plan_command_relative_path() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -387,13 +388,16 @@ async fn test_plan_command_relative_path() -> Result<()> {
     let _plan_file = create_test_plan_file(&plans_dir, "relative-test.md", "Relative Path Test")?;
 
     // Test using flow test mode with relative path
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        "plan_filename=./specification/relative-test.md",
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            "plan_filename=./specification/relative-test.md",
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -408,15 +412,13 @@ async fn test_plan_command_relative_path() -> Result<()> {
         "Should execute workflow in test mode: {stdout}"
     );
 
-
-
     Ok(())
 }
 
 /// Test plan command with absolute path  
 #[tokio::test]
 async fn test_plan_command_absolute_path() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -425,13 +427,16 @@ async fn test_plan_command_absolute_path() -> Result<()> {
     let plan_file = create_test_plan_file(&temp_path, "absolute-test.md", "Absolute Path Test")?;
 
     // Test using flow test mode with absolute path
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -446,15 +451,13 @@ async fn test_plan_command_absolute_path() -> Result<()> {
         "Should execute workflow successfully: {stdout}"
     );
 
-
-
     Ok(())
 }
 
 /// Test plan workflow with complex specification in test mode
 #[tokio::test]
 async fn test_plan_workflow_complex_specification() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -463,13 +466,16 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
     let plan_file = create_complex_plan_file(&temp_path, "advanced-feature.md")?;
 
     // Test complex plan using flow test mode
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -489,20 +495,19 @@ async fn test_plan_workflow_complex_specification() -> Result<()> {
         "Should show coverage report: {stdout}"
     );
 
-
-
     Ok(())
 }
 
 /// Test error scenario: file not found
 #[tokio::test]
 async fn test_plan_command_file_not_found() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent-plan.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "nonexistent-plan.md"], &temp_path).await?;
 
     assert!(
         result.exit_code != 0,
@@ -517,15 +522,13 @@ async fn test_plan_command_file_not_found() -> Result<()> {
         "Should show file not found error: {stderr}"
     );
 
-
-
     Ok(())
 }
 
 /// Test error scenario: directory instead of file
 #[tokio::test]
 async fn test_plan_command_directory_as_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -534,7 +537,9 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
     let dir_path = temp_path.join("directory-not-file");
     fs::create_dir_all(&dir_path)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path)
+            .await?;
 
     assert!(
         result.exit_code != 0,
@@ -547,15 +552,13 @@ async fn test_plan_command_directory_as_file() -> Result<()> {
         "Should show appropriate error for directory: {stderr}"
     );
 
-
-
     Ok(())
 }
 
 /// Test error scenario: empty file
 #[tokio::test]
 async fn test_plan_command_empty_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -564,7 +567,9 @@ async fn test_plan_command_empty_file() -> Result<()> {
     let empty_file = temp_path.join("empty-plan.md");
     fs::write(&empty_file, "")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // Empty file might still be processed, but should not create meaningful issues
     // The important thing is the command completes without crashing
@@ -573,15 +578,13 @@ async fn test_plan_command_empty_file() -> Result<()> {
         "Plan command should complete even with empty file"
     );
 
-
-
     Ok(())
 }
 
 /// Test plan workflow with existing issues (test mode)
 #[tokio::test]
 async fn test_plan_workflow_with_existing_issues() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -600,13 +603,16 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
     // Create and test plan workflow in test mode
     let plan_file = create_test_plan_file(&temp_path, "new-feature.md", "New Feature Plan")?;
 
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -632,15 +638,13 @@ async fn test_plan_workflow_with_existing_issues() -> Result<()> {
         "Should preserve existing issues: {existing_files:?}"
     );
 
-
-
     Ok(())
 }
 
 /// Test plan workflow with files containing spaces and special characters
 #[tokio::test]
 async fn test_plan_workflow_special_characters() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -652,13 +656,16 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         "Special Characters Test",
     )?;
 
-    let result = run_sah_command_in_process_with_dir(&[
-        "flow",
-        "test",
-        "plan",
-        "--var",
-        &format!("plan_filename={}", plan_file.display()),
-    ], &temp_path)
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "flow",
+            "test",
+            "plan",
+            "--var",
+            &format!("plan_filename={}", plan_file.display()),
+        ],
+        &temp_path,
+    )
     .await?;
 
     assert!(
@@ -673,52 +680,42 @@ async fn test_plan_workflow_special_characters() -> Result<()> {
         "Should execute workflow successfully: {stdout}"
     );
 
-
-
     Ok(())
 }
 
-/// Test concurrent plan workflow executions in test mode
+/// Test sequential plan workflow executions in test mode
+/// Note: Running sequentially due to IsolatedTestHome requiring exclusive access
 #[tokio::test]
-async fn test_concurrent_plan_workflow_executions() -> Result<()> {
-    use tokio::task::JoinSet;
-
-    let mut tasks = JoinSet::new();
-
-    // Run multiple plan workflows concurrently in test mode
+async fn test_sequential_plan_workflow_executions() -> Result<()> {
+    // Run multiple plan workflows sequentially in test mode
     for i in 0..3 {
-        tasks.spawn(async move {
-            let _guard = create_test_home_guard();
-            let (_temp_dir, temp_path) = setup_plan_test_environment().unwrap();
+        let _guard = IsolatedTestHome::new();
+        let (_temp_dir, temp_path) = setup_plan_test_environment().unwrap();
 
-            let plan_file = create_test_plan_file(
-                &temp_path,
-                &format!("concurrent-test-{i}.md"),
-                &format!("Concurrent Test {i}"),
-            )
-            .unwrap();
+        let plan_file = create_test_plan_file(
+            &temp_path,
+            &format!("sequential-test-{i}.md"),
+            &format!("Sequential Test {i}"),
+        )
+        .unwrap();
 
-            // Use explicit working directory instead of global directory change
-            let result = run_sah_command_in_process_with_dir(&[
+        // Use explicit working directory instead of global directory change
+        let result = run_sah_command_in_process_with_dir(
+            &[
                 "flow",
                 "test",
                 "plan",
                 "--var",
                 &format!("plan_filename={}", plan_file.display()),
-            ], &temp_path)
-            .await
-            .expect("Failed to run plan workflow test");
+            ],
+            &temp_path,
+        )
+        .await
+        .expect("Failed to run plan workflow test");
 
-            (i, result.exit_code == 0)
-        });
-    }
-
-    // All commands should succeed
-    while let Some(result) = tasks.join_next().await {
-        let (i, success) = result?;
         assert!(
-            success,
-            "Concurrent plan workflow execution {i} should succeed"
+            result.exit_code == 0,
+            "Sequential plan workflow execution {i} should succeed"
         );
     }
 
@@ -728,12 +725,16 @@ async fn test_concurrent_plan_workflow_executions() -> Result<()> {
 /// Test enhanced error handling: comprehensive file validation
 #[tokio::test]
 async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["plan", "definitely-nonexistent-plan.md"], &temp_path).await?;
+    let result = run_sah_command_in_process_with_dir(
+        &["plan", "definitely-nonexistent-plan.md"],
+        &temp_path,
+    )
+    .await?;
 
     assert!(
         result.exit_code != 0,
@@ -759,15 +760,13 @@ async fn test_plan_enhanced_error_file_not_found() -> Result<()> {
         "Should include actionable suggestions: {stderr}"
     );
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: empty file validation
 #[tokio::test]
 async fn test_plan_enhanced_error_empty_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -776,7 +775,9 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
     let empty_file = temp_path.join("empty-plan.md");
     fs::write(&empty_file, "")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // Empty file should trigger enhanced error handling
     let stderr = &result.stderr;
@@ -796,15 +797,13 @@ async fn test_plan_enhanced_error_empty_file() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: whitespace-only file
 #[tokio::test]
 async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -813,7 +812,11 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
     let whitespace_file = temp_path.join("whitespace-plan.md");
     fs::write(&whitespace_file, "   \n\t  \n  ")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", whitespace_file.to_str().unwrap()], &temp_path).await?;
+    let result = run_sah_command_in_process_with_dir(
+        &["plan", whitespace_file.to_str().unwrap()],
+        &temp_path,
+    )
+    .await?;
 
     let stderr = &result.stderr;
 
@@ -830,15 +833,13 @@ async fn test_plan_enhanced_error_whitespace_file() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: directory instead of file
 #[tokio::test]
 async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -847,7 +848,9 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
     let dir_path = temp_path.join("directory-not-file");
     fs::create_dir_all(&dir_path)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", dir_path.to_str().unwrap()], &temp_path)
+            .await?;
 
     assert!(
         result.exit_code != 0,
@@ -869,15 +872,13 @@ async fn test_plan_enhanced_error_directory_not_file() -> Result<()> {
         "Should provide specific guidance for directory error: {stderr}"
     );
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: file too large
 #[tokio::test]
 async fn test_plan_enhanced_error_large_file() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -887,7 +888,9 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
     let large_content = "x".repeat(11 * 1024 * 1024); // 11MB - over default 10MB limit
     fs::write(&large_file, large_content)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", large_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", large_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -904,15 +907,13 @@ async fn test_plan_enhanced_error_large_file() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: invalid binary content
 #[tokio::test]
 async fn test_plan_enhanced_error_binary_content() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
@@ -922,7 +923,9 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
     let binary_content = b"# Plan with\0null bytes\0in content";
     fs::write(&binary_file, binary_content)?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", binary_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", binary_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -944,22 +947,21 @@ async fn test_plan_enhanced_error_binary_content() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: color output detection
 #[tokio::test]
 async fn test_plan_enhanced_error_color_output() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
 
     // Test with explicit NO_COLOR environment variable
     std::env::set_var("NO_COLOR", "1");
-    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
     std::env::remove_var("NO_COLOR");
 
     let stderr = &result.stderr;
@@ -973,21 +975,20 @@ async fn test_plan_enhanced_error_color_output() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: exit codes
 #[tokio::test]
 async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
 
     // Test file not found exit code
-    let result = run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "nonexistent.md"], &temp_path).await?;
 
     assert_eq!(
         result.exit_code,
@@ -999,7 +1000,9 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
     let empty_file = temp_path.join("empty.md");
     fs::write(&empty_file, "")?;
 
-    let result2 = run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path).await?;
+    let result2 =
+        run_sah_command_in_process_with_dir(&["plan", empty_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     // Empty file should return warning exit code if detected as empty
     let stderr = &result2.stderr;
@@ -1011,15 +1014,13 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: issues directory validation
 #[tokio::test]
 async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     // Create minimal test environment WITHOUT issues directory
     let _temp_dir = create_temp_dir()?;
     let temp_path = _temp_dir.path().to_path_buf();
@@ -1043,7 +1044,9 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
     let issues_file = temp_path.join("issues");
     fs::write(&issues_file, "not a directory")?;
 
-    let result = run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", plan_file.to_str().unwrap()], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -1060,20 +1063,20 @@ async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
         );
     }
 
-
-
     Ok(())
 }
 
 /// Test enhanced error handling: comprehensive error message structure
 #[tokio::test]
 async fn test_plan_enhanced_error_message_structure() -> Result<()> {
-    let _guard = create_test_home_guard();
+    let _guard = IsolatedTestHome::new();
     let (_temp_dir, temp_path) = setup_plan_test_environment()?;
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["plan", "structured-error-test.md"], &temp_path).await?;
+    let result =
+        run_sah_command_in_process_with_dir(&["plan", "structured-error-test.md"], &temp_path)
+            .await?;
 
     let stderr = &result.stderr;
 
@@ -1097,8 +1100,6 @@ async fn test_plan_enhanced_error_message_structure() -> Result<()> {
             "Should have bulleted suggestions: {stderr}"
         );
     }
-
-
 
     Ok(())
 }

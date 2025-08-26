@@ -2,6 +2,7 @@
 
 use crate::test_utils::IsolatedTestEnvironment;
 use crate::workflow::actions::*;
+use crate::workflow::WorkflowTemplateContext;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -69,7 +70,7 @@ fn test_sub_workflow_action_type() {
 #[tokio::test]
 async fn test_sub_workflow_action_circular_dependency_detection() {
     let action = SubWorkflowAction::new("workflow-a".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Simulate that workflow-a is already in the execution stack
     let workflow_stack = vec![
@@ -95,7 +96,7 @@ async fn test_sub_workflow_action_invalid_input_key() {
     let action = SubWorkflowAction::new("test-workflow".to_string())
         .with_input("invalid key!".to_string(), "value".to_string());
 
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     let result = action.execute(&mut context).await;
 
     assert!(result.is_err());
@@ -114,7 +115,7 @@ async fn test_sub_workflow_action_empty_workflow_stack() {
     crate::workflow::actions::clear_test_storage();
 
     let action = SubWorkflowAction::new("test-workflow".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // This should not fail with circular dependency since stack is empty
     let result = action.execute(&mut context).await;
@@ -155,7 +156,7 @@ async fn test_sub_workflow_action_in_process_execution() {
         .with_input("input_var".to_string(), "test_input".to_string())
         .with_result_variable("sub_result".to_string());
 
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Execute the sub-workflow
     let result = action.execute(&mut context).await;

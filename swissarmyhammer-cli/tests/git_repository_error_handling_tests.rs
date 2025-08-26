@@ -21,7 +21,6 @@ async fn _test_memo_commands_require_git_repository_disabled() {
 
     // Restore original directory
 
-
     let output = result.unwrap();
     assert_ne!(output.exit_code, 0, "Command should fail");
 
@@ -57,7 +56,6 @@ async fn test_issue_commands_require_git_repository() {
 
     // Restore original directory
 
-
     let output = result.unwrap();
     // Issue commands currently succeed outside git repos and show "No issues found."
     // This tests the current behavior rather than expected git repo validation
@@ -84,10 +82,10 @@ async fn _test_error_message_format_consistency_disabled() {
     // Use explicit working directory instead of global directory change
 
     // Test memo command error format
-    let result = run_sah_command_in_process_with_dir(&["memo", "create", "test"], temp_dir.path()).await;
+    let result =
+        run_sah_command_in_process_with_dir(&["memo", "create", "test"], temp_dir.path()).await;
 
     // Restore original directory
-
 
     let output = result.unwrap();
     assert_ne!(output.exit_code, 0, "Command should fail");
@@ -130,7 +128,6 @@ async fn test_commands_work_in_git_repository() {
 
     // Restore original directory
 
-
     let output = result.unwrap();
     // Should not contain Git repository requirement error
     assert!(
@@ -150,7 +147,6 @@ async fn test_git_repository_error_exit_codes() {
     let result = run_sah_command_in_process_with_dir(&["memo", "list"], temp_dir.path()).await;
 
     // Restore original directory
-
 
     let output = result.unwrap();
     eprintln!(
@@ -181,10 +177,11 @@ async fn test_web_search_works_without_git() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["web-search", "search", "test"], temp_dir.path()).await;
+    let result =
+        run_sah_command_in_process_with_dir(&["web-search", "search", "test"], temp_dir.path())
+            .await;
 
     // Restore original directory
-
 
     let output = result.unwrap();
     // Should not contain Git repository requirement error
@@ -202,18 +199,20 @@ async fn test_error_messages_are_actionable() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&[
-        "issue",
-        "create",
-        "--name",
-        "test",
-        "--content",
-        "Test issue content",
-    ], temp_dir.path())
+    let result = run_sah_command_in_process_with_dir(
+        &[
+            "issue",
+            "create",
+            "--name",
+            "test",
+            "--content",
+            "Test issue content",
+        ],
+        temp_dir.path(),
+    )
     .await;
 
     // Restore original directory
-
 
     let output = result.unwrap();
     eprintln!(
@@ -249,10 +248,10 @@ async fn _test_error_context_preservation_disabled() {
 
     // Use explicit working directory instead of global directory change
 
-    let result = run_sah_command_in_process_with_dir(&["memo", "get", "invalid_id"], temp_dir.path()).await;
+    let result =
+        run_sah_command_in_process_with_dir(&["memo", "get", "invalid_id"], temp_dir.path()).await;
 
     // Restore original directory
-
 
     let output = result.unwrap();
     assert_ne!(output.exit_code, 0, "Command should fail");

@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::workflow::actions::{LogAction, SetVariableAction, WaitAction};
+use crate::workflow::WorkflowTemplateContext;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_shell_action_integration_with_context() {
     // Test shell action with variable substitution from context
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.insert(
         "message".to_string(),
         Value::String("Hello from context".to_string()),
@@ -31,7 +32,7 @@ async fn test_shell_action_integration_with_context() {
 #[tokio::test]
 async fn test_shell_action_with_sequential_action_execution() {
     // Test shell action in sequence with other actions
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // First, execute a set variable action
     let set_action = SetVariableAction::new("filename".to_string(), "test.txt".to_string());
@@ -55,7 +56,7 @@ async fn test_shell_action_with_sequential_action_execution() {
 #[tokio::test]
 async fn test_shell_action_conditional_execution_pattern() {
     // Test conditional execution pattern based on shell action results
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Execute a command that succeeds
     let success_cmd = ShellAction::new("echo 'success test'".to_string());
@@ -74,7 +75,7 @@ async fn test_shell_action_conditional_execution_pattern() {
 #[tokio::test]
 async fn test_shell_action_error_handling_integration() {
     // Test error handling integration with other actions
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Execute a command that fails
     let failing_cmd = ShellAction::new("exit 1".to_string());
@@ -94,7 +95,7 @@ async fn test_shell_action_error_handling_integration() {
 #[tokio::test]
 async fn test_shell_action_timeout_integration() {
     // Test timeout handling with other actions
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Execute a command that times out
     let timeout_cmd =
@@ -119,7 +120,7 @@ async fn test_shell_action_timeout_integration() {
 #[tokio::test]
 async fn test_shell_action_complex_multi_step_integration() {
     // Test complex multi-step workflow integration
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Step 1: Create temp file
     let create_cmd =
@@ -158,7 +159,7 @@ async fn test_shell_action_complex_multi_step_integration() {
 #[tokio::test]
 async fn test_shell_action_environment_variable_integration() {
     // Test environment variable handling with context
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.insert("debug_level".to_string(), Value::String("INFO".to_string()));
 
     // Create shell action with environment variables that use context substitution
@@ -188,7 +189,7 @@ async fn test_shell_action_environment_variable_integration() {
 #[tokio::test]
 async fn test_shell_action_working_directory_integration() {
     // Test working directory functionality with variable substitution
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.insert("work_dir".to_string(), Value::String("/tmp".to_string()));
 
     let shell_action = ShellAction::new("pwd".to_string())
@@ -208,7 +209,7 @@ async fn test_shell_action_working_directory_integration() {
 #[tokio::test]
 async fn test_shell_action_mixed_with_other_action_types() {
     // Test shell actions working with other action types
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Step 1: Log action
     let log_action = LogAction::info("Starting mixed action workflow".to_string());
@@ -245,7 +246,7 @@ async fn test_shell_action_mixed_with_other_action_types() {
 #[tokio::test]
 async fn test_shell_action_performance_with_sequential_execution() {
     // Test performance of multiple shell actions in sequence
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let start_time = std::time::Instant::now();
 
@@ -274,7 +275,7 @@ async fn test_shell_action_performance_with_sequential_execution() {
 #[tokio::test]
 async fn test_shell_action_result_variable_chaining() {
     // Test that result variables from one shell action can be used in subsequent actions
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // First command produces intermediate result
     let first_cmd = ShellAction::new("echo 'intermediate_value'".to_string())
@@ -312,7 +313,7 @@ async fn test_shell_action_result_variable_chaining() {
 #[tokio::test]
 async fn test_shell_action_context_isolation() {
     // Test that shell actions don't interfere with each other's context variables
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Set up initial variables
     let set_var1 = SetVariableAction::new("var1".to_string(), "value1".to_string());
@@ -352,7 +353,7 @@ async fn test_shell_action_context_isolation() {
 #[tokio::test]
 async fn test_shell_action_error_recovery_pattern() {
     // Test error recovery patterns with shell actions
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // Execute a command that fails
     let risky_cmd = ShellAction::new("exit 42".to_string());
@@ -383,7 +384,7 @@ async fn test_shell_action_concurrent_execution_safety() {
     // Spawn multiple tasks that execute shell actions
     for i in 1..=3 {
         let handle = task::spawn(async move {
-            let mut context = HashMap::new();
+            let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
             let shell_action = ShellAction::new(format!("echo 'Task {i}'"))
                 .with_result_variable("task_output".to_string());
 

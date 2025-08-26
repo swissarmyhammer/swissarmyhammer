@@ -2,6 +2,7 @@
 
 use crate::workflow::actions::*;
 use crate::workflow::actions_tests::create_test_context;
+use crate::workflow::WorkflowTemplateContext;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -95,7 +96,7 @@ fn test_shell_action_variable_substitution() {
 #[tokio::test]
 async fn test_shell_action_basic_execution() {
     let action = ShellAction::new("echo hello world".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await.unwrap();
 
@@ -124,7 +125,7 @@ async fn test_shell_action_basic_execution() {
 #[tokio::test]
 async fn test_shell_action_failed_execution() {
     let action = ShellAction::new("exit 1".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await.unwrap();
 
@@ -186,7 +187,7 @@ fn test_shell_action_debug() {
 async fn test_shell_action_working_directory_validation() {
     // Test with valid existing directory
     let action = ShellAction::new("pwd".to_string()).with_working_dir("/tmp".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_ok());
@@ -194,7 +195,7 @@ async fn test_shell_action_working_directory_validation() {
     // Test with non-existent directory
     let action =
         ShellAction::new("pwd".to_string()).with_working_dir("/nonexistent/directory".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -206,7 +207,7 @@ async fn test_shell_action_working_directory_validation() {
 async fn test_shell_action_working_directory_path_traversal_prevention() {
     // Test path traversal attempts
     let action = ShellAction::new("pwd".to_string()).with_working_dir("../../../etc".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -223,7 +224,7 @@ async fn test_shell_action_environment_variable_validation() {
     env.insert("VAR123".to_string(), "value".to_string());
 
     let action = ShellAction::new("echo $VALID_VAR".to_string()).with_environment(env);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_ok());
@@ -233,7 +234,7 @@ async fn test_shell_action_environment_variable_validation() {
     env.insert("123INVALID".to_string(), "value".to_string()); // starts with number
 
     let action = ShellAction::new("echo test".to_string()).with_environment(env);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -251,7 +252,7 @@ async fn test_shell_action_environment_variable_special_characters() {
     env.insert("INVALID-VAR".to_string(), "value".to_string()); // hyphen not allowed
 
     let action = ShellAction::new("echo test".to_string()).with_environment(env);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -266,7 +267,7 @@ async fn test_shell_action_environment_variable_special_characters() {
 async fn test_shell_action_working_directory_variable_substitution() {
     // Test variable substitution in working directory
     let action = ShellAction::new("pwd".to_string()).with_working_dir("${work_dir}".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.insert(
         "work_dir".to_string(),
         serde_json::Value::String("/tmp".to_string()),
@@ -286,7 +287,7 @@ async fn test_shell_action_environment_variable_substitution() {
     env.insert("TEST_VAR".to_string(), "${test_value}".to_string());
 
     let action = ShellAction::new("echo $TEST_VAR".to_string()).with_environment(env);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.insert(
         "test_value".to_string(),
         serde_json::Value::String("substituted_value".to_string()),
@@ -496,7 +497,7 @@ fn test_shell_action_timeout_validation() {
 async fn test_shell_action_security_command_injection_prevention() {
     // Test that command injection patterns are blocked
     let action = ShellAction::new("echo hello; rm -rf /".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -511,7 +512,7 @@ async fn test_shell_action_security_command_injection_prevention() {
 #[tokio::test]
 async fn test_shell_action_security_empty_command() {
     let action = ShellAction::new("".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -523,7 +524,7 @@ async fn test_shell_action_security_empty_command() {
 async fn test_shell_action_security_long_command() {
     let long_command = "echo ".to_string() + &"a".repeat(5000);
     let action = ShellAction::new(long_command);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -538,7 +539,7 @@ async fn test_shell_action_security_environment_variable_validation() {
     env.insert("123INVALID".to_string(), "value".to_string());
 
     let action = ShellAction::new("echo test".to_string()).with_environment(env);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -555,7 +556,7 @@ async fn test_shell_action_security_environment_variable_too_long() {
     env.insert("TEST_VAR".to_string(), "x".repeat(2000));
 
     let action = ShellAction::new("echo test".to_string()).with_environment(env);
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -570,7 +571,7 @@ async fn test_shell_action_security_environment_variable_too_long() {
 #[tokio::test]
 async fn test_shell_action_security_timeout_too_large() {
     let action = ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(4000)); // Exceeds limit
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     let result = action.execute(&mut context).await;
     assert!(result.is_err());
@@ -582,7 +583,7 @@ async fn test_shell_action_security_timeout_too_large() {
 async fn test_shell_action_security_sensitive_directory_warning() {
     // This should succeed but generate warnings in logs
     let action = ShellAction::new("ls".to_string()).with_working_dir("/etc".to_string());
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
     // This test would need the /etc directory to exist, so we expect it to either:
     // 1. Succeed with warnings logged, or
@@ -1011,7 +1012,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_command_variable_substitution_simple() {
         let action = ShellAction::new("echo ${message}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "message".to_string(),
             serde_json::Value::String("hello world".to_string()),
@@ -1025,7 +1026,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_command_variable_substitution_multiple() {
         let action = ShellAction::new("echo ${greeting} ${name}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "greeting".to_string(),
             serde_json::Value::String("Hello".to_string()),
@@ -1043,7 +1044,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_command_variable_substitution_nested() {
         let action = ShellAction::new("echo ${prefix}_${suffix}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "prefix".to_string(),
             serde_json::Value::String("test".to_string()),
@@ -1061,7 +1062,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_command_variable_substitution_numeric() {
         let action = ShellAction::new("echo count: ${count}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("count".to_string(), serde_json::Value::Number(42.into()));
 
         let _result = action.execute(&mut context).await.unwrap();
@@ -1072,7 +1073,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_command_variable_substitution_boolean() {
         let action = ShellAction::new("echo enabled: ${enabled}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert("enabled".to_string(), serde_json::Value::Bool(true));
 
         let _result = action.execute(&mut context).await.unwrap();
@@ -1084,7 +1085,7 @@ mod comprehensive_variable_substitution_tests {
     async fn test_working_directory_variable_substitution_simple() {
         let action =
             ShellAction::new("pwd".to_string()).with_working_dir("${work_dir}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "work_dir".to_string(),
             serde_json::Value::String("/tmp".to_string()),
@@ -1098,7 +1099,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_working_directory_variable_substitution_nested() {
         let action = ShellAction::new("pwd".to_string()).with_working_dir("${base}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "base".to_string(),
             serde_json::Value::String("/tmp".to_string()),
@@ -1126,7 +1127,7 @@ mod comprehensive_variable_substitution_tests {
         env.insert("TEST_VAR".to_string(), "${var_value}".to_string());
 
         let action = ShellAction::new("echo $TEST_VAR".to_string()).with_environment(env);
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "var_value".to_string(),
             serde_json::Value::String("substituted".to_string()),
@@ -1146,7 +1147,7 @@ mod comprehensive_variable_substitution_tests {
         env.insert("VAR3".to_string(), "static_value".to_string());
 
         let action = ShellAction::new("echo $VAR1 $VAR2 $VAR3".to_string()).with_environment(env);
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "value1".to_string(),
             serde_json::Value::String("first".to_string()),
@@ -1166,7 +1167,7 @@ mod comprehensive_variable_substitution_tests {
     #[test]
     fn test_variable_substitution_missing_variable() {
         let action = ShellAction::new("echo ${missing_var}".to_string());
-        let context = HashMap::new();
+        let context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let substituted = action.substitute_string(&action.command, &context);
         // Missing variables should remain as-is in the current implementation
@@ -1176,7 +1177,7 @@ mod comprehensive_variable_substitution_tests {
     #[test]
     fn test_variable_substitution_complex_patterns() {
         let action = ShellAction::new("echo ${var1}${var2} ${var3}_suffix".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "var1".to_string(),
             serde_json::Value::String("prefix".to_string()),
@@ -1197,7 +1198,7 @@ mod comprehensive_variable_substitution_tests {
     #[test]
     fn test_variable_substitution_special_characters() {
         let action = ShellAction::new("echo '${message}'".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "message".to_string(),
             serde_json::Value::String("hello & goodbye".to_string()),
@@ -1210,7 +1211,7 @@ mod comprehensive_variable_substitution_tests {
     #[test]
     fn test_variable_substitution_empty_value() {
         let action = ShellAction::new("echo start${empty}end".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "empty".to_string(),
             serde_json::Value::String("".to_string()),
@@ -1224,7 +1225,7 @@ mod comprehensive_variable_substitution_tests {
     async fn test_variable_substitution_in_result_variable_capture() {
         let action = ShellAction::new("echo ${input_text}".to_string())
             .with_result_variable("captured_output".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "input_text".to_string(),
             serde_json::Value::String("test message".to_string()),
@@ -1243,7 +1244,7 @@ mod comprehensive_variable_substitution_tests {
     #[tokio::test]
     async fn test_variable_substitution_json_complex_values() {
         let action = ShellAction::new("echo ${json_data}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         // Test with a JSON string value - but shell might interpret quotes differently
         context.insert(
             "json_data".to_string(),
@@ -1258,7 +1259,7 @@ mod comprehensive_variable_substitution_tests {
     #[test]
     fn test_variable_substitution_case_sensitive() {
         let action = ShellAction::new("echo ${VAR} ${var} ${Var}".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         context.insert(
             "VAR".to_string(),
             serde_json::Value::String("upper".to_string()),
@@ -1287,7 +1288,7 @@ mod timeout_and_process_management_tests {
     async fn test_successful_command_within_short_timeout() {
         let action =
             ShellAction::new("echo hello".to_string()).with_timeout(Duration::from_secs(5));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -1308,7 +1309,7 @@ mod timeout_and_process_management_tests {
     async fn test_command_timeout_handling() {
         // Use a command that will definitely timeout on Unix systems
         let action = ShellAction::new("sleep 3".to_string()).with_timeout(Duration::from_secs(1));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -1340,7 +1341,7 @@ mod timeout_and_process_management_tests {
     #[tokio::test]
     async fn test_default_timeout_behavior() {
         let action = ShellAction::new("echo hello".to_string()); // No explicit timeout
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -1354,7 +1355,7 @@ mod timeout_and_process_management_tests {
         // Test that timeout validation occurs during execution
         let action =
             ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(4000)); // Exceeds maximum
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
         assert!(result.is_err());
@@ -1366,7 +1367,7 @@ mod timeout_and_process_management_tests {
     async fn test_timeout_precision() {
         // Test timeout precision with a 1-second timeout
         let action = ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let start = std::time::Instant::now();
         let result = action.execute(&mut context).await.unwrap();
@@ -1385,7 +1386,7 @@ mod timeout_and_process_management_tests {
     async fn test_timeout_with_fast_failing_command() {
         // Test timeout with a command that fails quickly
         let action = ShellAction::new("exit 1".to_string()).with_timeout(Duration::from_secs(10));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1415,7 +1416,7 @@ mod timeout_and_process_management_tests {
     #[tokio::test]
     async fn test_timeout_context_variables() {
         let action = ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1447,7 +1448,7 @@ mod timeout_and_process_management_tests {
         let action = ShellAction::new("sleep 2".to_string())
             .with_timeout(Duration::from_secs(1))
             .with_result_variable("output".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -1463,7 +1464,7 @@ mod timeout_and_process_management_tests {
         // that the timeout mechanism works correctly
         let action =
             ShellAction::new("sleep 5".to_string()).with_timeout(Duration::from_millis(200));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1510,8 +1511,8 @@ mod timeout_and_process_management_tests {
         let action2 =
             ShellAction::new("sleep 1".to_string()).with_timeout(Duration::from_millis(200));
 
-        let mut context1 = HashMap::new();
-        let mut context2 = HashMap::new();
+        let mut context1 = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context2 = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let start = std::time::Instant::now();
 
@@ -1546,7 +1547,7 @@ mod comprehensive_error_handling_tests {
 
         for exit_code in exit_codes {
             let action = ShellAction::new(format!("exit {exit_code}"));
-            let mut context = HashMap::new();
+            let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
             let result = action.execute(&mut context).await.unwrap();
 
@@ -1566,7 +1567,7 @@ mod comprehensive_error_handling_tests {
     #[tokio::test]
     async fn test_nonexistent_command_error_handling() {
         let action = ShellAction::new("nonexistent_command_12345_xyz".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1595,7 +1596,7 @@ mod comprehensive_error_handling_tests {
         for dir in invalid_dirs {
             let action =
                 ShellAction::new("echo test".to_string()).with_working_dir(dir.to_string());
-            let mut context = HashMap::new();
+            let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
             let result = action.execute(&mut context).await;
             assert!(result.is_err(), "Should fail with invalid directory: {dir}");
@@ -1617,7 +1618,7 @@ mod comprehensive_error_handling_tests {
 
         let action = ShellAction::new("echo test".to_string())
             .with_working_dir(file_path.to_string_lossy().to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
         assert!(result.is_err());
@@ -1630,7 +1631,7 @@ mod comprehensive_error_handling_tests {
     async fn test_command_with_stderr_output() {
         // Use a different approach that doesn't trigger security validation
         let action = ShellAction::new("echo error message >&2".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
 
@@ -1652,7 +1653,7 @@ mod comprehensive_error_handling_tests {
     async fn test_command_with_both_stdout_and_stderr() {
         // This test is expected to fail due to security validation of semicolon
         let action = ShellAction::new("echo stdout message".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1690,7 +1691,7 @@ mod comprehensive_error_handling_tests {
         let invalid_command = "sh -c 'invalid\"command\"syntax'";
 
         let action = ShellAction::new(invalid_command.to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         // This might either succeed with an error exit code or fail to spawn
         // We just verify it doesn't panic and handles the error gracefully
@@ -1723,7 +1724,7 @@ mod comprehensive_error_handling_tests {
         env.insert("VALID_VAR".to_string(), "${nonexistent_var}".to_string());
 
         let action = ShellAction::new("echo $VALID_VAR".to_string()).with_environment(env);
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
         // Deliberately don't provide nonexistent_var
 
         let _result = action.execute(&mut context).await.unwrap();
@@ -1741,7 +1742,7 @@ mod comprehensive_error_handling_tests {
         // Test handling of large output (but not too large to avoid test issues)
         let large_text = "a".repeat(1000);
         let action = ShellAction::new(format!("echo '{large_text}'"));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1756,7 +1757,7 @@ mod comprehensive_error_handling_tests {
         // Test that all context variables are properly set in error scenarios
         let action =
             ShellAction::new("exit 42".to_string()).with_result_variable("result".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -1997,7 +1998,7 @@ mod additional_security_tests {
     async fn test_security_validation_order() {
         // Test that security validation happens before execution
         let action = ShellAction::new("echo hello; rm -rf /".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
         assert!(result.is_err());
@@ -2094,7 +2095,7 @@ mod integration_tests {
     async fn test_result_variable_integration() {
         let action = ShellAction::new("echo 'captured output'".to_string())
             .with_result_variable("my_result".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2115,7 +2116,7 @@ mod integration_tests {
         // Test that shell action context variables work for chaining
         let action1 = ShellAction::new("echo first_result".to_string())
             .with_result_variable("chain_var".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result1 = action1.execute(&mut context).await.unwrap();
 
@@ -2169,7 +2170,7 @@ mod cross_platform_tests {
     #[tokio::test]
     async fn test_cross_platform_echo() {
         let action = ShellAction::new("echo hello world".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2184,7 +2185,7 @@ mod cross_platform_tests {
 
         for exit_code in exit_codes {
             let action = ShellAction::new(format!("exit {exit_code}"));
-            let mut context = HashMap::new();
+            let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
             let _result = action.execute(&mut context).await.unwrap();
 
@@ -2208,7 +2209,7 @@ mod cross_platform_tests {
     #[tokio::test]
     async fn test_windows_specific_echo() {
         let action = ShellAction::new("echo Windows Test".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2221,7 +2222,7 @@ mod cross_platform_tests {
     #[tokio::test]
     async fn test_windows_dir_command() {
         let action = ShellAction::new("dir /B".to_string()).with_working_dir(".".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
         // We can't guarantee this will succeed (depends on environment)
@@ -2241,7 +2242,7 @@ mod cross_platform_tests {
     #[tokio::test]
     async fn test_unix_specific_commands() {
         let action = ShellAction::new("echo Unix Test".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2254,7 +2255,7 @@ mod cross_platform_tests {
     #[tokio::test]
     async fn test_unix_ls_command() {
         let action = ShellAction::new("ls".to_string()).with_working_dir(".".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
         // ls should generally be available on Unix systems
@@ -2275,7 +2276,7 @@ mod cross_platform_tests {
         env.insert("TEST_VAR".to_string(), "test_value".to_string());
 
         let action = ShellAction::new("echo $TEST_VAR".to_string()).with_environment(env);
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2290,7 +2291,7 @@ mod cross_platform_tests {
     #[tokio::test]
     async fn test_cross_platform_working_directory() {
         let action = ShellAction::new("pwd".to_string()).with_working_dir("/tmp".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
 
@@ -2306,7 +2307,7 @@ mod cross_platform_tests {
     async fn test_cross_platform_command_execution() {
         // Test that command execution works on different platforms
         let action = ShellAction::new("echo platform test".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2321,7 +2322,7 @@ mod cross_platform_tests {
         // Test timeout behavior across platforms
         let action =
             ShellAction::new("echo quick command".to_string()).with_timeout(Duration::from_secs(5));
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2335,7 +2336,7 @@ mod cross_platform_tests {
     async fn test_cross_platform_stderr_handling() {
         // Test stderr handling across platforms - use a command that should work everywhere
         let action = ShellAction::new("echo 'error' >&2".to_string());
-        let mut context = HashMap::new();
+        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
 
         let result = action.execute(&mut context).await;
 

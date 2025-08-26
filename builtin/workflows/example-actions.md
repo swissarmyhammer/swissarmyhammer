@@ -27,7 +27,7 @@ stateDiagram-v2
     FailurePath --> HandleError
     HandleError --> WaitExample
     WaitExample --> BranchDecision
-    BranchDecision --> Branch1: example_var.startsWith("Hello")
+    BranchDecision --> Branch1: example_var.contains("Hello")
     BranchDecision --> Branch2: is_error == true
     BranchDecision --> DefaultBranch: default
     Branch1 --> Complete
@@ -122,7 +122,7 @@ This workflow demonstrates branching with the following conditional transitions:
 
 ### Choice State Branching (BranchDecision State)
 The `BranchDecision` state is a choice state that evaluates conditions to determine the next state:
-- **Branch1**: Selected when `example_var` starts with "Hello" (CEL: `example_var.startsWith('Hello')`)
+- **Branch1**: Selected when `example_var` contains "Hello" (CEL: `example_var.contains("Hello")`)
 - **Branch2**: Selected when there is an error (CEL: `is_error == true`)
 - **DefaultBranch**: Selected when no other conditions match
 

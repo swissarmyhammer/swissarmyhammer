@@ -1,6 +1,7 @@
 //! Tests for PromptAction
 
 use crate::workflow::actions::*;
+use crate::workflow::WorkflowTemplateContext;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -78,7 +79,7 @@ async fn test_prompt_action_execution_with_invalid_argument_key() {
     let action = PromptAction::new("test-prompt".to_string())
         .with_argument("invalid key!".to_string(), "value".to_string());
 
-    let mut context = HashMap::new();
+    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     let result = action.execute(&mut context).await;
 
     assert!(result.is_err());

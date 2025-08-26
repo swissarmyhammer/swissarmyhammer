@@ -29,8 +29,11 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 5;
 
 /// Handle the flow command
-pub async fn handle_command(subcommand: FlowSubcommand) -> i32 {
-    match run_flow_command(subcommand).await {
+pub async fn handle_command(
+    subcommand: FlowSubcommand,
+    _template_context: &swissarmyhammer_config::TemplateContext,
+) -> i32 {
+    match run_flow_command(subcommand, _template_context).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             eprintln!("Flow command failed: {}", e);
@@ -40,7 +43,10 @@ pub async fn handle_command(subcommand: FlowSubcommand) -> i32 {
 }
 
 /// Main entry point for flow command
-pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
+pub async fn run_flow_command(
+    subcommand: FlowSubcommand,
+    _template_context: &swissarmyhammer_config::TemplateContext,
+) -> Result<()> {
     match subcommand {
         FlowSubcommand::Run {
             workflow,
@@ -53,15 +59,18 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
         } => {
             let all_vars = vars;
 
-            run_workflow_command(WorkflowCommandConfig {
-                workflow_name: workflow,
-                vars: all_vars,
-                interactive,
-                dry_run,
-                test_mode: test,
-                timeout_str,
-                quiet,
-            })
+            run_workflow_command(
+                WorkflowCommandConfig {
+                    workflow_name: workflow,
+                    vars: all_vars,
+                    interactive,
+                    dry_run,
+                    test_mode: test,
+                    timeout_str,
+                    quiet,
+                },
+                _template_context,
+            )
             .await
         }
         FlowSubcommand::Resume {
@@ -110,15 +119,18 @@ pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
             let all_vars = vars;
 
             // Run workflow in test mode - same as flow run --test
-            run_workflow_command(WorkflowCommandConfig {
-                workflow_name: workflow,
-                vars: all_vars,
-                interactive,
-                dry_run: false,
-                test_mode: true,
-                timeout_str,
-                quiet,
-            })
+            run_workflow_command(
+                WorkflowCommandConfig {
+                    workflow_name: workflow,
+                    vars: all_vars,
+                    interactive,
+                    dry_run: false,
+                    test_mode: true,
+                    timeout_str,
+                    quiet,
+                },
+                _template_context,
+            )
             .await
         }
     }
@@ -136,7 +148,10 @@ struct WorkflowCommandConfig {
 }
 
 /// Execute a workflow
-async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
+async fn run_workflow_command(
+    config: WorkflowCommandConfig,
+    _template_context: &swissarmyhammer_config::TemplateContext,
+) -> Result<()> {
     // Use proper WorkflowStorage with embedded builtins
     let workflow_storage = tokio::task::spawn_blocking(WorkflowStorage::file_system)
         .await
@@ -299,15 +314,16 @@ async fn run_workflow_command(config: WorkflowCommandConfig) -> Result<()> {
     })?;
 
     // Set initial variables
-    run.context.extend(variables.clone());
+    run.context.set_workflow_vars(variables.clone());
 
-    // Store variables in context for liquid template rendering
-    if !variables.is_empty() {
-        run.context.insert(
-            "_template_vars".to_string(),
-            serde_json::to_value(variables.clone())?,
-        );
-    }
+    // Merge configuration context into workflow context
+    // Configuration has lower precedence than workflow variables (CLI args have highest precedence)
+    // Note: WorkflowTemplateContext already manages template context internally
+    // so this explicit merge may not be needed
+    // _template_context.merge_into_workflow_context(&mut run.context);
+
+    // Store variables in context for liquid template rendering - this will now include config values
+    // The merge_into_workflow_context method properly handles precedence
 
     // Set quiet mode in context for actions to use
     if config.quiet {
@@ -857,7 +873,7 @@ fn print_run_status(
                 );
             }
             println!("📈 History: {} transitions", run.history.len());
-            println!("🔧 Variables: {} items", run.context.len());
+            println!("🔧 Variables: {} items", run.context.workflow_vars().len());
         }
         OutputFormat::Json => {
             let json_output = serde_json::to_string_pretty(&run)?;
@@ -910,9 +926,9 @@ fn print_run_logs(
     }
 
     // Show current context/variables
-    if !run.context.is_empty() {
+    if !run.context.workflow_vars().is_empty() {
         println!("\n🔧 Current Variables:");
-        for (key, value) in &run.context {
+        for (key, value) in run.context.iter() {
             println!("  {key} = {value}");
         }
     }
@@ -1255,7 +1271,7 @@ async fn execute_workflow_test_mode(
 
     // Create a mock workflow run
     let mut run = WorkflowRun::new(workflow.clone());
-    run.context.extend(initial_variables);
+    run.context.set_workflow_vars(initial_variables);
 
     // All variables are now handled through the regular workflow variables system
 
