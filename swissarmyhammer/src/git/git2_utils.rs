@@ -21,6 +21,24 @@ pub fn convert_git2_error(operation: &str, error: git2::Error) -> SwissArmyHamme
     SwissArmyHammerError::git2_operation_failed(operation, error)
 }
 
+/// Convert git2::Error to enhanced SwissArmyHammerError with context
+///
+/// This function provides enhanced error conversion with user-friendly messages,
+/// recovery suggestions, and detailed context information.
+pub fn convert_git2_error_with_context(
+    operation: &str,
+    context: &str,
+    error: git2::Error,
+) -> SwissArmyHammerError {
+    trace!(
+        "Converting git2 error with context for operation '{}' in context '{}': {}",
+        operation,
+        context,
+        error
+    );
+    SwissArmyHammerError::from_git2_with_context(operation, context, error)
+}
+
 /// Convert git2::Error to repository-specific error
 ///
 /// Use this for repository-specific operations where additional context
@@ -325,6 +343,308 @@ where
     result
 }
 
+/// Collect repository state information for error context
+pub fn collect_repository_state(repo: &Repository) -> crate::error::RepositoryState {
+    let mut state = crate::error::RepositoryState::default();
+
+    // Get current branch and head information
+    if let Ok(head) = repo.head() {
+        state.head_detached = !head.is_branch();
+        state.current_branch = head.shorthand().map(|s| s.to_string());
+        if let Some(oid) = head.target() {
+            state.head_commit = Some(oid.to_string());
+        }
+    }
+
+    // Check if repository is empty
+    state.repository_empty = repo.is_empty().unwrap_or(false);
+
+    // Get working directory path
+    state.workdir_path = repo.workdir().map(|p| p.to_path_buf());
+
+    // Get repository status
+    if let Ok(statuses) = repo.statuses(None) {
+        state.working_directory_clean = statuses.is_empty();
+
+        for entry in statuses.iter() {
+            if let Some(path) = entry.path() {
+                let path_str = path.to_string();
+                let status = entry.status();
+
+                if status.is_index_new() || status.is_index_modified() || status.is_index_deleted()
+                {
+                    state.staged_files.push(path_str.clone());
+                }
+
+                if status.is_wt_new() || status.is_wt_modified() || status.is_wt_deleted() {
+                    state.modified_files.push(path_str);
+                }
+            }
+        }
+    }
+
+    state
+}
+
+/// Extract git2 crate version from build environment
+fn get_git2_version() -> String {
+    // Try to get version from Cargo.toml at build time
+    const CARGO_TOML: &str = include_str!("../../Cargo.toml");
+
+    // Parse git2 version from Cargo.toml
+    for line in CARGO_TOML.lines() {
+        if line.trim().starts_with("git2") && line.contains("=") {
+            // Extract version from line like: git2 = "0.19"
+            if let Some(version_part) = line.split('=').nth(1) {
+                let version = version_part.trim().trim_matches('"').trim_matches('\'');
+                return format!("git2 {}", version);
+            }
+        }
+    }
+
+    // Fallback to known version if parsing fails
+    "git2 0.19.0".to_string()
+}
+
+/// Collect environment information for error context
+pub fn collect_environment_info(work_dir: &std::path::Path) -> crate::error::EnvironmentInfo {
+    crate::error::EnvironmentInfo {
+        git2_version: get_git2_version(), // Use dynamic git2 version detection
+        working_directory: work_dir.to_path_buf(),
+        user_config: collect_user_config(),
+        git_config_locations: find_git_config_files(),
+    }
+}
+
+/// Collect user git configuration
+fn collect_user_config() -> Option<crate::error::UserConfig> {
+    git2::Config::open_default().ok().map(|config| {
+        let name = config.get_string("user.name").ok();
+        let email = config.get_string("user.email").ok();
+        crate::error::UserConfig { name, email }
+    })
+}
+
+/// Find git configuration file locations
+fn find_git_config_files() -> Vec<std::path::PathBuf> {
+    let mut configs = Vec::new();
+
+    // System config
+    if let Ok(path) = git2::Config::find_system() {
+        configs.push(path);
+    }
+
+    // Global config
+    if let Ok(path) = git2::Config::find_global() {
+        configs.push(path);
+    }
+
+    // XDG config
+    if let Ok(path) = git2::Config::find_xdg() {
+        configs.push(path);
+    }
+
+    configs
+}
+
+/// Collect system information for error context
+pub fn collect_system_info(repo_path: &std::path::Path) -> crate::error::SystemInfo {
+    crate::error::SystemInfo {
+        platform: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        filesystem_type: detect_filesystem_type(repo_path),
+        permissions: check_repository_permissions(repo_path),
+    }
+}
+
+/// Detect filesystem type (simplified implementation)
+fn detect_filesystem_type(_path: &std::path::Path) -> Option<String> {
+    // This is a simplified implementation - could be enhanced with platform-specific code
+    None
+}
+
+/// Check repository permissions
+fn check_repository_permissions(repo_path: &std::path::Path) -> crate::error::PermissionInfo {
+    use std::fs;
+
+    let repo_metadata = fs::metadata(repo_path);
+    let git_dir = repo_path.join(".git");
+    let git_metadata = fs::metadata(&git_dir);
+
+    crate::error::PermissionInfo {
+        repo_readable: repo_metadata
+            .as_ref()
+            .map(|m| !m.permissions().readonly())
+            .unwrap_or(false),
+        repo_writable: repo_metadata.is_ok(),
+        git_dir_accessible: git_metadata.is_ok(),
+    }
+}
+
+/// Execute git2 operation with automatic error recovery
+pub fn execute_with_recovery<T, F>(
+    operation_name: &str,
+    context: &str,
+    repo: &Repository,
+    operation: F,
+) -> Result<T>
+where
+    F: Fn(&Repository) -> std::result::Result<T, git2::Error>,
+{
+    match operation(repo) {
+        Ok(result) => {
+            debug!("Operation '{}' succeeded", operation_name);
+            Ok(result)
+        }
+        Err(error) => {
+            warn!("Operation '{}' failed: {}", operation_name, error);
+
+            // Attempt recovery based on error type
+            if let Some(()) = attempt_error_recovery(&error, operation_name, repo)? {
+                info!(
+                    "Recovered from error {}, retrying {}",
+                    error, operation_name
+                );
+                // Retry the operation after recovery
+                operation(repo)
+                    .map_err(|e| convert_git2_error_with_context(operation_name, context, e))
+            } else {
+                // Recovery not possible, return enhanced error
+                Err(convert_git2_error_with_context(
+                    operation_name,
+                    context,
+                    error,
+                ))
+            }
+        }
+    }
+}
+
+/// Attempt to recover from common git2 error conditions
+fn attempt_error_recovery(
+    error: &git2::Error,
+    operation: &str,
+    repo: &Repository,
+) -> Result<Option<()>> {
+    match error.code() {
+        git2::ErrorCode::Locked => {
+            // Attempt to resolve lock file issue
+            resolve_repository_lock(repo)?;
+            Ok(Some(()))
+        }
+        git2::ErrorCode::IndexDirty => {
+            if operation.starts_with("merge") || operation.starts_with("checkout") {
+                // For merge/checkout operations, refresh index and retry
+                refresh_repository_index(repo)?;
+                Ok(Some(()))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Resolve repository lock files
+fn resolve_repository_lock(repo: &Repository) -> Result<()> {
+    if let Some(git_dir) = repo.path().parent() {
+        let lock_file = git_dir.join(".git").join("index.lock");
+        if lock_file.exists() {
+            // Check if the lock is stale (older than 10 minutes)
+            if let Ok(metadata) = std::fs::metadata(&lock_file) {
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(elapsed) = modified.elapsed() {
+                        if elapsed.as_secs() > 600 {
+                            warn!("Removing stale git lock file: {:?}", lock_file);
+                            std::fs::remove_file(&lock_file).map_err(|e| {
+                                SwissArmyHammerError::Other(format!(
+                                    "Failed to remove stale lock file: {}",
+                                    e
+                                ))
+                            })?;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(SwissArmyHammerError::Other(
+        "Repository is locked and lock cannot be safely removed".to_string(),
+    ))
+}
+
+/// Refresh repository index
+fn refresh_repository_index(repo: &Repository) -> Result<()> {
+    let mut index = repo
+        .index()
+        .map_err(|e| convert_git2_error("get index", e))?;
+
+    index
+        .read(true)
+        .map_err(|e| convert_git2_error("refresh index", e))?;
+
+    Ok(())
+}
+
+/// Generate comprehensive error report
+pub fn generate_error_report(
+    error: &SwissArmyHammerError,
+    operation: &str,
+    repo: Option<&Repository>,
+    work_dir: &std::path::Path,
+) -> crate::error::ErrorReport {
+    // Collect error context
+    let error_context = if let Some(repo) = repo {
+        crate::error::GitErrorContext {
+            repository_state: collect_repository_state(repo),
+            environment_info: collect_environment_info(work_dir),
+            operation_history: vec![operation.to_string()], // Could be enhanced with actual history
+            system_info: collect_system_info(work_dir),
+        }
+    } else {
+        crate::error::GitErrorContext {
+            repository_state: crate::error::RepositoryState::default(),
+            environment_info: collect_environment_info(work_dir),
+            operation_history: vec![operation.to_string()],
+            system_info: collect_system_info(work_dir),
+        }
+    };
+
+    crate::error::ErrorReport {
+        error_id: ulid::Ulid::new().to_string(),
+        timestamp: chrono::Utc::now(),
+        operation: operation.to_string(),
+        error_type: error.error_type(),
+        error_message: error.to_string(),
+        recovery_suggestion: error.recovery_suggestion(),
+        context: serde_json::to_value(&error_context).unwrap_or(serde_json::Value::Null),
+        stack_trace: error.stack_trace(),
+        environment: crate::error::collect_environment_variables(),
+    }
+}
+
+/// Save error report to file for later analysis
+pub fn save_error_report(
+    report: &crate::error::ErrorReport,
+    work_dir: &std::path::Path,
+) -> Result<std::path::PathBuf> {
+    let reports_dir = work_dir.join(".swissarmyhammer").join("error_reports");
+    std::fs::create_dir_all(&reports_dir)?;
+
+    let filename = format!("error_report_{}.json", report.error_id);
+    let report_path = reports_dir.join(filename);
+
+    let json = serde_json::to_string_pretty(report).map_err(|e| {
+        SwissArmyHammerError::Other(format!("Failed to serialize error report: {}", e))
+    })?;
+
+    std::fs::write(&report_path, json)?;
+
+    Ok(report_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,5 +830,163 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    // Enhanced error handling tests
+
+    #[test]
+    fn test_convert_git2_error_with_context() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+
+        let git_error = git2::Error::from_str("Test error");
+        let app_error =
+            convert_git2_error_with_context("test_operation", "test_context", git_error);
+
+        let error_msg = app_error.to_string();
+        assert!(error_msg.contains("Git2 operation failed: test_operation"));
+    }
+
+    #[test]
+    fn test_collect_repository_state() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        let state = collect_repository_state(&repo);
+
+        // Repository should be empty initially
+        assert!(state.repository_empty);
+        assert!(state.working_directory_clean);
+        assert!(state.staged_files.is_empty());
+        assert!(state.modified_files.is_empty());
+        assert!(state.workdir_path.is_some());
+    }
+
+    #[test]
+    fn test_collect_environment_info() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+
+        let env_info = collect_environment_info(temp_dir.path());
+
+        assert!(!env_info.git2_version.is_empty());
+        assert_eq!(env_info.working_directory, temp_dir.path());
+        // Note: user_config might be None in test environment
+        // git_config_locations might be empty in some test environments
+        // assert!(!env_info.git_config_locations.is_empty());
+    }
+
+    #[test]
+    fn test_collect_system_info() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+
+        let sys_info = collect_system_info(temp_dir.path());
+
+        assert!(!sys_info.platform.is_empty());
+        assert!(!sys_info.arch.is_empty());
+        // Repository should be readable and writable in test
+        assert!(sys_info.permissions.repo_readable);
+        assert!(sys_info.permissions.repo_writable);
+        assert!(sys_info.permissions.git_dir_accessible);
+    }
+
+    #[test]
+    fn test_execute_with_recovery_success() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        let result = execute_with_recovery("test_operation", "test_context", &repo, |_repo| {
+            Ok("success")
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "success");
+    }
+
+    #[test]
+    fn test_execute_with_recovery_failure() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        let result: Result<&str> =
+            execute_with_recovery("test_operation", "test_context", &repo, |_repo| {
+                Err(git2::Error::from_str("Test error"))
+            });
+
+        assert!(result.is_err());
+        // Should return enhanced error with context
+        let error = result.unwrap_err();
+        let error_msg = error.to_string();
+        assert!(error_msg.contains("Git2 operation failed"));
+    }
+
+    #[test]
+    fn test_generate_error_report() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        let error = SwissArmyHammerError::Git2OperationFailed {
+            operation: "test_operation".to_string(),
+            source: git2::Error::from_str("Test error"),
+        };
+
+        let report = generate_error_report(&error, "test_operation", Some(&repo), temp_dir.path());
+
+        assert!(!report.error_id.is_empty());
+        assert_eq!(report.operation, "test_operation");
+        assert_eq!(report.error_type, "Git2OperationFailed");
+        assert!(!report.error_message.is_empty());
+        assert!(!report.stack_trace.is_empty());
+        assert!(!report.environment.is_empty());
+    }
+
+    #[test]
+    fn test_save_error_report() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        let error = SwissArmyHammerError::Git2OperationFailed {
+            operation: "test_operation".to_string(),
+            source: git2::Error::from_str("Test error"),
+        };
+
+        let report = generate_error_report(&error, "test_operation", Some(&repo), temp_dir.path());
+        let report_path = save_error_report(&report, temp_dir.path()).unwrap();
+
+        assert!(report_path.exists());
+        assert!(report_path.extension().unwrap() == "json");
+
+        // Verify the content is valid JSON
+        let content = std::fs::read_to_string(&report_path).unwrap();
+        let _parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    }
+
+    #[test]
+    fn test_refresh_repository_index() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        // This should not fail on a valid repository
+        let result = refresh_repository_index(&repo);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_resolve_repository_lock_no_lock() {
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
+        let temp_dir = create_test_git_repo().unwrap();
+        let repo = open_repository(temp_dir.path()).unwrap();
+
+        // Should return error when no lock file exists
+        let result = resolve_repository_lock(&repo);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Repository is locked and lock cannot be safely removed"));
     }
 }

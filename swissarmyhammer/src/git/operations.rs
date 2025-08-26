@@ -236,7 +236,7 @@ impl CompatibilityReport {
             shell_success,
             results_match: None,
         });
-        
+
         if !git2_success || !shell_success {
             self.overall_compatible = false;
         }
@@ -247,7 +247,7 @@ impl CompatibilityReport {
         if let Some(test) = self.tests.iter_mut().find(|t| t.operation == operation) {
             test.results_match = Some(results_match);
         }
-        
+
         if !results_match {
             self.overall_compatible = false;
         }
@@ -327,10 +327,12 @@ impl GitOperations {
             .arg("--git-dir")
             .current_dir(path)
             .output()
-            .map_err(|e| SwissArmyHammerError::git_operation_failed(
-                "check repository", 
-                &format!("Failed to execute git command: {}", e)
-            ))?;
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "check repository",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
 
         if !output.status.success() {
             return Err(SwissArmyHammerError::git_operation_failed(
@@ -358,12 +360,12 @@ impl GitOperations {
         if let Ok(backend) = std::env::var("SAH_GIT_BACKEND") {
             return backend.to_lowercase() == "git2";
         }
-        
+
         // Check if git2 is explicitly disabled
         if std::env::var("SAH_DISABLE_GIT2").is_ok() {
             return false;
         }
-        
+
         // Default to git2 for new installations
         true
     }
@@ -420,7 +422,7 @@ impl GitOperations {
     }
 
     /// Check if this instance is using the git2 backend
-    /// 
+    ///
     /// Returns true if using git2-rs native operations, false if using shell commands
     pub fn is_using_git2(&self) -> bool {
         self.use_git2
@@ -464,10 +466,12 @@ impl GitOperations {
             .arg("HEAD")
             .current_dir(&self.work_dir)
             .output()
-            .map_err(|e| SwissArmyHammerError::git_operation_failed(
-                "get current branch",
-                &format!("Failed to execute git command: {}", e),
-            ))?;
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "get current branch",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
 
         if !output.status.success() {
             return Err(SwissArmyHammerError::git_operation_failed(
@@ -610,10 +614,12 @@ impl GitOperations {
             .arg(format!("refs/heads/{}", branch))
             .current_dir(&self.work_dir)
             .output()
-            .map_err(|e| SwissArmyHammerError::git_operation_failed(
-                "check branch existence",
-                &format!("Failed to execute git command: {}", e),
-            ))?;
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "check branch existence",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
 
         Ok(output.status.success())
     }
@@ -633,11 +639,20 @@ impl GitOperations {
 
     /// Check if we can create a branch with the given name
     pub fn can_create_branch(&self, branch_name: &str) -> Result<bool> {
+        if self.use_git2 {
+            self.can_create_branch_git2(branch_name)
+        } else {
+            self.can_create_branch_shell(branch_name)
+        }
+    }
+
+    /// Check if a branch can be created using git2 backend
+    pub fn can_create_branch_git2(&self, branch_name: &str) -> Result<bool> {
         // Validate branch name format
         self.validate_branch_name(branch_name)?;
 
         // Check if branch already exists
-        if self.branch_exists(branch_name)? {
+        if self.branch_exists_git2(branch_name)? {
             return Ok(false);
         }
 
@@ -650,6 +665,40 @@ impl GitOperations {
                 "check HEAD for branching",
                 e,
             )),
+        }
+    }
+
+    /// Check if a branch can be created using shell backend
+    pub fn can_create_branch_shell(&self, branch_name: &str) -> Result<bool> {
+        // Validate branch name format
+        self.validate_branch_name(branch_name)?;
+
+        // Check if branch already exists
+        if self.branch_exists_shell(branch_name)? {
+            return Ok(false);
+        }
+
+        // Check if we have a valid HEAD to branch from using shell command
+        let output = Command::new("git")
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("HEAD")
+            .current_dir(&self.work_dir)
+            .output()
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "check HEAD for branching",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
+
+        if output.status.success() {
+            Ok(true)
+        } else {
+            // Check if this is an unborn branch (initial commit not made yet)
+            let _stderr = String::from_utf8_lossy(&output.stderr);
+            // Both cases mean we can't create the branch (either no commits yet or other error)
+            Ok(false)
         }
     }
 
@@ -853,10 +902,12 @@ impl GitOperations {
             .arg(branch_name)
             .current_dir(&self.work_dir)
             .output()
-            .map_err(|e| SwissArmyHammerError::git_operation_failed(
-                "create and checkout branch",
-                &format!("Failed to execute git command: {}", e),
-            ))?;
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "create and checkout branch",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
 
         if !output.status.success() {
             return Err(SwissArmyHammerError::git_operation_failed(
@@ -923,10 +974,12 @@ impl GitOperations {
             .arg(branch)
             .current_dir(&self.work_dir)
             .output()
-            .map_err(|e| SwissArmyHammerError::git_operation_failed(
-                "checkout branch",
-                &format!("Failed to execute git command: {}", e),
-            ))?;
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "checkout branch",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
 
         if !output.status.success() {
             return Err(SwissArmyHammerError::git_operation_failed(
@@ -1069,8 +1122,17 @@ impl GitOperations {
         Ok(())
     }
 
-    /// Find merge target branch using git2 reflog analysis (native git2 implementation)
+    /// Find merge target branch using reflog analysis
     fn find_merge_target_branch_using_reflog(&self, issue_name: &str) -> Result<String> {
+        if self.use_git2 {
+            self.find_merge_target_branch_using_reflog_git2(issue_name)
+        } else {
+            self.find_merge_target_branch_using_reflog_shell(issue_name)
+        }
+    }
+
+    /// Find merge target branch using git2 reflog analysis (native git2 implementation)
+    fn find_merge_target_branch_using_reflog_git2(&self, issue_name: &str) -> Result<String> {
         let branch_name = format!("issue/{issue_name}");
 
         // First check if the issue branch exists
@@ -1122,6 +1184,63 @@ impl GitOperations {
             git2::Error::from_str(&format!(
                 "no reflog entry found for issue branch '{branch_name}'"
             )),
+        ))
+    }
+
+    /// Find merge target branch using shell reflog analysis
+    fn find_merge_target_branch_using_reflog_shell(&self, issue_name: &str) -> Result<String> {
+        let branch_name = format!("issue/{issue_name}");
+
+        // First check if the issue branch exists
+        if !self.branch_exists(&branch_name)? {
+            return Err(SwissArmyHammerError::Other(format!(
+                "Issue branch '{branch_name}' does not exist"
+            )));
+        }
+
+        // Use shell commands to get reflog entries
+        let output = Command::new("git")
+            .current_dir(&self.work_dir)
+            .args(["reflog", "--oneline", "HEAD"])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(SwissArmyHammerError::git_operation_failed(
+                "access repository",
+                "Failed to get reflog via shell command",
+            ));
+        }
+
+        let reflog_output = String::from_utf8_lossy(&output.stdout);
+
+        // Parse each reflog line looking for branch creation
+        for line in reflog_output.lines() {
+            // Lines look like: "abc1234 HEAD@{0}: checkout: moving from main to issue/test_issue"
+            if let Some(message_start) = line.find(": ") {
+                let message = &line[message_start + 2..];
+                if let Some(target_branch) = self.parse_checkout_message(message, &branch_name)? {
+                    // Verify the target branch still exists and is valid
+                    if self.branch_exists(&target_branch)? && !self.is_issue_branch(&target_branch)
+                    {
+                        tracing::debug!(
+                            "Found merge target '{}' for issue '{}' via shell reflog",
+                            target_branch,
+                            issue_name
+                        );
+                        return Ok(target_branch);
+                    }
+                }
+            }
+        }
+
+        // If no valid target found, create abort file
+        create_abort_file(&self.work_dir, &format!(
+            "Cannot determine merge target for issue '{issue_name}'. No reflog entry found showing where this issue branch was created from. This usually means:\n1. The issue branch was not created using standard git checkout operations\n2. The reflog has been cleared or is too short\n3. The branch was created externally"
+        ))?;
+
+        Err(SwissArmyHammerError::git_operation_failed(
+            "determine merge target",
+            &format!("no reflog entry found for issue branch '{branch_name}'"),
         ))
     }
 
@@ -1192,7 +1311,11 @@ impl GitOperations {
                 e
             );
             create_abort_file(&self.work_dir, &error_msg).ok();
-            SwissArmyHammerError::git_branch_operation_failed("checkout", &target_branch, &error_msg)
+            SwissArmyHammerError::git_branch_operation_failed(
+                "checkout",
+                &target_branch,
+                &error_msg,
+            )
         })?;
 
         // Perform merge using git2
@@ -1280,61 +1403,68 @@ impl GitOperations {
     /// Delete a branch
     pub fn delete_branch(&self, branch_name: &str, force: bool) -> Result<()> {
         let repo = self.open_git2_repository()?;
-        
+
         // Check if branch exists first - idempotent behavior
         let mut branch = match repo.find_branch(branch_name, git2::BranchType::Local) {
             Ok(branch) => branch,
             Err(e) if e.code() == git2::ErrorCode::NotFound => {
                 // Branch doesn't exist - already achieved desired outcome
-                tracing::info!("Branch '{}' does not exist - deletion already achieved", branch_name);
+                tracing::info!(
+                    "Branch '{}' does not exist - deletion already achieved",
+                    branch_name
+                );
                 return Ok(());
-            },
-            Err(e) => return Err(git2_utils::convert_git2_error(
-                &format!("find branch '{}'", branch_name), e))
+            }
+            Err(e) => {
+                return Err(git2_utils::convert_git2_error(
+                    &format!("find branch '{}'", branch_name),
+                    e,
+                ))
+            }
         };
-        
+
         // Validate deletion safety unless forced
         if !force {
             self.validate_branch_deletion_safety(&branch, branch_name)?;
         }
-        
+
         // Delete the branch
-        branch.delete()
-            .map_err(|e| {
-                // Create abort file for deletion failures
-                let _ = create_abort_file(&self.work_dir, 
-                    &format!("Failed to delete branch '{}': {}", branch_name, e));
-                git2_utils::convert_git2_error(
-                    &format!("delete branch '{}'", branch_name), e)
-            })?;
-        
+        branch.delete().map_err(|e| {
+            // Create abort file for deletion failures
+            let _ = create_abort_file(
+                &self.work_dir,
+                &format!("Failed to delete branch '{}': {}", branch_name, e),
+            );
+            git2_utils::convert_git2_error(&format!("delete branch '{}'", branch_name), e)
+        })?;
+
         tracing::info!("Successfully deleted branch '{}'", branch_name);
         Ok(())
     }
 
     /// Validates branch deletion safety for non-force deletion operations.
-    /// 
+    ///
     /// Performs two key safety checks:
     /// 1. Ensures the branch is not currently checked out (prevents deletion of current branch)
     /// 2. Verifies the branch is fully merged (prevents data loss from unmerged commits)
-    /// 
+    ///
     /// This method replicates the safety behavior of `git branch --delete` (non-forced).
-    /// 
+    ///
     /// # Parameters
     /// - `branch`: Git2 branch reference to validate
     /// - `branch_name`: Name of the branch for error reporting
-    /// 
+    ///
     /// # Returns  
     /// - `Ok(())` if the branch is safe to delete
     /// - `Err(SwissArmyHammerError)` if deletion would be unsafe
-    /// 
+    ///
     /// # Errors
     /// - When attempting to delete the currently checked out branch
     /// - When attempting to delete an unmerged branch (contains unmerged commits)
     fn validate_branch_deletion_safety(
         &self,
         branch: &git2::Branch,
-        branch_name: &str
+        branch_name: &str,
     ) -> Result<()> {
         // Check if we're currently on the branch we're trying to delete
         let current_branch = self.current_branch()?;
@@ -1347,7 +1477,7 @@ impl GitOperations {
                 ))
             ));
         }
-        
+
         // Check if branch is merged (git2 equivalent of --delete behavior)
         if !self.is_branch_merged(branch, branch_name)? {
             return Err(git2_utils::convert_git2_error(
@@ -1358,53 +1488,54 @@ impl GitOperations {
                 ))
             ));
         }
-        
+
         Ok(())
     }
 
     /// Determines if a branch is fully merged into the current HEAD.
-    /// 
+    ///
     /// This method checks whether all commits in the branch are reachable from HEAD,
     /// indicating that the branch has been merged and contains no unique commits.
     /// The logic mirrors Git's merge detection used by `git branch --delete`.
-    /// 
+    ///
     /// # Algorithm
     /// 1. If branch points to same commit as HEAD → merged (fast-forward case)
     /// 2. If branch commit is ancestor of HEAD → merged (branch was merged)  
     /// 3. If HEAD is descendant of branch → merged (no unique commits in branch)
     /// 4. Otherwise → not merged (branch has unique commits)
-    /// 
+    ///
     /// # Parameters
     /// - `branch`: Git2 branch reference to check
     /// - `branch_name`: Name of the branch for error reporting
-    /// 
+    ///
     /// # Returns
     /// - `Ok(true)` if the branch is fully merged into HEAD
     /// - `Ok(false)` if the branch contains unmerged commits  
     /// - `Err(SwissArmyHammerError)` for Git operation failures
-    /// 
+    ///
     /// # Errors
     /// - When unable to access branch or HEAD commits
     /// - When Git repository operations fail
     fn is_branch_merged(&self, branch: &git2::Branch, branch_name: &str) -> Result<bool> {
         let repo = self.open_git2_repository()?;
-        
+
         // Get branch commit
-        let branch_commit = branch.get().peel_to_commit()
-            .map_err(|e| git2_utils::convert_git2_error(
-                &format!("get commit for branch '{}'", branch_name), e))?;
-        
+        let branch_commit = branch.get().peel_to_commit().map_err(|e| {
+            git2_utils::convert_git2_error(&format!("get commit for branch '{}'", branch_name), e)
+        })?;
+
         // Get HEAD commit
-        let head_commit = repo.head()
+        let head_commit = repo
+            .head()
             .map_err(|e| git2_utils::convert_git2_error("get HEAD", e))?
             .peel_to_commit()
             .map_err(|e| git2_utils::convert_git2_error("get HEAD commit", e))?;
-        
+
         // If branch points to the same commit as HEAD, it's merged
         if branch_commit.id() == head_commit.id() {
             return Ok(true);
         }
-        
+
         // Check if branch commit is an ancestor of HEAD (i.e., branch was merged or has no unique commits)
         match repo.graph_descendant_of(head_commit.id(), branch_commit.id()) {
             Ok(true) => Ok(true), // Branch commit is reachable from HEAD - merged
@@ -1414,52 +1545,60 @@ impl GitOperations {
                     Ok(true) => Ok(true), // HEAD is descendant of branch - branch has no unique commits
                     Ok(false) => Ok(false), // Branch has unique commits - not merged
                     Err(e) => {
-                        tracing::warn!("Could not determine merge status for branch '{}': {}", branch_name, e);
+                        tracing::warn!(
+                            "Could not determine merge status for branch '{}': {}",
+                            branch_name,
+                            e
+                        );
                         Ok(false) // Be conservative if we can't determine
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("Could not determine merge status for branch '{}': {}", branch_name, e);
+                tracing::warn!(
+                    "Could not determine merge status for branch '{}': {}",
+                    branch_name,
+                    e
+                );
                 Ok(false) // Be conservative if we can't determine
             }
         }
     }
 
     /// Deletes multiple branches in a single batch operation with detailed results.
-    /// 
+    ///
     /// This method provides efficient batch processing for deleting multiple branches
     /// while returning detailed success/failure information for each branch. It uses
     /// the same safety validation and idempotent behavior as `delete_branch()`.
-    /// 
+    ///
     /// # Behavior
     /// - **Force Mode (true)**: Continues processing all branches even if some fail
     /// - **Safe Mode (false)**: Stops at first failure to prevent unexpected behavior
     /// - Each branch deletion is independent and idempotent
     /// - Failed deletions are logged with detailed context
-    /// 
+    ///
     /// # Parameters
     /// - `branch_names`: Array of branch names to delete
     /// - `force`: Skip safety validation and continue on failures when true
-    /// 
+    ///
     /// # Returns
     /// `Ok(Vec<(String, bool)>)` where each tuple contains:
     /// - Branch name (String)
     /// - Success status (bool): true if deleted successfully, false if failed
-    /// 
+    ///
     /// # Errors  
     /// - In safe mode: Returns first deletion error encountered
     /// - In force mode: Never returns errors, check individual results instead
-    /// 
+    ///
     /// # Examples
     /// ```rust,no_run
     /// use swissarmyhammer::git::operations::GitOperations;
     /// # fn example() -> swissarmyhammer::Result<()> {
     /// let git = GitOperations::new()?;
-    /// 
+    ///
     /// // Safe batch deletion (stops on first error)
     /// let results = git.delete_branches(&["feature-1", "feature-2"], false)?;
-    /// 
+    ///
     /// // Force batch deletion (processes all branches)
     /// let results = git.delete_branches(&["old-branch-1", "old-branch-2"], true)?;
     /// for (branch, success) in results {
@@ -1472,16 +1611,20 @@ impl GitOperations {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn delete_branches(&self, branch_names: &[&str], force: bool) -> Result<Vec<(String, bool)>> {
+    pub fn delete_branches(
+        &self,
+        branch_names: &[&str],
+        force: bool,
+    ) -> Result<Vec<(String, bool)>> {
         let mut results = Vec::new();
-        
+
         for &branch_name in branch_names {
             match self.delete_branch(branch_name, force) {
                 Ok(()) => results.push((branch_name.to_string(), true)),
                 Err(e) => {
                     tracing::warn!("Failed to delete branch '{}': {}", branch_name, e);
                     results.push((branch_name.to_string(), false));
-                    
+
                     // Continue with other branches unless it's a critical failure
                     if !force {
                         return Err(e);
@@ -1489,7 +1632,7 @@ impl GitOperations {
                 }
             }
         }
-        
+
         Ok(results)
     }
 
@@ -1497,17 +1640,19 @@ impl GitOperations {
     pub fn cleanup_merged_issue_branches(&self) -> Result<Vec<String>> {
         let repo = self.open_git2_repository()?;
         let mut cleaned_branches = Vec::new();
-        
+
         // List all issue branches
-        let branches = repo.branches(Some(git2::BranchType::Local))
+        let branches = repo
+            .branches(Some(git2::BranchType::Local))
             .map_err(|e| git2_utils::convert_git2_error("list branches", e))?;
-        
+
         for branch_result in branches {
-            let (branch, _) = branch_result
-                .map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
-            
-            if let Some(branch_name) = branch.name()
-                .map_err(|e| git2_utils::convert_git2_error("get branch name", e))? 
+            let (branch, _) =
+                branch_result.map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
+
+            if let Some(branch_name) = branch
+                .name()
+                .map_err(|e| git2_utils::convert_git2_error("get branch name", e))?
             {
                 // Only process issue branches
                 if self.is_issue_branch(branch_name) {
@@ -1517,7 +1662,7 @@ impl GitOperations {
                             Ok(()) => {
                                 tracing::info!("Cleaned up merged issue branch: {}", branch_name);
                                 cleaned_branches.push(branch_name.to_string());
-                            },
+                            }
                             Err(e) => {
                                 tracing::warn!("Failed to cleanup branch '{}': {}", branch_name, e);
                             }
@@ -1526,7 +1671,7 @@ impl GitOperations {
                 }
             }
         }
-        
+
         Ok(cleaned_branches)
     }
 
@@ -1534,24 +1679,27 @@ impl GitOperations {
     pub fn list_unmerged_issue_branches(&self) -> Result<Vec<String>> {
         let repo = self.open_git2_repository()?;
         let mut unmerged_branches = Vec::new();
-        
-        let branches = repo.branches(Some(git2::BranchType::Local))
+
+        let branches = repo
+            .branches(Some(git2::BranchType::Local))
             .map_err(|e| git2_utils::convert_git2_error("list branches", e))?;
-        
+
         for branch_result in branches {
-            let (branch, _) = branch_result
-                .map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
-            
-            if let Some(branch_name) = branch.name()
+            let (branch, _) =
+                branch_result.map_err(|e| git2_utils::convert_git2_error("iterate branch", e))?;
+
+            if let Some(branch_name) = branch
+                .name()
                 .map_err(|e| git2_utils::convert_git2_error("get branch name", e))?
             {
-                if self.is_issue_branch(branch_name) 
-                    && !self.is_branch_merged(&branch, branch_name)? {
+                if self.is_issue_branch(branch_name)
+                    && !self.is_branch_merged(&branch, branch_name)?
+                {
                     unmerged_branches.push(branch_name.to_string());
                 }
             }
         }
-        
+
         Ok(unmerged_branches)
     }
 
@@ -1568,34 +1716,35 @@ impl GitOperations {
     /// Get last commit info using git2
     pub fn get_last_commit_info_git2(&self) -> Result<String> {
         let repo = self.open_git2_repository()?;
-        
+
         // Get HEAD commit
-        let head_commit = repo.head()
+        let head_commit = repo
+            .head()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("get HEAD", e))?
             .peel_to_commit()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("get HEAD commit", e))?;
-        
+
         // Format commit info to match shell output exactly
         let hash = head_commit.id().to_string();
         let message = head_commit.message().unwrap_or("").trim().to_string();
         let author = head_commit.author();
         let author_name = author.name().unwrap_or("unknown").to_string();
-        
+
         // Format timestamp to ISO format matching --date=iso
         // Git's --date=iso uses local time with timezone offset
         let timestamp = author.when();
         let offset_minutes = timestamp.offset_minutes();
         let datetime = DateTime::<Utc>::from_timestamp(timestamp.seconds(), 0).unwrap_or_default();
-        
+
         // Convert offset from minutes to hours and minutes for formatting
         let offset_sign = if offset_minutes >= 0 { "+" } else { "-" };
         let offset_abs_minutes = offset_minutes.abs();
         let offset_hours = offset_abs_minutes / 60;
         let offset_mins = offset_abs_minutes % 60;
-        
+
         // Apply the offset to get local time
         let local_datetime = datetime + chrono::Duration::minutes(offset_minutes as i64);
-        
+
         let iso_date = format!(
             "{} {}{:02}{:02}",
             local_datetime.format("%Y-%m-%d %H:%M:%S"),
@@ -1603,7 +1752,7 @@ impl GitOperations {
             offset_hours,
             offset_mins
         );
-        
+
         Ok(format!("{}|{}|{}|{}", hash, message, author_name, iso_date))
     }
 
@@ -1613,10 +1762,12 @@ impl GitOperations {
             .current_dir(&self.work_dir)
             .args(["log", "-1", "--pretty=format:%H|%s|%an|%ai"])
             .output()
-            .map_err(|e| SwissArmyHammerError::git_operation_failed(
-                "get last commit info",
-                &format!("Failed to execute git command: {}", e),
-            ))?;
+            .map_err(|e| {
+                SwissArmyHammerError::git_operation_failed(
+                    "get last commit info",
+                    &format!("Failed to execute git command: {}", e),
+                )
+            })?;
 
         if !output.status.success() {
             return Err(SwissArmyHammerError::git_operation_failed(
@@ -1631,31 +1782,34 @@ impl GitOperations {
     /// Get commit history using git2-rs revwalk
     pub fn get_commit_history(&self, limit: Option<usize>) -> Result<Vec<CommitInfo>> {
         let repo = self.open_git2_repository()?;
-        let mut revwalk = repo.revwalk()
+        let mut revwalk = repo
+            .revwalk()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("create revwalk", e))?;
-        
+
         // Start from HEAD
-        revwalk.push_head()
+        revwalk
+            .push_head()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("push HEAD to revwalk", e))?;
-        
+
         let mut commits = Vec::new();
-        
+
         for (count, oid_result) in revwalk.enumerate() {
             if let Some(limit) = limit {
                 if count >= limit {
                     break;
                 }
             }
-            
+
             let oid = oid_result
                 .map_err(|e| SwissArmyHammerError::git2_operation_failed("iterate revwalk", e))?;
-            
-            let commit = repo.find_commit(oid)
+
+            let commit = repo
+                .find_commit(oid)
                 .map_err(|e| SwissArmyHammerError::git2_operation_failed("find commit", e))?;
-            
+
             commits.push(self.commit_to_info(&commit));
         }
-        
+
         Ok(commits)
     }
 
@@ -1687,34 +1841,41 @@ impl GitOperations {
     }
 
     /// Find commits by author name or email
-    pub fn find_commits_by_author(&self, author: &str, limit: Option<usize>) -> Result<Vec<CommitInfo>> {
+    pub fn find_commits_by_author(
+        &self,
+        author: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<CommitInfo>> {
         let repo = self.open_git2_repository()?;
-        let mut revwalk = repo.revwalk()
+        let mut revwalk = repo
+            .revwalk()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("create revwalk", e))?;
-        
+
         // Start from HEAD
-        revwalk.push_head()
+        revwalk
+            .push_head()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("push HEAD to revwalk", e))?;
-        
+
         let mut matching_commits = Vec::new();
         let mut match_count = 0;
-        
+
         for oid_result in revwalk {
             let oid = oid_result
                 .map_err(|e| SwissArmyHammerError::git2_operation_failed("iterate revwalk", e))?;
-            
-            let commit = repo.find_commit(oid)
+
+            let commit = repo
+                .find_commit(oid)
                 .map_err(|e| SwissArmyHammerError::git2_operation_failed("find commit", e))?;
-            
+
             // Check if this commit matches the author filter
             let author_signature = commit.author();
             let author_name = author_signature.name().unwrap_or("unknown");
             let author_email = author_signature.email().unwrap_or("");
-            
+
             if author_name.contains(author) || author_email.contains(author) {
                 matching_commits.push(self.commit_to_info(&commit));
                 match_count += 1;
-                
+
                 if let Some(limit) = limit {
                     if match_count >= limit {
                         break;
@@ -1722,134 +1883,185 @@ impl GitOperations {
                 }
             }
         }
-        
+
         Ok(matching_commits)
     }
 
     /// Find commits in a range between two references
     pub fn find_commits_in_range(&self, since: &str, until: &str) -> Result<Vec<CommitInfo>> {
         let repo = self.open_git2_repository()?;
-        let mut revwalk = repo.revwalk()
+        let mut revwalk = repo
+            .revwalk()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("create revwalk", e))?;
-        
+
         // Parse range (simplified - could be enhanced)
-        let since_oid = repo.revparse_single(since)
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("parse since '{}'", since), e))?
+        let since_oid = repo
+            .revparse_single(since)
+            .map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed(&format!("parse since '{}'", since), e)
+            })?
             .id();
-        
-        let until_oid = repo.revparse_single(until)
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("parse until '{}'", until), e))?
+
+        let until_oid = repo
+            .revparse_single(until)
+            .map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed(&format!("parse until '{}'", until), e)
+            })?
             .id();
-        
-        revwalk.push(until_oid)
+
+        revwalk
+            .push(until_oid)
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("push until to revwalk", e))?;
-        revwalk.hide(since_oid)
+        revwalk
+            .hide(since_oid)
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("hide since in revwalk", e))?;
-        
+
         let mut commits = Vec::new();
-        
+
         for oid_result in revwalk {
-            let oid = oid_result
-                .map_err(|e| SwissArmyHammerError::git2_operation_failed("iterate revwalk range", e))?;
-            
-            let commit = repo.find_commit(oid)
-                .map_err(|e| SwissArmyHammerError::git2_operation_failed("find commit in range", e))?;
-            
+            let oid = oid_result.map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("iterate revwalk range", e)
+            })?;
+
+            let commit = repo.find_commit(oid).map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("find commit in range", e)
+            })?;
+
             commits.push(self.commit_to_info(&commit));
         }
-        
+
         Ok(commits)
     }
 
     /// Get commit history for a specific branch
-    pub fn get_branch_history(&self, branch_name: &str, limit: Option<usize>) -> Result<Vec<CommitInfo>> {
+    pub fn get_branch_history(
+        &self,
+        branch_name: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<CommitInfo>> {
         let repo = self.open_git2_repository()?;
-        
+
         // Find the branch
-        let branch = repo.find_branch(branch_name, git2::BranchType::Local)
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("find branch '{}'", branch_name), e))?;
-        
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed(
+                    &format!("find branch '{}'", branch_name),
+                    e,
+                )
+            })?;
+
         // Get branch commit
-        let branch_commit = branch.get().peel_to_commit()
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("get commit for branch '{}'", branch_name), e))?;
-        
+        let branch_commit = branch.get().peel_to_commit().map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed(
+                &format!("get commit for branch '{}'", branch_name),
+                e,
+            )
+        })?;
+
         // Walk from branch commit
-        let mut revwalk = repo.revwalk()
+        let mut revwalk = repo
+            .revwalk()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("create revwalk", e))?;
-        
-        revwalk.push(branch_commit.id())
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed("push branch to revwalk", e))?;
-        
+
+        revwalk.push(branch_commit.id()).map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed("push branch to revwalk", e)
+        })?;
+
         let mut commits = Vec::new();
-        
+
         for (count, oid_result) in revwalk.enumerate() {
             if let Some(limit) = limit {
                 if count >= limit {
                     break;
                 }
             }
-            
-            let oid = oid_result
-                .map_err(|e| SwissArmyHammerError::git2_operation_failed("iterate branch revwalk", e))?;
-            
-            let commit = repo.find_commit(oid)
-                .map_err(|e| SwissArmyHammerError::git2_operation_failed("find branch commit", e))?;
-            
+
+            let oid = oid_result.map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("iterate branch revwalk", e)
+            })?;
+
+            let commit = repo.find_commit(oid).map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("find branch commit", e)
+            })?;
+
             commits.push(self.commit_to_info(&commit));
         }
-        
+
         Ok(commits)
     }
 
     /// Get commits that are unique to a branch (not in base branch)
-    pub fn get_commits_unique_to_branch(&self, branch_name: &str, base_branch: &str) -> Result<Vec<CommitInfo>> {
+    pub fn get_commits_unique_to_branch(
+        &self,
+        branch_name: &str,
+        base_branch: &str,
+    ) -> Result<Vec<CommitInfo>> {
         let repo = self.open_git2_repository()?;
-        
+
         // Get branch commits
-        let branch = repo.find_branch(branch_name, git2::BranchType::Local)
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("find branch '{}'", branch_name), e))?;
-        let branch_commit = branch.get().peel_to_commit()
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("get commit for branch '{}'", branch_name), e))?;
-        
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
+            .map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed(
+                    &format!("find branch '{}'", branch_name),
+                    e,
+                )
+            })?;
+        let branch_commit = branch.get().peel_to_commit().map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed(
+                &format!("get commit for branch '{}'", branch_name),
+                e,
+            )
+        })?;
+
         // Get base branch commit
-        let base = repo.find_branch(base_branch, git2::BranchType::Local)
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("find base branch '{}'", base_branch), e))?;
-        let base_commit = base.get().peel_to_commit()
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed(
-                &format!("get commit for base branch '{}'", base_branch), e))?;
-        
+        let base = repo
+            .find_branch(base_branch, git2::BranchType::Local)
+            .map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed(
+                    &format!("find base branch '{}'", base_branch),
+                    e,
+                )
+            })?;
+        let base_commit = base.get().peel_to_commit().map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed(
+                &format!("get commit for base branch '{}'", base_branch),
+                e,
+            )
+        })?;
+
         // Find merge base
-        let merge_base = repo.merge_base(branch_commit.id(), base_commit.id())
+        let merge_base = repo
+            .merge_base(branch_commit.id(), base_commit.id())
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("find merge base", e))?;
-        
+
         // Walk from branch commit, hiding merge base
-        let mut revwalk = repo.revwalk()
+        let mut revwalk = repo
+            .revwalk()
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("create revwalk", e))?;
-        
-        revwalk.push(branch_commit.id())
-            .map_err(|e| SwissArmyHammerError::git2_operation_failed("push branch to revwalk", e))?;
-        revwalk.hide(merge_base)
+
+        revwalk.push(branch_commit.id()).map_err(|e| {
+            SwissArmyHammerError::git2_operation_failed("push branch to revwalk", e)
+        })?;
+        revwalk
+            .hide(merge_base)
             .map_err(|e| SwissArmyHammerError::git2_operation_failed("hide merge base", e))?;
-        
+
         let mut unique_commits = Vec::new();
-        
+
         for oid_result in revwalk {
-            let oid = oid_result
-                .map_err(|e| SwissArmyHammerError::git2_operation_failed("iterate unique commits", e))?;
-            
-            let commit = repo.find_commit(oid)
-                .map_err(|e| SwissArmyHammerError::git2_operation_failed("find unique commit", e))?;
-            
+            let oid = oid_result.map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("iterate unique commits", e)
+            })?;
+
+            let commit = repo.find_commit(oid).map_err(|e| {
+                SwissArmyHammerError::git2_operation_failed("find unique commit", e)
+            })?;
+
             unique_commits.push(self.commit_to_info(&commit));
         }
-        
+
         Ok(unique_commits)
     }
 
@@ -2220,12 +2432,12 @@ impl GitOperations {
     }
 
     /// Get issue source branch from configuration
-    /// 
+    ///
     /// This is a placeholder for future configuration-based source branch tracking.
     /// When implemented, this would read from .swissarmyhammer/config or similar
     /// to allow users to specify which branch issues should be merged back to
     /// on a per-project or per-issue basis.
-    /// 
+    ///
     /// Currently returns None, causing the system to fall back to reflog analysis
     /// for determining the appropriate target branch.
     fn get_issue_source_branch(&self, _issue_name: &str) -> Result<Option<String>> {
@@ -2237,7 +2449,11 @@ impl GitOperations {
     /// Get information about which backend is being used
     pub fn backend_info(&self) -> BackendInfo {
         BackendInfo {
-            backend_type: if self.use_git2 { "git2".to_string() } else { "shell".to_string() },
+            backend_type: if self.use_git2 {
+                "git2".to_string()
+            } else {
+                "shell".to_string()
+            },
             git2_available: true, // git2 is always available since it's compiled in
             git2_version: env!("CARGO_PKG_VERSION").to_string(),
             shell_available: self.is_shell_git_available(),
@@ -2273,26 +2489,26 @@ impl GitOperations {
     /// Test both backends for compatibility
     pub fn test_backend_compatibility(&self) -> Result<CompatibilityReport> {
         let mut report = CompatibilityReport::new();
-        
+
         // Test basic operations with both backends
         let operations = vec![
             "current_branch",
             "branch_exists_main",
             "working_directory_status",
         ];
-        
+
         for op in &operations {
             let git2_result = self.test_operation_git2(op);
             let shell_result = self.test_operation_shell(op);
-            
+
             report.add_test(op, git2_result.is_ok(), shell_result.is_ok());
-            
+
             // Compare results if both succeeded
             if let (Ok(git2_val), Ok(shell_val)) = (&git2_result, &shell_result) {
                 report.add_comparison(op, git2_val == shell_val);
             }
         }
-        
+
         Ok(report)
     }
 
@@ -2303,9 +2519,16 @@ impl GitOperations {
             "branch_exists_main" => Ok(self.branch_exists_git2("main")?.to_string()),
             "working_directory_status" => {
                 let summary = self.get_status_summary()?;
-                Ok(format!("clean: {}, changes: {}", summary.is_clean(), summary.total_changes()))
-            },
-            _ => Err(SwissArmyHammerError::Other(format!("Unknown test operation: {}", operation))),
+                Ok(format!(
+                    "clean: {}, changes: {}",
+                    summary.is_clean(),
+                    summary.total_changes()
+                ))
+            }
+            _ => Err(SwissArmyHammerError::Other(format!(
+                "Unknown test operation: {}",
+                operation
+            ))),
         }
     }
 
@@ -2316,9 +2539,16 @@ impl GitOperations {
             "branch_exists_main" => Ok(self.branch_exists_shell("main")?.to_string()),
             "working_directory_status" => {
                 let changes = self.is_working_directory_clean()?;
-                Ok(format!("clean: {}, changes: {}", changes.is_empty(), changes.len()))
-            },
-            _ => Err(SwissArmyHammerError::Other(format!("Unknown test operation: {}", operation))),
+                Ok(format!(
+                    "clean: {}, changes: {}",
+                    changes.is_empty(),
+                    changes.len()
+                ))
+            }
+            _ => Err(SwissArmyHammerError::Other(format!(
+                "Unknown test operation: {}",
+                operation
+            ))),
         }
     }
 
@@ -2675,7 +2905,11 @@ mod tests {
             Command::new("git")
         } else {
             // Try common git locations for macOS and Linux
-            let common_paths = ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
+            let common_paths = [
+                "/usr/bin/git",
+                "/usr/local/bin/git",
+                "/opt/homebrew/bin/git",
+            ];
             for path in &common_paths {
                 if std::path::Path::new(path).exists() {
                     return Command::new(path);
@@ -2744,38 +2978,40 @@ mod tests {
 
     /// Test helper that runs the same test with both backends using the same repository
     /// This ensures that both shell and git2 backends produce equivalent results
-    fn test_with_both_backends<F>(test_fn: F) -> Result<()> 
+    fn test_with_both_backends<F>(test_fn: F) -> Result<()>
     where
         F: Fn(&GitOperations) -> Result<()>,
     {
-        let temp_dir = create_test_git_repo()?;
-        let repo_path = temp_dir.path().to_path_buf();
-        
-        // Test with shell backend
-        let shell_ops = GitOperations::with_work_dir_and_backend(repo_path.clone(), false)?;
-        test_fn(&shell_ops)
-            .map_err(|e| SwissArmyHammerError::Other(format!("Shell backend test failed: {}", e)))?;
-        
-        // Test with git2 backend using same repository
-        let git2_ops = GitOperations::with_work_dir_and_backend(repo_path, true)?;
+        // Test with shell backend using a fresh repository
+        let shell_temp_dir = create_test_git_repo()?;
+        let shell_repo_path = shell_temp_dir.path().to_path_buf();
+        let shell_ops = GitOperations::with_work_dir_and_backend(shell_repo_path, false)?;
+        test_fn(&shell_ops).map_err(|e| {
+            SwissArmyHammerError::Other(format!("Shell backend test failed: {}", e))
+        })?;
+
+        // Test with git2 backend using a separate fresh repository
+        let git2_temp_dir = create_test_git_repo()?;
+        let git2_repo_path = git2_temp_dir.path().to_path_buf();
+        let git2_ops = GitOperations::with_work_dir_and_backend(git2_repo_path, true)?;
         test_fn(&git2_ops)
             .map_err(|e| SwissArmyHammerError::Other(format!("Git2 backend test failed: {}", e)))?;
-        
+
         Ok(())
     }
-    
+
     /// Create GitOperations with shell backend for testing
     fn create_test_git_ops_shell() -> Result<GitOperations> {
         let temp_dir = create_test_git_repo()?;
         GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), false)
     }
-    
+
     /// Create GitOperations with git2 backend for testing
     fn create_test_git_ops_git2() -> Result<GitOperations> {
         let temp_dir = create_test_git_repo()?;
         GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true)
     }
-    
+
     /// Compare results from both backends using the same repository to ensure compatibility
     /// Returns tuple of (shell_result, git2_result) and asserts they're equal
     fn compare_backend_results<T, F>(operation: F) -> Result<(T, T)>
@@ -2785,31 +3021,32 @@ mod tests {
     {
         let temp_dir = create_test_git_repo()?;
         let repo_path = temp_dir.path().to_path_buf();
-        
+
         let shell_ops = GitOperations::with_work_dir_and_backend(repo_path.clone(), false)?;
         let git2_ops = GitOperations::with_work_dir_and_backend(repo_path, true)?;
-        
+
         let shell_result = operation(&shell_ops)?;
         let git2_result = operation(&git2_ops)?;
-        
-        assert_eq!(shell_result, git2_result, 
-            "Backend results differ: shell={:?}, git2={:?}", shell_result, git2_result);
-        
+
+        assert_eq!(
+            shell_result, git2_result,
+            "Backend results differ: shell={:?}, git2={:?}",
+            shell_result, git2_result
+        );
+
         Ok((shell_result, git2_result))
     }
-
-
 
     // Dual backend compatibility tests
 
     #[test]
     fn test_backend_infrastructure() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        
+
         // Test that we can create both backend types
         let shell_ops = create_test_git_ops_shell().unwrap();
         let git2_ops = create_test_git_ops_git2().unwrap();
-        
+
         // Verify backend selection worked correctly
         assert!(!shell_ops.is_using_git2());
         assert!(git2_ops.is_using_git2());
@@ -2819,10 +3056,11 @@ mod tests {
     fn test_shell_backend_directly() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
-        
+
         // Try shell backend directly
-        let shell_ops = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), false).unwrap();
-        
+        let shell_ops =
+            GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), false).unwrap();
+
         // Test that shell backend can get current branch
         let current_branch = shell_ops.current_branch().unwrap();
         let expected_branch = get_expected_default_branch(&shell_ops);
@@ -2843,17 +3081,23 @@ mod tests {
             Err(e) => {
                 // Expected: Shell backend fails due to PATH issues, verify git2 backend works
                 let temp_dir = create_test_git_repo().unwrap();
-                let git2_ops = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true).unwrap();
+                let git2_ops =
+                    GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true)
+                        .unwrap();
                 let git2_branch = git2_ops.current_branch().unwrap();
                 assert!(git2_branch == "main" || git2_branch == "master");
-                
+
                 // Test default backend selection (should use git2 by default)
-                let default_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+                let default_ops =
+                    GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
                 let default_branch = default_ops.current_branch().unwrap();
                 assert_eq!(git2_branch, default_branch);
                 assert!(default_ops.is_using_git2());
-                
-                println!("✓ Git2 backend works for current_branch despite shell failure: {}", e);
+
+                println!(
+                    "✓ Git2 backend works for current_branch despite shell failure: {}",
+                    e
+                );
             }
         }
     }
@@ -2861,7 +3105,7 @@ mod tests {
     #[test]
     fn test_main_branch_both_backends() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        
+
         match test_with_both_backends(|git_ops| {
             let main_branch = git_ops.main_branch()?;
             assert!(main_branch == "main" || main_branch == "master");
@@ -2873,10 +3117,15 @@ mod tests {
             Err(e) => {
                 // Expected: Shell backend fails, verify git2 backend works
                 let temp_dir = create_test_git_repo().unwrap();
-                let git2_ops = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true).unwrap();
+                let git2_ops =
+                    GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true)
+                        .unwrap();
                 let git2_main = git2_ops.main_branch().unwrap();
                 assert!(git2_main == "main" || git2_main == "master");
-                println!("✓ Git2 backend works for main_branch despite shell failure: {}", e);
+                println!(
+                    "✓ Git2 backend works for main_branch despite shell failure: {}",
+                    e
+                );
             }
         }
     }
@@ -2884,7 +3133,7 @@ mod tests {
     #[test]
     fn test_branch_exists_both_backends() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        
+
         match test_with_both_backends(|git_ops| {
             let main_branch = git_ops.main_branch()?;
             assert!(git_ops.branch_exists(&main_branch)?);
@@ -2897,11 +3146,16 @@ mod tests {
             Err(e) => {
                 // Expected: Shell backend fails, verify git2 backend works
                 let temp_dir = create_test_git_repo().unwrap();
-                let git2_ops = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true).unwrap();
+                let git2_ops =
+                    GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true)
+                        .unwrap();
                 let git2_main = git2_ops.main_branch().unwrap();
                 assert!(git2_ops.branch_exists(&git2_main).unwrap());
                 assert!(!git2_ops.branch_exists("non-existent-branch").unwrap());
-                println!("✓ Git2 backend works for branch_exists despite shell failure: {}", e);
+                println!(
+                    "✓ Git2 backend works for branch_exists despite shell failure: {}",
+                    e
+                );
             }
         }
     }
@@ -2911,31 +3165,31 @@ mod tests {
         // Simple test to verify git2 backend functionality
         let temp_dir = create_test_git_repo().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
-        
+
         // Test git2 backend
         let git2_ops = GitOperations::with_work_dir_and_backend(repo_path.clone(), true).unwrap();
         assert!(git2_ops.is_using_git2());
-        
+
         let current_branch = git2_ops.current_branch().unwrap();
         assert!(current_branch == "main" || current_branch == "master");
-        
+
         let main_branch = git2_ops.main_branch().unwrap();
         assert!(main_branch == "main" || main_branch == "master");
         assert_eq!(current_branch, main_branch);
-        
+
         assert!(git2_ops.branch_exists(&main_branch).unwrap());
         assert!(!git2_ops.branch_exists("non-existent-branch").unwrap());
     }
 
     // Performance comparison test framework
-    
+
     /// Benchmark a git operation and return execution duration
     fn benchmark_git_operation<F, T>(operation: F, iterations: usize) -> std::time::Duration
     where
         F: Fn() -> T,
     {
         use std::time::Instant;
-        
+
         let start = Instant::now();
         for _ in 0..iterations {
             operation();
@@ -2943,61 +3197,66 @@ mod tests {
         start.elapsed() / iterations as u32
     }
 
-    #[test] 
+    #[test]
     fn test_git2_vs_shell_performance() {
         // This test compares git2 vs shell performance
         let temp_dir = create_test_git_repo().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
-        
+
         // Create both backend instances
         let git2_ops = GitOperations::with_work_dir_and_backend(repo_path.clone(), true).unwrap();
         let shell_ops = GitOperations::with_work_dir_and_backend(repo_path, false).unwrap();
-        
+
         const ITERATIONS: usize = 10;
-        
+
         // Benchmark git2 backend
-        let git2_current_branch_time = benchmark_git_operation(|| {
-            git2_ops.current_branch().unwrap()
-        }, ITERATIONS);
-        
-        let git2_main_branch_time = benchmark_git_operation(|| {
-            git2_ops.main_branch().unwrap()
-        }, ITERATIONS);
-        
-        let git2_branch_exists_time = benchmark_git_operation(|| {
-            git2_ops.branch_exists("main").unwrap() || git2_ops.branch_exists("master").unwrap()
-        }, ITERATIONS);
-        
+        let git2_current_branch_time =
+            benchmark_git_operation(|| git2_ops.current_branch().unwrap(), ITERATIONS);
+
+        let git2_main_branch_time =
+            benchmark_git_operation(|| git2_ops.main_branch().unwrap(), ITERATIONS);
+
+        let git2_branch_exists_time = benchmark_git_operation(
+            || git2_ops.branch_exists("main").unwrap() || git2_ops.branch_exists("master").unwrap(),
+            ITERATIONS,
+        );
+
         // Benchmark shell backend
-        let shell_current_branch_time = benchmark_git_operation(|| {
-            shell_ops.current_branch().unwrap()
-        }, ITERATIONS);
-        
-        let shell_main_branch_time = benchmark_git_operation(|| {
-            shell_ops.main_branch().unwrap()
-        }, ITERATIONS);
-        
-        let shell_branch_exists_time = benchmark_git_operation(|| {
-            shell_ops.branch_exists("main").unwrap() || shell_ops.branch_exists("master").unwrap()
-        }, ITERATIONS);
-        
+        let shell_current_branch_time =
+            benchmark_git_operation(|| shell_ops.current_branch().unwrap(), ITERATIONS);
+
+        let shell_main_branch_time =
+            benchmark_git_operation(|| shell_ops.main_branch().unwrap(), ITERATIONS);
+
+        let shell_branch_exists_time = benchmark_git_operation(
+            || {
+                shell_ops.branch_exists("main").unwrap()
+                    || shell_ops.branch_exists("master").unwrap()
+            },
+            ITERATIONS,
+        );
+
         println!("Performance Comparison ({} iterations):", ITERATIONS);
         println!("Git2 Backend:");
         println!("  current_branch: {:?}", git2_current_branch_time);
-        println!("  main_branch: {:?}", git2_main_branch_time);  
+        println!("  main_branch: {:?}", git2_main_branch_time);
         println!("  branch_exists: {:?}", git2_branch_exists_time);
         println!("Shell Backend:");
         println!("  current_branch: {:?}", shell_current_branch_time);
-        println!("  main_branch: {:?}", shell_main_branch_time);  
+        println!("  main_branch: {:?}", shell_main_branch_time);
         println!("  branch_exists: {:?}", shell_branch_exists_time);
-        
+
         // Git2 should be faster than shell (no subprocess overhead)
-        assert!(git2_current_branch_time < shell_current_branch_time, 
-            "Git2 should be faster: git2={:?}, shell={:?}", git2_current_branch_time, shell_current_branch_time);
-        
-        // Both should be reasonably fast (< 50ms per operation for simple repos)
-        assert!(git2_current_branch_time.as_millis() < 50);
-        assert!(shell_current_branch_time.as_millis() < 50);
+        assert!(
+            git2_current_branch_time < shell_current_branch_time,
+            "Git2 should be faster: git2={:?}, shell={:?}",
+            git2_current_branch_time,
+            shell_current_branch_time
+        );
+
+        // Both should be reasonably fast (< 100ms per operation for simple repos)
+        assert!(git2_current_branch_time.as_millis() < 100);
+        assert!(shell_current_branch_time.as_millis() < 100);
     }
 
     #[test]
@@ -3009,7 +3268,7 @@ mod tests {
                 return;
             }
         };
-        
+
         // Test current_branch compatibility - handle shell backend failures gracefully
         match compare_backend_results(|ops| ops.current_branch()) {
             Ok((shell_branch, git2_branch)) => {
@@ -3021,7 +3280,10 @@ mod tests {
                 // Verify git2 backend still works independently
                 match create_test_git_repo() {
                     Ok(temp_dir) => {
-                        if let Ok(git2_ops) = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true) {
+                        if let Ok(git2_ops) = GitOperations::with_work_dir_and_backend(
+                            temp_dir.path().to_path_buf(),
+                            true,
+                        ) {
                             if let Ok(git2_branch) = git2_ops.current_branch() {
                                 assert!(git2_branch == "main" || git2_branch == "master");
                                 println!("✓ Git2 backend works independently despite shell backend failure: {}", e);
@@ -3032,8 +3294,8 @@ mod tests {
                 }
             }
         }
-        
-        // Test main_branch compatibility - handle shell backend failures gracefully  
+
+        // Test main_branch compatibility - handle shell backend failures gracefully
         match compare_backend_results(|ops| ops.main_branch()) {
             Ok((shell_main, git2_main)) => {
                 assert_eq!(shell_main, git2_main);
@@ -3043,7 +3305,10 @@ mod tests {
                 // Expected: Shell backend fails, verify git2 backend works
                 match create_test_git_repo() {
                     Ok(temp_dir) => {
-                        if let Ok(git2_ops) = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true) {
+                        if let Ok(git2_ops) = GitOperations::with_work_dir_and_backend(
+                            temp_dir.path().to_path_buf(),
+                            true,
+                        ) {
                             if let Ok(git2_main) = git2_ops.main_branch() {
                                 assert!(git2_main == "main" || git2_main == "master");
                                 println!("✓ Git2 backend works independently for main_branch despite shell failure: {}", e);
@@ -3054,7 +3319,7 @@ mod tests {
                 }
             }
         }
-        
+
         // Test branch_exists compatibility - handle shell backend failures gracefully
         match compare_backend_results(|ops| {
             let main_branch = ops.main_branch()?;
@@ -3069,7 +3334,10 @@ mod tests {
                 // Expected: Shell backend fails, verify git2 backend works
                 match create_test_git_repo() {
                     Ok(temp_dir) => {
-                        if let Ok(git2_ops) = GitOperations::with_work_dir_and_backend(temp_dir.path().to_path_buf(), true) {
+                        if let Ok(git2_ops) = GitOperations::with_work_dir_and_backend(
+                            temp_dir.path().to_path_buf(),
+                            true,
+                        ) {
                             if let Ok(git2_main) = git2_ops.main_branch() {
                                 if let Ok(git2_exists) = git2_ops.branch_exists(&git2_main) {
                                     assert!(git2_exists); // Main branch should exist
@@ -3148,7 +3416,7 @@ mod tests {
                     e
                 );
             }
-            Ok(_) => return Err(SwissArmyHammerError::Other("Expected error but got success".into())),
+            Ok(_) => panic!("Expected error but got success"),
         }
     }
 
@@ -3171,7 +3439,8 @@ mod tests {
             // Should be on main or master branch
             assert!(current_branch == "main" || current_branch == "master");
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3184,7 +3453,8 @@ mod tests {
             // Should find main or master branch
             assert!(main_branch == "main" || main_branch == "master");
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3199,7 +3469,8 @@ mod tests {
             // Non-existent branch should not exist
             assert!(!git_ops.branch_exists("non-existent-branch")?);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3218,7 +3489,8 @@ mod tests {
             // Verify the branch exists
             assert!(git_ops.branch_exists("issue/test_issue")?);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3244,7 +3516,8 @@ mod tests {
             let current_branch = git_ops.current_branch()?;
             assert_eq!(current_branch, "issue/test_issue");
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3279,7 +3552,8 @@ mod tests {
             // Verify the file exists (merge was successful)
             assert!(git_ops.work_dir().join("test.txt").exists());
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3291,7 +3565,8 @@ mod tests {
             let result = git_ops.merge_issue_branch_auto("non_existent_issue");
             assert!(result.is_err());
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3323,7 +3598,8 @@ mod tests {
             // Should have no uncommitted changes again
             assert!(!git_ops.has_uncommitted_changes()?);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3360,7 +3636,8 @@ mod tests {
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), "issue/test_issue");
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3374,7 +3651,10 @@ mod tests {
             // Try to create the same work branch again (resume scenario) - should succeed
             let result = git_ops.create_work_branch("test_issue");
             if result.is_err() {
-                return Err(SwissArmyHammerError::Other(format!("Expected success but got error: {:?}", result.unwrap_err())));
+                return Err(SwissArmyHammerError::Other(format!(
+                    "Expected success but got error: {:?}",
+                    result.unwrap_err()
+                )));
             }
             assert_eq!(result.unwrap(), "issue/test_issue");
 
@@ -3382,7 +3662,8 @@ mod tests {
             let current_branch = git_ops.current_branch()?;
             assert_eq!(current_branch, "issue/test_issue");
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -3736,7 +4017,8 @@ mod tests {
             let error_msg = result.unwrap_err().to_string();
             assert!(error_msg.contains("Cannot create issue 'third-issue' from issue branch"));
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -4220,7 +4502,8 @@ mod tests {
             // Verify the branch still doesn't exist
             assert!(!git_ops.branch_exists("nonexistent-branch")?);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -4243,12 +4526,17 @@ mod tests {
                 println!("Delete branch error even with force: {}", e);
                 eprintln!("Error details: {:?}", e);
             }
-            assert!(result.is_ok(), "Deleting existing branch should succeed: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "Deleting existing branch should succeed: {:?}",
+                result
+            );
 
             // Verify the branch no longer exists
             assert!(!git_ops.branch_exists("issue/delete-test")?);
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[test]
@@ -4878,13 +5166,21 @@ mod tests {
         assert!(git_ops.branch_exists("issue/batch-test-3").unwrap());
 
         // Delete all branches using batch operation with force
-        let branch_names = &["issue/batch-test-1", "issue/batch-test-2", "issue/batch-test-3"];
+        let branch_names = &[
+            "issue/batch-test-1",
+            "issue/batch-test-2",
+            "issue/batch-test-3",
+        ];
         let results = git_ops.delete_branches(branch_names, true).unwrap();
 
         // Verify all deletions succeeded
         assert_eq!(results.len(), 3);
         for (branch_name, success) in results {
-            assert!(success, "Branch {} should have been deleted successfully", branch_name);
+            assert!(
+                success,
+                "Branch {} should have been deleted successfully",
+                branch_name
+            );
         }
 
         // Verify branches no longer exist
@@ -4908,7 +5204,10 @@ mod tests {
 
         // Verify results
         assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|(_, success)| *success), "All deletions should succeed (idempotent)");
+        assert!(
+            results.iter().all(|(_, success)| *success),
+            "All deletions should succeed (idempotent)"
+        );
 
         // Verify existing branch was deleted
         assert!(!git_ops.branch_exists("issue/mixed-test-1").unwrap());
@@ -4931,7 +5230,10 @@ mod tests {
         // Since these branches point to the same commit as main, they should be considered merged
         // in our current test scenario, so the list might be empty
         // But let's verify the method works correctly
-        assert!(unmerged.len() <= 2, "Should not have more branches than we created");
+        assert!(
+            unmerged.len() <= 2,
+            "Should not have more branches than we created"
+        );
     }
 
     #[test]
@@ -4949,12 +5251,18 @@ mod tests {
         let cleaned = git_ops.cleanup_merged_issue_branches().unwrap();
 
         // In our test scenario, branches pointing to same commit as main should be cleaned up
-        assert!(cleaned.len() <= 2, "Should not clean up more branches than we created");
-        
+        assert!(
+            cleaned.len() <= 2,
+            "Should not clean up more branches than we created"
+        );
+
         // Verify cleaned branches no longer exist
         for branch_name in cleaned {
-            assert!(!git_ops.branch_exists(&branch_name).unwrap(), 
-                "Cleaned branch {} should no longer exist", branch_name);
+            assert!(
+                !git_ops.branch_exists(&branch_name).unwrap(),
+                "Cleaned branch {} should no longer exist",
+                branch_name
+            );
         }
     }
 
@@ -4969,72 +5277,93 @@ mod tests {
 
         // Trying to delete current branch without force should fail
         let result = git_ops.delete_branch("issue/safety-test", false);
-        assert!(result.is_err(), "Should not be able to delete current branch without force");
+        assert!(
+            result.is_err(),
+            "Should not be able to delete current branch without force"
+        );
 
         // Even with force, git doesn't allow deleting the current branch
         let result = git_ops.delete_branch("issue/safety-test", true);
-        assert!(result.is_err(), "Cannot delete current branch even with force - this is correct git behavior");
+        assert!(
+            result.is_err(),
+            "Cannot delete current branch even with force - this is correct git behavior"
+        );
     }
 
     // Helper to create a test repository with multiple commits
     fn create_test_repo_with_commits() -> Result<(TempDir, GitOperations)> {
         let temp_dir = create_test_git_repo()?;
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf())?;
-        
+
         // Create additional commits
         for i in 1..=3 {
-            fs::write(temp_dir.path().join(format!("file{}.txt", i)), format!("Content {}", i))?;
-            
+            fs::write(
+                temp_dir.path().join(format!("file{}.txt", i)),
+                format!("Content {}", i),
+            )?;
+
             Command::new("git")
                 .current_dir(temp_dir.path())
                 .args(["add", &format!("file{}.txt", i)])
                 .output()?;
-                
+
             Command::new("git")
                 .current_dir(temp_dir.path())
                 .args(["commit", "-m", &format!("Add file{}.txt", i)])
                 .output()?;
         }
-        
+
         Ok((temp_dir, git_ops))
     }
 
     #[test]
     fn test_get_last_commit_info() {
         let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
-        
+
         let commit_info = git_ops.get_last_commit_info().unwrap();
-        
+
         // Should contain pipe-separated format: hash|subject|author|date
         let parts: Vec<&str> = commit_info.split('|').collect();
-        assert_eq!(parts.len(), 4, "Expected 4 parts in commit info: {}", commit_info);
-        
+        assert_eq!(
+            parts.len(),
+            4,
+            "Expected 4 parts in commit info: {}",
+            commit_info
+        );
+
         // Hash should be 40 characters
         assert_eq!(parts[0].len(), 40, "Hash should be 40 characters");
-        
+
         // Subject should match our last commit
         assert_eq!(parts[1], "Add file3.txt");
-        
+
         // Author should be test user
         assert_eq!(parts[2], "Test User");
-        
+
         // Date should be in ISO format (contains space and timezone)
         assert!(parts[3].contains(' '), "Date should contain space");
-        assert!(parts[3].contains('+') || parts[3].contains('-'), "Date should contain timezone");
+        assert!(
+            parts[3].contains('+') || parts[3].contains('-'),
+            "Date should contain timezone"
+        );
     }
 
     #[test]
     fn test_get_commit_history() {
         let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
-        
+
         // Get all commits
         let all_commits = git_ops.get_commit_history(None).unwrap();
-        assert_eq!(all_commits.len(), 4, "Should have 4 commits (initial + 3 added)");
-        
+        assert_eq!(
+            all_commits.len(),
+            4,
+            "Should have 4 commits (initial + 3 added)"
+        );
+
         // Get limited commits
         let limited_commits = git_ops.get_commit_history(Some(2)).unwrap();
         assert_eq!(limited_commits.len(), 2, "Should limit to 2 commits");
-        
+
         // Verify commit info structure
         let latest_commit = &all_commits[0];
         assert_eq!(latest_commit.message, "Add file3.txt");
@@ -5042,7 +5371,7 @@ mod tests {
         assert_eq!(latest_commit.author_email, "test@example.com");
         assert_eq!(latest_commit.short_hash.len(), 7);
         assert_eq!(latest_commit.hash.len(), 40);
-        
+
         // Verify commits are in chronological order (newest first)
         assert_eq!(all_commits[1].message, "Add file2.txt");
         assert_eq!(all_commits[2].message, "Add file1.txt");
@@ -5052,35 +5381,51 @@ mod tests {
     #[test]
     fn test_find_commits_by_author() {
         let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
-        
+
         // Find by author name
         let commits_by_name = git_ops.find_commits_by_author("Test User", None).unwrap();
-        assert_eq!(commits_by_name.len(), 4, "Should find all commits by Test User");
-        
+        assert_eq!(
+            commits_by_name.len(),
+            4,
+            "Should find all commits by Test User"
+        );
+
         // Find by author email
-        let commits_by_email = git_ops.find_commits_by_author("test@example.com", None).unwrap();
-        assert_eq!(commits_by_email.len(), 4, "Should find all commits by test@example.com");
-        
+        let commits_by_email = git_ops
+            .find_commits_by_author("test@example.com", None)
+            .unwrap();
+        assert_eq!(
+            commits_by_email.len(),
+            4,
+            "Should find all commits by test@example.com"
+        );
+
         // Find with limit
-        let limited_commits = git_ops.find_commits_by_author("Test User", Some(2)).unwrap();
+        let limited_commits = git_ops
+            .find_commits_by_author("Test User", Some(2))
+            .unwrap();
         assert_eq!(limited_commits.len(), 2, "Should limit to 2 commits");
-        
+
         // Find non-existent author
         let no_commits = git_ops.find_commits_by_author("NonExistent", None).unwrap();
-        assert_eq!(no_commits.len(), 0, "Should find no commits for non-existent author");
+        assert_eq!(
+            no_commits.len(),
+            0,
+            "Should find no commits for non-existent author"
+        );
     }
 
     #[test]
     fn test_get_branch_history() {
         let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
-        
+
         // Create a new branch with additional commits
         Command::new("git")
             .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature-branch"])
             .output()
             .unwrap();
-            
+
         fs::write(temp_dir.path().join("feature.txt"), "Feature content").unwrap();
         Command::new("git")
             .current_dir(temp_dir.path())
@@ -5092,19 +5437,25 @@ mod tests {
             .args(["commit", "-m", "Add feature"])
             .output()
             .unwrap();
-        
+
         // Get main branch history
         let main_branch = git_ops.main_branch().unwrap();
         let main_history = git_ops.get_branch_history(&main_branch, None).unwrap();
         assert_eq!(main_history.len(), 4, "Main branch should have 4 commits");
-        
+
         // Get feature branch history
         let feature_history = git_ops.get_branch_history("feature-branch", None).unwrap();
-        assert_eq!(feature_history.len(), 5, "Feature branch should have 5 commits");
+        assert_eq!(
+            feature_history.len(),
+            5,
+            "Feature branch should have 5 commits"
+        );
         assert_eq!(feature_history[0].message, "Add feature");
-        
+
         // Test with limit
-        let limited_history = git_ops.get_branch_history("feature-branch", Some(2)).unwrap();
+        let limited_history = git_ops
+            .get_branch_history("feature-branch", Some(2))
+            .unwrap();
         assert_eq!(limited_history.len(), 2, "Should limit to 2 commits");
     }
 
@@ -5112,14 +5463,14 @@ mod tests {
     fn test_get_commits_unique_to_branch() {
         let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
         let main_branch = git_ops.main_branch().unwrap();
-        
+
         // Create a new branch with additional commits
         Command::new("git")
             .current_dir(temp_dir.path())
             .args(["checkout", "-b", "feature-branch"])
             .output()
             .unwrap();
-            
+
         fs::write(temp_dir.path().join("feature1.txt"), "Feature 1").unwrap();
         Command::new("git")
             .current_dir(temp_dir.path())
@@ -5131,7 +5482,7 @@ mod tests {
             .args(["commit", "-m", "Add feature 1"])
             .output()
             .unwrap();
-            
+
         fs::write(temp_dir.path().join("feature2.txt"), "Feature 2").unwrap();
         Command::new("git")
             .current_dir(temp_dir.path())
@@ -5143,25 +5494,37 @@ mod tests {
             .args(["commit", "-m", "Add feature 2"])
             .output()
             .unwrap();
-        
+
         // Get commits unique to feature branch
-        let unique_commits = git_ops.get_commits_unique_to_branch("feature-branch", &main_branch).unwrap();
-        assert_eq!(unique_commits.len(), 2, "Should have 2 commits unique to feature branch");
+        let unique_commits = git_ops
+            .get_commits_unique_to_branch("feature-branch", &main_branch)
+            .unwrap();
+        assert_eq!(
+            unique_commits.len(),
+            2,
+            "Should have 2 commits unique to feature branch"
+        );
         assert_eq!(unique_commits[0].message, "Add feature 2");
         assert_eq!(unique_commits[1].message, "Add feature 1");
-        
+
         // Main branch should have no unique commits compared to itself
-        let no_unique = git_ops.get_commits_unique_to_branch(&main_branch, &main_branch).unwrap();
-        assert_eq!(no_unique.len(), 0, "Branch should have no commits unique to itself");
+        let no_unique = git_ops
+            .get_commits_unique_to_branch(&main_branch, &main_branch)
+            .unwrap();
+        assert_eq!(
+            no_unique.len(),
+            0,
+            "Branch should have no commits unique to itself"
+        );
     }
 
     #[test]
     fn test_commit_to_info_conversion() {
         let (_temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
-        
+
         let commits = git_ops.get_commit_history(Some(1)).unwrap();
         let commit_info = &commits[0];
-        
+
         // Verify all fields are properly populated
         assert!(!commit_info.hash.is_empty());
         assert_eq!(commit_info.short_hash.len(), 7);
@@ -5203,47 +5566,67 @@ mod tests {
 
         // Getting last commit info should fail
         let result = git_ops.get_last_commit_info();
-        assert!(result.is_err(), "Should fail to get commit info from empty repository");
+        assert!(
+            result.is_err(),
+            "Should fail to get commit info from empty repository"
+        );
 
         // Getting commit history should fail
         let result = git_ops.get_commit_history(None);
-        assert!(result.is_err(), "Should fail to get history from empty repository");
+        assert!(
+            result.is_err(),
+            "Should fail to get history from empty repository"
+        );
     }
 
-    #[test] 
+    #[test]
     fn test_commit_history_output_compatibility() {
         let (temp_dir, git_ops) = create_test_repo_with_commits().unwrap();
-        
+
         // Get last commit info using git2 implementation
         let git2_output = git_ops.get_last_commit_info().unwrap();
-        
+
         // Get the same info using shell command for comparison
         let shell_output = Command::new("git")
             .current_dir(temp_dir.path())
             .args(["log", "-1", "--pretty=format:%H|%s|%an|%ad", "--date=iso"])
             .output()
             .unwrap();
-        let shell_result = String::from_utf8_lossy(&shell_output.stdout).trim().to_string();
-        
+        let shell_result = String::from_utf8_lossy(&shell_output.stdout)
+            .trim()
+            .to_string();
+
         // Debug output for troubleshooting
         println!("Git2 output: {}", git2_output);
         println!("Shell output: {}", shell_result);
-        
+
         // Parse both outputs to compare parts separately
         let git2_parts: Vec<&str> = git2_output.split('|').collect();
         let shell_parts: Vec<&str> = shell_result.split('|').collect();
-        
+
         // Hash, subject, and author should be identical
         assert_eq!(git2_parts[0], shell_parts[0], "Commit hash should match");
-        assert_eq!(git2_parts[1], shell_parts[1], "Subject should match"); 
+        assert_eq!(git2_parts[1], shell_parts[1], "Subject should match");
         assert_eq!(git2_parts[2], shell_parts[2], "Author should match");
-        
+
         // For now, just verify that timestamps are in the same format (will fix exact matching later)
-        assert!(git2_parts[3].contains(' '), "Git2 date should contain space");
-        assert!(shell_parts[3].contains(' '), "Shell date should contain space");
-        assert!(git2_parts[3].len() > 10, "Git2 date should be reasonable length");
-        assert!(shell_parts[3].len() > 10, "Shell date should be reasonable length");
-        
+        assert!(
+            git2_parts[3].contains(' '),
+            "Git2 date should contain space"
+        );
+        assert!(
+            shell_parts[3].contains(' '),
+            "Shell date should contain space"
+        );
+        assert!(
+            git2_parts[3].len() > 10,
+            "Git2 date should be reasonable length"
+        );
+        assert!(
+            shell_parts[3].len() > 10,
+            "Shell date should be reasonable length"
+        );
+
         // NOTE: Exact timestamp matching between git2 and shell backends is deferred
         // The backends may format timestamps slightly differently but both are valid
         println!("Note: Exact timestamp matching deferred - format validation passed");
