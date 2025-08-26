@@ -12,6 +12,7 @@ mod list;
 mod logging;
 mod mcp_integration;
 mod memo;
+mod ndjson_layer;
 mod parameter_cli;
 // prompt_loader module removed - using SDK's PromptResolver directly
 mod prompt;
@@ -26,7 +27,15 @@ use clap::CommandFactory;
 use cli::{Cli, Commands};
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
+// Debug logging handled in flow.rs when WorkflowRunId is available
 use swissarmyhammer::SwissArmyHammerError;
+
+/// Determine if debug logging to NDJSON should be enabled
+/// Only enable when --debug flag is used with Flow commands
+fn should_enable_debug_logging(cli: &Cli) -> bool {
+    cli.debug && matches!(cli.command, Some(Commands::Flow { .. }))
+}
+
 
 #[tokio::main]
 async fn main() {
@@ -111,10 +120,30 @@ async fn main() {
             }
         }
     } else {
-        registry()
+        // Check if we should enable debug logging to NDJSON
+        let enable_debug_logging = should_enable_debug_logging(&cli);
+        
+        let registry = registry()
             .with(create_filter())
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .init();
+            .with(fmt::layer().with_writer(std::io::stderr));
+            
+        // Conditionally add NDJSON layer for debug logging
+        if enable_debug_logging {
+            use crate::ndjson_layer::NdjsonLayer;
+            use std::fs;
+            
+            let log_dir = std::path::PathBuf::from(".swissarmyhammer");
+            if let Err(e) = fs::create_dir_all(&log_dir) {
+                tracing::warn!("Failed to create log directory for debug: {}", e);
+                registry.init();
+            } else if let Ok(debug_file) = fs::File::create(log_dir.join("debug.ndjson")) {
+                registry.with(NdjsonLayer::new(debug_file)).init();
+            } else {
+                registry.init();
+            }
+        } else {
+            registry.init();
+        }
     }
 
     let exit_code = match cli.command {
@@ -136,7 +165,7 @@ async fn main() {
         }
         Some(Commands::Flow { subcommand }) => {
             tracing::debug!("Running flow command");
-            run_flow(subcommand).await
+            run_flow(subcommand, cli.debug).await
         }
         Some(Commands::Validate {
             quiet,
@@ -286,10 +315,10 @@ fn run_completions(shell: clap_complete::Shell) -> i32 {
     }
 }
 
-async fn run_flow(subcommand: cli::FlowSubcommand) -> i32 {
+async fn run_flow(subcommand: cli::FlowSubcommand, debug: bool) -> i32 {
     use flow;
 
-    match flow::run_flow_command(subcommand).await {
+    match flow::run_flow_command(subcommand, debug).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             // Check if this is an abort error (file-based detection)
@@ -446,7 +475,7 @@ async fn run_plan(plan_filename: String) -> i32 {
     );
     tracing::debug!("Plan file size: {} bytes", validated_file.size);
 
-    match flow::run_flow_command(subcommand).await {
+    match flow::run_flow_command(subcommand, false).await {
         Ok(_) => {
             tracing::info!("Plan workflow completed successfully");
             EXIT_SUCCESS
@@ -518,7 +547,7 @@ async fn run_implement() -> i32 {
 
     tracing::info!("Executing implement workflow");
 
-    match flow::run_flow_command(subcommand).await {
+    match flow::run_flow_command(subcommand, false).await {
         Ok(_) => {
             tracing::info!("Implement workflow completed successfully");
             EXIT_SUCCESS

@@ -22,8 +22,10 @@ use tokio::time::timeout;
 /// Default timeout for workflow test mode execution in seconds
 const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 60;
 
+
+
 /// Main entry point for flow command
-pub async fn run_flow_command(subcommand: FlowSubcommand) -> Result<()> {
+pub async fn run_flow_command(subcommand: FlowSubcommand, _debug: bool) -> Result<()> {
     match subcommand {
         FlowSubcommand::Run {
             workflow,
