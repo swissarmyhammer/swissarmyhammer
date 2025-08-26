@@ -28,30 +28,26 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// Default timeout for workflow test mode execution in seconds
 const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 5;
 
-/// Setup debug logging for a specific workflow run in the correct directory per spec
+/// Setup debug logging for a specific workflow run
 fn setup_workflow_debug_logging(run_id: &WorkflowRunId) -> Result<()> {
     use std::fs;
 
-    // Create debug log file in proper workflow run directory per specification
+    // Create debug log file in proper workflow run directory
     let workflow_runs_path = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
     let run_dir = workflow_runs_path.join("runs").join(format!("{run_id:?}"));
-    
+
     // Ensure directory exists
     fs::create_dir_all(&run_dir).map_err(|e| {
-        SwissArmyHammerError::Other(format!(
-            "Failed to create workflow run directory: {e}"
-        ))
+        SwissArmyHammerError::Other(format!("Failed to create workflow run directory: {e}"))
     })?;
 
     let debug_log_path = run_dir.join("run_logs.ndjson");
-    
+
     // Create debug log file that will be populated by the NDJSON layer
     fs::File::create(&debug_log_path).map_err(|e| {
-        SwissArmyHammerError::Other(format!(
-            "Failed to create debug log file: {e}"
-        ))
+        SwissArmyHammerError::Other(format!("Failed to create debug log file: {e}"))
     })?;
-    
+
     tracing::info!(
         run_id = %run_id,
         debug_log_path = %debug_log_path.display(),

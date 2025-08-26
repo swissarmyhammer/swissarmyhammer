@@ -4,10 +4,8 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tokio::time::Duration;
 
-use swissarmyhammer::issues::{
-    FileSystemIssueStorage, IssueStorage,
-};
 use swissarmyhammer::issues::metrics::{Operation, PerformanceMetrics};
+use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 
 fn setup_fs_storage() -> (FileSystemIssueStorage, TempDir) {
     let temp_dir = TempDir::new().unwrap();

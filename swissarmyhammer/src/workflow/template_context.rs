@@ -3,10 +3,10 @@
 //! This module provides integration between the new TemplateContext system and
 //! the existing workflow HashMap-based context system.
 
+use crate::workflow::action_parser::ActionParser;
 use serde_json::Value;
 use std::collections::HashMap;
 use swissarmyhammer_config::{ConfigurationResult, TemplateContext};
-use crate::workflow::action_parser::ActionParser;
 
 /// Workflow-specific template context that bridges between TemplateContext and HashMap
 ///
@@ -25,7 +25,7 @@ impl WorkflowTemplateContext {
     /// Create a new WorkflowTemplateContext from configuration
     pub fn load() -> ConfigurationResult<Self> {
         let template_context = TemplateContext::load()?;
-        Ok(Self { 
+        Ok(Self {
             template_context,
             workflow_vars: HashMap::new(),
         })
@@ -34,7 +34,7 @@ impl WorkflowTemplateContext {
     /// Create a new WorkflowTemplateContext with CLI environment variables loaded
     pub fn load_for_cli() -> ConfigurationResult<Self> {
         let template_context = TemplateContext::load_for_cli()?;
-        Ok(Self { 
+        Ok(Self {
             template_context,
             workflow_vars: HashMap::new(),
         })
@@ -43,7 +43,7 @@ impl WorkflowTemplateContext {
     /// Create a WorkflowTemplateContext with additional template variables
     pub fn with_vars(vars: HashMap<String, Value>) -> ConfigurationResult<Self> {
         let template_context = TemplateContext::with_template_vars(vars)?;
-        Ok(Self { 
+        Ok(Self {
             template_context,
             workflow_vars: HashMap::new(),
         })
@@ -76,7 +76,7 @@ impl WorkflowTemplateContext {
         if let Some(value) = self.workflow_vars.get(key) {
             return Some(value);
         }
-        
+
         // Then check template context
         self.template_context.get(key)
     }
@@ -134,8 +134,6 @@ impl WorkflowTemplateContext {
         liquid_vars
     }
 
-
-
     /// Render a template string with both liquid and fallback variable substitution
     ///
     /// This method provides comprehensive template rendering by:
@@ -150,14 +148,14 @@ impl WorkflowTemplateContext {
         // For liquid template parsing, we need to handle internal variables specially
         // since liquid fails if it encounters undefined variables
         let mut template_for_liquid = input.to_string();
-        
+
         // Find all internal variables in the template and temporarily replace them
         let internal_var_regex = regex::Regex::new(r"\{\{(_\w+)\}\}").unwrap();
         let internal_vars: Vec<String> = internal_var_regex
             .captures_iter(input)
             .map(|cap| cap[1].to_string())
             .collect();
-        
+
         // Replace internal variables with unique placeholders
         let mut placeholder_map = HashMap::new();
         for (i, var) in internal_vars.iter().enumerate() {
@@ -188,12 +186,12 @@ impl WorkflowTemplateContext {
         // For fallback variable substitution, create a combined context
         // that includes both template variables and workflow variables
         let mut combined_context = HashMap::new();
-        
+
         // Add template variables first
         for (key, value) in self.template_context.variables() {
             combined_context.insert(key.clone(), value.clone());
         }
-        
+
         // Add workflow variables (higher precedence)
         for (key, value) in &self.workflow_vars {
             combined_context.insert(key.clone(), value.clone());
@@ -237,12 +235,12 @@ impl WorkflowTemplateContext {
     pub fn to_template_context(&self) -> ConfigurationResult<TemplateContext> {
         // Create a combined variables map
         let mut combined_vars = serde_json::Map::new();
-        
+
         // Add template configuration variables first
         for (key, value) in self.template_context.variables() {
             combined_vars.insert(key.clone(), value.clone());
         }
-        
+
         // Add workflow variables with higher precedence
         for (key, value) in &self.workflow_vars {
             combined_vars.insert(key.clone(), value.clone());
@@ -259,12 +257,13 @@ impl WorkflowTemplateContext {
     /// both template configuration and workflow variables with proper precedence.
     pub fn to_workflow_hashmap(&self) -> HashMap<String, Value> {
         let mut context = self.initialize_workflow_context();
-        
+
         // Flatten template variables from _template_vars to top level for substitution
-        let template_vars_to_flatten = context.get("_template_vars")
+        let template_vars_to_flatten = context
+            .get("_template_vars")
             .and_then(|v| v.as_object())
             .cloned();
-            
+
         if let Some(template_vars) = template_vars_to_flatten {
             for (key, value) in template_vars {
                 // Don't overwrite if key already exists at top level
@@ -273,7 +272,7 @@ impl WorkflowTemplateContext {
                 }
             }
         }
-        
+
         // Include workflow variables (which include action results)
         // These take precedence over template variables
         for (key, value) in &self.workflow_vars {
@@ -308,7 +307,7 @@ impl WorkflowTemplateContext {
         if self.workflow_vars.contains_key(key) {
             return true;
         }
-        
+
         // Then check template context
         self.template_context.get(key).is_some()
     }
@@ -451,9 +450,7 @@ mod tests {
 
     #[test]
     fn test_render_template_with_fallback_syntax() {
-        let template_vars = HashMap::from([
-            ("base_url".to_string(), json!("https://example.com")),
-        ]);
+        let template_vars = HashMap::from([("base_url".to_string(), json!("https://example.com"))]);
         let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
 
         let workflow_vars = HashMap::from([
@@ -486,7 +483,10 @@ mod tests {
         let template = "Deploying {{app_name}} v{{version}} to ${environment} at ${timestamp}";
         let result = workflow_context.render_template(template);
 
-        assert_eq!(result, "Deploying MyApp v2.0.0 to production at 2024-01-15T10:30:00Z");
+        assert_eq!(
+            result,
+            "Deploying MyApp v2.0.0 to production at 2024-01-15T10:30:00Z"
+        );
     }
 
     #[test]
@@ -499,9 +499,8 @@ mod tests {
         let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
 
         // Workflow overrides the host but not port
-        let workflow_vars = HashMap::from([
-            ("database_host".to_string(), json!("prod.example.com")),
-        ]);
+        let workflow_vars =
+            HashMap::from([("database_host".to_string(), json!("prod.example.com"))]);
 
         workflow_context.set_workflow_vars(workflow_vars);
         let template = "postgresql://{{database_host}}:{{database_port}}/mydb";
@@ -512,9 +511,7 @@ mod tests {
 
     #[test]
     fn test_render_template_ignores_internal_keys() {
-        let template_vars = HashMap::from([
-            ("public_var".to_string(), json!("public_value")),
-        ]);
+        let template_vars = HashMap::from([("public_var".to_string(), json!("public_value"))]);
         let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
 
         let workflow_vars = HashMap::from([
@@ -523,10 +520,14 @@ mod tests {
         ]);
 
         workflow_context.set_workflow_vars(workflow_vars);
-        let template = "Public: {{public_var}}, Normal: {{normal_var}}, Internal: {{_internal_var}}";
+        let template =
+            "Public: {{public_var}}, Normal: {{normal_var}}, Internal: {{_internal_var}}";
         let result = workflow_context.render_template(template);
 
         // Internal variable should not be rendered, leaving the template syntax as-is
-        assert_eq!(result, "Public: public_value, Normal: normal_value, Internal: {{_internal_var}}");
+        assert_eq!(
+            result,
+            "Public: public_value, Normal: normal_value, Internal: {{_internal_var}}"
+        );
     }
 }

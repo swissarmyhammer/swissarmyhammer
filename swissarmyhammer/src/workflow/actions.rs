@@ -716,8 +716,6 @@ impl Action for LogAction {
         Ok(Value::String(message))
     }
 
-
-
     fn description(&self) -> String {
         format!("Log message: {}", self.message)
     }
@@ -895,7 +893,6 @@ fn render_with_liquid_template(input: &str, context: &HashMap<String, Value>) ->
         .substitute_variables_safe(&liquid_rendered, context)
         .unwrap_or_else(|_| liquid_rendered)
 }
-
 
 impl SubWorkflowAction {
     /// Create a new sub-workflow action
@@ -2737,13 +2734,13 @@ mod tests {
 
         // Create a WorkflowTemplateContext with configuration values
         let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
-        
+
         let mut workflow_vars = HashMap::new();
         workflow_vars.insert("project_name".to_string(), json!("SwissArmyHammer"));
         workflow_vars.insert("version".to_string(), json!("2.0.0"));
         workflow_vars.insert("debug".to_string(), json!(true));
         workflow_vars.insert("workflow_step".to_string(), json!("initialization"));
-        
+
         context.set_workflow_vars(workflow_vars);
 
         // Create a LogAction with liquid template syntax
@@ -2751,10 +2748,7 @@ mod tests {
             LogAction::info("Project {{project_name}} v{{version}} (Debug: {{debug}})".to_string());
 
         // Execute with the context
-        let result = log_action
-            .execute(&mut context)
-            .await
-            .unwrap();
+        let result = log_action.execute(&mut context).await.unwrap();
 
         // Verify the template was rendered correctly using configuration values
         assert_eq!(
@@ -2776,7 +2770,7 @@ mod tests {
 
         // Create a WorkflowTemplateContext with all variables
         let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
-        
+
         let mut all_vars = HashMap::new();
         all_vars.insert("app_name".to_string(), json!("TestApp"));
         all_vars.insert("current_file".to_string(), json!("main.rs"));
@@ -2789,10 +2783,7 @@ mod tests {
             LogAction::info("App: {{app_name}}, Current file: {{current_file}}".to_string());
 
         // Execute with the context
-        let result = log_action
-            .execute(&mut context)
-            .await
-            .unwrap();
+        let result = log_action.execute(&mut context).await.unwrap();
 
         // Verify both template and workflow variables were used
         assert_eq!(
@@ -2801,10 +2792,7 @@ mod tests {
         );
 
         // Verify workflow variables are preserved
-        assert_eq!(
-            context.get("current_file"),
-            Some(&json!("main.rs"))
-        );
+        assert_eq!(context.get("current_file"), Some(&json!("main.rs")));
         assert_eq!(context.get("line_count"), Some(&json!(42)));
     }
 

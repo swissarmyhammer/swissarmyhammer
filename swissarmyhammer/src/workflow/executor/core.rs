@@ -631,7 +631,8 @@ impl WorkflowExecutor {
     fn capture_error_context(&mut self, run: &mut WorkflowRun, action_error: &ActionError) {
         let error_context = ErrorContext::new(action_error.to_string(), run.current_state.clone());
         let error_context_json = serde_json::to_value(&error_context).unwrap_or(Value::Null);
-        run.context.insert(ErrorContext::CONTEXT_KEY.to_string(), error_context_json);
+        run.context
+            .insert(ErrorContext::CONTEXT_KEY.to_string(), error_context_json);
     }
 
     /// Format action error for logging

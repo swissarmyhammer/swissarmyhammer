@@ -11,7 +11,7 @@ fn test_debug_flag_creates_ndjson_logs() {
     std::env::set_current_dir(&temp_dir).unwrap();
 
     // Run flow command with debug flag
-    let output = std::process::Command::new("cargo")
+    let _output = std::process::Command::new("cargo")
         .args(&["run", "--", "--debug", "flow", "list"])
         .output()
         .expect("Failed to run command");
@@ -21,17 +21,20 @@ fn test_debug_flag_creates_ndjson_logs() {
 
     // Check that debug.ndjson was created
     let debug_file = temp_dir.path().join(".swissarmyhammer/debug.ndjson");
-    assert!(debug_file.exists(), "Debug NDJSON file should be created with --debug flag");
+    assert!(
+        debug_file.exists(),
+        "Debug NDJSON file should be created with --debug flag"
+    );
 
     // Check file has content
     let content = fs::read_to_string(&debug_file).unwrap();
     assert!(!content.is_empty(), "Debug file should have content");
-    
+
     // Verify NDJSON format
     let first_line = content.lines().next().unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(first_line)
-        .expect("First line should be valid JSON");
-    
+    let parsed: serde_json::Value =
+        serde_json::from_str(first_line).expect("First line should be valid JSON");
+
     // Verify required fields
     assert!(parsed["timestamp"].is_string());
     assert!(parsed["level"].is_string());
@@ -58,5 +61,8 @@ fn test_no_debug_flag_creates_no_logs() {
 
     // Check that debug.ndjson was NOT created
     let debug_file = temp_dir.path().join(".swissarmyhammer/debug.ndjson");
-    assert!(!debug_file.exists(), "Debug NDJSON file should NOT be created without --debug flag");
+    assert!(
+        !debug_file.exists(),
+        "Debug NDJSON file should NOT be created without --debug flag"
+    );
 }

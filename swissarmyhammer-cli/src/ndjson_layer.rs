@@ -3,13 +3,13 @@
 //! A tracing layer that outputs log events in NDJSON (Newline Delimited JSON) format.
 
 // Use std time instead of chrono for timestamp
-use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{field::Visit, layer::Context, Layer};
 
@@ -27,11 +27,13 @@ impl WorkflowDebugWriter {
 
     fn setup_workflow_file(&self, run_id: &str) -> std::io::Result<()> {
         let workflow_runs_path = PathBuf::from(".swissarmyhammer/workflow-runs");
-        let run_dir = workflow_runs_path.join("runs").join(format!("WorkflowRunId({run_id})"));
-        
+        let run_dir = workflow_runs_path
+            .join("runs")
+            .join(format!("WorkflowRunId({run_id})"));
+
         std::fs::create_dir_all(&run_dir)?;
         let debug_log_path = run_dir.join("run_logs.ndjson");
-        
+
         let debug_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -65,7 +67,7 @@ impl Write for WorkflowDebugWriter {
                 return file.write(buf);
             }
         }
-        
+
         // Fallback: write to .swissarmyhammer/debug.ndjson
         let fallback_path = PathBuf::from(".swissarmyhammer/debug.ndjson");
         if let Some(parent) = fallback_path.parent() {
@@ -179,7 +181,9 @@ where
             if current_span.metadata().name() == "workflow_execution" {
                 // The span was created with run_id field, try to access it
                 // For now, we'll use a simpler approach and just mark that we're in a workflow context
-                visitor.fields.insert("workflow_context".to_string(), json!(true));
+                visitor
+                    .fields
+                    .insert("workflow_context".to_string(), json!(true));
             }
         }
 
@@ -193,12 +197,14 @@ where
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let iso_timestamp = format!("2025-08-26T{:02}:{:02}:{:02}.{:03}Z", 
-            (timestamp / 3600000) % 24, 
-            (timestamp / 60000) % 60, 
-            (timestamp / 1000) % 60, 
-            timestamp % 1000);
-            
+        let iso_timestamp = format!(
+            "2025-08-26T{:02}:{:02}:{:02}.{:03}Z",
+            (timestamp / 3600000) % 24,
+            (timestamp / 60000) % 60,
+            (timestamp / 1000) % 60,
+            timestamp % 1000
+        );
+
         let json_object = json!({
             "timestamp": iso_timestamp,
             "level": event.metadata().level().to_string(),

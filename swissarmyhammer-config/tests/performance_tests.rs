@@ -634,7 +634,7 @@ value2 = "test4"
 
 #[test]
 #[serial]
-#[ignore] // Disabled due to test isolation issues - passes individually but fails in test suite  
+#[ignore] // Disabled due to test isolation issues - passes individually but fails in test suite
 fn test_memory_usage_characteristics() {
     let test = IsolatedPerformanceTest::new();
     let config_dir = test.project_config_dir();

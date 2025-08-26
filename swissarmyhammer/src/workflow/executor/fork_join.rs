@@ -3,7 +3,8 @@
 use super::core::WorkflowExecutor;
 use super::{ExecutionEventType, ExecutorError, ExecutorResult, LAST_ACTION_RESULT_KEY};
 use crate::workflow::{
-    parse_action_from_description_with_context, StateId, StateType, Workflow, WorkflowRun, WorkflowTemplateContext,
+    parse_action_from_description_with_context, StateId, StateType, Workflow, WorkflowRun,
+    WorkflowTemplateContext,
 };
 use serde_json::Value;
 
