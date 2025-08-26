@@ -17,3 +17,5 @@ DO NOT code now, the goal is just to create issues
   - Look for language referring to later implementation
 - Look at the current issues, do not duplicate an issue
 - Report your progress
+
+{% render "review_format" %}

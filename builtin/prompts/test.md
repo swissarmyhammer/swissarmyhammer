@@ -29,23 +29,17 @@ The goal is to have:
 ## Process
 
 - run all tests
-- look at modified files on your current branch and figure out if you are resuming interrupted work
-- write all errors and warnings to a markdown scratchpad file `./TEST_FAILURES.md`, this is your todo list
-- if there is an existing `./TEST_FAILURES.md`, just append to it -- more work to do!
+- read the modified files on your current branch to establish context
+- write all test failures, errors, slowness, and warnings to a markdown scratchpad file `.swissarmyhammer/tmp/TEST_FAILURES.md`, this is your todo list of things to fix
+- refer to `.swissarmyhammer/tmp/TEST_FAILURES.md` to refresh your memory
+- if there is an existing `.swissarmyhammer/tmp/TEST_FAILURES.md`, read it, think, and append to it -- more work to do!
 - when you start to work on a specific test, use the notify_create tool to let the user know
 - when you fix a specific test, use the notify_create tool to let the user know
 - DO NOT commit to git
 - DO NOT mark the issue complete with the issue_mark_complete tool
-{% render "todo", todo_file: "./TEST_FAILURES.md" %}
+{% render "todo", todo_file: ".swissarmyhammer/tmp/TEST_FAILURES.md %}
 
 ## Reporting
-
-Describe what you plan to do to fix each failing test in this format:
-
-<failing test name>:
-- [ ] todo step 1
-- [ ] todo step 2
-...
 
 Show overall test results as:
 

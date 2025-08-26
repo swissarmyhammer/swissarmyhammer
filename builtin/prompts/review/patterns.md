@@ -62,21 +62,12 @@ Please review the all code in this project.
 - Recommendations for utility functions/classes
 - Proposals for constant extraction
 
-### Code Examples
-
-  Provide before/after code snippets for suggested improvements
-
-  Rate overall consistency: ⭐⭐⭐⭐⭐ (1-5 stars)
-
-  This prompt emphasizes systematic detection of inconsistencies and duplications while providing actionable refactoring suggestions.
 
 ## Process
 
-- list all source files in the project and create a markdown scratchpad file, this is your todo list
-- create a CODE_REVIEW.md markdown file, this is your code review output
+- list all source files in the project and use the todo tool to keep track of files to review
 - for each file in the todo list
   - perform the Review Checklist
-  - summarize your findings
-  - write your findings to the code review output
+  - use the issue_create tool to create issues for each finding
 
 {% render "review_format" %}

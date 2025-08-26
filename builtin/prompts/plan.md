@@ -17,24 +17,24 @@ Process the specific plan file: {{ plan_filename }}
 Process all specifications in the ./specification directory.
 {% endif %}
 
-Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order. Use the issue_create tool to make each issue.
+Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order. Use the issue_create tool to create an issue for each step.
 
 
 ## Guidelines
 
-- DO Follow the Coding Standards
 - DO NOT code at this step, we are just creating the plan
 - DO make sure to review the existing codebase and architecture before creating the implementation plan
 - DO make sure each step file is a single focused task
-- DO create many, small step files. Ideally each step should result in less than 500 lines of code changed
+- DO create many, small, incremental step files. Ideally each step should result in less than 250 lines of code changed
 - Any time you create a step file, it should use the next number larger than all other issues
-- DO Use markdown
+- DO Use markdown in the step files
 - DO Use Mermaid to diagram and make the step clearer
-- DO provide context in the issues that will help when it is time to code
-- Each step must be incremental progress, ensuring no big jumps in complexity at any stage
-- DO make sure that each step builds on the previous prompts, and ends with wiring things together
+- DO provide context in the step files that will help when it is time to code
+- DO make sure that each step builds on the previous prompts
 - DO NOT leave hanging or orphaned code that isn't integrated into a previous step
 - DO NOT plan security features unless specifically asked
+- DO NOT plan performance features unless specifically asked
+- DO NOT plan backward compatibility features unless specifically asked
 {% if plan_filename %}
 - Each issue you create that is a step in the plan should include the phrase "Refer to {{ plan_filename }}"
 {% else %}
