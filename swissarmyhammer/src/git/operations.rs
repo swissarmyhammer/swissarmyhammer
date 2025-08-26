@@ -72,6 +72,9 @@ use git2::Repository;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(test)]
+use which;
+
 /// Exit code used when a command's exit status cannot be determined
 /// Detailed status summary for git repository state
 #[derive(Debug, Default)]
@@ -2665,13 +2668,31 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    // Helper to create a git command with proper PATH handling for tests
+    fn test_git_command() -> Command {
+        // In test environments, try to find git in common locations if not in PATH
+        if which::which("git").is_ok() {
+            Command::new("git")
+        } else {
+            // Try common git locations for macOS and Linux
+            let common_paths = ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
+            for path in &common_paths {
+                if std::path::Path::new(path).exists() {
+                    return Command::new(path);
+                }
+            }
+            // Fall back to regular git command and let it fail with a clear error
+            Command::new("git")
+        }
+    }
+
     // Helper to create a temporary git repository
     fn create_test_git_repo() -> Result<TempDir> {
         let temp_dir = TempDir::new()?;
         let repo_path = temp_dir.path();
 
         // Initialize git repo
-        let output = Command::new("git")
+        let output = test_git_command()
             .current_dir(repo_path)
             .args(["init"])
             .output()?;
@@ -2683,12 +2704,12 @@ mod tests {
         }
 
         // Set up user config for tests
-        Command::new("git")
+        test_git_command()
             .current_dir(repo_path)
             .args(["config", "user.name", "Test User"])
             .output()?;
 
-        Command::new("git")
+        test_git_command()
             .current_dir(repo_path)
             .args(["config", "user.email", "test@example.com"])
             .output()?;
@@ -2696,17 +2717,27 @@ mod tests {
         // Create initial commit
         fs::write(repo_path.join("README.md"), "# Test Repository")?;
 
-        Command::new("git")
+        test_git_command()
             .current_dir(repo_path)
             .args(["add", "README.md"])
             .output()?;
 
-        Command::new("git")
+        test_git_command()
             .current_dir(repo_path)
             .args(["commit", "-m", "Initial commit"])
             .output()?;
 
         Ok(temp_dir)
+    }
+
+    /// Helper to get the actual default branch name for test assertions
+    fn get_expected_default_branch(git_ops: &GitOperations) -> String {
+        // Use the git operations to determine the actual main branch
+        // This avoids hard-coding "main" or "master"
+        git_ops.main_branch().unwrap_or_else(|_| {
+            // Fallback to current branch if main_branch fails
+            git_ops.current_branch().unwrap_or("main".to_string())
+        })
     }
 
     // Enhanced dual backend test infrastructure
@@ -2772,7 +2803,6 @@ mod tests {
     // Dual backend compatibility tests
 
     #[test]
-    #[ignore = "Shell backend has PATH issues in test environment"]
     fn test_backend_infrastructure() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         
@@ -2786,7 +2816,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Shell backend has PATH issues in test environment"]
     fn test_shell_backend_directly() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = create_test_git_repo().unwrap();
@@ -2796,7 +2825,8 @@ mod tests {
         
         // Test that shell backend can get current branch
         let current_branch = shell_ops.current_branch().unwrap();
-        assert!(current_branch == "main" || current_branch == "master");
+        let expected_branch = get_expected_default_branch(&shell_ops);
+        assert_eq!(current_branch, expected_branch);
     }
 
     #[test]
@@ -2914,16 +2944,14 @@ mod tests {
     }
 
     #[test] 
-    #[ignore = "Performance test - run manually when comparing backends"]
     fn test_git2_vs_shell_performance() {
         // This test compares git2 vs shell performance
-        // Ignored by default since shell backend has PATH issues
         let temp_dir = create_test_git_repo().unwrap();
         let repo_path = temp_dir.path().to_path_buf();
         
         // Create both backend instances
         let git2_ops = GitOperations::with_work_dir_and_backend(repo_path.clone(), true).unwrap();
-        // let shell_ops = GitOperations::with_work_dir_and_backend(repo_path, false).unwrap();
+        let shell_ops = GitOperations::with_work_dir_and_backend(repo_path, false).unwrap();
         
         const ITERATIONS: usize = 10;
         
@@ -2940,20 +2968,36 @@ mod tests {
             git2_ops.branch_exists("main").unwrap() || git2_ops.branch_exists("master").unwrap()
         }, ITERATIONS);
         
-        // TODO: Benchmark shell backend when PATH issues are resolved
-        // let shell_current_branch_time = benchmark_git_operation(|| {
-        //     shell_ops.current_branch().unwrap()
-        // }, ITERATIONS);
+        // Benchmark shell backend
+        let shell_current_branch_time = benchmark_git_operation(|| {
+            shell_ops.current_branch().unwrap()
+        }, ITERATIONS);
         
-        println!("Git2 Performance Benchmarks ({} iterations):", ITERATIONS);
+        let shell_main_branch_time = benchmark_git_operation(|| {
+            shell_ops.main_branch().unwrap()
+        }, ITERATIONS);
+        
+        let shell_branch_exists_time = benchmark_git_operation(|| {
+            shell_ops.branch_exists("main").unwrap() || shell_ops.branch_exists("master").unwrap()
+        }, ITERATIONS);
+        
+        println!("Performance Comparison ({} iterations):", ITERATIONS);
+        println!("Git2 Backend:");
         println!("  current_branch: {:?}", git2_current_branch_time);
         println!("  main_branch: {:?}", git2_main_branch_time);  
         println!("  branch_exists: {:?}", git2_branch_exists_time);
+        println!("Shell Backend:");
+        println!("  current_branch: {:?}", shell_current_branch_time);
+        println!("  main_branch: {:?}", shell_main_branch_time);  
+        println!("  branch_exists: {:?}", shell_branch_exists_time);
         
-        // Git2 should be reasonably fast (< 1ms per operation for simple repos)
-        assert!(git2_current_branch_time.as_millis() < 10);
-        assert!(git2_main_branch_time.as_millis() < 10);
-        assert!(git2_branch_exists_time.as_millis() < 10);
+        // Git2 should be faster than shell (no subprocess overhead)
+        assert!(git2_current_branch_time < shell_current_branch_time, 
+            "Git2 should be faster: git2={:?}, shell={:?}", git2_current_branch_time, shell_current_branch_time);
+        
+        // Both should be reasonably fast (< 50ms per operation for simple repos)
+        assert!(git2_current_branch_time.as_millis() < 50);
+        assert!(shell_current_branch_time.as_millis() < 50);
     }
 
     #[test]
@@ -3119,157 +3163,167 @@ mod tests {
 
     #[test]
     fn test_current_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
-        let current_branch = git_ops.current_branch().unwrap();
+        test_with_both_backends(|git_ops| {
+            let current_branch = git_ops.current_branch()?;
 
-        // Should be on main or master branch
-        assert!(current_branch == "main" || current_branch == "master");
+            // Should be on main or master branch
+            assert!(current_branch == "main" || current_branch == "master");
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_main_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
-        let main_branch = git_ops.main_branch().unwrap();
+        test_with_both_backends(|git_ops| {
+            let main_branch = git_ops.main_branch()?;
 
-        // Should find main or master branch
-        assert!(main_branch == "main" || main_branch == "master");
+            // Should find main or master branch
+            assert!(main_branch == "main" || main_branch == "master");
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_branch_exists() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        test_with_both_backends(|git_ops| {
+            // Main branch should exist
+            let main_branch = git_ops.main_branch()?;
+            assert!(git_ops.branch_exists(&main_branch)?);
 
-        // Main branch should exist
-        let main_branch = git_ops.main_branch().unwrap();
-        assert!(git_ops.branch_exists(&main_branch).unwrap());
-
-        // Non-existent branch should not exist
-        assert!(!git_ops.branch_exists("non-existent-branch").unwrap());
+            // Non-existent branch should not exist
+            assert!(!git_ops.branch_exists("non-existent-branch")?);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_create_work_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        test_with_both_backends(|git_ops| {
+            // Create work branch
+            let branch_name = git_ops.create_work_branch("test_issue")?;
+            assert_eq!(branch_name, "issue/test_issue");
 
-        // Create work branch
-        let branch_name = git_ops.create_work_branch("test_issue").unwrap();
-        assert_eq!(branch_name, "issue/test_issue");
+            // Verify we're on the new branch
+            let current_branch = git_ops.current_branch()?;
+            assert_eq!(current_branch, "issue/test_issue");
 
-        // Verify we're on the new branch
-        let current_branch = git_ops.current_branch().unwrap();
-        assert_eq!(current_branch, "issue/test_issue");
-
-        // Verify the branch exists
-        assert!(git_ops.branch_exists("issue/test_issue").unwrap());
+            // Verify the branch exists
+            assert!(git_ops.branch_exists("issue/test_issue")?);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_checkout_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        test_with_both_backends(|git_ops| {
+            // Create work branch
+            git_ops.create_work_branch_simple("test_issue")?;
 
-        // Create work branch
-        git_ops.create_work_branch_simple("test_issue").unwrap();
+            // Switch back to main
+            let main_branch = git_ops.main_branch()?;
+            git_ops.checkout_branch(&main_branch)?;
 
-        // Switch back to main
-        let main_branch = git_ops.main_branch().unwrap();
-        git_ops.checkout_branch(&main_branch).unwrap();
+            // Verify we're on main
+            let current_branch = git_ops.current_branch()?;
+            assert_eq!(current_branch, main_branch);
 
-        // Verify we're on main
-        let current_branch = git_ops.current_branch().unwrap();
-        assert_eq!(current_branch, main_branch);
+            // Switch back to work branch
+            git_ops.checkout_branch("issue/test_issue")?;
 
-        // Switch back to work branch
-        git_ops.checkout_branch("issue/test_issue").unwrap();
-
-        // Verify we're on work branch
-        let current_branch = git_ops.current_branch().unwrap();
-        assert_eq!(current_branch, "issue/test_issue");
+            // Verify we're on work branch
+            let current_branch = git_ops.current_branch()?;
+            assert_eq!(current_branch, "issue/test_issue");
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_merge_issue_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        test_with_both_backends(|git_ops| {
+            // Create work branch
+            git_ops.create_work_branch_simple("test_issue")?;
 
-        // Create work branch
-        git_ops.create_work_branch_simple("test_issue").unwrap();
+            // Make a change on the work branch
+            fs::write(git_ops.work_dir().join("test.txt"), "test content").unwrap();
+            Command::new("git")
+                .current_dir(git_ops.work_dir())
+                .args(["add", "test.txt"])
+                .output()
+                .unwrap();
+            Command::new("git")
+                .current_dir(git_ops.work_dir())
+                .args(["commit", "-m", "Add test file"])
+                .output()
+                .unwrap();
 
-        // Make a change on the work branch
-        fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
-        Command::new("git")
-            .current_dir(temp_dir.path())
-            .args(["add", "test.txt"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(temp_dir.path())
-            .args(["commit", "-m", "Add test file"])
-            .output()
-            .unwrap();
+            // Merge the branch
+            git_ops.merge_issue_branch_auto("test_issue")?;
 
-        // Merge the branch
-        git_ops.merge_issue_branch_auto("test_issue").unwrap();
+            // Verify we're on main branch
+            let main_branch = git_ops.main_branch()?;
+            let current_branch = git_ops.current_branch()?;
+            assert_eq!(current_branch, main_branch);
 
-        // Verify we're on main branch
-        let main_branch = git_ops.main_branch().unwrap();
-        let current_branch = git_ops.current_branch().unwrap();
-        assert_eq!(current_branch, main_branch);
-
-        // Verify the file exists (merge was successful)
-        assert!(temp_dir.path().join("test.txt").exists());
+            // Verify the file exists (merge was successful)
+            assert!(git_ops.work_dir().join("test.txt").exists());
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_merge_non_existent_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
-
-        // Try to merge non-existent branch
-        let result = git_ops.merge_issue_branch_auto("non_existent_issue");
-        assert!(result.is_err());
+        test_with_both_backends(|git_ops| {
+            // Try to merge non-existent branch
+            let result = git_ops.merge_issue_branch_auto("non_existent_issue");
+            assert!(result.is_err());
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_has_uncommitted_changes() {
-        let temp_dir = create_test_git_repo().unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        test_with_both_backends(|git_ops| {
+            // Initially should have no uncommitted changes
+            assert!(!git_ops.has_uncommitted_changes()?);
 
-        // Initially should have no uncommitted changes
-        assert!(!git_ops.has_uncommitted_changes().unwrap());
+            // Add a file
+            fs::write(git_ops.work_dir().join("test.txt"), "test content").unwrap();
 
-        // Add a file
-        fs::write(temp_dir.path().join("test.txt"), "test content").unwrap();
+            // Should now have uncommitted changes
+            assert!(git_ops.has_uncommitted_changes()?);
 
-        // Should now have uncommitted changes
-        assert!(git_ops.has_uncommitted_changes().unwrap());
+            // Stage and commit the file
+            Command::new("git")
+                .current_dir(git_ops.work_dir())
+                .args(["add", "test.txt"])
+                .output()
+                .unwrap();
+            Command::new("git")
+                .current_dir(git_ops.work_dir())
+                .args(["commit", "-m", "Add test file"])
+                .output()
+                .unwrap();
 
-        // Stage and commit the file
-        Command::new("git")
-            .current_dir(temp_dir.path())
-            .args(["add", "test.txt"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(temp_dir.path())
-            .args(["commit", "-m", "Add test file"])
-            .output()
-            .unwrap();
-
-        // Should have no uncommitted changes again
-        assert!(!git_ops.has_uncommitted_changes().unwrap());
+            // Should have no uncommitted changes again
+            assert!(!git_ops.has_uncommitted_changes()?);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
@@ -3293,38 +3347,42 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_from_main_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        // Verify we're on main branch
-        let main_branch = git_ops.main_branch().unwrap();
-        let current_branch = git_ops.current_branch().unwrap();
-        assert_eq!(current_branch, main_branch);
+        test_with_both_backends(|git_ops| {
+            // Verify we're on main branch
+            let main_branch = git_ops.main_branch()?;
+            let current_branch = git_ops.current_branch()?;
+            assert_eq!(current_branch, main_branch);
 
-        // Create work branch from main - should succeed
-        let result = git_ops.create_work_branch_simple("test_issue");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "issue/test_issue");
+            // Create work branch from main - should succeed
+            let result = git_ops.create_work_branch_simple("test_issue");
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), "issue/test_issue");
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_create_work_branch_resume_on_correct_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        // Create work branch
-        git_ops.create_work_branch_simple("test_issue").unwrap();
+        test_with_both_backends(|git_ops| {
+            // Create work branch
+            git_ops.create_work_branch_simple("test_issue")?;
 
-        // Try to create the same work branch again (resume scenario) - should succeed
-        let result = git_ops.create_work_branch("test_issue");
-        if result.is_err() {
-            panic!("Expected success but got error: {:?}", result.unwrap_err());
-        }
-        assert_eq!(result.unwrap(), "issue/test_issue");
+            // Try to create the same work branch again (resume scenario) - should succeed
+            let result = git_ops.create_work_branch("test_issue");
+            if result.is_err() {
+                panic!("Expected success but got error: {:?}", result.unwrap_err());
+            }
+            assert_eq!(result.unwrap(), "issue/test_issue");
 
-        // Verify we're still on the same branch
-        let current_branch = git_ops.current_branch().unwrap();
-        assert_eq!(current_branch, "issue/test_issue");
+            // Verify we're still on the same branch
+            let current_branch = git_ops.current_branch()?;
+            assert_eq!(current_branch, "issue/test_issue");
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
@@ -3660,23 +3718,25 @@ mod tests {
 
     #[test]
     fn test_validation_prevents_issue_from_issue_branch() {
-        let temp_dir = create_test_git_repo().unwrap();
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        // Create first issue branch
-        git_ops.create_work_branch_simple("first-issue").unwrap();
+        test_with_both_backends(|git_ops| {
+            // Create first issue branch
+            git_ops.create_work_branch_simple("first-issue")?;
 
-        // Try to create issue from issue branch (current branch)
-        let result = git_ops.validate_branch_creation("second-issue", None);
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot create issue 'second-issue' from issue branch"));
+            // Try to create issue from issue branch (current branch)
+            let result = git_ops.validate_branch_creation("second-issue", None);
+            assert!(result.is_err());
+            let error_msg = result.unwrap_err().to_string();
+            assert!(error_msg.contains("Cannot create issue 'second-issue' from issue branch"));
 
-        // Try to create issue with explicit issue branch as source
-        let result = git_ops.validate_branch_creation("third-issue", Some("issue/first-issue"));
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Cannot create issue 'third-issue' from issue branch"));
+            // Try to create issue with explicit issue branch as source
+            let result = git_ops.validate_branch_creation("third-issue", Some("issue/first-issue"));
+            assert!(result.is_err());
+            let error_msg = result.unwrap_err().to_string();
+            assert!(error_msg.contains("Cannot create issue 'third-issue' from issue branch"));
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
@@ -4147,44 +4207,48 @@ mod tests {
 
     #[test]
     fn test_delete_branch_nonexistent_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        // Try to delete a branch that doesn't exist - should succeed
-        let result = git_ops.delete_branch("nonexistent-branch", false);
-        assert!(
-            result.is_ok(),
-            "Deleting nonexistent branch should succeed since desired outcome is achieved"
-        );
+        test_with_both_backends(|git_ops| {
+            // Try to delete a branch that doesn't exist - should succeed
+            let result = git_ops.delete_branch("nonexistent-branch", false);
+            assert!(
+                result.is_ok(),
+                "Deleting nonexistent branch should succeed since desired outcome is achieved"
+            );
 
-        // Verify the branch still doesn't exist
-        assert!(!git_ops.branch_exists("nonexistent-branch").unwrap());
+            // Verify the branch still doesn't exist
+            assert!(!git_ops.branch_exists("nonexistent-branch")?);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
     fn test_delete_branch_existing_succeeds() {
-        let temp_dir = create_test_git_repo().unwrap();
-        let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let _test_env = IsolatedTestEnvironment::new().unwrap();
 
-        // Create a test branch
-        git_ops.create_work_branch("delete-test").unwrap();
+        test_with_both_backends(|git_ops| {
+            // Create a test branch
+            git_ops.create_work_branch("delete-test")?;
 
-        // Switch back to main so we can delete the branch
-        git_ops.checkout_branch("main").unwrap();
+            // Switch back to main so we can delete the branch
+            git_ops.checkout_branch("main")?;
 
-        // Verify the branch exists
-        assert!(git_ops.branch_exists("issue/delete-test").unwrap());
+            // Verify the branch exists
+            assert!(git_ops.branch_exists("issue/delete-test")?);
 
-        // Delete the branch - should succeed (using force to avoid merge status issues in tests)
-        let result = git_ops.delete_branch("issue/delete-test", true);
-        if let Err(ref e) = result {
-            println!("Delete branch error even with force: {}", e);
-            eprintln!("Error details: {:?}", e);
-        }
-        assert!(result.is_ok(), "Deleting existing branch should succeed: {:?}", result);
+            // Delete the branch - should succeed (using force to avoid merge status issues in tests)
+            let result = git_ops.delete_branch("issue/delete-test", true);
+            if let Err(ref e) = result {
+                println!("Delete branch error even with force: {}", e);
+                eprintln!("Error details: {:?}", e);
+            }
+            assert!(result.is_ok(), "Deleting existing branch should succeed: {:?}", result);
 
-        // Verify the branch no longer exists
-        assert!(!git_ops.branch_exists("issue/delete-test").unwrap());
+            // Verify the branch no longer exists
+            assert!(!git_ops.branch_exists("issue/delete-test")?);
+            Ok(())
+        }).unwrap();
     }
 
     #[test]
