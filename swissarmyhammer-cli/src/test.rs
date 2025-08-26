@@ -265,7 +265,21 @@ impl TestRunner {
         prompt: &Prompt,
         args: &HashMap<String, String>,
     ) -> Result<String> {
-        Ok(self.library.render_prompt_with_env(&prompt.name, args)?)
+        {
+            let template_context = swissarmyhammer_config::TemplateContext::with_template_vars(
+                args.iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect(),
+            )
+            .map_err(|e| {
+                swissarmyhammer::SwissArmyHammerError::Template(format!(
+                    "Template context error: {e}"
+                ))
+            })?;
+            Ok(self
+                .library
+                .render_prompt(&prompt.name, &template_context)?)
+        }
     }
 
     fn output_result(

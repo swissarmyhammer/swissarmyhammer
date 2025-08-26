@@ -4,18 +4,14 @@ description: Generate a step by step development plan from specification(s).
 parameters:
   - name: plan_filename
     description: Path to the specific plan markdown file to process (optional)
-    required: false
+    required: true
 ---
 
 ## Goal
 
 Turn specification(s) into a multiple step plan.
 
-{% if plan_filename %}
 Process the specific plan file: {{ plan_filename }}
-{% else %}
-Process all specifications in the ./specification directory.
-{% endif %}
 
 Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_step.md` markdown step files, one for each step in order. Use the issue_create tool to create an issue for each step.
 
@@ -35,20 +31,12 @@ Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_
 - DO NOT plan security features unless specifically asked by the user
 - DO NOT plan performance features unless specifically asked by the user
 - DO NOT plan backward compatibility features unless specifically asked by the user
-{% if plan_filename %}
 - Each issue you create that is a step in the plan should include the phrase "Refer to {{ plan_filename }}"
-{% else %}
-- Each issue you create that is a step in the plan should include references to the relevant specification files
-{% endif %}
 - Iterate until you feel that the steps are right sized for this project.
 
 ## Process
 
-{% if plan_filename %}
 - Read and analyze the specified plan file: {{ plan_filename }}
-{% else %}
-- Review the existing `./specification` directory and determine what is to be planned.
-{% endif %}
 - Review the existing memos and think deeply about how they apply to the plan.
 - Review the existing code to determine what parts of the specification might already be implemented.  Unless explicitly instructed otherwise in the specification, do not add new systems/services when existing patterns and systems can be extended to achieve the goals.
 - Draft a detailed, step-by-step plan to meet the specification, write this out to a temp file `.swissarmyhammer/tmp/DRAFT_PLAN.md`, refer to this draft plan to refresh your memory.
@@ -57,9 +45,5 @@ Generate a multiple step plan with multiple issues folder of multiple `<nnnnnn>_
 - From here you should have the foundation to provide an in order series of issue files that describes the work to do at each step
 - Review the results and make sure that the steps are small enough to be implemented safely, but big enough to move the project forward
 - When creating issue steps for the plan, make sure to prefix and number them padded with 0's so they run in order
-{% if plan_filename %}
   - Example, assuming your spec file is called `FOO.md`, make issue files called `FOO_<nnnnnn>_name.md`, so that your plan steps are in order
-{% else %}
-  - Example, make issue files called `PLAN_<nnnnnn>_name.md`, so that your plan steps are in order
-{% endif %}
   - Use the issue_create tool, specifying the name, again making sure they are named so that they run in order

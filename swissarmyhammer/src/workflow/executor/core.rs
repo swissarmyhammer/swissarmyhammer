@@ -498,6 +498,7 @@ impl WorkflowExecutor {
     ) -> ExecutorResult<bool> {
         // Parse action from state description with liquid template rendering
         let context_hashmap = run.context.to_workflow_hashmap();
+
         if let Some(action) =
             parse_action_from_description_with_context(state_description, &context_hashmap)?
         {

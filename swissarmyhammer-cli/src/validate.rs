@@ -3,6 +3,7 @@ use colored::*;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_config::TemplateContext;
 
 use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
@@ -363,10 +364,9 @@ impl Validator {
         result.merge(content_validation_result);
 
         // Try to render the template with partials support using the same path as test/serve
-        let empty_args = std::collections::HashMap::new();
 
         // Use render_prompt which internally uses render_with_partials
-        if let Err(e) = library.render_prompt(&prompt.name, &empty_args) {
+        if let Err(e) = library.render_prompt(&prompt.name, &TemplateContext::default()) {
             let error_msg = e.to_string();
 
             // Only report actual syntax errors, not unknown variable errors

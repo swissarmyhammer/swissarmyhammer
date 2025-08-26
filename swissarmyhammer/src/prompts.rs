@@ -1184,26 +1184,16 @@ impl PromptLibrary {
     ///
     /// let result = library.render_prompt("greeting", &args).unwrap();
     /// ```
-    pub fn render_prompt(&self, name: &str, args: &HashMap<String, String>) -> Result<String> {
-        let prompt = self.get(name)?;
-        prompt.render_with_partials(
-            args,
-            Arc::new(Self {
-                storage: self.storage.clone_box(),
-            }),
-        )
-    }
-
-    /// Renders a prompt with the given arguments and environment variables.
+    /// Renders a prompt template with the given template context.
     ///
-    /// Retrieves the prompt by name and renders it with both the provided arguments
-    /// and environment variables. The provided arguments take precedence over
-    /// environment variables with the same name.
+    /// This is the single, canonical method for rendering prompts. All template variables,
+    /// configuration values, workflow variables, and environment variables should be
+    /// included in the provided TemplateContext.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the prompt to render
-    /// * `args` - Template variables as key-value pairs
+    /// * `template_context` - Complete context including all variables and configuration
     ///
     /// # Returns
     ///
@@ -1212,118 +1202,45 @@ impl PromptLibrary {
     /// # Errors
     ///
     /// Returns an error if:
+    /// - The named prompt does not exist
     /// - Template parsing fails due to invalid Liquid syntax
-    /// - Required arguments are missing from the provided arguments map
+    /// - Required template variables are missing from the context
     /// - Template rendering fails during execution
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::PromptLibrary;
-    /// use std::collections::HashMap;
-    ///
-    /// let library = PromptLibrary::new();
-    /// let mut args = HashMap::new();
-    /// args.insert("app".to_string(), "myapp".to_string());
-    /// // Environment variables like USER will be available automatically
-    ///
-    /// let result = library.render_prompt_with_env("deploy", &args).unwrap();
-    /// ```
-    pub fn render_prompt_with_env(
-        &self,
-        name: &str,
-        args: &HashMap<String, String>,
-    ) -> Result<String> {
+    pub fn render_prompt(&self, name: &str, template_context: &TemplateContext) -> Result<String> {
         let prompt = self.get(name)?;
-        prompt.render_with_partials_and_env(
-            args,
-            Arc::new(Self {
-                storage: self.storage.clone_box(),
-            }),
-        )
-    }
 
-    /// Renders a prompt with configuration context and user arguments.
-    ///
-    /// This method combines configuration values from TemplateContext with user-provided
-    /// arguments. User arguments take precedence over configuration values.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Name of the prompt to render
-    /// * `template_context` - Configuration context from config files and environment
-    /// * `args` - User-provided template arguments (highest precedence)
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::PromptLibrary;
-    /// use swissarmyhammer_config::TemplateContext;
-    /// use std::collections::HashMap;
-    ///
-    /// let library = PromptLibrary::new();
-    /// let template_context = TemplateContext::new();
-    /// let mut args = HashMap::new();
-    /// args.insert("name".to_string(), "World".to_string());
-    ///
-    /// let result = library.render_prompt_with_context("greeting", &template_context, &args).unwrap();
-    /// ```
-    pub fn render_prompt_with_context(
-        &self,
-        name: &str,
-        template_context: &TemplateContext,
-        args: &HashMap<String, String>,
-    ) -> Result<String> {
-        let prompt = self.get(name)?;
-        prompt.render_with_context(
-            template_context,
-            args,
-            Arc::new(Self {
-                storage: self.storage.clone_box(),
-            }),
-        )
-    }
+        // Create a new template context with prompt parameter defaults
+        let mut enhanced_context = template_context.clone();
+        
+        // Apply prompt parameter defaults for any missing variables
+        for param in &prompt.parameters {
+            if let Some(default_value) = &param.default {
+                // Only set default if the parameter isn't already provided
+                if enhanced_context.get(&param.name).is_none() {
+                    enhanced_context.set_var(param.name.clone(), default_value.clone());
+                    tracing::debug!("Applied default value for parameter '{}': {:?}", param.name, default_value);
+                }
+            }
+        }
 
-    /// Renders a prompt with configuration context, environment variables, and user arguments.
-    ///
-    /// This method combines configuration values, environment variables, and user-provided
-    /// arguments with proper precedence: config < env < user arguments.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Name of the prompt to render
-    /// * `template_context` - Configuration context from config files
-    /// * `args` - User-provided template arguments (highest precedence)
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::PromptLibrary;
-    /// use swissarmyhammer_config::TemplateContext;
-    /// use std::collections::HashMap;
-    ///
-    /// let library = PromptLibrary::new();
-    /// let template_context = TemplateContext::new();
-    /// let mut args = HashMap::new();
-    /// args.insert("app".to_string(), "myapp".to_string());
-    /// // Environment variables like USER will be available automatically
-    ///
-    /// let result = library.render_prompt_with_env_and_context("deploy", &template_context, &args).unwrap();
-    /// ```
-    pub fn render_prompt_with_env_and_context(
-        &self,
-        name: &str,
-        template_context: &TemplateContext,
-        args: &HashMap<String, String>,
-    ) -> Result<String> {
-        let prompt = self.get(name)?;
-        prompt.render_with_partials_and_env_and_context(
-            template_context,
-            args,
-            Arc::new(Self {
-                storage: self.storage.clone_box(),
-            }),
-        )
+        // Use liquid context directly for proper template rendering
+        let liquid_vars = enhanced_context.to_liquid_context();
+        tracing::debug!("Liquid Context: {:?}", liquid_vars);
+
+        // Parse and render the template directly with liquid
+        let liquid_template = liquid::ParserBuilder::with_stdlib()
+            .build()
+            .map_err(|e| {
+                SwissArmyHammerError::Template(format!("Failed to create liquid parser: {e}"))
+            })?
+            .parse(&prompt.template)
+            .map_err(|e| {
+                SwissArmyHammerError::Template(format!("Failed to parse template '{}': {e}", name))
+            })?;
+
+        liquid_template.render(&liquid_vars).map_err(|e| {
+            SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
+        })
     }
 
     /// Searches for prompts matching the given query.

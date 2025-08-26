@@ -17,6 +17,7 @@ use swissarmyhammer::workflow::{
     WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer::{PromptLibrary, PromptResolver, Result, SwissArmyHammerError};
+use swissarmyhammer_config::TemplateContext;
 use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
@@ -317,7 +318,20 @@ impl McpServer {
 
         // Handle arguments if provided
         let content = if let Some(args) = arguments {
-            library.render_prompt(name, args)?
+            {
+                let template_context = TemplateContext::with_template_vars(
+                    args.iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect(),
+                )
+                .map_err(|e| {
+                    SwissArmyHammerError::git_operation_failed(
+                        "template_context",
+                        &format!("Failed to create template context: {e}"),
+                    )
+                })?;
+                library.render_prompt(name, &template_context)?
+            }
         } else {
             prompt.template.clone()
         };
@@ -703,7 +717,24 @@ impl ServerHandler for McpServer {
                 let content = if let Some(args) = &request.arguments {
                     let template_args = Self::json_map_to_string_map(args);
 
-                    match library.render_prompt(&request.name, &template_args) {
+                    let template_context = match TemplateContext::with_template_vars(
+                        template_args
+                            .iter()
+                            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                            .collect(),
+                    ) {
+                        Ok(ctx) => ctx,
+                        Err(e) => {
+                            return Ok(GetPromptResult {
+                                description: Some(format!(
+                                    "Error: Failed to create template context: {}",
+                                    e
+                                )),
+                                messages: vec![],
+                            });
+                        }
+                    };
+                    match library.render_prompt(&request.name, &template_context) {
                         Ok(rendered) => rendered,
                         Err(e) => {
                             return Err(McpError::internal_error(

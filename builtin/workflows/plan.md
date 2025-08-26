@@ -6,7 +6,7 @@ tags:
 parameters:
   - name: plan_filename
     description: Path to the specification file to process
-    required: false
+    required: true
     type: string
     pattern: '^.*\.md$'
 
@@ -32,6 +32,6 @@ stateDiagram-v2
 
 ## Actions
 
-- start: log "Making the plan{% if plan_filename %} for {{ plan_filename }}{% endif %}"
-- plan: execute prompt "plan"{% if plan_filename %} with plan_filename="{{ plan_filename }}"{% endif %}
+- start: log "Making the plan {{ plan_filename }}"
+- plan: execute prompt "plan" with plan_filename="{{ plan_filename }}"
 - done: log "Plan ready"

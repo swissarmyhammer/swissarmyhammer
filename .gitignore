@@ -22,6 +22,8 @@ Thumbs.db
 # Debug
 *.pdb
 semantic.db
+semantic.db.wal
+semantic.db-wal
 
 # Logs
 *.log

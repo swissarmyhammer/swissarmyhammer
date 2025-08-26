@@ -200,46 +200,7 @@ fn validate_plan_file_with_fs(
     })
 }
 
-/// Validate that the issues directory is accessible and writable
-pub fn validate_issues_directory() -> Result<PathBuf, PlanCommandError> {
-    let fs_utils = FileSystemUtils::new();
-    let fs = fs_utils.fs();
 
-    let issues_dir = Path::new("./issues");
-
-    // Check if directory exists, create if it doesn't
-    if !fs.exists(issues_dir) {
-        match fs.create_dir_all(issues_dir) {
-            Ok(()) => {}
-            Err(e) => {
-                return Err(PlanCommandError::IssuesDirectoryNotWritable {
-                    path: issues_dir.display().to_string(),
-                    source: match e {
-                        crate::error::SwissArmyHammerError::Io(io_err) => io_err,
-                        _ => std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Failed to create issues directory: {e}"),
-                        ),
-                    },
-                });
-            }
-        }
-    } else if !fs.is_dir(issues_dir) {
-        return Err(PlanCommandError::IssuesDirectoryNotWritable {
-            path: issues_dir.display().to_string(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::NotADirectory,
-                "Issues path exists but is not a directory",
-            ),
-        });
-    }
-
-    // Return canonicalized path
-    match issues_dir.canonicalize() {
-        Ok(canonical_path) => Ok(canonical_path),
-        Err(_) => Ok(issues_dir.to_path_buf()),
-    }
-}
 
 #[cfg(test)]
 mod tests {

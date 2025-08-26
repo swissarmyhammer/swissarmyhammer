@@ -317,21 +317,33 @@ impl Action for PromptAction {
 
 impl PromptAction {
     /// Render both user prompt and system prompt using the same library instance
-    async fn render_prompts_directly(
+    fn render_prompts_directly(
         &self,
         context: &WorkflowTemplateContext,
     ) -> ActionResult<(String, Option<String>)> {
-        // Substitute variables in arguments
-        let args = self.substitute_variables(context);
+        tracing::debug!(
+            "Starting render_prompts_directly for prompt: {}",
+            self.prompt_name
+        );
 
-        // Validate argument keys
-        for key in args.keys() {
-            if !is_valid_argument_key(key) {
-                return Err(ActionError::ParseError(
-                    format!("Invalid argument key '{key}': must contain only alphanumeric characters, hyphens, and underscores")
-                ));
+        // Create args HashMap with all workflow variables
+        let mut args = HashMap::new();
+
+        // Add all workflow variables (including plan_filename, etc.)
+        for (key, value) in context.iter() {
+            // Skip internal keys
+            if !key.starts_with('_') {
+                args.insert(key.clone(), value.to_string());
             }
         }
+
+        // Add/override with action-specific arguments
+        let action_args = self.substitute_variables(context);
+        for (key, value) in &action_args {
+            args.insert(key.clone(), value.clone());
+        }
+
+        tracing::debug!("Args for prompt rendering: {:?}", args);
 
         // Load prompts and render directly
         let mut library = PromptLibrary::new();
@@ -341,9 +353,23 @@ impl PromptAction {
             ActionError::ClaudeError(format!("Failed to load prompts from directories: {e}"))
         })?;
 
-        // Render user prompt
+        tracing::debug!("Loaded prompts successfully");
+
+        // Create TemplateContext with full configuration and template vars
+        let mut template_context = swissarmyhammer_config::TemplateContext::load()
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to load template context: {e}")))?;
+            
+        // Add all args as template vars
+        for (key, value) in args {
+            template_context.set_var(key.clone(), serde_json::Value::String(value.clone()));
+        }
+
+        tracing::debug!("Created template context successfully");
+
+        // Render user prompt with complete template context
+        tracing::debug!("About to render user prompt: {}", self.prompt_name);
         let rendered = library
-            .render_prompt_with_env(&self.prompt_name, &args)
+            .render_prompt(&self.prompt_name, &template_context)
             .map_err(|e| {
                 // Try to get available prompts for better error messaging
                 let available_prompts = library
@@ -365,21 +391,25 @@ impl PromptAction {
                 ))
             })?;
 
-        // Render system prompt using the same library instance
-        let system_prompt = library
-            .render_prompt_with_env(".system", &std::collections::HashMap::new())
-            .map_err(|e| {
-                ActionError::ClaudeError(
-                    format!("Failed to render system prompt: {}. Make sure .system prompt exists in one of the standard directories (builtin/prompts, .swissarmyhammer/prompts, prompts)", e)
-                )
-            })?;
+        // Render system prompt using the same library instance (optional)
+        let system_prompt = match library.render_prompt("system", &template_context) {
+            Ok(prompt) => Some(prompt),
+            Err(e) => {
+                tracing::warn!("Failed to render system prompt: {}. Proceeding without system prompt.", e);
+                None
+            }
+        };
 
-        tracing::debug!(
-            "System prompt rendered successfully ({} chars)",
-            system_prompt.len()
-        );
+        if let Some(ref sys_prompt) = system_prompt {
+            tracing::debug!(
+                "System prompt rendered successfully ({} chars)",
+                sys_prompt.len()
+            );
+        } else {
+            tracing::debug!("No system prompt will be used");
+        }
 
-        Ok((rendered, Some(system_prompt)))
+        Ok((rendered, system_prompt))
     }
 
     /// Get Claude CLI path from context or environment
@@ -492,7 +522,13 @@ impl PromptAction {
         );
 
         // Render both user and system prompts using the same library instance
-        let (user_prompt, system_prompt) = self.render_prompts_directly(context).await?;
+        let (user_prompt, system_prompt) = match self.render_prompts_directly(context) {
+            Ok(prompts) => prompts,
+            Err(e) => {
+                tracing::error!("Failed to render prompts: {:?}", e);
+                return Err(e);
+            }
+        };
 
         // Log the actual prompt being sent to Claude
         tracing::debug!("Piping prompt to Claude:\n{}", user_prompt);
@@ -1727,46 +1763,59 @@ pub fn parse_action_from_description_with_context(
         );
     }
 
-    let rendered_description = if let Some(template_vars) = enhanced_context.get("_template_vars") {
-        // Extract template variables from context (now includes config variables)
-        if let Some(vars_map) = template_vars.as_object() {
-            // Convert to liquid Object
-            let mut liquid_vars = liquid::Object::new();
-            for (key, value) in vars_map {
+    let rendered_description = {
+        // Convert ALL context variables to liquid Object (not just _template_vars)
+        let mut liquid_vars = liquid::Object::new();
+
+        // Add all variables from the context (includes workflow vars like plan_filename)
+        for (key, value) in &enhanced_context {
+            // Skip internal keys
+            if !key.starts_with('_') {
                 liquid_vars.insert(
                     key.clone().into(),
                     liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
                 );
             }
+        }
 
-            // Parse and render the template
-            match liquid::ParserBuilder::with_stdlib()
-                .build()
-                .and_then(|parser| parser.parse(description))
-            {
-                Ok(template) => match template.render(&liquid_vars) {
-                    Ok(rendered) => rendered,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to render liquid template: {}. Using original text.",
-                            e
+        // Also include template variables if they exist
+        if let Some(template_vars) = enhanced_context.get("_template_vars") {
+            if let Some(vars_map) = template_vars.as_object() {
+                for (key, value) in vars_map {
+                    // Template vars have lower precedence than workflow vars
+                    if !liquid_vars.contains_key(key.as_str()) {
+                        liquid_vars.insert(
+                            key.clone().into(),
+                            liquid::model::to_value(value).unwrap_or(liquid::model::Value::Nil),
                         );
-                        description.to_string()
                     }
-                },
+                }
+            }
+        }
+
+        // Parse and render the template
+        match liquid::ParserBuilder::with_stdlib()
+            .build()
+            .and_then(|parser| parser.parse(description))
+        {
+            Ok(template) => match template.render(&liquid_vars) {
+                Ok(rendered) => rendered,
                 Err(e) => {
                     tracing::warn!(
-                        "Failed to parse liquid template: {}. Using original text.",
+                        "Failed to render liquid template: {}. Using original text.",
                         e
                     );
                     description.to_string()
                 }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to parse liquid template: {}. Using original text.",
+                    e
+                );
+                description.to_string()
             }
-        } else {
-            description.to_string()
         }
-    } else {
-        description.to_string()
     };
 
     parse_action_from_description(&rendered_description)
