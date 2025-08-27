@@ -29,12 +29,54 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// Default timeout for workflow test mode execution in seconds
 const DEFAULT_TEST_MODE_TIMEOUT_SECS: u64 = 5;
 
+/// Setup debug logging for a specific workflow run - follows same pattern as run.json  
+fn setup_workflow_debug_logging(run_id: &WorkflowRunId) -> Result<()> {
+    use std::fs;
+
+    // Create debug log file in proper workflow run directory (same pattern as run.json)
+    let workflow_runs_path = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
+    let run_dir = workflow_runs_path.join("runs").join(format!("{run_id:?}"));
+
+    // Ensure directory exists (same as run.json creation)
+    fs::create_dir_all(&run_dir).map_err(|e| {
+        SwissArmyHammerError::Other(format!("Failed to create workflow run directory: {e}"))
+    })?;
+
+    let debug_log_path = run_dir.join("run_logs.ndjson");
+
+    // Create debug log file and store path for later use
+    let debug_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&debug_log_path)
+        .map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to create debug log file: {e}"))
+        })?;
+
+    // Store the file handle globally for the NDJSON writer to use
+    if DEBUG_FILE.set(std::sync::Arc::new(std::sync::Mutex::new(debug_file))).is_err() {
+        return Err(SwissArmyHammerError::Other("Debug file already initialized".to_string()));
+    }
+
+    tracing::info!(
+        run_id = %run_id,
+        debug_log_path = %debug_log_path.display(),
+        "Debug logging enabled for workflow run"
+    );
+
+    Ok(())
+}
+
+/// Global debug file handle for current workflow run
+pub static DEBUG_FILE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+
 /// Handle the flow command
 pub async fn handle_command(
     subcommand: FlowSubcommand,
     _template_context: &swissarmyhammer_config::TemplateContext,
+    debug: bool,
 ) -> i32 {
-    match run_flow_command(subcommand, _template_context).await {
+    match run_flow_command(subcommand, _template_context, debug).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             eprintln!("Flow command failed: {}", e);
@@ -47,6 +89,7 @@ pub async fn handle_command(
 pub async fn run_flow_command(
     subcommand: FlowSubcommand,
     _template_context: &swissarmyhammer_config::TemplateContext,
+    debug: bool,
 ) -> Result<()> {
     match subcommand {
         FlowSubcommand::Run {
@@ -69,6 +112,7 @@ pub async fn run_flow_command(
                     test_mode: test,
                     timeout_str,
                     quiet,
+                    debug,
                 },
                 _template_context,
             )
@@ -129,6 +173,7 @@ pub async fn run_flow_command(
                     test_mode: true,
                     timeout_str,
                     quiet,
+                    debug,
                 },
                 _template_context,
             )
@@ -146,6 +191,7 @@ pub struct WorkflowCommandConfig {
     pub test_mode: bool,
     pub timeout_str: Option<String>,
     pub quiet: bool,
+    pub debug: bool,
 }
 
 /// Execute a workflow
@@ -316,6 +362,11 @@ pub async fn run_workflow_command(
 
     // Set initial variables
     run.context.set_workflow_vars(variables.clone());
+
+    // Setup debug logging if enabled - follows same pattern as run.json
+    if config.debug {
+        setup_workflow_debug_logging(&run.id)?;
+    }
 
     // Merge configuration context into workflow context
     // Configuration has lower precedence than workflow variables (CLI args have highest precedence)

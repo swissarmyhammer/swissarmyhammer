@@ -20,5 +20,5 @@ pub async fn handle_command(template_context: &swissarmyhammer_config::TemplateC
         quiet: false,
     };
 
-    crate::commands::flow::handle_command(subcommand, template_context).await
+    crate::commands::flow::handle_command(subcommand, template_context, false).await
 }

@@ -41,7 +41,7 @@ async fn run_builtin_workflow_in_process(
     };
 
     let test_context = swissarmyhammer_config::TemplateContext::new();
-    let result = run_flow_command(subcommand, &test_context).await;
+    let result = run_flow_command(subcommand, &test_context, false).await;
 
     Ok(result.is_ok())
 }
