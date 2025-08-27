@@ -259,5 +259,8 @@ pub mod prelude {
 /// Test utilities module for testing support
 pub mod test_utils;
 
+/// Test organization utilities for improved test management
+pub mod test_organization;
+
 /// Common utilities module for code reuse
 pub mod common;

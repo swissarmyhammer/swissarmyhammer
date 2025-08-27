@@ -7,6 +7,9 @@ description: Perform a comprehensive review of the code to improve pattern use.
 
 Please review the all code in this project.
 
+DO NOT suggest external or architecture documentation improvements.
+Inline doc comment improvements are allowed.
+
 ## Review Checklist
 
 ### 1. Pattern Consistency Analysis

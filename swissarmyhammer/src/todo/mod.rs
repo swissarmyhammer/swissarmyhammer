@@ -42,6 +42,7 @@
 //! ```
 
 use crate::common::generate_monotonic_ulid;
+use crate::common::mcp_errors::ToSwissArmyHammerError;
 use crate::directory_utils;
 use crate::error::{Result, SwissArmyHammerError};
 use serde::{Deserialize, Serialize};
@@ -234,10 +235,7 @@ pub struct MarkCompleteTodoRequest {
 /// Requires being within a Git repository - no fallback to current directory.
 pub fn get_todo_directory() -> Result<PathBuf> {
     let swissarmyhammer_dir = directory_utils::get_or_create_swissarmyhammer_directory()
-        .map_err(|e| SwissArmyHammerError::Other(format!(
-            "Todo operations require a Git repository. Please run this command from within a Git repository. Error: {}",
-            e
-        )))?;
+        .to_swiss_error_with_context("Todo operations require a Git repository. Please run this command from within a Git repository")?;
 
     let todo_dir = swissarmyhammer_dir.join("todo");
 

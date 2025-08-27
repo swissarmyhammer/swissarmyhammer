@@ -4,6 +4,7 @@
 //! potential security vulnerabilities like path traversal attacks and denial
 //! of service through excessive resource consumption.
 
+use crate::common::mcp_errors::ToSwissArmyHammerError;
 use crate::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 
@@ -73,7 +74,7 @@ pub fn validate_path_security(path: &Path, root: &Path) -> Result<PathBuf> {
     let canonical_path = if full_path.exists() {
         full_path
             .canonicalize()
-            .map_err(|e| SwissArmyHammerError::Other(format!("Failed to canonicalize path: {e}")))?
+            .to_swiss_error_with_context("Failed to canonicalize path")?
     } else {
         // Check the parent directory exists and is valid
         let parent = full_path.parent().ok_or_else(|| {

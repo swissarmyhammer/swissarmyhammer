@@ -4,6 +4,7 @@
 //! including boolean queries, phrase searches, wildcards, and relevance scoring.
 //! It builds on the Tantivy search library for high-performance full-text search.
 
+use crate::common::mcp_errors::McpResultExt;
 use crate::error::{Result, SwissArmyHammerError};
 use crate::memoranda::{Memo, MemoId, SearchOptions, SearchResult};
 use std::collections::HashMap;
@@ -22,23 +23,7 @@ use tracing::{debug, info};
 /// Configuration constants for advanced search engine
 const DEFAULT_WRITER_BUFFER_SIZE: usize = 50_000_000; // 50MB buffer for index writer
 
-/// Helper functions for common error mappings
-impl AdvancedMemoSearchEngine {
-    /// Map Tantivy errors to SwissArmyHammerError for index operations
-    fn map_tantivy_error(context: &str, error: impl std::fmt::Display) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("{context}: {error}"))
-    }
 
-    /// Map commit errors
-    fn map_commit_error(operation: &str, error: impl std::fmt::Display) -> SwissArmyHammerError {
-        Self::map_tantivy_error(&format!("Failed to commit {operation}"), error)
-    }
-
-    /// Map reload errors
-    fn map_reload_error(context: &str, error: impl std::fmt::Display) -> SwissArmyHammerError {
-        Self::map_tantivy_error(&format!("Failed to reload {context}"), error)
-    }
-}
 
 /// Advanced memo search engine using Tantivy for full-text indexing
 ///
@@ -127,9 +112,9 @@ impl AdvancedMemoSearchEngine {
 
         let schema = Self::build_schema();
         let directory = MmapDirectory::open(path)
-            .map_err(|e| Self::map_tantivy_error("Failed to open index directory", e))?;
+            .with_tantivy_context()?;
         let index = Index::open_or_create(directory, schema)
-            .map_err(|e| Self::map_tantivy_error("Failed to create index", e))?;
+            .with_tantivy_context()?;
 
         Self::new_from_index(index).await
     }
@@ -156,11 +141,11 @@ impl AdvancedMemoSearchEngine {
 
         let writer = index
             .writer(DEFAULT_WRITER_BUFFER_SIZE)
-            .map_err(|e| Self::map_tantivy_error("Failed to create index writer", e))?;
+            .with_tantivy_context()?;
 
         let reader = index
             .reader()
-            .map_err(|e| Self::map_tantivy_error("Failed to create index reader", e))?;
+            .with_tantivy_context()?;
 
         Ok(Self {
             index,
@@ -223,13 +208,13 @@ impl AdvancedMemoSearchEngine {
             writer.delete_term(id_term);
             writer
                 .commit()
-                .map_err(|e| Self::map_commit_error("deletion", e))?;
+                .with_tantivy_context()?;
         }
 
         // Reload reader to ensure deletions are visible
         self.reader
             .reload()
-            .map_err(|e| Self::map_reload_error("after deletion", e))?;
+            .with_tantivy_context()?;
 
         // Then, add the new document
         {
@@ -245,17 +230,17 @@ impl AdvancedMemoSearchEngine {
 
             writer
                 .add_document(doc)
-                .map_err(|e| Self::map_tantivy_error("Failed to add document", e))?;
+                .with_tantivy_context()?;
 
             writer
                 .commit()
-                .map_err(|e| Self::map_commit_error("addition", e))?;
+                .with_tantivy_context()?;
         }
 
         // Final reload to see the new document
         self.reader
             .reload()
-            .map_err(|e| Self::map_reload_error("after addition", e))?;
+            .with_tantivy_context()?;
 
         debug!("Indexed memo: {} ({})", memo.title, memo.id);
         Ok(())
@@ -298,13 +283,13 @@ impl AdvancedMemoSearchEngine {
             writer.delete_term(id_term);
             writer
                 .commit()
-                .map_err(|e| Self::map_commit_error("removal", e))?;
+                .with_tantivy_context()?;
         }
 
         // Reload reader to see changes
         self.reader
             .reload()
-            .map_err(|e| Self::map_reload_error("index reader", e))?;
+            .with_tantivy_context()?;
 
         debug!("Removed memo from index: {}", memo_id);
         Ok(())
@@ -322,12 +307,12 @@ impl AdvancedMemoSearchEngine {
         let mut writer = self.writer.write().await;
         writer
             .commit()
-            .map_err(|e| Self::map_commit_error("index", e))?;
+            .with_tantivy_context()?;
 
         // Reload reader to see new changes
         self.reader
             .reload()
-            .map_err(|e| Self::map_reload_error("index reader", e))?;
+            .with_tantivy_context()?;
 
         debug!("Committed index changes");
         Ok(())
@@ -370,7 +355,7 @@ impl AdvancedMemoSearchEngine {
 
         let top_docs = searcher
             .search(&*parsed_query, &TopDocs::with_limit(limit))
-            .map_err(|e| Self::map_tantivy_error("Search failed", e))?;
+            .with_tantivy_context()?;
 
         let mut results = Vec::new();
         let memo_map: HashMap<String, &Memo> = all_memos
@@ -384,7 +369,7 @@ impl AdvancedMemoSearchEngine {
             // Current version: searcher.doc::<tantivy::TantivyDocument>(doc_address)
             let doc = searcher
                 .doc::<tantivy::TantivyDocument>(doc_address)
-                .map_err(|e| Self::map_tantivy_error("Failed to retrieve document", e))?;
+                .with_tantivy_context()?;
 
             if let Some(id_value) = doc.get_first(self.id_field) {
                 if let Some(id_str) = id_value.as_str() {
@@ -445,7 +430,7 @@ impl AdvancedMemoSearchEngine {
 
         let parsed = query_parser
             .parse_query(query)
-            .map_err(|e| Self::map_tantivy_error("Query parsing failed", e))?;
+            .with_tantivy_context()?;
 
         Ok(parsed)
     }
@@ -466,7 +451,7 @@ impl AdvancedMemoSearchEngine {
         let quoted_phrase = format!("\"{phrase}\"");
         let parsed = query_parser
             .parse_query(&quoted_phrase)
-            .map_err(|e| Self::map_tantivy_error("Phrase query parsing failed", e))?;
+            .with_tantivy_context()?;
 
         Ok(parsed)
     }
@@ -516,7 +501,7 @@ impl AdvancedMemoSearchEngine {
 
         let parsed = query_parser
             .parse_query(clean_query)
-            .map_err(|e| Self::map_tantivy_error("Wildcard query parsing failed", e))?;
+            .with_tantivy_context()?;
 
         Ok(parsed)
     }
@@ -529,7 +514,7 @@ impl AdvancedMemoSearchEngine {
 
         let parsed = query_parser
             .parse_query(term)
-            .map_err(|e| Self::map_tantivy_error("Term query parsing failed", e))?;
+            .with_tantivy_context()?;
 
         Ok(parsed)
     }

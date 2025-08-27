@@ -1,7 +1,7 @@
 //! Search functionality for prompts
 
 use crate::common::mcp_errors::McpResultExt;
-use crate::{Prompt, Result, SwissArmyHammerError};
+use crate::{Prompt, Result};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::path::Path;
@@ -116,9 +116,7 @@ impl SearchEngine {
 
         document.add_text(self.template_field, &prompt.template);
 
-        self.writer
-            .add_document(document)
-            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        self.writer.add_document(document).with_tantivy_context()?;
 
         Ok(())
     }
@@ -135,18 +133,13 @@ impl SearchEngine {
 
     /// Commit changes to the index
     pub fn commit(&mut self) -> Result<()> {
-        self.writer
-            .commit()
-            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        self.writer.commit().with_tantivy_context()?;
         Ok(())
     }
 
     /// Search for prompts using full-text search
     pub fn search(&self, query: &str, prompts: &[Prompt]) -> Result<Vec<SearchResult>> {
-        let reader = self
-            .index
-            .reader()
-            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        let reader = self.index.reader().with_tantivy_context()?;
 
         let searcher = reader.searcher();
 
@@ -161,13 +154,11 @@ impl SearchEngine {
             ],
         );
 
-        let query = query_parser
-            .parse_query(query)
-            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        let query = query_parser.parse_query(query).with_tantivy_context()?;
 
         let top_docs = searcher
             .search(&query, &TopDocs::with_limit(100))
-            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+            .with_tantivy_context()?;
 
         let mut results = Vec::new();
 
@@ -177,7 +168,7 @@ impl SearchEngine {
             // Current version: searcher.doc::<tantivy::TantivyDocument>(doc_address)
             let doc = searcher
                 .doc::<tantivy::TantivyDocument>(doc_address)
-                .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+                .with_tantivy_context()?;
 
             if let Some(name_value) = doc.get_first(self.name_field) {
                 if let Some(name) = name_value.as_str() {

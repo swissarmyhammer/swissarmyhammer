@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::future;
 use std::io::{self, Write};
 use std::time::Duration;
+use swissarmyhammer::common::mcp_errors::ToSwissArmyHammerError;
 use swissarmyhammer::workflow::{
     ExecutionVisualizer, ExecutorError, MemoryWorkflowStorage, StateId, TransitionKey, Workflow,
     WorkflowExecutor, WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus,
@@ -977,8 +978,7 @@ fn parse_duration(s: &str) -> Result<Duration> {
 
 /// Helper to parse WorkflowRunId from string
 fn parse_workflow_run_id(s: &str) -> Result<WorkflowRunId> {
-    WorkflowRunId::parse(s)
-        .map_err(|e| SwissArmyHammerError::Other(format!("Invalid workflow run ID '{s}': {e}")))
+    WorkflowRunId::parse(s).to_swiss_error_with_context(&format!("Invalid workflow run ID '{s}'"))
 }
 
 /// Helper to convert WorkflowRunId to string

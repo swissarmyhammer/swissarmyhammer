@@ -41,15 +41,15 @@ pub fn create_test_context() -> WorkflowTemplateContext {
 }
 
 /// Helper function to create a test context with special characters
-pub fn _create_context_with_special_chars() -> HashMap<String, Value> {
-    let mut context = HashMap::new();
-    context.insert(
+pub fn create_context_with_special_chars() -> WorkflowTemplateContext {
+    let mut vars = HashMap::new();
+    vars.insert(
         "special_chars".to_string(),
         Value::String("hello\"world'test".to_string()),
     );
-    context.insert("empty_string".to_string(), Value::String("".to_string()));
-    context.insert("null_value".to_string(), Value::Null);
-    context
+    vars.insert("empty_string".to_string(), Value::String("".to_string()));
+    vars.insert("null_value".to_string(), Value::Null);
+    WorkflowTemplateContext::with_vars(vars).unwrap()
 }
 
 // Include all test modules
@@ -87,3 +87,16 @@ mod shell_action_tests;
 
 #[cfg(test)]
 mod shell_action_integration_tests;
+
+// Consolidated test modules demonstrating the test organization framework
+#[cfg(test)]
+mod action_parsing_consolidated_tests;
+
+#[cfg(test)]
+mod wait_action_consolidated_tests;
+
+#[cfg(test)]
+mod log_action_consolidated_tests;
+
+#[cfg(test)]
+mod error_handling_consolidated_tests;

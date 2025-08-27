@@ -66,18 +66,14 @@ swissarmyhammer-cli/.swissarmyhammer
 # SwissArmyHammer temporary todo files
 .swissarmyhammer/todo/
 
-
-
 doc/book
 
 # Claude Code configuration
 .claude/
 
-# Test home directories (temporary test fixtures)
-tests/test-home/
-
 Cargo.lock
 
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md
-.swissarmyhammer/workflows/
+
+test_validation

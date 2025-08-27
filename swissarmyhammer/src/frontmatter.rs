@@ -3,6 +3,7 @@
 //! This module provides common frontmatter parsing logic used by both
 //! workflow and prompt parsers to eliminate code duplication.
 
+use crate::common::mcp_errors::McpResultExt;
 use crate::{Result, SwissArmyHammerError};
 
 /// Represents parsed frontmatter with metadata and content
@@ -66,8 +67,7 @@ pub fn parse_frontmatter(content: &str) -> Result<Frontmatter> {
                 })?;
 
             // Convert to JSON for consistent handling
-            let json_value = serde_json::to_value(yaml_value)
-                .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+            let json_value = serde_json::to_value(yaml_value).with_json_context()?;
 
             return Ok(Frontmatter {
                 metadata: Some(json_value),
