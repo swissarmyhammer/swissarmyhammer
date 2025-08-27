@@ -300,7 +300,7 @@ fn test_example_usage() {
     library.add(greeting_prompt).unwrap();
 
     // Retrieve and use
-    let prompt = library.get("greeting").unwrap();
+    let _prompt = library.get("greeting").unwrap();
 
     let mut template_vars = HashMap::new();
     template_vars.insert("name".to_string(), json!("Alice"));

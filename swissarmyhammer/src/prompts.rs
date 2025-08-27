@@ -765,6 +765,11 @@ impl PromptLibrary {
         let mut resolver = crate::PromptResolver::new();
         let mut full_library = PromptLibrary::new();
         resolver.load_all_prompts(&mut full_library)?;
+        // load in prompts from self as overrides of the base library
+        // this is used in testing in particular
+        for prompt in self.list()? {
+            full_library.add(prompt)?;
+        }
 
         let prompt = full_library.get(name)?;
 
@@ -1491,7 +1496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_render() {
+    fn test_prompt_render_basic() {
         let prompt = Prompt::new("test", "Hello {{ name }}!")
             .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
@@ -1712,7 +1717,7 @@ This is another prompt.
             "project_info",
             "Project: {{project_name}} v{{version}} by {{author}}",
         );
-        library.add(prompt);
+        library.add(prompt).unwrap();
 
         let result = library.render("project_info", &template_context).unwrap();
         assert_eq!(result, "Project: MyProject v1.0.0 by Test User");
@@ -1729,7 +1734,7 @@ This is another prompt.
 
         let mut library = PromptLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}");
-        library.add(prompt);
+        library.add(prompt).unwrap();
 
         // User args should override config values
         let mut template_context = TemplateContext::new();
@@ -1753,7 +1758,7 @@ This is another prompt.
                 Parameter::new("project_name", "Project name", ParameterType::String)
                     .required(true),
             );
-        library.add(prompt);
+        library.add(prompt).unwrap();
 
         // Should fail because required parameter is not provided in args or config
         let result = library.render("project_info", &template_context);
@@ -1779,7 +1784,7 @@ This is another prompt.
                 Parameter::new("project_name", "Project name", ParameterType::String)
                     .required(true),
             );
-        library.add(prompt);
+        library.add(prompt).unwrap();
 
         // Should succeed because required parameter is provided via config
         let result = library.render("project_info", &template_context).unwrap();
