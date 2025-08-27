@@ -6,6 +6,7 @@ mod error;
 mod exit_codes;
 mod logging;
 mod mcp_integration;
+mod ndjson_layer;
 mod parameter_cli;
 mod schema_conversion;
 mod schema_validation;
@@ -222,7 +223,7 @@ async fn handle_dynamic_matches(
         Some(("prompt", sub_matches)) => {
             handle_prompt_command(sub_matches, &template_context).await
         }
-        Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &template_context).await,
+        Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &template_context, debug).await,
         Some(("validate", sub_matches)) => {
             handle_validate_command(sub_matches, &template_context).await
         }
@@ -505,6 +506,7 @@ async fn handle_prompt_command(
 async fn handle_flow_command(
     matches: &clap::ArgMatches,
     template_context: &TemplateContext,
+    debug: bool,
 ) -> i32 {
     use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
 
@@ -658,7 +660,7 @@ async fn handle_flow_command(
         }
     };
 
-    commands::flow::handle_command(subcommand, template_context).await
+    commands::flow::handle_command(subcommand, template_context, debug).await
 }
 
 async fn handle_validate_command(
@@ -758,9 +760,21 @@ async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode:
             }
         }
     } else {
-        registry()
+        // Check if we should enable debug logging to NDJSON for flow commands
+        let enable_debug_ndjson = debug && std::env::args().any(|arg| arg == "flow");
+        
+        let registry = registry()
             .with(create_filter())
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .init();
+            .with(fmt::layer().with_writer(std::io::stderr));
+            
+        if enable_debug_ndjson {
+            // Add NDJSON layer for workflow debug logging
+            use crate::ndjson_layer::{NdjsonLayer, WorkflowDebugWriter};
+            
+            let debug_writer = WorkflowDebugWriter::new();
+            registry.with(NdjsonLayer::new(debug_writer)).init();
+        } else {
+            registry.init();
+        }
     }
 }

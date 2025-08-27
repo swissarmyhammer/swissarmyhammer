@@ -7,6 +7,7 @@ pub mod error;
 pub mod exit_codes;
 pub mod list;
 pub mod mcp_integration;
+pub mod ndjson_layer;
 pub mod parameter_cli;
 pub mod schema_conversion;
 pub mod schema_validation;

@@ -75,7 +75,7 @@ async fn run_plan(plan_filename: String) -> i32 {
 
     // Execute the flow command with the plan workflow
     let temp_context = swissarmyhammer_config::TemplateContext::new(); // Plan command doesn't need configuration
-    let exit_code = crate::commands::flow::handle_command(subcommand, &temp_context).await;
+    let exit_code = crate::commands::flow::handle_command(subcommand, &temp_context, false).await;
 
     if exit_code == EXIT_SUCCESS {
         tracing::info!("Plan workflow execution completed successfully");
