@@ -339,6 +339,16 @@ impl PromptAction {
 
         // Add/override with action-specific arguments
         let action_args = self.substitute_variables(context);
+        
+        // Validate argument keys early
+        for key in action_args.keys() {
+            if !is_valid_argument_key(key) {
+                return Err(ActionError::ParseError(
+                    format!("Invalid argument key '{key}': must contain only alphanumeric characters, hyphens, and underscores")
+                ));
+            }
+        }
+        
         for (key, value) in &action_args {
             args.insert(key.clone(), value.clone());
         }

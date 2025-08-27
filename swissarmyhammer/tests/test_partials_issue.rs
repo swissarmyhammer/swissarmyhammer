@@ -6,9 +6,9 @@ fn test_partials_with_liquid_extension() {
     // Create a library and add a partial
     let mut library = PromptLibrary::new();
 
-    // Add the partial prompt (like principals.md.liquid)
+    // Add the partial prompt (override the builtin principals partial)
     let partial = Prompt::new(
-        "principals.md.liquid",
+        "principals",
         "{% partial %}\n\n## Principals\n\nDon't hold back!",
     );
     library.add(partial).unwrap();

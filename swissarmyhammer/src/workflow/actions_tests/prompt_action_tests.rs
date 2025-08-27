@@ -87,6 +87,6 @@ async fn test_prompt_action_execution_with_invalid_argument_key() {
         ActionError::ParseError(msg) => {
             assert!(msg.contains("Invalid argument key"));
         }
-        _ => panic!("Expected ParseError"),
+        e => panic!("Unexpected error: {:?}", e),
     }
 }

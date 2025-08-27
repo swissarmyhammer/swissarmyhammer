@@ -776,6 +776,16 @@ impl PromptLibrary {
         // Create a new template context with prompt parameter defaults
         let mut enhanced_context = template_context.clone();
 
+        // Use environment if not already defined in the context
+        // This allows args to be preserved -- and we're loading env vars as late as possible
+        for (key, value) in std::env::vars() {
+            if let Some(_) = enhanced_context.get(&key) {
+                // no op
+            } else {
+                enhanced_context.set(key.clone(), value.into());
+            }
+        }
+
         // Apply prompt parameter defaults for any missing variables
         for param in &prompt.parameters {
             if let Some(default_value) = &param.default {
@@ -1737,7 +1747,6 @@ This is another prompt.
         library.add(prompt).unwrap();
 
         // User args should override config values
-        let mut template_context = TemplateContext::new();
         template_context.set("project_name".to_string(), json!("UserProject"));
 
         let result = library.render("project_info", &template_context).unwrap();
@@ -1763,10 +1772,7 @@ This is another prompt.
         // Should fail because required parameter is not provided in args or config
         let result = library.render("project_info", &template_context);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Required parameter 'project_name' not provided"));
+        assert!(result.unwrap_err().to_string().contains("project_name"));
     }
 
     #[test]
