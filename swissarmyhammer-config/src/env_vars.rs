@@ -14,7 +14,7 @@ impl EnvVarSubstitution {
     /// Create a new environment variable substitution instance
     pub fn new() -> ConfigurationResult<Self> {
         let env_var_regex = Regex::new(r"\$\{([^}:]+)(?::-([^}]*))?\}")
-            .map_err(|e| ConfigurationError::env_var(format!("Failed to compile regex: {}", e)))?;
+            .map_err(|e| ConfigurationError::env_var(format!("Failed to compile regex: {e}")))?;
 
         Ok(Self { env_var_regex })
     }
