@@ -38,7 +38,7 @@ The goal is to have:
 - when you fix a specific test, use the notify_create tool to let the user know
 - DO NOT commit to git
 - DO NOT mark the issue complete with the issue_mark_complete tool
-{% render "todo", todo_file: ".swissarmyhammer/tmp/TEST_FAILURES.md %}
+{% render "todo", todo_file: ".swissarmyhammer/tmp/TEST_FAILURES.md" %}
 
 ## Reporting
 

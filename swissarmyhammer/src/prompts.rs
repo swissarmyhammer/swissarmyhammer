@@ -1223,7 +1223,7 @@ impl PromptLibrary {
             }
         }
 
-        // Use liquid context directly for proper template rendering
+        // Use liquid context directly for proper template rendering (without partials for now)
         let liquid_vars = enhanced_context.to_liquid_context();
         tracing::debug!("Liquid Context: {:?}", liquid_vars);
 
@@ -1241,6 +1241,55 @@ impl PromptLibrary {
         liquid_template.render(&liquid_vars).map_err(|e| {
             SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
         })
+    }
+
+    /// Renders a prompt with partial support
+    ///
+    /// This method enables the use of `{% render %}` tags within templates
+    /// to include other prompts as partials.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the prompt to render
+    /// * `template_context` - Context for template variable substitution
+    /// * `library` - The prompt library to use for resolving partials
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::sync::Arc;
+    /// let library = Arc::new(PromptLibrary::new());
+    /// let result = PromptLibrary::render_prompt_with_partials(
+    ///     "greeting", &template_context, library.clone()
+    /// ).unwrap();
+    /// ```
+    pub fn render_prompt_with_partials(
+        name: &str,
+        template_context: &TemplateContext,
+        library: Arc<PromptLibrary>,
+    ) -> Result<String> {
+        let prompt = library.get(name)?;
+
+        // Create a new template context with prompt parameter defaults
+        let mut enhanced_context = template_context.clone();
+        
+        // Apply prompt parameter defaults for any missing variables
+        for param in &prompt.parameters {
+            if let Some(default_value) = &param.default {
+                // Only set default if the parameter isn't already provided
+                if enhanced_context.get(&param.name).is_none() {
+                    enhanced_context.set_var(param.name.clone(), default_value.clone());
+                    tracing::debug!("Applied default value for parameter '{}': {:?}", param.name, default_value);
+                }
+            }
+        }
+
+        // Use partials-aware rendering
+        prompt.render_with_partials_and_env_and_context(
+            &enhanced_context,
+            &HashMap::new(), // Empty args since we're using template context
+            library
+        )
     }
 
     /// Searches for prompts matching the given query.
@@ -1770,6 +1819,7 @@ impl Default for PromptLoader {
 mod tests {
     use super::*;
     use crate::common::{Parameter, ParameterType};
+    use serde_json::Value;
 
     #[test]
     fn test_prompt_creation() {
@@ -2096,11 +2146,15 @@ This is another prompt.
         template_context.set("name".to_string(), json!("Config"));
 
         // Test rendering with context
-        let mut args = HashMap::new();
-        args.insert("name".to_string(), "User".to_string()); // Override config
+        let mut user_args_map = HashMap::new();
+        user_args_map.insert("name".to_string(), Value::String("User".to_string())); // Override config
+        let user_context = TemplateContext::from_hash_map(user_args_map);
+        
+        let mut combined_context = template_context.clone();
+        combined_context.merge(user_context);
 
         let result = library
-            .render_prompt_with_context("test_prompt", &template_context, &args)
+            .render_prompt("test_prompt", &combined_context)
             .unwrap();
         assert_eq!(result, "Hello User from SwissArmyHammer!"); // User arg + config fallback
     }
@@ -2118,11 +2172,9 @@ This is another prompt.
         let mut template_context = TemplateContext::new();
         template_context.set("app_name".to_string(), json!("MyApp"));
 
-        let args = HashMap::new(); // No user overrides
-
         // This should work with environment variables
         let result = library
-            .render_prompt_with_env_and_context("env_prompt", &template_context, &args)
+            .render_prompt("env_prompt", &template_context)
             .unwrap();
         assert!(result.contains("App: MyApp"));
         // USER environment variable should be available too

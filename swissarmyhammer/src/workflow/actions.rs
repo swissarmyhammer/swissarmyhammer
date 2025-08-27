@@ -356,9 +356,11 @@ impl PromptAction {
         tracing::debug!("Loaded prompts successfully");
 
         // Create TemplateContext with full configuration and template vars
-        let mut template_context = swissarmyhammer_config::TemplateContext::load()
-            .map_err(|e| ActionError::ClaudeError(format!("Failed to load template context: {e}")))?;
-            
+        let mut template_context =
+            swissarmyhammer_config::TemplateContext::load().map_err(|e| {
+                ActionError::ClaudeError(format!("Failed to load template context: {e}"))
+            })?;
+
         // Add all args as template vars
         for (key, value) in args {
             template_context.set_var(key.clone(), serde_json::Value::String(value.clone()));
@@ -366,13 +368,15 @@ impl PromptAction {
 
         tracing::debug!("Created template context successfully");
 
-        // Render user prompt with complete template context
+        // Convert library to Arc for partials support
+        let library_arc = Arc::new(library);
+
+        // Render user prompt with complete template context and partials support
         tracing::debug!("About to render user prompt: {}", self.prompt_name);
-        let rendered = library
-            .render_prompt(&self.prompt_name, &template_context)
+        let rendered = PromptLibrary::render_prompt_with_partials(&self.prompt_name, &template_context, library_arc.clone())
             .map_err(|e| {
                 // Try to get available prompts for better error messaging
-                let available_prompts = library
+                let available_prompts = library_arc
                     .list()
                     .ok()
                     .map(|prompts| {
@@ -392,10 +396,13 @@ impl PromptAction {
             })?;
 
         // Render system prompt using the same library instance (optional)
-        let system_prompt = match library.render_prompt("system", &template_context) {
+        let system_prompt = match PromptLibrary::render_prompt_with_partials(".system", &template_context, library_arc.clone()) {
             Ok(prompt) => Some(prompt),
             Err(e) => {
-                tracing::warn!("Failed to render system prompt: {}. Proceeding without system prompt.", e);
+                tracing::warn!(
+                    "Failed to render system prompt: {}. Proceeding without system prompt.",
+                    e
+                );
                 None
             }
         };

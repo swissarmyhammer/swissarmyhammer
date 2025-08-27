@@ -98,7 +98,7 @@ After thorough investigation of the codebase, I've identified the key integratio
 
 #### Current Claude Code Integration
 - **Primary Integration Point**: `swissarmyhammer/src/workflow/actions.rs:428-432`
-- **Method**: `PromptAction::execute_once_internal()` 
+- **Method**: `PromptAction::execute_once_internal()`
 - **Command Construction**: Claude CLI is invoked with specific arguments and prompt content piped via stdin
 - **Current Arguments**: `--dangerously-skip-permissions`, `--print`, `--output-format stream-json`, `--verbose`
 
@@ -152,7 +152,7 @@ async fn render_system_prompt(
     })?;
 
     // Try to render 'system' prompt (maps to .system.md)
-    match library.render_prompt_with_env("system", &HashMap::new()) {
+    match library.render_prompt_with_env(".system", &HashMap::new()) {
         Ok(rendered) => Ok(Some(rendered)),
         Err(_) => {
             // System prompt not found or failed to render - continue without it
@@ -200,7 +200,7 @@ if let Some(system_content) = &system_prompt {
 ### Integration Points Summary
 
 1. **`swissarmyhammer/src/workflow/actions.rs:390`**: Add system prompt rendering call
-2. **`swissarmyhammer/src/workflow/actions.rs:318`**: Add new `render_system_prompt()` method  
+2. **`swissarmyhammer/src/workflow/actions.rs:318`**: Add new `render_system_prompt()` method
 3. **`swissarmyhammer/src/workflow/actions.rs:428-432`**: Add `--append-system-prompt` argument
 4. **Context Variables**: Use existing context system for configuration control
 

@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use swissarmyhammer::{Prompt, PromptLibrary};
+use swissarmyhammer_config::TemplateContext;
 
 #[test]
 fn test_partials_with_liquid_extension() {
@@ -20,9 +20,10 @@ fn test_partials_with_liquid_extension() {
     );
     library.add(main_prompt).unwrap();
 
-    // Try to render the main prompt
-    let args = HashMap::new();
-    match library.render_prompt("do_next_issue", &args) {
+    // Try to render the main prompt with partials support
+    let template_context = TemplateContext::new();
+    let library_arc = std::sync::Arc::new(library);
+    match PromptLibrary::render_prompt_with_partials("do_next_issue", &template_context, library_arc) {
         Ok(result) => {
             println!("Success:\n{result}");
             assert!(result.contains("Principals"));
@@ -54,9 +55,10 @@ fn test_partials_without_extension() {
     );
     library.add(main_prompt).unwrap();
 
-    // Try to render the main prompt
-    let args = HashMap::new();
-    match library.render_prompt("do_next_issue", &args) {
+    // Try to render the main prompt with partials support
+    let template_context = TemplateContext::new();
+    let library_arc = std::sync::Arc::new(library);
+    match PromptLibrary::render_prompt_with_partials("do_next_issue", &template_context, library_arc) {
         Ok(result) => {
             println!("Success:\n{result}");
             assert!(result.contains("Principals"));

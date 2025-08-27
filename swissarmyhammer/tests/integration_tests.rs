@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 use swissarmyhammer::common::{Parameter, ParameterType};
 use swissarmyhammer::prelude::*;
+use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
+use serde_json::Value;
 
 use rmcp::ServerHandler;
 
@@ -339,10 +341,11 @@ This is the main content."#;
     }
 
     // Get and render the main template with partial support
-    let mut args = HashMap::new();
-    args.insert("app_name".to_string(), "SwissArmyHammer".to_string());
+    let mut args_map = HashMap::new();
+    args_map.insert("app_name".to_string(), Value::String("SwissArmyHammer".to_string()));
+    let template_context = TemplateContext::from_hash_map(args_map);
 
-    let rendered = library.render_prompt("main", &args).unwrap();
+    let rendered = library.render_prompt("main", &template_context).unwrap();
     let expected = "# Welcome to SwissArmyHammer!\n\nThis is the main content.";
     assert_eq!(rendered, expected);
 }
@@ -376,10 +379,11 @@ Main content here.
     library.add_directory(&prompts_dir).unwrap();
 
     // Get and render the main template with partial support
-    let mut args = HashMap::new();
-    args.insert("year".to_string(), "2024".to_string());
+    let mut args_map = HashMap::new();
+    args_map.insert("year".to_string(), Value::String("2024".to_string()));
+    let template_context = TemplateContext::from_hash_map(args_map);
 
-    let rendered = library.render_prompt("main", &args).unwrap();
+    let rendered = library.render_prompt("main", &template_context).unwrap();
     let expected = "Main content here.\n\nFooter content: 2024";
     assert_eq!(rendered, expected);
 }
@@ -483,8 +487,8 @@ After partial"#;
     );
 
     // Render the main template
-    let args = HashMap::new();
-    let rendered = library.render_prompt("main", &args).unwrap();
+    let template_context = TemplateContext::new();
+    let rendered = library.render_prompt("main", &template_context).unwrap();
     let expected = "Before partial\nThis is from partials/top!\nAfter partial";
     assert_eq!(rendered, expected);
 }
@@ -518,9 +522,9 @@ After partial"#;
     library.add_directory(&prompts_dir).unwrap();
 
     // Get and render the main template with partial support
-    let args = HashMap::new(); // No variables needed
+    let template_context = TemplateContext::new(); // No variables needed
 
-    let rendered = library.render_prompt("main", &args).unwrap();
+    let rendered = library.render_prompt("main", &template_context).unwrap();
     let expected = "Before partial\nThis is a static partial.\nAfter partial";
     assert_eq!(rendered, expected);
 }
