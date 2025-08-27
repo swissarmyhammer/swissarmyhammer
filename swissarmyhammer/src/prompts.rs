@@ -315,12 +315,15 @@ impl Validatable for Prompt {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from(format!("prompt:{}", self.name)));
 
-        // Check if this is a partial template by looking at the description
+        // Check if this is a partial template using multiple criteria
         let is_partial = self
             .description
             .as_ref()
             .map(|desc| desc == "Partial template for reuse in other prompts")
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || self.name.to_lowercase().contains("partial") // Name contains "partial"
+            || self.name.starts_with('_') // Name starts with underscore
+            || self.template.trim_start().starts_with("{% partial %}"); // Content starts with partial marker
 
         // Skip field validation for partial templates
         if !is_partial {
@@ -1404,11 +1407,6 @@ impl<'a> liquid::partials::PartialSource for LibraryPartialSource<'a> {
         for ext in &extensions {
             let name_with_ext = format!("{name}{ext}");
             if self.storage.get(&name_with_ext).is_ok() {
-                tracing::debug!(
-                    "Found match for '{}' with extension: '{}'",
-                    name,
-                    name_with_ext
-                );
                 return true;
             }
         }
@@ -1419,11 +1417,6 @@ impl<'a> liquid::partials::PartialSource for LibraryPartialSource<'a> {
             for ext in &extensions {
                 if let Some(name_without_ext) = name.strip_suffix(ext) {
                     if self.storage.get(name_without_ext).is_ok() {
-                        tracing::debug!(
-                            "Found match for '{}' by stripping extension to: '{}'",
-                            name,
-                            name_without_ext
-                        );
                         return true;
                     }
                     // Also try with other extensions
@@ -1431,11 +1424,6 @@ impl<'a> liquid::partials::PartialSource for LibraryPartialSource<'a> {
                         if ext != other_ext {
                             let name_with_other_ext = format!("{name_without_ext}{other_ext}");
                             if self.storage.get(&name_with_other_ext).is_ok() {
-                                tracing::debug!(
-                                    "Found match for '{}' by swapping extension to: '{}'",
-                                    name,
-                                    name_with_other_ext
-                                );
                                 return true;
                             }
                         }
