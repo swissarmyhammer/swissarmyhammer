@@ -247,6 +247,44 @@ impl TemplateContext {
         Ok(context)
     }
 
+    /// Create a TemplateContext from only template variables without configuration loading
+    ///
+    /// This creates a TemplateContext directly from the provided variables without
+    /// attempting to load configuration from files or environment. This is useful
+    /// for tests or when you only need template variables without configuration.
+    ///
+    /// # Arguments
+    /// * `vars` - HashMap of template variables to set
+    ///
+    /// # Returns
+    /// * `Self` - A new TemplateContext with only the provided template variables
+    ///
+    /// # Examples
+    /// ```
+    /// use swissarmyhammer_config::TemplateContext;
+    /// use std::collections::HashMap;
+    /// use serde_json::json;
+    ///
+    /// let mut template_vars = HashMap::new();
+    /// template_vars.insert("project_name".to_string(), json!("MyProject"));
+    /// template_vars.insert("version".to_string(), json!("1.0.0"));
+    ///
+    /// let context = TemplateContext::from_template_vars(template_vars);
+    ///
+    /// assert_eq!(context.get("project_name"), Some(&json!("MyProject")));
+    /// assert_eq!(context.get("version"), Some(&json!("1.0.0")));
+    /// ```
+    pub fn from_template_vars(vars: HashMap<String, Value>) -> Self {
+        let mut context = Self::new();
+
+        // Add template variables
+        for (key, value) in vars {
+            context.set(key, value);
+        }
+
+        context
+    }
+
     /// Load configuration with specific options
     fn load_with_options(for_cli: bool, cli_args: Option<Value>) -> ConfigurationResult<Self> {
         debug!("Loading template context with CLI mode: {}", for_cli);

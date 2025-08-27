@@ -26,11 +26,13 @@
 
 use crate::common::{Parameter, ParameterProvider, ParameterType};
 use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
-use crate::{Result, SwissArmyHammerError, Template};
+use crate::{Result, SwissArmyHammerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use std::borrow::Cow;
 use swissarmyhammer_config::TemplateContext;
 
 /// Represents a single prompt with metadata and template content.
@@ -193,462 +195,6 @@ impl Prompt {
             source: None,
             metadata: HashMap::new(),
         }
-    }
-
-    /// Renders the prompt template with the provided arguments.
-    ///
-    /// This method validates that all required arguments are provided, applies
-    /// default values for missing optional arguments, and renders the template
-    /// using the Liquid template engine.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - Map of argument names to values
-    ///
-    /// # Returns
-    ///
-    /// The rendered template as a string.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Template parsing fails due to invalid Liquid syntax
-    /// - Required arguments are missing from the provided arguments map
-    /// - Template rendering fails during execution
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer::{Prompt, common::{Parameter, ParameterType}};
-    /// use std::collections::HashMap;
-    ///
-    /// let prompt = Prompt::new("greet", "Hello {{name}}!")
-    ///     .add_parameter(
-    ///         Parameter::new("name", "", ParameterType::String)
-    ///             .required(true)
-    ///     );
-    ///
-    /// let mut args = HashMap::new();
-    /// args.insert("name".to_string(), "Alice".to_string());
-    ///
-    /// let result = prompt.render(&args).unwrap();
-    /// assert_eq!(result, "Hello Alice!");
-    /// ```
-    pub fn render(&self, args: &HashMap<String, String>) -> Result<String> {
-        let template = Template::new(&self.template)?;
-
-        // Validate required parameters
-        for param in &self.parameters {
-            if param.required && !args.contains_key(&param.name) {
-                return Err(SwissArmyHammerError::Template(format!(
-                    "Required parameter '{}' not provided",
-                    param.name
-                )));
-            }
-        }
-
-        // Start with all provided arguments
-        let mut render_args = args.clone();
-
-        // Add defaults for missing parameters
-        for param in &self.parameters {
-            if !render_args.contains_key(&param.name) {
-                if let Some(default) = &param.default {
-                    // Convert JSON default value to string for template rendering
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    render_args.insert(param.name.clone(), default_str);
-                }
-            }
-        }
-
-        template.render(&render_args)
-    }
-
-    /// Renders the prompt template with environment variables included
-    ///
-    /// This method merges the provided arguments with environment variables,
-    /// with provided arguments taking precedence over environment variables.
-    /// This is useful for templates that need access to system configuration
-    /// or environment-specific values.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - Template variables as key-value pairs
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swissarmyhammer::Prompt;
-    /// use std::collections::HashMap;
-    ///
-    /// let prompt = Prompt::new("deploy", "Deploying to {{ENV}} by {{USER}}");
-    /// let mut args = HashMap::new();
-    /// args.insert("ENV".to_string(), "production".to_string());
-    /// // The USER env var will be picked up automatically
-    ///
-    /// let result = prompt.render_with_env(&args).unwrap();
-    /// ```
-    pub fn render_with_env(&self, args: &HashMap<String, String>) -> Result<String> {
-        let template = Template::new(&self.template)?;
-
-        // Validate required parameters
-        for param in &self.parameters {
-            if param.required && !args.contains_key(&param.name) {
-                return Err(SwissArmyHammerError::Template(format!(
-                    "Required parameter '{}' not provided",
-                    param.name
-                )));
-            }
-        }
-
-        // Start with all provided arguments
-        let mut render_args = args.clone();
-
-        // Add defaults for missing parameters
-        for param in &self.parameters {
-            if !render_args.contains_key(&param.name) {
-                if let Some(default) = &param.default {
-                    // Convert JSON default value to string for template rendering
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    render_args.insert(param.name.clone(), default_str);
-                }
-            }
-        }
-
-        template.render_with_env(&render_args)
-    }
-
-    /// Renders the prompt template with partial support
-    ///
-    /// This method enables the use of `{% render %}` tags within the template
-    /// to include other prompts as partials.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - Template variables as key-value pairs
-    /// * `library` - The prompt library to use for resolving partials
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::{Prompt, PromptLibrary};
-    /// use std::collections::HashMap;
-    /// use std::sync::Arc;
-    ///
-    /// let mut library = PromptLibrary::new();
-    /// // Add partials to library...
-    ///
-    /// let prompt = Prompt::new("main", "{% render \"header\" %}\nContent here");
-    /// let mut args = HashMap::new();
-    /// args.insert("name".to_string(), "World".to_string());
-    ///
-    /// let result = prompt.render_with_partials(&args, Arc::new(library)).unwrap();
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Template parsing fails due to invalid Liquid syntax or partial resolution
-    /// - Required arguments are missing from the provided arguments map
-    /// - Template rendering fails during execution
-    /// - Referenced partials cannot be found in the provided library
-    pub fn render_with_partials(
-        &self,
-        args: &HashMap<String, String>,
-        library: Arc<PromptLibrary>,
-    ) -> Result<String> {
-        let template = crate::Template::with_partials(&self.template, library)?;
-
-        // Validate required parameters
-        for param in &self.parameters {
-            if param.required && !args.contains_key(&param.name) {
-                return Err(SwissArmyHammerError::Template(format!(
-                    "Required parameter '{}' not provided",
-                    param.name
-                )));
-            }
-        }
-
-        // Start with all provided arguments
-        let mut render_args = args.clone();
-
-        // Add defaults for missing parameters
-        for param in &self.parameters {
-            if !render_args.contains_key(&param.name) {
-                if let Some(default) = &param.default {
-                    // Convert JSON default value to string for template rendering
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    render_args.insert(param.name.clone(), default_str);
-                }
-            }
-        }
-
-        template.render_with_config(&render_args)
-    }
-
-    /// Renders the prompt template with partial support and environment variables
-    ///
-    /// This method combines the features of partial rendering and environment variable
-    /// inclusion. It enables the use of `{% render %}` tags within the template
-    /// to include other prompts as partials, while also making environment variables
-    /// available in the template context.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - Template variables as key-value pairs
-    /// * `library` - The prompt library to use for resolving partials
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::{Prompt, PromptLibrary};
-    /// use std::collections::HashMap;
-    /// use std::sync::Arc;
-    ///
-    /// let mut library = PromptLibrary::new();
-    /// // Add partials to library...
-    ///
-    /// let prompt = Prompt::new("deploy", "{% render \"header\" %}\nDeploying to {{ENV}}");
-    /// let mut args = HashMap::new();
-    /// args.insert("app".to_string(), "myapp".to_string());
-    /// // ENV var from environment will be available
-    ///
-    /// let result = prompt.render_with_partials_and_env(&args, Arc::new(library)).unwrap();
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Template parsing fails due to invalid Liquid syntax or partial resolution
-    /// - Required arguments are missing from the provided arguments map
-    /// - Template rendering fails during execution
-    /// - Referenced partials cannot be found in the provided library
-    pub fn render_with_partials_and_env(
-        &self,
-        args: &HashMap<String, String>,
-        library: Arc<PromptLibrary>,
-    ) -> Result<String> {
-        let template = crate::Template::with_partials(&self.template, library)?;
-
-        // Validate required parameters
-        for param in &self.parameters {
-            if param.required && !args.contains_key(&param.name) {
-                return Err(SwissArmyHammerError::Template(format!(
-                    "Required parameter '{}' not provided",
-                    param.name
-                )));
-            }
-        }
-
-        // Start with all provided arguments
-        let mut render_args = args.clone();
-
-        // Add defaults for missing parameters
-        for param in &self.parameters {
-            if !render_args.contains_key(&param.name) {
-                if let Some(default) = &param.default {
-                    // Convert JSON default value to string for template rendering
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    render_args.insert(param.name.clone(), default_str);
-                }
-            }
-        }
-
-        template.render_with_config(&render_args)
-    }
-
-    /// Renders the prompt with configuration context and user arguments.
-    ///
-    /// This method combines configuration values from TemplateContext with user-provided
-    /// arguments. User arguments take precedence over configuration values.
-    ///
-    /// # Arguments
-    ///
-    /// * `template_context` - Configuration context from config files and environment
-    /// * `args` - User-provided template arguments (highest precedence)
-    /// * `library` - The prompt library for resolving partials
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::{Prompt, PromptLibrary};
-    /// use swissarmyhammer_config::TemplateContext;
-    /// use std::collections::HashMap;
-    /// use std::sync::Arc;
-    ///
-    /// let mut template_context = TemplateContext::new();
-    /// let mut library = PromptLibrary::new();
-    ///
-    /// let prompt = Prompt::new("greeting", "Hello {{name}} from {{project}}!");
-    /// let mut args = HashMap::new();
-    /// args.insert("name".to_string(), "World".to_string());
-    /// // project value would come from template_context
-    ///
-    /// let result = prompt.render_with_context(&template_context, &args, Arc::new(library)).unwrap();
-    /// ```
-    pub fn render_with_context(
-        &self,
-        template_context: &TemplateContext,
-        args: &HashMap<String, String>,
-        library: Arc<PromptLibrary>,
-    ) -> Result<String> {
-        let template = crate::Template::with_partials(&self.template, library)?;
-
-        // Validate required parameters
-        for param in &self.parameters {
-            if param.required
-                && !args.contains_key(&param.name)
-                && template_context.get(&param.name).is_none()
-            {
-                return Err(SwissArmyHammerError::Template(format!(
-                    "Required parameter '{}' not provided in arguments or configuration",
-                    param.name
-                )));
-            }
-        }
-
-        // Start with configuration context (lowest precedence)
-        let mut render_args = HashMap::new();
-
-        // Add config values as strings for template rendering
-        for (key, value) in template_context.variables() {
-            let value_str = match value {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                _ => value.to_string(),
-            };
-            render_args.insert(key.clone(), value_str);
-        }
-
-        // Add user-provided arguments (highest precedence)
-        for (key, value) in args {
-            render_args.insert(key.clone(), value.clone());
-        }
-
-        // Add defaults for missing parameters
-        for param in &self.parameters {
-            if !render_args.contains_key(&param.name) {
-                if let Some(default) = &param.default {
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    render_args.insert(param.name.clone(), default_str);
-                }
-            }
-        }
-
-        template.render_with_config(&render_args)
-    }
-
-    /// Renders the prompt with configuration context, environment variables, and user arguments.
-    ///
-    /// This method combines configuration values, environment variables, and user-provided
-    /// arguments with proper precedence: config < env < user arguments.
-    ///
-    /// # Arguments
-    ///
-    /// * `template_context` - Configuration context from config files
-    /// * `args` - User-provided template arguments (highest precedence)  
-    /// * `library` - The prompt library for resolving partials
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use swissarmyhammer::{Prompt, PromptLibrary};
-    /// use swissarmyhammer_config::TemplateContext;
-    /// use std::collections::HashMap;
-    /// use std::sync::Arc;
-    ///
-    /// let mut template_context = TemplateContext::new();
-    /// let mut library = PromptLibrary::new();
-    ///
-    /// let prompt = Prompt::new("deploy", "Deploying {{app}} to {{ENV}} environment");
-    /// let mut args = HashMap::new();
-    /// args.insert("app".to_string(), "myapp".to_string());
-    /// // ENV var from environment will be available
-    ///
-    /// let result = prompt.render_with_partials_and_env_and_context(&template_context, &args, Arc::new(library)).unwrap();
-    /// ```
-    pub fn render_with_partials_and_env_and_context(
-        &self,
-        template_context: &TemplateContext,
-        args: &HashMap<String, String>,
-        library: Arc<PromptLibrary>,
-    ) -> Result<String> {
-        let template = crate::Template::with_partials(&self.template, library)?;
-
-        // Validate required parameters
-        for param in &self.parameters {
-            if param.required
-                && !args.contains_key(&param.name)
-                && template_context.get(&param.name).is_none()
-            {
-                return Err(SwissArmyHammerError::Template(format!(
-                    "Required parameter '{}' not provided in arguments or configuration",
-                    param.name
-                )));
-            }
-        }
-
-        // Start with configuration context (lowest precedence)
-        let mut render_args = HashMap::new();
-
-        // Add config values as strings for template rendering
-        for (key, value) in template_context.variables() {
-            let value_str = match value {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                _ => value.to_string(),
-            };
-            render_args.insert(key.clone(), value_str);
-        }
-
-        // Add user-provided arguments (highest precedence)
-        for (key, value) in args {
-            render_args.insert(key.clone(), value.clone());
-        }
-
-        // Add defaults for missing parameters
-        for param in &self.parameters {
-            if !render_args.contains_key(&param.name) {
-                if let Some(default) = &param.default {
-                    let default_str = match default {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Number(n) => n.to_string(),
-                        serde_json::Value::Bool(b) => b.to_string(),
-                        _ => default.to_string(),
-                    };
-                    render_args.insert(param.name.clone(), default_str);
-                }
-            }
-        }
-
-        template.render_with_env(&render_args)
     }
 
     /// Adds a parameter specification to the prompt.
@@ -1184,11 +730,18 @@ impl PromptLibrary {
     ///
     /// let result = library.render_prompt("greeting", &args).unwrap();
     /// ```
-    /// Renders a prompt template with the given template context.
+    /// **THE ONE TRUE RENDER METHOD**
     ///
-    /// This is the single, canonical method for rendering prompts. All template variables,
-    /// configuration values, workflow variables, and environment variables should be
-    /// included in the provided TemplateContext.
+    /// ⚠️  **WARNING: DO NOT CREATE ANY OTHER RENDER METHODS ON PromptLibrary** ⚠️
+    /// ⚠️  **THIS IS THE ONLY METHOD THAT SHOULD EXIST FOR RENDERING PROMPTS** ⚠️
+    /// ⚠️  **DO NOT ADD render_with_*, render_using_*, or ANY OTHER RENDER METHOD** ⚠️
+    /// ⚠️  **IF YOU ADD ANOTHER RENDER METHOD, YOU ARE A FUCKING ASSHOLE** ⚠️
+    ///
+    /// This is the single, canonical method for rendering prompts with full partials support.
+    /// All template variables, configuration values, workflow variables, and environment
+    /// variables should be included in the provided TemplateContext.
+    ///
+    /// This method ALWAYS uses partials support - there is no need for separate methods.
     ///
     /// # Arguments
     ///
@@ -1197,7 +750,7 @@ impl PromptLibrary {
     ///
     /// # Returns
     ///
-    /// The rendered template string.
+    /// The rendered template string with full partials support.
     ///
     /// # Errors
     ///
@@ -1206,32 +759,49 @@ impl PromptLibrary {
     /// - Template parsing fails due to invalid Liquid syntax
     /// - Required template variables are missing from the context
     /// - Template rendering fails during execution
-    pub fn render_prompt(&self, name: &str, template_context: &TemplateContext) -> Result<String> {
-        let prompt = self.get(name)?;
+    /// - Referenced partials cannot be found
+    pub fn render(&self, name: &str, template_context: &TemplateContext) -> Result<String> {
+        // Load all prompts fresh to ensure partials are available
+        let mut resolver = crate::PromptResolver::new();
+        let mut full_library = PromptLibrary::new();
+        resolver.load_all_prompts(&mut full_library)?;
+
+        let prompt = full_library.get(name)?;
 
         // Create a new template context with prompt parameter defaults
         let mut enhanced_context = template_context.clone();
-        
+
         // Apply prompt parameter defaults for any missing variables
         for param in &prompt.parameters {
             if let Some(default_value) = &param.default {
                 // Only set default if the parameter isn't already provided
                 if enhanced_context.get(&param.name).is_none() {
                     enhanced_context.set_var(param.name.clone(), default_value.clone());
-                    tracing::debug!("Applied default value for parameter '{}': {:?}", param.name, default_value);
+                    tracing::debug!(
+                        "Applied default value for parameter '{}': {:?}",
+                        param.name,
+                        default_value
+                    );
                 }
             }
         }
 
-        // Use liquid context directly for proper template rendering (without partials for now)
+        // Use liquid context directly for proper template rendering WITH partials support
         let liquid_vars = enhanced_context.to_liquid_context();
         tracing::debug!("Liquid Context: {:?}", liquid_vars);
 
-        // Parse and render the template directly with liquid
+        let partial_source = crate::template::PromptPartialSource::new(Arc::new(full_library));
+        let partial_compiler = liquid::partials::EagerCompiler::new(partial_source);
+
+        // Parse and render the template with partials support
         let liquid_template = liquid::ParserBuilder::with_stdlib()
+            .partials(partial_compiler)
+            .tag(crate::template::PartialTag::new())
             .build()
             .map_err(|e| {
-                SwissArmyHammerError::Template(format!("Failed to create liquid parser: {e}"))
+                SwissArmyHammerError::Template(format!(
+                    "Failed to create liquid parser with partials: {e}"
+                ))
             })?
             .parse(&prompt.template)
             .map_err(|e| {
@@ -1241,55 +811,6 @@ impl PromptLibrary {
         liquid_template.render(&liquid_vars).map_err(|e| {
             SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
         })
-    }
-
-    /// Renders a prompt with partial support
-    ///
-    /// This method enables the use of `{% render %}` tags within templates
-    /// to include other prompts as partials.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - Name of the prompt to render
-    /// * `template_context` - Context for template variable substitution
-    /// * `library` - The prompt library to use for resolving partials
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use std::sync::Arc;
-    /// let library = Arc::new(PromptLibrary::new());
-    /// let result = PromptLibrary::render_prompt_with_partials(
-    ///     "greeting", &template_context, library.clone()
-    /// ).unwrap();
-    /// ```
-    pub fn render_prompt_with_partials(
-        name: &str,
-        template_context: &TemplateContext,
-        library: Arc<PromptLibrary>,
-    ) -> Result<String> {
-        let prompt = library.get(name)?;
-
-        // Create a new template context with prompt parameter defaults
-        let mut enhanced_context = template_context.clone();
-        
-        // Apply prompt parameter defaults for any missing variables
-        for param in &prompt.parameters {
-            if let Some(default_value) = &param.default {
-                // Only set default if the parameter isn't already provided
-                if enhanced_context.get(&param.name).is_none() {
-                    enhanced_context.set_var(param.name.clone(), default_value.clone());
-                    tracing::debug!("Applied default value for parameter '{}': {:?}", param.name, default_value);
-                }
-            }
-        }
-
-        // Use partials-aware rendering
-        prompt.render_with_partials_and_env_and_context(
-            &enhanced_context,
-            &HashMap::new(), // Empty args since we're using template context
-            library
-        )
     }
 
     /// Searches for prompts matching the given query.
@@ -1815,11 +1336,152 @@ impl Default for PromptLoader {
     }
 }
 
+/// Custom partial source that works directly with a storage backend
+pub struct LibraryPartialSource<'a> {
+    storage: &'a dyn crate::StorageBackend,
+    names: Vec<String>,
+}
+
+impl<'a> LibraryPartialSource<'a> {
+    /// Create a new partial source from a storage backend
+    pub fn new(storage: &'a dyn crate::StorageBackend) -> Self {
+        let mut names = Vec::new();
+        if let Ok(prompts) = storage.list() {
+            for prompt in prompts.iter() {
+                names.push(prompt.name.clone());
+
+                // Strip common prompt extensions to make them available as partials
+                let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
+                for ext in &extensions {
+                    if let Some(name_without_ext) = prompt.name.strip_suffix(ext) {
+                        names.push(name_without_ext.to_string());
+                    }
+                }
+            }
+        }
+        Self { storage, names }
+    }
+}
+
+impl<'a> std::fmt::Debug for LibraryPartialSource<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LibraryPartialSource")
+            .field("storage", &"<StorageBackend>")
+            .field("names", &self.names)
+            .finish()
+    }
+}
+
+impl<'a> liquid::partials::PartialSource for LibraryPartialSource<'a> {
+    fn contains(&self, name: &str) -> bool {
+        tracing::debug!(
+            "LibraryPartialSource::contains called with name: '{}'",
+            name
+        );
+
+        // Try exact name first
+        if self.storage.get(name).is_ok() {
+            return true;
+        }
+
+        // Try with various prompt file extensions
+        let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
+        for ext in &extensions {
+            let name_with_ext = format!("{name}{ext}");
+            if self.storage.get(&name_with_ext).is_ok() {
+                tracing::debug!(
+                    "Found match for '{}' with extension: '{}'",
+                    name,
+                    name_with_ext
+                );
+                return true;
+            }
+        }
+
+        // If the name already has an extension, try stripping it
+        if name.contains('.') {
+            // Try stripping each known extension
+            for ext in &extensions {
+                if let Some(name_without_ext) = name.strip_suffix(ext) {
+                    if self.storage.get(name_without_ext).is_ok() {
+                        tracing::debug!(
+                            "Found match for '{}' by stripping extension to: '{}'",
+                            name,
+                            name_without_ext
+                        );
+                        return true;
+                    }
+                    // Also try with other extensions
+                    for other_ext in &extensions {
+                        if ext != other_ext {
+                            let name_with_other_ext = format!("{name_without_ext}{other_ext}");
+                            if self.storage.get(&name_with_other_ext).is_ok() {
+                                tracing::debug!(
+                                    "Found match for '{}' by swapping extension to: '{}'",
+                                    name,
+                                    name_with_other_ext
+                                );
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tracing::debug!("No match found for partial '{}'", name);
+        false
+    }
+
+    fn names(&self) -> Vec<&str> {
+        self.names.iter().map(|s| s.as_str()).collect()
+    }
+
+    fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
+        // Try exact name first
+        if let Ok(prompt) = self.storage.get(name) {
+            return Some(Cow::Owned(prompt.template));
+        }
+
+        // Try with various prompt file extensions - prioritize .md.liquid for partials
+        let extensions = [".md.liquid", ".liquid.md", ".liquid", ".md", ".markdown"];
+        for ext in &extensions {
+            let name_with_ext = format!("{name}{ext}");
+            if let Ok(prompt) = self.storage.get(&name_with_ext) {
+                return Some(Cow::Owned(prompt.template));
+            }
+        }
+
+        // If the name already has an extension, try stripping it
+        if name.contains('.') {
+            // Try stripping each known extension
+            for ext in &extensions {
+                if let Some(name_without_ext) = name.strip_suffix(ext) {
+                    if let Ok(prompt) = self.storage.get(name_without_ext) {
+                        return Some(Cow::Owned(prompt.template));
+                    }
+                    // Also try with other extensions
+                    for other_ext in &extensions {
+                        if ext != other_ext {
+                            let name_with_other_ext = format!("{name_without_ext}{other_ext}");
+                            if let Ok(prompt) = self.storage.get(&name_with_other_ext) {
+                                return Some(Cow::Owned(prompt.template));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common::{Parameter, ParameterType};
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     #[test]
     fn test_prompt_creation() {
@@ -1833,10 +1495,13 @@ mod tests {
         let prompt = Prompt::new("test", "Hello {{ name }}!")
             .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
-        let mut args = HashMap::new();
-        args.insert("name".to_string(), "World".to_string());
+        let mut template_vars = HashMap::new();
+        template_vars.insert("name".to_string(), json!("World"));
 
-        let result = prompt.render(&args).unwrap();
+        let template_context = TemplateContext::from_template_vars(template_vars);
+        let mut library = PromptLibrary::new();
+        library.add(prompt).unwrap();
+        let result = library.render("test", &template_context).unwrap();
         assert_eq!(result, "Hello World!");
     }
 
@@ -2035,7 +1700,6 @@ This is another prompt.
     #[test]
     fn test_prompt_render_with_context() {
         use serde_json::json;
-        use std::sync::Arc;
 
         // Create a test template context with config values
         let mut template_context = TemplateContext::new();
@@ -2043,62 +1707,56 @@ This is another prompt.
         template_context.set("version".to_string(), json!("1.0.0"));
         template_context.set("author".to_string(), json!("Test User"));
 
-        let library = PromptLibrary::new();
+        let mut library = PromptLibrary::new();
         let prompt = Prompt::new(
             "project_info",
             "Project: {{project_name}} v{{version}} by {{author}}",
         );
+        library.add(prompt);
 
-        // Test with empty user args - should use config values
-        let args = HashMap::new();
-        let result = prompt
-            .render_with_context(&template_context, &args, Arc::new(library))
-            .unwrap();
+        let result = library.render("project_info", &template_context).unwrap();
         assert_eq!(result, "Project: MyProject v1.0.0 by Test User");
     }
 
     #[test]
     fn test_prompt_render_with_context_user_override() {
         use serde_json::json;
-        use std::sync::Arc;
 
         // Create a test template context with config values
         let mut template_context = TemplateContext::new();
         template_context.set("project_name".to_string(), json!("ConfigProject"));
         template_context.set("version".to_string(), json!("1.0.0"));
 
-        let library = PromptLibrary::new();
+        let mut library = PromptLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}");
+        library.add(prompt);
 
         // User args should override config values
-        let mut args = HashMap::new();
-        args.insert("project_name".to_string(), "UserProject".to_string());
+        let mut template_context = TemplateContext::new();
+        template_context.set("project_name".to_string(), json!("UserProject"));
 
-        let result = prompt
-            .render_with_context(&template_context, &args, Arc::new(library))
-            .unwrap();
+        let result = library.render("project_info", &template_context).unwrap();
         assert_eq!(result, "Project: UserProject v1.0.0"); // User override + config fallback
     }
 
     #[test]
     fn test_prompt_render_with_context_required_param_validation() {
         use serde_json::json;
-        use std::sync::Arc;
 
         // Create context missing a required parameter
         let mut template_context = TemplateContext::new();
         template_context.set("version".to_string(), json!("1.0.0"));
 
-        let library = PromptLibrary::new();
+        let mut library = PromptLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}")
             .add_parameter(
                 Parameter::new("project_name", "Project name", ParameterType::String)
                     .required(true),
             );
+        library.add(prompt);
 
         // Should fail because required parameter is not provided in args or config
-        let args = HashMap::new();
-        let result = prompt.render_with_context(&template_context, &args, Arc::new(library));
+        let result = library.render("project_info", &template_context);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -2109,25 +1767,22 @@ This is another prompt.
     #[test]
     fn test_prompt_render_with_context_required_param_from_config() {
         use serde_json::json;
-        use std::sync::Arc;
 
         // Create context with required parameter
         let mut template_context = TemplateContext::new();
         template_context.set("project_name".to_string(), json!("ConfigProject"));
         template_context.set("version".to_string(), json!("1.0.0"));
 
-        let library = PromptLibrary::new();
+        let mut library = PromptLibrary::new();
         let prompt = Prompt::new("project_info", "Project: {{project_name}} v{{version}}")
             .add_parameter(
                 Parameter::new("project_name", "Project name", ParameterType::String)
                     .required(true),
             );
+        library.add(prompt);
 
         // Should succeed because required parameter is provided via config
-        let args = HashMap::new();
-        let result = prompt
-            .render_with_context(&template_context, &args, Arc::new(library))
-            .unwrap();
+        let result = library.render("project_info", &template_context).unwrap();
         assert_eq!(result, "Project: ConfigProject v1.0.0");
     }
 
@@ -2149,13 +1804,11 @@ This is another prompt.
         let mut user_args_map = HashMap::new();
         user_args_map.insert("name".to_string(), Value::String("User".to_string())); // Override config
         let user_context = TemplateContext::from_hash_map(user_args_map);
-        
+
         let mut combined_context = template_context.clone();
         combined_context.merge(user_context);
 
-        let result = library
-            .render_prompt("test_prompt", &combined_context)
-            .unwrap();
+        let result = library.render("test_prompt", &combined_context).unwrap();
         assert_eq!(result, "Hello User from SwissArmyHammer!"); // User arg + config fallback
     }
 
@@ -2173,9 +1826,7 @@ This is another prompt.
         template_context.set("app_name".to_string(), json!("MyApp"));
 
         // This should work with environment variables
-        let result = library
-            .render_prompt("env_prompt", &template_context)
-            .unwrap();
+        let result = library.render("env_prompt", &template_context).unwrap();
         assert!(result.contains("App: MyApp"));
         // USER environment variable should be available too
     }

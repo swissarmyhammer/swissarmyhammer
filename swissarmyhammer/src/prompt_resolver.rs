@@ -32,6 +32,8 @@ impl PromptResolver {
     /// 1. Builtin prompts (least specific, embedded in binary)
     /// 2. User prompts from ~/.swissarmyhammer/prompts
     /// 3. Local prompts from .swissarmyhammer directories (most specific)
+    /// 
+    /// Also loads partials into the library's storage for template rendering.
     pub fn load_all_prompts(&mut self, library: &mut PromptLibrary) -> Result<()> {
         // Load builtin prompts first (least precedence)
         self.load_builtin_prompts()?;
@@ -39,18 +41,33 @@ impl PromptResolver {
         // Load all files from directories using VFS
         self.vfs.load_all()?;
 
-        // Process all loaded files into prompts
+        // Process all loaded files into prompts and partials
         let loader = PromptLoader::new();
         for file in self.vfs.list() {
-            // Load the prompt from content
-            let prompt = loader.load_from_string(&file.name, &file.content)?;
+            // Check if this is a partial template first
+            let is_partial = file.content.trim_start().starts_with("{% partial %}");
+            
+            if is_partial {
+                // For partials, create a minimal prompt object to store in the library
+                // The name should not include the .liquid extension for template resolution
+                let partial_name = file.name.strip_suffix(".liquid").unwrap_or(&file.name);
+                let partial_prompt = crate::prompts::Prompt::new(partial_name, file.content.clone());
+                library.add(partial_prompt)?;
+                
+                // Track the source for partials too
+                self.prompt_sources
+                    .insert(partial_name.to_string(), file.source.clone());
+            } else {
+                // Load regular prompts normally
+                let prompt = loader.load_from_string(&file.name, &file.content)?;
 
-            // Track the source
-            self.prompt_sources
-                .insert(prompt.name.clone(), file.source.clone());
+                // Track the source
+                self.prompt_sources
+                    .insert(prompt.name.clone(), file.source.clone());
 
-            // Add to library
-            library.add(prompt)?;
+                // Add to library
+                library.add(prompt)?;
+            }
         }
 
         Ok(())

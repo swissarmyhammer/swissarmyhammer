@@ -9,13 +9,12 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_liquid_templates() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
-
         template_vars.insert("name".to_string(), json!("Alice"));
         template_vars.insert("language".to_string(), json!("French"));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Test prompt action with templates
         let description =
@@ -84,13 +83,12 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_default_values() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
-
         template_vars.insert("name".to_string(), json!("Bob"));
         // Note: language is not set, should use default
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Test with simple template - liquid doesn't support default filter syntax
         let description = r#"Log "Hello, {{ name }}!""#;
@@ -107,7 +105,8 @@ mod tests {
 
     #[test]
     fn test_action_parsing_without_templates() {
-        let context = HashMap::new(); // No template vars
+        let workflow_context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let context = workflow_context.initialize_workflow_context(); // No template vars
 
         let description = r#"Execute prompt "test-prompt" with arg="value""#;
         let action = parse_action_from_description_with_context(description, &context)
@@ -124,10 +123,9 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_missing_template_var() {
-        let mut context = HashMap::new();
         let template_vars: HashMap<String, Value> = HashMap::new(); // Empty template vars
-
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Template variable not provided, liquid will keep the template text
         let description = r#"Log "Hello, {{ name }}!""#;
@@ -145,11 +143,11 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_invalid_liquid_syntax() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("name".to_string(), json!("Bob"));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Invalid liquid syntax - unclosed tag
         let description = r#"Log "Hello, {{ name""#;
@@ -167,11 +165,11 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_nested_liquid_errors() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("items".to_string(), json!(["a", "b", "c"]));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Invalid nested liquid - can't have {{ inside {% %}
         let description = r#"Log "Items: {% for item in {{ items }} %}{{ item }}{% endfor %}""#;
@@ -189,11 +187,11 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_undefined_filter() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("value".to_string(), json!("test"));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Use a filter that doesn't exist
         let description = r#"Log "Value: {{ value | nonexistent_filter }}""#;
@@ -214,12 +212,12 @@ mod tests {
 
     #[test]
     fn test_prompt_action_with_template_in_arguments() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("user".to_string(), json!("Alice"));
         template_vars.insert("task".to_string(), json!("review code"));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Test templates in prompt arguments
         let description =
@@ -241,9 +239,9 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_empty_template_vars() {
-        let mut context = HashMap::new();
         // _template_vars exists but is empty
-        context.insert("_template_vars".to_string(), json!({}));
+        let workflow_context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         let description = r#"Log "Hello, {{ name }}!""#;
         let action = parse_action_from_description_with_context(description, &context)
@@ -260,11 +258,11 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_null_template_value() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("value".to_string(), json!(null));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         let description = r#"Log "Value is: {{ value }}""#;
         let action = parse_action_from_description_with_context(description, &context)
@@ -281,7 +279,6 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_complex_object_template_value() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert(
             "user".to_string(),
@@ -291,7 +288,8 @@ mod tests {
             }),
         );
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Try to access nested property
         let description = r#"Log "User: {{ user.name }} (ID: {{ user.id }})""#;
@@ -309,11 +307,11 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_array_template_value() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("items".to_string(), json!(["a", "b", "c"]));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Array access
         let description = r#"Log "First item: {{ items[0] }}, Count: {{ items.size }}""#;
@@ -330,13 +328,13 @@ mod tests {
 
     #[test]
     fn test_action_parsing_with_special_characters_in_template() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         // Use special characters that won't break the action parser
         template_vars.insert("message".to_string(), json!("Hello World & <everyone>!"));
         template_vars.insert("path".to_string(), json!("/usr/bin/test"));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         let description = r#"Log "Message: {{ message }} at {{ path }}""#;
         let action = parse_action_from_description_with_context(description, &context)
@@ -356,12 +354,12 @@ mod tests {
 
     #[test]
     fn test_set_variable_action_with_template() {
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
         template_vars.insert("prefix".to_string(), json!("test"));
         template_vars.insert("suffix".to_string(), json!("value"));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         let description = r#"Set my_var="{{ prefix }}_{{ suffix }}""#;
         let action = parse_action_from_description_with_context(description, &context)
@@ -381,14 +379,13 @@ mod tests {
         // Test that sah.toml configuration variables are merged into template context
         // This tests the integration without requiring actual file I/O by simulating template variables
 
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
-
         // Simulate what would happen if sah.toml config was loaded
         template_vars.insert("project_name".to_string(), json!("TestProject"));
         template_vars.insert("debug".to_string(), json!(true));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         // Use a template that uses configuration variables
         let description = r#"Log "Project: {{ project_name }}, Debug: {{ debug }}""#;
@@ -415,14 +412,13 @@ mod tests {
     #[test]
     fn test_config_variable_precedence() {
         // Test that workflow variables override configuration variables
-        let mut context = HashMap::new();
         let mut template_vars = HashMap::new();
-
         // Simulate workflow variables that would override config variables
         template_vars.insert("project_name".to_string(), json!("WorkflowProject"));
         template_vars.insert("debug".to_string(), json!(true));
 
-        context.insert("_template_vars".to_string(), json!(template_vars));
+        let workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let context = workflow_context.initialize_workflow_context();
 
         let description = r#"Log "Project: {{ project_name }}, Debug mode: {{ debug }}""#;
         let action = parse_action_from_description_with_context(description, &context)

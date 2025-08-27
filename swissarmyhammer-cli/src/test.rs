@@ -278,7 +278,7 @@ impl TestRunner {
             })?;
             Ok(self
                 .library
-                .render_prompt(&prompt.name, &template_context)?)
+                .render(&prompt.name, &template_context)?)
         }
     }
 

@@ -82,9 +82,10 @@ use swissarmyhammer_config::TemplateContext;
 
 /// Custom partial tag that acts as a no-op marker for liquid partial files
 #[derive(Clone, Debug, Default)]
-struct PartialTag;
+pub struct PartialTag;
 
 impl PartialTag {
+    /// Create a new PartialTag
     pub fn new() -> Self {
         Self
     }
@@ -205,6 +206,37 @@ impl PromptPartialSource {
         }
         Self { library, names }
     }
+
+    /// Create a new partial source from a storage backend
+    pub fn from_storage(storage: &dyn crate::StorageBackend) -> Self {
+        let mut names = Vec::new();
+        if let Ok(prompts) = storage.list() {
+            for prompt in prompts.iter() {
+                names.push(prompt.name.clone());
+
+                // Strip common prompt extensions to make them available as partials
+                let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
+                for ext in &extensions {
+                    if let Some(name_without_ext) = prompt.name.strip_suffix(ext) {
+                        names.push(name_without_ext.to_string());
+                    }
+                }
+            }
+        }
+
+        // Create a temporary library wrapper around the storage
+        let mut library = PromptLibrary::new();
+        if let Ok(prompts) = storage.list() {
+            for prompt in prompts {
+                let _ = library.add(prompt);
+            }
+        }
+
+        Self {
+            library: Arc::new(library),
+            names,
+        }
+    }
 }
 
 impl liquid::partials::PartialSource for PromptPartialSource {
@@ -213,7 +245,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
 
         // Try exact name first
         if self.library.get(name).is_ok() {
-            tracing::debug!("Found exact match for '{}'", name);
             return true;
         }
 
@@ -273,7 +304,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
     fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
         // Try exact name first
         if let Ok(prompt) = self.library.get(name) {
-            tracing::debug!("Found exact match for '{}'", name);
             return Some(Cow::Owned(prompt.template));
         }
 

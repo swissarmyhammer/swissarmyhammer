@@ -373,7 +373,7 @@ impl PromptAction {
 
         // Render user prompt with complete template context and partials support
         tracing::debug!("About to render user prompt: {}", self.prompt_name);
-        let rendered = PromptLibrary::render_prompt_with_partials(&self.prompt_name, &template_context, library_arc.clone())
+        let rendered = library_arc.render(&self.prompt_name, &template_context)
             .map_err(|e| {
                 // Try to get available prompts for better error messaging
                 let available_prompts = library_arc
@@ -396,7 +396,7 @@ impl PromptAction {
             })?;
 
         // Render system prompt using the same library instance (optional)
-        let system_prompt = match PromptLibrary::render_prompt_with_partials(".system", &template_context, library_arc.clone()) {
+        let system_prompt = match library_arc.render(".system", &template_context) {
             Ok(prompt) => Some(prompt),
             Err(e) => {
                 tracing::warn!(

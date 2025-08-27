@@ -5,6 +5,8 @@ use swissarmyhammer::{
     common::{Parameter, ParameterType},
     Prompt, PromptLibrary,
 };
+use swissarmyhammer_config::TemplateContext;
+use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new prompt library
@@ -68,11 +70,11 @@ Focus on:
     // Use a prompt
     let prompt = library.get("code-review")?;
 
-    let mut args = HashMap::new();
-    args.insert("language".to_string(), "rust".to_string());
-    args.insert(
+    let mut template_vars = HashMap::new();
+    template_vars.insert("language".to_string(), json!("rust"));
+    template_vars.insert(
         "code".to_string(),
-        r#"
+        json!(r#"
 fn fibonacci(n: u32) -> u32 {
     if n <= 1 {
         n
@@ -80,11 +82,13 @@ fn fibonacci(n: u32) -> u32 {
         fibonacci(n - 1) + fibonacci(n - 2)
     }
 }
-"#
-        .to_string(),
+"#),
     );
 
-    let rendered = prompt.render(&args)?;
+    let template_context = TemplateContext::with_template_vars(template_vars)?;
+    let mut library = PromptLibrary::new();
+    library.add(prompt)?;
+    let rendered = library.render("code_assistant", &template_context)?;
     println!("\nRendered prompt:\n{rendered}");
 
     Ok(())

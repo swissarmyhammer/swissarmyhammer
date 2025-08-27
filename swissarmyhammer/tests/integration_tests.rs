@@ -1,10 +1,10 @@
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use swissarmyhammer::common::{Parameter, ParameterType};
 use swissarmyhammer::prelude::*;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
-use serde_json::Value;
 
 use rmcp::ServerHandler;
 
@@ -22,10 +22,13 @@ fn test_prompt_creation_and_rendering() {
         .with_category("examples")
         .with_tags(vec!["greeting".to_string(), "example".to_string()]);
 
-    let mut args = HashMap::new();
-    args.insert("name".to_string(), "World".to_string());
+    let mut template_vars = HashMap::new();
+    template_vars.insert("name".to_string(), json!("World"));
 
-    let rendered = prompt.render(&args).unwrap();
+    let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
+    let mut library = PromptLibrary::new();
+    library.add(prompt).unwrap();
+    let rendered = library.render("greeting", &template_context).unwrap();
     assert_eq!(rendered, "Hello World!");
 }
 
@@ -42,18 +45,22 @@ fn test_prompt_with_arguments() {
         );
 
     // Test with all arguments provided
-    let mut args = HashMap::new();
-    args.insert("greeting".to_string(), "Hello".to_string());
-    args.insert("name".to_string(), "Alice".to_string());
+    let mut template_vars = HashMap::new();
+    template_vars.insert("greeting".to_string(), json!("Hello"));
+    template_vars.insert("name".to_string(), json!("Alice"));
 
-    let rendered = prompt.render(&args).unwrap();
+    let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
+    let mut library = PromptLibrary::new();
+    library.add(prompt.clone()).unwrap();
+    let rendered = library.render("complex", &template_context).unwrap();
     assert_eq!(rendered, "Hello, Alice!");
 
     // Test with default value
-    let mut args = HashMap::new();
-    args.insert("greeting".to_string(), "Hi".to_string());
+    let mut template_vars = HashMap::new();
+    template_vars.insert("greeting".to_string(), json!("Hi"));
 
-    let rendered = prompt.render(&args).unwrap();
+    let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
+    let rendered = library.render("complex", &template_context).unwrap();
     assert_eq!(rendered, "Hi, Friend!");
 }
 
@@ -62,8 +69,11 @@ fn test_missing_required_argument() {
     let prompt = Prompt::new("test", "Hello {{ name }}!")
         .add_parameter(Parameter::new("name", "", ParameterType::String).required(true));
 
-    let args = HashMap::new();
-    let result = prompt.render(&args);
+    let template_vars = HashMap::new();
+    let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
+    let mut library = PromptLibrary::new();
+    library.add(prompt).unwrap();
+    let result = library.render("test", &template_context);
     assert!(result.is_err());
 }
 
@@ -102,10 +112,11 @@ Testing {{ subject }}!"#;
     assert_eq!(prompt.tags, vec!["test", "example"]);
 
     // Render the prompt
-    let mut args = HashMap::new();
-    args.insert("subject".to_string(), "library".to_string());
+    let mut template_vars = HashMap::new();
+    template_vars.insert("subject".to_string(), json!("library"));
 
-    let rendered = prompt.render(&args).unwrap();
+    let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
+    let rendered = library.render("test", &template_context).unwrap();
     assert_eq!(rendered, "Testing library!");
 }
 
@@ -291,10 +302,11 @@ fn test_example_usage() {
     // Retrieve and use
     let prompt = library.get("greeting").unwrap();
 
-    let mut args = HashMap::new();
-    args.insert("name".to_string(), "Alice".to_string());
+    let mut template_vars = HashMap::new();
+    template_vars.insert("name".to_string(), json!("Alice"));
 
-    let output = prompt.render(&args).unwrap();
+    let template_context = TemplateContext::with_template_vars(template_vars).unwrap();
+    let output = library.render("greeting", &template_context).unwrap();
     assert_eq!(output, "Hello Alice! Welcome to our application.");
 }
 
@@ -342,10 +354,13 @@ This is the main content."#;
 
     // Get and render the main template with partial support
     let mut args_map = HashMap::new();
-    args_map.insert("app_name".to_string(), Value::String("SwissArmyHammer".to_string()));
+    args_map.insert(
+        "app_name".to_string(),
+        Value::String("SwissArmyHammer".to_string()),
+    );
     let template_context = TemplateContext::from_hash_map(args_map);
 
-    let rendered = library.render_prompt("main", &template_context).unwrap();
+    let rendered = library.render("main", &template_context).unwrap();
     let expected = "# Welcome to SwissArmyHammer!\n\nThis is the main content.";
     assert_eq!(rendered, expected);
 }
@@ -383,7 +398,7 @@ Main content here.
     args_map.insert("year".to_string(), Value::String("2024".to_string()));
     let template_context = TemplateContext::from_hash_map(args_map);
 
-    let rendered = library.render_prompt("main", &template_context).unwrap();
+    let rendered = library.render("main", &template_context).unwrap();
     let expected = "Main content here.\n\nFooter content: 2024";
     assert_eq!(rendered, expected);
 }
@@ -488,7 +503,7 @@ After partial"#;
 
     // Render the main template
     let template_context = TemplateContext::new();
-    let rendered = library.render_prompt("main", &template_context).unwrap();
+    let rendered = library.render("main", &template_context).unwrap();
     let expected = "Before partial\nThis is from partials/top!\nAfter partial";
     assert_eq!(rendered, expected);
 }
@@ -524,7 +539,7 @@ After partial"#;
     // Get and render the main template with partial support
     let template_context = TemplateContext::new(); // No variables needed
 
-    let rendered = library.render_prompt("main", &template_context).unwrap();
+    let rendered = library.render("main", &template_context).unwrap();
     let expected = "Before partial\nThis is a static partial.\nAfter partial";
     assert_eq!(rendered, expected);
 }

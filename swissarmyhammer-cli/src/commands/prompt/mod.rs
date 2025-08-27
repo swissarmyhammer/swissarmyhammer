@@ -233,7 +233,7 @@ async fn run_test_command(
     // Render the prompt with the merged context
     // The library's render_prompt_with_env_and_context method will use both the context and arguments,
     // but since we've already merged CLI args into the context with highest precedence, we can pass empty arguments
-    let rendered = library.render_prompt(&prompt_name, &final_context)?;
+    let rendered = library.render(&prompt_name, &final_context)?;
     println!("{}", rendered);
 
     Ok(())

@@ -1,10 +1,12 @@
 //! Example showing custom template filters and advanced templating
 
+use serde_json::json;
 use std::collections::HashMap;
 use swissarmyhammer::{
     common::{Parameter, ParameterType},
     Prompt, PromptLibrary, TemplateEngine,
 };
+use swissarmyhammer_config::TemplateContext;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a template engine
@@ -112,16 +114,17 @@ Fixes: {{ issues }}
     // Use the commit message prompt
     let prompt = library.get("git-commit")?;
 
-    let mut args = HashMap::new();
-    args.insert("type".to_string(), "feat".to_string());
-    args.insert(
+    let mut template_vars = HashMap::new();
+    template_vars.insert("type".to_string(), json!("feat"));
+    template_vars.insert(
         "description".to_string(),
-        "add library API for prompt management".to_string(),
+        json!("add library API for prompt management"),
     );
-    args.insert("body".to_string(), "This commit refactors SwissArmyHammer to expose core functionality as a reusable Rust library. Developers can now integrate prompt management into their own applications.".to_string());
-    args.insert("issues".to_string(), "#123, #456".to_string());
+    template_vars.insert("body".to_string(), json!("This commit refactors SwissArmyHammer to expose core functionality as a reusable Rust library. Developers can now integrate prompt management into their own applications."));
+    template_vars.insert("issues".to_string(), json!("#123, #456"));
 
-    let commit_msg = prompt.render(&args)?;
+    let template_context = TemplateContext::with_template_vars(template_vars)?;
+    let commit_msg = library.render(&prompt.name, &template_context)?;
     println!("\nGenerated commit message:\n{commit_msg}");
 
     Ok(())

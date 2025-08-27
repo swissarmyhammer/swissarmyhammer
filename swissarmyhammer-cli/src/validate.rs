@@ -365,8 +365,8 @@ impl Validator {
 
         // Try to render the template with partials support using the same path as test/serve
 
-        // Use render_prompt which internally uses render_with_partials
-        if let Err(e) = library.render_prompt(&prompt.name, &TemplateContext::default()) {
+        // Use render which internally uses partials support
+        if let Err(e) = library.render(&prompt.name, &TemplateContext::default()) {
             let error_msg = e.to_string();
 
             // Only report actual syntax errors, not unknown variable errors

@@ -330,7 +330,7 @@ impl McpServer {
                         &format!("Failed to create template context: {e}"),
                     )
                 })?;
-                library.render_prompt(name, &template_context)?
+                library.render(name, &template_context)?
             }
         } else {
             prompt.template.clone()
@@ -734,7 +734,7 @@ impl ServerHandler for McpServer {
                             });
                         }
                     };
-                    match library.render_prompt(&request.name, &template_context) {
+                    match library.render(&request.name, &template_context) {
                         Ok(rendered) => rendered,
                         Err(e) => {
                             return Err(McpError::internal_error(

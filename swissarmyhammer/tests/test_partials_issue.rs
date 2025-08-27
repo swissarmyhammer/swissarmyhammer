@@ -23,7 +23,7 @@ fn test_partials_with_liquid_extension() {
     // Try to render the main prompt with partials support
     let template_context = TemplateContext::new();
     let library_arc = std::sync::Arc::new(library);
-    match PromptLibrary::render_prompt_with_partials("do_next_issue", &template_context, library_arc) {
+    match library_arc.render("do_next_issue", &template_context) {
         Ok(result) => {
             println!("Success:\n{result}");
             assert!(result.contains("Principals"));
@@ -57,8 +57,7 @@ fn test_partials_without_extension() {
 
     // Try to render the main prompt with partials support
     let template_context = TemplateContext::new();
-    let library_arc = std::sync::Arc::new(library);
-    match PromptLibrary::render_prompt_with_partials("do_next_issue", &template_context, library_arc) {
+    match library.render("do_next_issue", &template_context) {
         Ok(result) => {
             println!("Success:\n{result}");
             assert!(result.contains("Principals"));

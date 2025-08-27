@@ -1,11 +1,11 @@
 //! Integration tests for prompt rendering with TemplateContext
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use swissarmyhammer::PromptLibrary;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
-use serde_json::Value;
 
 #[tokio::test]
 async fn test_prompt_render_with_config_integration() {
@@ -47,9 +47,12 @@ User: {{user_name}}"#;
 
     // Test rendering with config context only
     // Debug: print what variables are available
-    eprintln!("Template context variables: {:?}", template_context.to_hash_map());
+    eprintln!(
+        "Template context variables: {:?}",
+        template_context.to_hash_map()
+    );
     let result = library
-        .render_prompt("test_project", &template_context)
+        .render("test_project", &template_context)
         .unwrap();
 
     // println!("Rendered result: {}", result);
@@ -60,16 +63,20 @@ User: {{user_name}}"#;
 
     // Test rendering with user argument override
     let mut user_args_map = HashMap::new();
-    user_args_map.insert("project_name".to_string(), Value::String("UserProject".to_string()));
-    user_args_map.insert("user_name".to_string(), Value::String("TestUser".to_string()));
+    user_args_map.insert(
+        "project_name".to_string(),
+        Value::String("UserProject".to_string()),
+    );
+    user_args_map.insert(
+        "user_name".to_string(),
+        Value::String("TestUser".to_string()),
+    );
     let user_context = TemplateContext::from_hash_map(user_args_map);
-    
+
     let mut combined_context = template_context.clone();
     combined_context.merge(user_context);
 
-    let result_with_override = library
-        .render_prompt("test_project", &combined_context)
-        .unwrap();
+    let result_with_override = library.render("test_project", &combined_context).unwrap();
 
     assert!(result_with_override.contains("Project: UserProject v1.0.0")); // User override + config fallback
     assert!(result_with_override.contains("Environment: test")); // Config value
@@ -85,7 +92,7 @@ async fn test_prompt_render_with_env_and_context_integration() {
 
     // Create a test prompt that uses environment variables
     let prompt_content = r#"---
-title: "Environment Test Prompt"  
+title: "Environment Test Prompt"
 description: "Tests environment variable integration"
 ---
 App: {{app_name}}
@@ -97,10 +104,16 @@ Current User: {{USER}}"#;
     // Create a test configuration context with environment variables
     let mut template_context = TemplateContext::load().unwrap();
     template_context.set("app_name".to_string(), serde_json::json!("TestApp"));
-    
+
     // Add environment variables that the test expects
-    template_context.set("HOME".to_string(), serde_json::json!(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())));
-    template_context.set("USER".to_string(), serde_json::json!(std::env::var("USER").unwrap_or_else(|_| "testuser".to_string())));
+    template_context.set(
+        "HOME".to_string(),
+        serde_json::json!(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())),
+    );
+    template_context.set(
+        "USER".to_string(),
+        serde_json::json!(std::env::var("USER").unwrap_or_else(|_| "testuser".to_string())),
+    );
 
     // Load prompts
     let mut library = PromptLibrary::new();
@@ -112,7 +125,7 @@ Current User: {{USER}}"#;
 
     // Test rendering with config and environment variables
     let result = library
-        .render_prompt("env_test", &template_context)
+        .render("env_test", &template_context)
         .unwrap();
 
     assert!(result.contains("App: TestApp")); // From config
