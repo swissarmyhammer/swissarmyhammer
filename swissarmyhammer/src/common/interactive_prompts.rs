@@ -334,10 +334,12 @@ impl InteractivePrompts {
         let mut input_prompt = Input::<String>::with_theme(&theme)
             .with_prompt(format!("Enter {} ({})", param.name, param.description));
 
-        // Add default value if available
+        // Add default value if available and show it in the prompt
         if let Some(default) = &param.default {
             if let Some(default_str) = default.as_str() {
-                input_prompt = input_prompt.default(default_str.to_string());
+                input_prompt = input_prompt
+                    .default(default_str.to_string())
+                    .show_default(true);
             }
         }
 

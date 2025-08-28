@@ -989,9 +989,21 @@ impl DefaultParameterResolver {
                 };
 
                 if should_include {
-                    // Check if we can use a default value, regardless of whether it's required
-                    if let Some(default) = &param.default {
-                        // Use default value for parameters when condition is met
+                    // In interactive mode, prompt even if a default exists so the user can confirm/override
+                    if interactive {
+                        // Explicitly prompt for the parameter (even if a default exists)
+                        let interactive_prompts =
+                            crate::common::interactive_prompts::InteractivePrompts::new(false);
+
+                        match interactive_prompts.prompt_with_error_recovery(param) {
+                            Ok(value) => {
+                                resolved.insert(param.name.clone(), value);
+                                changed = true;
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    } else if let Some(default) = &param.default {
+                        // Non-interactive: use default value when available
                         resolved.insert(param.name.clone(), default.clone());
                         changed = true;
                     } else if param.required {
