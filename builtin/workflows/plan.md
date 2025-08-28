@@ -8,6 +8,7 @@ parameters:
     description: Path to the specification file to process
     required: true
     type: string
+    default: specification/index.md
     pattern: '^.*\.md$'
 
 parameter_groups:
