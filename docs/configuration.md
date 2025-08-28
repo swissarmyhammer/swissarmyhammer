@@ -12,7 +12,7 @@ This guide provides comprehensive documentation for SwissArmyHammer's configurat
 - [Environment Variable Substitution](#environment-variable-substitution)
 - [Template Integration](#template-integration)
 - [Advanced Usage](#advanced-usage)
-- [Migration Guide](#migration-guide)
+- [Model Configuration](#model-configuration)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -69,177 +69,13 @@ The system searches each location for configuration files in this order:
 ### TOML Format
 
 TOML (Tom's Obvious, Minimal Language) is the recommended format for its readability and robust typing.
-
-```toml
-# Global application settings
-[app]
-name = "MyProject"
-version = "2.1.0"
-debug = false
-max_workers = 10
-
-# Database configuration
-[database]
-host = "localhost"
-port = 5432
-ssl_enabled = true
-timeout_seconds = 30
-
-# Nested database credentials
-[database.credentials]
-username = "admin"
-password = "${DB_PASSWORD}"  # Environment variable substitution
-database = "production"
-
-# Connection pool settings
-[database.pool]
-min_connections = 5
-max_connections = 20
-acquire_timeout = 10
-
-# Feature flags
-[features]
-experimental_ui = false
-advanced_logging = true
-telemetry = true
-beta_features = false
-
-# Arrays of values
-[features.enabled_modules]
-modules = ["auth", "api", "web", "admin"]
-
-# Custom template variables
-[variables]
-project_root = "/opt/myproject"
-author = "Your Name"
-contact_email = "admin@example.com"
-build_timestamp = "2024-01-15T10:30:00Z"
-
-# Environment-specific overrides
-[environments.development]
-debug = true
-log_level = "debug"
-
-[environments.production]
-debug = false
-log_level = "warn"
-```
-
 ### YAML Format
 
 YAML provides excellent readability and supports complex nested structures.
 
-```yaml
-# Global application settings
-app:
-  name: MyProject
-  version: "2.1.0"
-  debug: false
-  max_workers: 10
-
-# Database configuration
-database:
-  host: localhost
-  port: 5432
-  ssl_enabled: true
-  timeout_seconds: 30
-  
-  # Nested credentials
-  credentials:
-    username: admin
-    password: "${DB_PASSWORD}"  # Environment variable substitution
-    database: production
-  
-  # Connection pool
-  pool:
-    min_connections: 5
-    max_connections: 20
-    acquire_timeout: 10
-
-# Feature flags
-features:
-  experimental_ui: false
-  advanced_logging: true
-  telemetry: true
-  beta_features: false
-  
-  # Arrays in YAML
-  enabled_modules:
-    - auth
-    - api
-    - web
-    - admin
-
-# Custom template variables
-variables:
-  project_root: /opt/myproject
-  author: "Your Name"
-  contact_email: admin@example.com
-  build_timestamp: "2024-01-15T10:30:00Z"
-
-# Environment-specific overrides
-environments:
-  development:
-    debug: true
-    log_level: debug
-  production:
-    debug: false
-    log_level: warn
-```
-
 ### JSON Format
 
 JSON provides universal compatibility and programmatic generation support.
-
-```json
-{
-  "app": {
-    "name": "MyProject",
-    "version": "2.1.0",
-    "debug": false,
-    "max_workers": 10
-  },
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "ssl_enabled": true,
-    "timeout_seconds": 30,
-    "credentials": {
-      "username": "admin",
-      "password": "${DB_PASSWORD}",
-      "database": "production"
-    },
-    "pool": {
-      "min_connections": 5,
-      "max_connections": 20,
-      "acquire_timeout": 10
-    }
-  },
-  "features": {
-    "experimental_ui": false,
-    "advanced_logging": true,
-    "telemetry": true,
-    "beta_features": false,
-    "enabled_modules": ["auth", "api", "web", "admin"]
-  },
-  "variables": {
-    "project_root": "/opt/myproject",
-    "author": "Your Name",
-    "contact_email": "admin@example.com",
-    "build_timestamp": "2024-01-15T10:30:00Z"
-  },
-  "environments": {
-    "development": {
-      "debug": true,
-      "log_level": "debug"
-    },
-    "production": {
-      "debug": false,
-      "log_level": "warn"
-    }
-  }
-}
-```
 
 ## Precedence Order
 
@@ -474,7 +310,7 @@ app:
 
 database:
   url: "${DATABASE_URL:-postgresql://localhost:5432/mydb}"
-  
+
 features:
   experimental: "${EXPERIMENTAL:-false}"
 ```
@@ -513,7 +349,7 @@ Configuration values can be accessed directly in templates:
 ## Database Settings
 
 - **Host:** {{database.host}}:{{database.port}}
-- **Database:** {{database.credentials.database}}  
+- **Database:** {{database.credentials.database}}
 - **SSL:** {% if database.ssl_enabled %}✓ Enabled{% else %}✗ Disabled{% endif %}
 
 ## Feature Status
@@ -540,7 +376,7 @@ Environment: **{{app.environment | capitalize}}**
 - Hot reload active
 - Test database in use
 {% elsif app.environment == "production" -%}
-## Production Settings  
+## Production Settings
 - Optimized performance
 - Error reporting enabled
 - Production database active
@@ -587,7 +423,7 @@ You can combine configuration values with template-specific variables:
 ```liquid
 {% comment %}
   Configuration provides: app.name, database.host, features
-  Template variables provide: task, user, timestamp  
+  Template variables provide: task, user, timestamp
 {% endcomment %}
 
 # Task Report for {{user}}
@@ -611,6 +447,223 @@ Advanced reporting features are available for this task.
 {% else -%}
 Basic reporting mode active. Enable advanced_reporting in configuration for more features.
 {% endif %}
+```
+
+## Model Configuration
+
+SwissArmyHammer supports two AI execution models: **Claude Code** (default) and **LlamaAgent** with local Qwen models. Here are practical examples you can copy and use.
+
+### Quick Start Examples
+
+#### Default Claude Code Setup
+Create `.swissarmyhammer/sah.toml`:
+```toml
+# Claude Code is the default - this is optional
+[agent]
+quiet = false
+
+[agent.executor]
+type = "claude-code"
+```
+
+#### Qwen Model Setup (Local AI)
+Create `.swissarmyhammer/sah.toml`:
+```toml
+[agent]
+quiet = false
+
+[agent.executor]
+type = "llama-agent"
+
+[agent.executor.config.model.source.HuggingFace]
+repo = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+filename = "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+
+[agent.executor.config.mcp_server]
+port = 0
+timeout_seconds = 30
+```
+
+### Claude Code Configuration Options
+
+**Basic Configuration:**
+```toml
+[agent.executor]
+type = "claude-code"
+```
+
+**Custom Claude CLI Path:**
+```toml
+[agent.executor]
+type = "claude-code"
+
+[agent.executor.config]
+claude_path = "/usr/local/bin/claude"
+args = ["--timeout=60"]
+```
+
+**Environment Variables:**
+```bash
+export SAH_AGENT_EXECUTOR_TYPE="claude-code"
+export SAH_AGENT_EXECUTOR_CONFIG_CLAUDE_PATH="/custom/path/to/claude"
+```
+
+### Qwen Model Configuration Options
+
+#### Production Model (Qwen3-Coder-30B)
+```toml
+[agent.executor]
+type = "llama-agent"
+
+[agent.executor.config.model.source.HuggingFace]
+repo = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+filename = "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+
+[agent.executor.config.mcp_server]
+port = 8080  # or 0 for random port
+timeout_seconds = 60
+```
+
+#### Development/Testing Model (Phi-4-mini)
+```toml
+[agent.executor]
+type = "llama-agent"
+
+[agent.executor.config.model.source.HuggingFace]
+repo = "unsloth/Phi-4-mini-instruct-GGUF"
+filename = "Phi-4-mini-instruct-Q4_K_M.gguf"
+
+[agent.executor.config.mcp_server]
+port = 0
+timeout_seconds = 10
+```
+
+#### Local Model File
+```toml
+[agent.executor]
+type = "llama-agent"
+
+[agent.executor.config.model.source.Local]
+filename = "/path/to/your/model.gguf"
+
+[agent.executor.config.mcp_server]
+port = 0
+timeout_seconds = 30
+```
+
+### Complete Configuration Examples
+
+#### `.swissarmyhammer/sah.toml` - Claude Code
+```toml
+# Project configuration
+project_name = "MyProject"
+
+# Use Claude Code (default)
+[agent]
+quiet = false
+
+[agent.executor]
+type = "claude-code"
+
+[agent.executor.config]
+args = ["--timeout=120"]
+
+# Other project settings
+[app]
+name = "MyProject"
+version = "1.0.0"
+```
+
+#### `.swissarmyhammer/sah.toml` - Local Qwen Model
+```toml
+# Project configuration  
+project_name = "MyProject"
+
+# Use local Qwen model
+[agent]
+quiet = false
+
+[agent.executor]
+type = "llama-agent"
+
+[agent.executor.config.model.source.HuggingFace]
+repo = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+filename = "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+
+[agent.executor.config.mcp_server]
+port = 0
+timeout_seconds = 30
+
+# Other project settings
+[app]
+name = "MyProject" 
+version = "1.0.0"
+```
+
+### Environment Variable Configuration
+
+```bash
+# Claude Code
+export SAH_AGENT_EXECUTOR_TYPE="claude-code"
+export SAH_AGENT_QUIET="false"
+
+# Qwen Model
+export SAH_AGENT_EXECUTOR_TYPE="llama-agent"
+export SAH_AGENT_EXECUTOR_CONFIG_MODEL_SOURCE_HUGGINGFACE_REPO="unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+export SAH_AGENT_EXECUTOR_CONFIG_MODEL_SOURCE_HUGGINGFACE_FILENAME="Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+export SAH_AGENT_EXECUTOR_CONFIG_MCP_SERVER_PORT="0"
+export SAH_AGENT_EXECUTOR_CONFIG_MCP_SERVER_TIMEOUT_SECONDS="30"
+```
+
+### Model Selection Guide
+
+| Model | Size | RAM | Speed | Use Case |
+|-------|------|-----|-------|-----------|
+| **Claude Code** | N/A | Low | Fast | Production, cloud, general use |
+| **Qwen3-Coder-30B** | ~18GB | ~20GB | Medium | Local development, privacy |  
+| **Phi-4-mini** | ~1.5GB | ~2GB | Fast | Testing, limited resources |
+
+### YAML Configuration Examples
+
+#### Claude Code (YAML)
+```yaml
+agent:
+  quiet: false
+  executor:
+    type: claude-code
+    config:
+      claude_path: "/usr/local/bin/claude"
+      args: ["--timeout=60"]
+```
+
+#### Qwen Model (YAML)  
+```yaml
+agent:
+  quiet: false
+  executor:
+    type: llama-agent
+    config:
+      model:
+        source:
+          HuggingFace:
+            repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+            filename: "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+      mcp_server:
+        port: 0
+        timeout_seconds: 30
+```
+
+### Testing Your Configuration
+
+```bash
+# Test configuration loading
+sah doctor
+
+# Check which model is active
+sah config get agent.executor.type
+
+# Test agent execution (if configured)
+echo "Test prompt" | sah workflow run test-agent
 ```
 
 ## Advanced Usage
@@ -678,89 +731,7 @@ let context = load_configuration_for_cli()?;
 println!("Project: {}", context.get("app.name").unwrap_or(&json!("Unknown")));
 ```
 
-### Programmatic Configuration
 
-Build configuration programmatically:
-
-```rust
-use swissarmyhammer_config::TemplateContext;
-use serde_json::json;
-
-let mut context = TemplateContext::new();
-
-// Set application info
-context.set("app.name".to_string(), json!("MyApp"));
-context.set("app.version".to_string(), json!("2.0.0"));
-context.set("app.debug".to_string(), json!(true));
-
-// Set nested database config
-context.set("database.host".to_string(), json!("localhost"));
-context.set("database.port".to_string(), json!(5432));
-context.set("database.ssl_enabled".to_string(), json!(false));
-
-// Convert to liquid context for template rendering
-let liquid_context = context.to_liquid_context();
-```
-
-## Migration Guide
-
-### From Previous Configuration System
-
-If you're migrating from the old SwissArmyHammer configuration system:
-
-1. **Configuration Location**:
-   - **Old**: Various locations, limited discovery
-   - **New**: `.swissarmyhammer/` directories with automatic discovery
-
-2. **File Formats**:
-   - **Old**: Primarily TOML with limited structure
-   - **New**: Full TOML, YAML, and JSON support with rich nesting
-
-3. **Environment Variables**:
-   - **Old**: Limited environment variable support
-   - **New**: Full environment variable integration with substitution
-
-4. **Template Integration**:
-   - **Old**: Manual configuration merging
-   - **New**: Automatic integration via `TemplateContext`
-
-### Migration Steps
-
-1. **Move Configuration Files**:
-   ```bash
-   # Create new directory structure
-   mkdir -p ~/.swissarmyhammer
-   mkdir -p ./.swissarmyhammer
-   
-   # Move existing config files
-   mv old-config.toml ~/.swissarmyhammer/sah.toml
-   ```
-
-2. **Update Configuration Format**:
-   - Old format may have used flat structures
-   - New format supports rich nesting and proper types
-   - Update environment variable names to use `SAH_` or `SWISSARMYHAMMER_` prefixes
-
-3. **Update Templates**:
-   - Configuration values automatically available
-   - No need to manually merge configuration
-   - Use dot notation for nested values: `{{app.name}}`, `{{database.host}}`
-
-4. **Test Configuration**:
-   ```bash
-   # Validate new configuration
-   sah validate
-   
-   # Test configuration loading
-   sah doctor
-   ```
-
-### Backward Compatibility Notes
-
-- **No backward compatibility** is provided for old configuration formats
-- The old `sah config test` command has been removed
-- Configuration file discovery uses new standard locations only
-- Environment variable names must use the new prefixes
 
 ## Troubleshooting
 
@@ -782,10 +753,10 @@ If you're migrating from the old SwissArmyHammer configuration system:
    ```bash
    # Test TOML syntax
    toml-lint ~/.swissarmyhammer/sah.toml
-   
-   # Test YAML syntax  
+
+   # Test YAML syntax
    yamllint ~/.swissarmyhammer/sah.yaml
-   
+
    # Test JSON syntax
    jq . ~/.swissarmyhammer/sah.json
    ```
@@ -805,7 +776,7 @@ If you're migrating from the old SwissArmyHammer configuration system:
    # Correct naming
    export SAH_APP_NAME="MyApp"           # → app.name
    export SAH_DATABASE_HOST="localhost"  # → database.host
-   
+
    # Incorrect naming (won't work)
    export APP_NAME="MyApp"               # Missing SAH_ prefix
    export SAH_APP-NAME="MyApp"           # Hyphens not supported
@@ -823,8 +794,8 @@ If you're migrating from the old SwissArmyHammer configuration system:
    export SAH_DEBUG="true"    # Correct
    export SAH_DEBUG="True"    # Also works
    export SAH_DEBUG="yes"     # Won't convert to boolean
-   
-   # Numeric values  
+
+   # Numeric values
    export SAH_PORT="5432"     # Correct
    export SAH_PORT="5432.0"   # Also works
    export SAH_PORT="5432px"   # Won't convert to number
@@ -845,7 +816,7 @@ If you're migrating from the old SwissArmyHammer configuration system:
    # Correct syntax
    url = "${DATABASE_URL}"
    url = "${DATABASE_URL:-default_value}"
-   
+
    # Incorrect syntax
    url = "$DATABASE_URL"        # Missing braces
    url = "${DATABASE_URL-}"     # Wrong default syntax
@@ -855,7 +826,7 @@ If you're migrating from the old SwissArmyHammer configuration system:
    ```toml
    # Works
    url = "${DB_URL:-postgresql://${DB_USER}:${DB_PASS}@localhost:5432/mydb}"
-   
+
    # Complex nesting may need simplification
    url = "${COMPLEX_URL:-${NESTED_${DYNAMIC}_VAR}}"  # May not work
    ```
@@ -876,10 +847,10 @@ If you're migrating from the old SwissArmyHammer configuration system:
    ```bash
    # Check global config
    cat ~/.swissarmyhammer/sah.toml
-   
+
    # Check project config
    cat ./.swissarmyhammer/sah.toml
-   
+
    # Check environment variables
    env | grep SAH_
    ```

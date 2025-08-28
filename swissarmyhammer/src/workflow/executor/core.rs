@@ -496,11 +496,23 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         state_description: &str,
     ) -> ExecutorResult<bool> {
-        // Parse action from state description with liquid template rendering
+        // Parse state description to extract action and store-as field
         let context_hashmap = run.context.to_workflow_hashmap();
+        let (mut action_text, store_as_var) = self.parse_state_description(state_description);
+
+        // Convert set_variable format to set format for compatibility with action parser
+        if action_text.starts_with("set_variable ") {
+            action_text = action_text.replace("set_variable ", "set ");
+        }
+
+        tracing::debug!(
+            "Parsed state description - action: '{}', store_as: {:?}",
+            action_text,
+            store_as_var
+        );
 
         if let Some(action) =
-            parse_action_from_description_with_context(state_description, &context_hashmap)?
+            parse_action_from_description_with_context(&action_text, &context_hashmap)?
         {
             self.log_event(
                 ExecutionEventType::StateExecution,
@@ -509,11 +521,60 @@ impl WorkflowExecutor {
 
             // Execute the action and handle result
             let result = self.execute_action_direct(run, action).await;
-            self.handle_action_result(run, result).await?;
+
+            // Handle the result and optionally store it in the Store As variable
+            self.handle_action_result_with_store_as(run, result, store_as_var)
+                .await?;
             Ok(true)
         } else {
+            tracing::warn!("No action could be parsed from: '{}'", action_text);
             Ok(false)
         }
+    }
+
+    /// Parse state description to extract action text and Store As variable
+    fn parse_state_description(&self, state_description: &str) -> (String, Option<String>) {
+        let mut action_text = String::new();
+        let mut store_as_var = None;
+
+        tracing::debug!("Received state description:\n{}", state_description);
+
+        for line in state_description.lines() {
+            let line = line.trim();
+
+            // Look for **Action**: pattern
+            if line.starts_with("**Action**:") || line.starts_with("**action**:") {
+                action_text = line
+                    .strip_prefix("**Action**:")
+                    .or_else(|| line.strip_prefix("**action**:"))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+            }
+
+            // Look for **Store As**: pattern
+            if line.starts_with("**Store As**:")
+                || line.starts_with("**store as**:")
+                || line.starts_with("**Store as**:")
+            {
+                let store_var = line
+                    .strip_prefix("**Store As**:")
+                    .or_else(|| line.strip_prefix("**store as**:"))
+                    .or_else(|| line.strip_prefix("**Store as**:"))
+                    .unwrap_or("")
+                    .trim();
+                if !store_var.is_empty() {
+                    store_as_var = Some(store_var.to_string());
+                }
+            }
+        }
+
+        // If no action found, use the entire description as fallback
+        if action_text.is_empty() {
+            action_text = state_description.to_string();
+        }
+
+        (action_text, store_as_var)
     }
 
     /// Execute action directly without retry logic
@@ -526,11 +587,12 @@ impl WorkflowExecutor {
         action.execute(&mut run.context).await
     }
 
-    /// Handle the result of action execution
-    async fn handle_action_result(
+    /// Handle the result of action execution with optional Store As variable
+    async fn handle_action_result_with_store_as(
         &mut self,
         run: &mut WorkflowRun,
         result: Result<Value, ActionError>,
+        store_as_var: Option<String>,
     ) -> ExecutorResult<()> {
         match result {
             Ok(result_value) => {
@@ -556,6 +618,17 @@ impl WorkflowExecutor {
                 // Also set the legacy last_action_result for backward compatibility
                 run.context
                     .insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
+
+                // If Store As variable is specified, store the result there too
+                if let Some(store_var) = store_as_var {
+                    run.context
+                        .set_workflow_var(store_var.clone(), result_value.clone());
+                    tracing::debug!(
+                        "Stored action result in workflow variable '{}': {:?}",
+                        store_var,
+                        result_value
+                    );
+                }
 
                 self.log_event(
                     ExecutionEventType::StateExecution,
@@ -859,5 +932,52 @@ impl WorkflowExecutor {
 impl Default for WorkflowExecutor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_state_description() {
+        let executor = WorkflowExecutor::new();
+
+        // Test state description with Action and Store As
+        let description = r#"**Type**: action
+**Action**: set_variable step1="First step completed"
+**Store As**: step1_result"#;
+
+        let (action_text, store_as_var) = executor.parse_state_description(description);
+
+        assert_eq!(action_text, r#"set_variable step1="First step completed""#);
+        assert_eq!(store_as_var, Some("step1_result".to_string()));
+    }
+
+    #[test]
+    fn test_parse_state_description_no_store_as() {
+        let executor = WorkflowExecutor::new();
+
+        // Test state description with only Action
+        let description = r#"**Type**: action
+**Action**: set_variable step1="First step completed""#;
+
+        let (action_text, store_as_var) = executor.parse_state_description(description);
+
+        assert_eq!(action_text, r#"set_variable step1="First step completed""#);
+        assert_eq!(store_as_var, None);
+    }
+
+    #[test]
+    fn test_parse_state_description_fallback() {
+        let executor = WorkflowExecutor::new();
+
+        // Test state description with no Action field
+        let description = r#"set_variable step1="First step completed""#;
+
+        let (action_text, store_as_var) = executor.parse_state_description(description);
+
+        assert_eq!(action_text, r#"set_variable step1="First step completed""#);
+        assert_eq!(store_as_var, None);
     }
 }

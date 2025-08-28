@@ -10,5 +10,6 @@ pub mod mcp_integration;
 pub mod parameter_cli;
 pub mod schema_conversion;
 pub mod schema_validation;
+pub mod signal_handler;
 pub mod test;
 pub mod validate;

@@ -276,9 +276,7 @@ impl TestRunner {
                     "Template context error: {e}"
                 ))
             })?;
-            Ok(self
-                .library
-                .render(&prompt.name, &template_context)?)
+            Ok(self.library.render(&prompt.name, &template_context)?)
         }
     }
 

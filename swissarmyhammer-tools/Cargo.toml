@@ -64,6 +64,12 @@ reqwest = { workspace = true }
 urlencoding = { workspace = true }
 tempfile = { workspace = true }
 
+# HTTP server dependencies
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["trace"] }
+hyper = { workspace = true }
+
 [dev-dependencies]
 tokio-test = "0.4"
 

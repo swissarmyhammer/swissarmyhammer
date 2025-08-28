@@ -4,9 +4,14 @@
 //! the existing workflow HashMap-based context system.
 
 use crate::workflow::action_parser::ActionParser;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
-use swissarmyhammer_config::{ConfigurationResult, TemplateContext};
+use swissarmyhammer_config::{
+    agent::{
+        AgentConfig, AgentExecutorType, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
+    },
+    ConfigurationResult, TemplateContext,
+};
 
 /// Workflow-specific template context that bridges between TemplateContext and HashMap
 ///
@@ -46,6 +51,92 @@ impl WorkflowTemplateContext {
         Ok(Self {
             template_context,
             workflow_vars: HashMap::new(),
+        })
+    }
+
+    /// Create a WorkflowTemplateContext for testing without configuration discovery
+    ///
+    /// This creates a minimal context with the provided variables without attempting
+    /// to load configuration files or access the current directory. Use this in tests
+    /// to avoid DiscoveryError issues.
+    #[cfg(test)]
+    pub fn with_vars_for_test(vars: HashMap<String, Value>) -> Self {
+        let mut template_context = TemplateContext::new();
+        for (key, value) in vars {
+            template_context.set(key, value);
+        }
+        Self {
+            template_context,
+            workflow_vars: HashMap::new(),
+        }
+    }
+
+    /// Create a test-safe WorkflowTemplateContext with variables (for use in helper functions)
+    #[cfg(test)]
+    pub fn with_vars_safe(vars: HashMap<String, Value>) -> Self {
+        Self::with_vars_for_test(vars)
+    }
+
+    /// Load workflow template context with agent configuration from environment/config
+    pub fn load_with_agent_config() -> ConfigurationResult<Self> {
+        let mut context = Self::load_for_cli()?;
+
+        // Check for agent configuration in environment or config files
+        if let Ok(executor_type) = std::env::var("SAH_AGENT_EXECUTOR") {
+            match executor_type.as_str() {
+                "claude-code" => {
+                    context.set_agent_config(AgentConfig::claude_code());
+                }
+                "llama-agent" => {
+                    let llama_config = Self::load_llama_config_from_env()?;
+                    let mut config = AgentConfig::llama_agent(llama_config);
+                    config.quiet = std::env::var("SAH_QUIET")
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    context.set_agent_config(config);
+                }
+                _ => {
+                    // Default to Claude Code for unknown types
+                    context.set_agent_config(AgentConfig::default());
+                }
+            }
+        } else {
+            // Default configuration
+            context.set_agent_config(AgentConfig::default());
+        }
+
+        // Set model name for prompt rendering
+        let model_name = context.get_model_name();
+        context.set_model_name(model_name);
+
+        Ok(context)
+    }
+
+    /// Load LlamaAgent configuration from environment variables
+    fn load_llama_config_from_env() -> ConfigurationResult<LlamaAgentConfig> {
+        let model_repo = std::env::var("SAH_LLAMA_MODEL_REPO")
+            .unwrap_or_else(|_| "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string());
+        let model_filename = std::env::var("SAH_LLAMA_MODEL_FILENAME").ok();
+        let mcp_port = std::env::var("SAH_LLAMA_MCP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0);
+        let mcp_timeout = std::env::var("SAH_LLAMA_MCP_TIMEOUT")
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(30);
+
+        Ok(LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: model_repo,
+                    filename: model_filename,
+                },
+            },
+            mcp_server: McpServerConfig {
+                port: mcp_port,
+                timeout_seconds: mcp_timeout,
+            },
         })
     }
 
@@ -309,6 +400,60 @@ impl WorkflowTemplateContext {
         // Then check template context
         self.template_context.get(key).is_some()
     }
+
+    /// Set agent configuration for workflow execution
+    pub fn set_agent_config(&mut self, config: AgentConfig) {
+        self.set_workflow_var(
+            "_agent_config".to_string(),
+            serde_json::to_value(config).unwrap(),
+        );
+    }
+
+    /// Get agent configuration from workflow context
+    pub fn get_agent_config(&self) -> AgentConfig {
+        self.get("_agent_config")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// Get the executor type from agent configuration
+    pub fn get_executor_type(&self) -> AgentExecutorType {
+        self.get_agent_config().executor_type()
+    }
+
+    /// Get LlamaAgent configuration if available
+    pub fn get_llama_config(&self) -> Option<LlamaAgentConfig> {
+        match &self.get_agent_config().executor {
+            swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(config) => {
+                Some(config.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if quiet mode is enabled
+    pub fn is_quiet(&self) -> bool {
+        self.get_agent_config().quiet
+    }
+
+    /// Set the model name in context for prompt rendering
+    pub fn set_model_name(&mut self, model_name: String) {
+        self.set_workflow_var("model".to_string(), json!(model_name));
+    }
+
+    /// Get model name for prompt rendering
+    pub fn get_model_name(&self) -> String {
+        match self.get_executor_type() {
+            AgentExecutorType::ClaudeCode => "claude".to_string(),
+            AgentExecutorType::LlamaAgent => self
+                .get_llama_config()
+                .map(|config| match &config.model.source {
+                    ModelSource::HuggingFace { repo, .. } => repo.clone(),
+                    ModelSource::Local { filename } => filename.to_string_lossy().to_string(),
+                })
+                .unwrap_or_else(|| "unknown".to_string()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -321,7 +466,7 @@ mod tests {
         // Simple test that doesn't rely on environment or file system
         let vars = HashMap::from([("test_var".to_string(), json!("test_value"))]);
 
-        let workflow_context = WorkflowTemplateContext::with_vars(vars).unwrap();
+        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
 
         // Should be able to get the value we set
         assert_eq!(
@@ -344,7 +489,7 @@ mod tests {
             ("config_var".to_string(), json!("config_value")),
             ("shared_var".to_string(), json!("config_shared")),
         ]);
-        let workflow_context = WorkflowTemplateContext::with_vars(vars).unwrap();
+        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
 
         // Create context with existing workflow variables
         let mut context = HashMap::new();
@@ -387,7 +532,7 @@ mod tests {
             ("version".to_string(), json!("1.0.0")),
         ]);
 
-        let workflow_context = WorkflowTemplateContext::with_vars(vars).unwrap();
+        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
         let liquid_context = workflow_context.to_liquid_context();
 
         // Should be able to use in liquid template
@@ -406,7 +551,7 @@ mod tests {
             ("project_name".to_string(), json!("BaseProject")),
             ("version".to_string(), json!("1.0.0")),
         ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
 
         // Workflow variables that should override template values
         let workflow_vars = HashMap::from([
@@ -432,7 +577,7 @@ mod tests {
             ("user_name".to_string(), json!("Alice")),
             ("greeting".to_string(), json!("Hello")),
         ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
 
         let workflow_vars = HashMap::from([
             ("action".to_string(), json!("deployed")),
@@ -449,7 +594,7 @@ mod tests {
     #[test]
     fn test_render_template_with_fallback_syntax() {
         let template_vars = HashMap::from([("base_url".to_string(), json!("https://example.com"))]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
 
         let workflow_vars = HashMap::from([
             ("endpoint".to_string(), json!("/api/v1/users")),
@@ -469,7 +614,7 @@ mod tests {
             ("app_name".to_string(), json!("MyApp")),
             ("version".to_string(), json!("2.0.0")),
         ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
 
         let workflow_vars = HashMap::from([
             ("environment".to_string(), json!("production")),
@@ -494,7 +639,7 @@ mod tests {
             ("database_host".to_string(), json!("localhost")),
             ("database_port".to_string(), json!(5432)),
         ]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
 
         // Workflow overrides the host but not port
         let workflow_vars =
@@ -510,7 +655,7 @@ mod tests {
     #[test]
     fn test_render_template_ignores_internal_keys() {
         let template_vars = HashMap::from([("public_var".to_string(), json!("public_value"))]);
-        let mut workflow_context = WorkflowTemplateContext::with_vars(template_vars).unwrap();
+        let mut workflow_context = WorkflowTemplateContext::with_vars_safe(template_vars);
 
         let workflow_vars = HashMap::from([
             ("_internal_var".to_string(), json!("should_be_ignored")),
@@ -527,5 +672,131 @@ mod tests {
             result,
             "Public: public_value, Normal: normal_value, Internal: {{_internal_var}}"
         );
+    }
+
+    #[test]
+    fn test_default_agent_config() {
+        let context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+
+        // Should default to Claude Code
+        assert_eq!(context.get_executor_type(), AgentExecutorType::ClaudeCode);
+        assert_eq!(context.get_model_name(), "claude");
+        assert!(!context.is_quiet());
+    }
+
+    #[test]
+    fn test_set_and_get_agent_config() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let config = AgentConfig::claude_code();
+
+        context.set_agent_config(config.clone());
+        let retrieved_config = context.get_agent_config();
+
+        assert_eq!(retrieved_config.executor_type(), config.executor_type());
+        assert_eq!(retrieved_config.quiet, config.quiet);
+    }
+
+    #[test]
+    fn test_llama_agent_config() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let llama_config = LlamaAgentConfig::default();
+        let agent_config = AgentConfig::llama_agent(llama_config.clone());
+
+        context.set_agent_config(agent_config);
+
+        assert_eq!(context.get_executor_type(), AgentExecutorType::LlamaAgent);
+        assert!(context.get_llama_config().is_some());
+        assert!(!context.is_quiet());
+
+        // Model name should be the HuggingFace repo
+        assert!(context.get_model_name().contains("Qwen3"));
+    }
+
+    #[test]
+    fn test_llama_agent_config_with_quiet() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let llama_config = LlamaAgentConfig::for_testing();
+        let mut agent_config = AgentConfig::llama_agent(llama_config);
+        agent_config.quiet = true;
+
+        context.set_agent_config(agent_config);
+
+        assert_eq!(context.get_executor_type(), AgentExecutorType::LlamaAgent);
+        assert!(context.get_llama_config().is_some());
+        assert!(context.is_quiet());
+
+        // Model name should be the test model repo
+        assert!(context.get_model_name().contains("Phi-4"));
+    }
+
+    #[test]
+    fn test_agent_config_serialization() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let config = AgentConfig::llama_agent(LlamaAgentConfig::for_testing());
+
+        context.set_agent_config(config.clone());
+
+        // Should serialize and deserialize correctly
+        let retrieved_config = context.get_agent_config();
+        assert_eq!(config.executor_type(), retrieved_config.executor_type());
+        assert_eq!(config.quiet, retrieved_config.quiet);
+    }
+
+    #[test]
+    fn test_model_name_rendering_claude() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let config = AgentConfig::claude_code();
+
+        context.set_agent_config(config);
+        assert_eq!(context.get_model_name(), "claude");
+
+        // Should be available as template variable after setting
+        context.set_model_name(context.get_model_name());
+        assert_eq!(context.get("model"), Some(&json!("claude")));
+    }
+
+    #[test]
+    fn test_model_name_rendering_llama() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let llama_config = LlamaAgentConfig::for_testing();
+        let config = AgentConfig::llama_agent(llama_config);
+
+        context.set_agent_config(config);
+        let model_name = context.get_model_name();
+        assert!(model_name.contains("Phi-4"));
+
+        // Should be available as template variable after setting
+        context.set_model_name(model_name.clone());
+        assert_eq!(context.get("model"), Some(&json!(model_name)));
+    }
+
+    #[test]
+    fn test_model_name_with_local_file() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let mut llama_config = LlamaAgentConfig::for_testing();
+        llama_config.model.source = ModelSource::Local {
+            filename: std::path::PathBuf::from("/path/to/model.gguf"),
+        };
+        let config = AgentConfig::llama_agent(llama_config);
+
+        context.set_agent_config(config);
+        let model_name = context.get_model_name();
+        assert_eq!(model_name, "/path/to/model.gguf");
+    }
+
+    #[test]
+    fn test_load_llama_config_from_env() {
+        // Test with default values (no env vars set)
+        let config = WorkflowTemplateContext::load_llama_config_from_env().unwrap();
+
+        match config.model.source {
+            ModelSource::HuggingFace { repo, filename } => {
+                assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
+                assert!(filename.is_none());
+            }
+            ModelSource::Local { .. } => panic!("Default should be HuggingFace"),
+        }
+        assert_eq!(config.mcp_server.port, 0);
+        assert_eq!(config.mcp_server.timeout_seconds, 30);
     }
 }

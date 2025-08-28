@@ -104,8 +104,10 @@ impl WorkflowRun {
 
         let now = chrono::Utc::now();
         let initial_state = workflow.initial_state.clone();
-        let context = WorkflowTemplateContext::load()
-            .unwrap_or_else(|_| WorkflowTemplateContext::with_vars(Default::default()).unwrap());
+        let context = WorkflowTemplateContext::load().unwrap_or_else(|_| {
+            WorkflowTemplateContext::with_vars(Default::default())
+                .expect("Failed to create default context")
+        });
         Self {
             id: WorkflowRunId::new(),
             workflow,

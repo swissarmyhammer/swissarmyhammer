@@ -23,8 +23,6 @@ use tracing::{debug, info};
 /// Configuration constants for advanced search engine
 const DEFAULT_WRITER_BUFFER_SIZE: usize = 50_000_000; // 50MB buffer for index writer
 
-
-
 /// Advanced memo search engine using Tantivy for full-text indexing
 ///
 /// Provides high-performance search capabilities for memoranda with support for:
@@ -111,10 +109,8 @@ impl AdvancedMemoSearchEngine {
         std::fs::create_dir_all(path)?;
 
         let schema = Self::build_schema();
-        let directory = MmapDirectory::open(path)
-            .with_tantivy_context()?;
-        let index = Index::open_or_create(directory, schema)
-            .with_tantivy_context()?;
+        let directory = MmapDirectory::open(path).with_tantivy_context()?;
+        let index = Index::open_or_create(directory, schema).with_tantivy_context()?;
 
         Self::new_from_index(index).await
     }
@@ -143,9 +139,7 @@ impl AdvancedMemoSearchEngine {
             .writer(DEFAULT_WRITER_BUFFER_SIZE)
             .with_tantivy_context()?;
 
-        let reader = index
-            .reader()
-            .with_tantivy_context()?;
+        let reader = index.reader().with_tantivy_context()?;
 
         Ok(Self {
             index,
@@ -206,15 +200,11 @@ impl AdvancedMemoSearchEngine {
             let mut writer = self.writer.write().await;
             let id_term = Term::from_field_text(self.id_field, memo.id.as_str());
             writer.delete_term(id_term);
-            writer
-                .commit()
-                .with_tantivy_context()?;
+            writer.commit().with_tantivy_context()?;
         }
 
         // Reload reader to ensure deletions are visible
-        self.reader
-            .reload()
-            .with_tantivy_context()?;
+        self.reader.reload().with_tantivy_context()?;
 
         // Then, add the new document
         {
@@ -228,19 +218,13 @@ impl AdvancedMemoSearchEngine {
                 self.updated_at_field => memo.updated_at.to_rfc3339(),
             );
 
-            writer
-                .add_document(doc)
-                .with_tantivy_context()?;
+            writer.add_document(doc).with_tantivy_context()?;
 
-            writer
-                .commit()
-                .with_tantivy_context()?;
+            writer.commit().with_tantivy_context()?;
         }
 
         // Final reload to see the new document
-        self.reader
-            .reload()
-            .with_tantivy_context()?;
+        self.reader.reload().with_tantivy_context()?;
 
         debug!("Indexed memo: {} ({})", memo.title, memo.id);
         Ok(())
@@ -281,15 +265,11 @@ impl AdvancedMemoSearchEngine {
             let mut writer = self.writer.write().await;
             let id_term = Term::from_field_text(self.id_field, memo_id.as_str());
             writer.delete_term(id_term);
-            writer
-                .commit()
-                .with_tantivy_context()?;
+            writer.commit().with_tantivy_context()?;
         }
 
         // Reload reader to see changes
-        self.reader
-            .reload()
-            .with_tantivy_context()?;
+        self.reader.reload().with_tantivy_context()?;
 
         debug!("Removed memo from index: {}", memo_id);
         Ok(())
@@ -305,14 +285,10 @@ impl AdvancedMemoSearchEngine {
     /// * `Result<()>` - Success or error if commit fails
     pub async fn commit(&self) -> Result<()> {
         let mut writer = self.writer.write().await;
-        writer
-            .commit()
-            .with_tantivy_context()?;
+        writer.commit().with_tantivy_context()?;
 
         // Reload reader to see new changes
-        self.reader
-            .reload()
-            .with_tantivy_context()?;
+        self.reader.reload().with_tantivy_context()?;
 
         debug!("Committed index changes");
         Ok(())
@@ -428,9 +404,7 @@ impl AdvancedMemoSearchEngine {
         let query_parser =
             QueryParser::for_index(&self.index, vec![self.title_field, self.content_field]);
 
-        let parsed = query_parser
-            .parse_query(query)
-            .with_tantivy_context()?;
+        let parsed = query_parser.parse_query(query).with_tantivy_context()?;
 
         Ok(parsed)
     }
@@ -512,9 +486,7 @@ impl AdvancedMemoSearchEngine {
         let query_parser =
             QueryParser::for_index(&self.index, vec![self.title_field, self.content_field]);
 
-        let parsed = query_parser
-            .parse_query(term)
-            .with_tantivy_context()?;
+        let parsed = query_parser.parse_query(term).with_tantivy_context()?;
 
         Ok(parsed)
     }

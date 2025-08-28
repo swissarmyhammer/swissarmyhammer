@@ -91,19 +91,23 @@ pub struct Cli {
 pub enum Commands {
     /// Run as MCP server (default when invoked via stdio)
     #[command(long_about = "
-Runs swissarmyhammer as an MCP server. This is the default mode when
+Run as MCP server. This is the default mode when
 invoked via stdio (e.g., by Claude Code). The server will:
 
 - Load all prompts from builtin, user, and local directories
-- Watch for file changes and reload prompts automatically
+- Watch for file changes and reload prompts automatically  
 - Expose prompts via the MCP protocol
 - Support template substitution with {{variables}}
 
 Example:
-  swissarmyhammer serve
+  swissarmyhammer serve        # Stdio mode (default)
+  swissarmyhammer serve http   # HTTP mode
   # Or configure in Claude Code's MCP settings
 ")]
-    Serve,
+    Serve {
+        #[command(subcommand)]
+        subcommand: Option<ServeSubcommand>,
+    },
     /// Diagnose configuration and setup issues
     #[command(long_about = commands::doctor::DESCRIPTION)]
     Doctor {},
@@ -183,6 +187,33 @@ the specification or requirements to be planned.")]
     /// Execute the implement workflow for autonomous issue resolution
     #[command(long_about = commands::implement::DESCRIPTION)]
     Implement,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServeSubcommand {
+    /// Start HTTP MCP server
+    #[command(long_about = "
+Start HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+The server exposes MCP tools through HTTP endpoints and provides:
+
+- RESTful MCP protocol implementation
+- Health check endpoint at /health
+- Support for random port allocation (use port 0)
+- Graceful shutdown with Ctrl+C
+
+Example:
+  swissarmyhammer serve http --port 8080 --host 127.0.0.1
+  swissarmyhammer serve http --port 0  # Random port
+")]
+    Http {
+        /// Port to bind to (use 0 for random port)
+        #[arg(long, short = 'p', default_value = "8000", value_parser = clap::value_parser!(u16))]
+        port: u16,
+
+        /// Host to bind to
+        #[arg(long, short = 'H', default_value = "127.0.0.1")]
+        host: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -597,7 +628,10 @@ mod tests {
         assert!(result.is_ok());
 
         let cli = result.unwrap();
-        assert!(matches!(cli.command, Some(Commands::Serve)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Serve { subcommand: _ })
+        ));
     }
 
     #[test]
@@ -636,7 +670,10 @@ mod tests {
 
         let cli = result.unwrap();
         assert!(cli.verbose);
-        assert!(matches!(cli.command, Some(Commands::Serve)));
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Serve { subcommand: _ })
+        ));
     }
 
     #[test]

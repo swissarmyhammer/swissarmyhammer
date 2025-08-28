@@ -97,6 +97,9 @@ syntect = { workspace = true }
 # HTTP client for API calls
 reqwest = { workspace = true }
 
+# LlamaAgent integration for local AI execution
+# llama_agent = { version = "0.1.0", optional = true }  # Commented out until llama_agent crate exists
+
 # Progress bars and user interface
 indicatif = { workspace = true }
 
@@ -116,6 +119,7 @@ semantic-search = [
     "fastembed",
     "duckdb",
 ]
+# llama-agent = ["llama_agent"]  # Commented out until llama_agent crate exists
 fast-tests = []
 test-utils = []
 
@@ -126,6 +130,7 @@ criterion = { workspace = true }
 
 futures = "0.3"
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config", features = ["test-utils"] }
 
 [lib]
 name = "swissarmyhammer"
@@ -146,3 +151,8 @@ path = "../benches/issue_performance.rs"
 name = "memo_benchmarks"
 harness = false
 path = "../benches/memo_benchmarks.rs"
+
+[[bench]]
+name = "executor_performance"
+harness = false
+path = "../benches/executor_performance.rs"

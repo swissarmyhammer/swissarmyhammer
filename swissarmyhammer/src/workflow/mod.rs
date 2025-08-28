@@ -4,15 +4,18 @@
 //! based on Mermaid state diagrams.
 
 mod action_parser;
-mod actions;
+pub mod actions;
 #[cfg(test)]
 mod actions_tests;
+mod agents;
 mod cache;
 mod definition;
 mod error_utils;
 #[cfg(test)]
 mod examples_tests;
 mod executor;
+#[cfg(test)]
+mod executor_utils;
 mod graph;
 #[cfg(test)]
 mod graph_tests;
@@ -22,7 +25,7 @@ mod parser;
 mod run;
 mod state;
 mod storage;
-mod template_context;
+pub mod template_context;
 #[cfg(test)]
 mod template_context_integration_test;
 #[cfg(test)]
@@ -39,9 +42,11 @@ pub use actions::{
     is_valid_env_var_name, parse_action_from_description,
     parse_action_from_description_with_context, validate_command,
     validate_environment_variables_security, validate_working_directory_security, Action,
-    ActionError, ActionResult, LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction,
-    SubWorkflowAction, WaitAction,
+    ActionError, ActionResult, AgentExecutionContext, AgentExecutor, AgentExecutorFactory,
+    LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction, SubWorkflowAction,
+    WaitAction,
 };
+pub use agents::LlamaAgentExecutor;
 pub use cache::{
     CacheStats, CelProgramCache, TransitionCache, TransitionPath, WorkflowCache,
     WorkflowCacheManager,
@@ -77,3 +82,9 @@ pub use visualization::{
     ColorScheme, ExecutionStep, ExecutionTrace, ExecutionVisualizer, VisualizationFormat,
     VisualizationOptions,
 };
+
+/// Convenience function to parse a workflow from a string
+pub fn parse_workflow_from_string(input: &str) -> ParseResult<Workflow> {
+    let workflow_name = WorkflowName::from("test_workflow");
+    MermaidParser::parse(input, workflow_name)
+}

@@ -37,7 +37,7 @@ pub fn create_test_context() -> WorkflowTemplateContext {
         "user_name".to_string(),
         Value::String("testuser".to_string()),
     );
-    WorkflowTemplateContext::with_vars(vars).unwrap()
+    WorkflowTemplateContext::with_vars_safe(vars)
 }
 
 /// Helper function to create a test context with special characters
@@ -49,7 +49,7 @@ pub fn create_context_with_special_chars() -> WorkflowTemplateContext {
     );
     vars.insert("empty_string".to_string(), Value::String("".to_string()));
     vars.insert("null_value".to_string(), Value::Null);
-    WorkflowTemplateContext::with_vars(vars).unwrap()
+    WorkflowTemplateContext::with_vars_safe(vars)
 }
 
 // Include all test modules

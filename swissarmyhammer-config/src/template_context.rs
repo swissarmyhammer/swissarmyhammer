@@ -1,3 +1,4 @@
+use crate::agent::AgentConfig;
 use crate::discovery::ConfigurationDiscovery;
 use crate::env_vars::EnvVarSubstitution;
 use crate::error::{ConfigurationError, ConfigurationResult};
@@ -503,6 +504,135 @@ impl TemplateContext {
 
         // Update the context with merged template variables
         context.insert("_template_vars".to_string(), Value::Object(merged_vars));
+    }
+
+    /// Get agent configuration with hierarchical fallback
+    ///
+    /// Priority: workflow-specific → repo default → system default (Claude)
+    ///
+    /// # Arguments
+    /// * `workflow_name` - Optional workflow name to look for specific configuration
+    ///
+    /// # Returns
+    /// * `AgentConfig` - The agent configuration with proper fallback
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_config::{TemplateContext, AgentConfig, AgentExecutorType};
+    /// use serde_json::json;
+    ///
+    /// let mut context = TemplateContext::new();
+    ///
+    /// // System default (Claude Code)
+    /// let config = context.get_agent_config(None);
+    /// assert_eq!(config.executor_type(), AgentExecutorType::ClaudeCode);
+    /// ```
+    pub fn get_agent_config(&self, workflow_name: Option<&str>) -> AgentConfig {
+        // 1. Check workflow-specific config
+        if let Some(workflow) = workflow_name {
+            let workflow_key = format!("agent.configs.{}", workflow);
+
+            // Try flat key access first (for programmatically set configs)
+            if let Some(config) = self.variables.get(&workflow_key) {
+                if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
+                    return agent_config;
+                }
+            }
+
+            // Try nested access (for file-loaded configs)
+            if let Some(config) = self.get(&workflow_key) {
+                if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
+                    return agent_config;
+                }
+            }
+        }
+
+        // 2. Check repo default config
+        // Try flat key access first (for programmatically set configs)
+        if let Some(config) = self.variables.get("agent.default") {
+            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
+                return agent_config;
+            }
+        }
+
+        // Try nested access (for file-loaded configs)
+        if let Some(config) = self.get("agent.default") {
+            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
+                return agent_config;
+            }
+        }
+
+        // 3. Fall back to system default (Claude Code)
+        AgentConfig::default()
+    }
+
+    /// Get all available agent configurations
+    ///
+    /// Returns a map of all available agent configurations, including the default
+    /// configuration (if set) and all named workflow-specific configurations.
+    /// Supports both nested access (file-loaded configs) and flat key access
+    /// (programmatically set configs).
+    ///
+    /// # Returns
+    /// * `HashMap<String, AgentConfig>` - Map of configuration names to agent configs
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_config::{TemplateContext, AgentConfig, LlamaAgentConfig};
+    /// use serde_json::json;
+    ///
+    /// let mut context = TemplateContext::new();
+    /// context.set("agent.default".to_string(),
+    ///     serde_json::to_value(AgentConfig::llama_agent(LlamaAgentConfig::default())).unwrap());
+    ///
+    /// let configs = context.get_all_agent_configs();
+    /// assert!(configs.contains_key("default"));
+    /// ```
+    pub fn get_all_agent_configs(&self) -> HashMap<String, AgentConfig> {
+        let mut configs = HashMap::new();
+
+        // Add default config if available
+        // Try flat key access first (for programmatically set configs)
+        if let Some(default_config) = self.variables.get("agent.default") {
+            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(default_config.clone())
+            {
+                configs.insert("default".to_string(), agent_config);
+            }
+        }
+        // Try nested access only if flat key didn't work (for file-loaded configs)
+        else if let Some(default_config) = self.get("agent.default") {
+            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(default_config.clone())
+            {
+                configs.insert("default".to_string(), agent_config);
+            }
+        }
+
+        // Look for flat keys that start with "agent.configs." first (programmatically set)
+        for (key, value) in &self.variables {
+            if let Some(workflow_name) = key.strip_prefix("agent.configs.") {
+                if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(value.clone()) {
+                    configs.insert(workflow_name.to_string(), agent_config);
+                }
+            }
+        }
+
+        // Add named configs - check if agent.configs exists as a nested object (file-loaded)
+        // Only add if not already added from flat keys
+        if let Some(serde_json::Value::Object(agent_configs)) = self.get("agent.configs") {
+            for (workflow_name, config_value) in agent_configs {
+                if !configs.contains_key(workflow_name) {
+                    if let Ok(agent_config) =
+                        serde_json::from_value::<AgentConfig>(config_value.clone())
+                    {
+                        configs.insert(workflow_name.clone(), agent_config);
+                    }
+                }
+            }
+        }
+
+        configs
     }
 }
 

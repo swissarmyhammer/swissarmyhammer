@@ -41,3 +41,7 @@ liquid = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = "3.1"
+
+[features]
+default = []
+test-utils = []

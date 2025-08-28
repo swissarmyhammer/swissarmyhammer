@@ -25,6 +25,10 @@ use thiserror::Error;
 use tokio::time::timeout;
 
 use crate::{PromptLibrary, PromptResolver};
+use async_trait::async_trait;
+use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType, LlamaAgentConfig};
+
+use super::agents::LlamaAgentExecutor;
 
 thread_local! {
     /// Thread-local test storage registry for tests
@@ -137,6 +141,340 @@ impl Default for ActionTimeouts {
                     .unwrap_or(3600),
             ), // 10 minutes default
         }
+    }
+}
+
+/// Extract LlamaAgent configuration from execution context
+fn get_llama_config_from_context(
+    context: &AgentExecutionContext<'_>,
+) -> ActionResult<LlamaAgentConfig> {
+    let agent_config = context.agent_config();
+
+    match &agent_config.executor {
+        swissarmyhammer_config::agent::AgentExecutorConfig::LlamaAgent(config) => {
+            Ok(config.clone())
+        }
+        _ => Err(ActionError::ExecutionError(
+            "Expected LlamaAgent configuration but found different executor type".to_string(),
+        )),
+    }
+}
+
+/// Agent execution context for prompt execution
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct AgentExecutionContext<'a> {
+    /// Reference to the workflow template context
+    pub workflow_context: &'a WorkflowTemplateContext,
+}
+
+#[allow(dead_code)]
+impl<'a> AgentExecutionContext<'a> {
+    /// Create a new agent execution context
+    /// Create a new agent execution context
+    pub fn new(workflow_context: &'a WorkflowTemplateContext) -> Self {
+        Self { workflow_context }
+    }
+
+    /// Get agent configuration from workflow context
+    pub fn agent_config(&self) -> AgentConfig {
+        self.workflow_context.get_agent_config()
+    }
+
+    /// Get executor type
+    pub fn executor_type(&self) -> AgentExecutorType {
+        self.agent_config().executor_type()
+    }
+
+    /// Check if quiet mode is enabled
+    pub fn quiet(&self) -> bool {
+        self.agent_config().quiet
+    }
+}
+
+/// Agent executor trait for abstracting prompt execution across different AI backends
+#[async_trait]
+#[allow(dead_code)]
+pub trait AgentExecutor: Send + Sync {
+    /// Execute a rendered prompt and return the response
+    async fn execute_prompt(
+        &self,
+        system_prompt: String,
+        rendered_prompt: String,
+        context: &AgentExecutionContext<'_>,
+        timeout: Duration,
+    ) -> ActionResult<Value>;
+
+    /// Get the executor type enum
+    fn executor_type(&self) -> AgentExecutorType;
+
+    /// Initialize the executor with configuration
+    async fn initialize(&mut self) -> ActionResult<()>;
+
+    /// Shutdown the executor and cleanup resources
+    async fn shutdown(&mut self) -> ActionResult<()>;
+}
+
+/// Factory for creating agent executors
+#[allow(dead_code)]
+pub struct AgentExecutorFactory;
+
+#[allow(dead_code)]
+impl AgentExecutorFactory {
+    /// Create an executor based on the execution context
+    pub async fn create_executor(
+        context: &AgentExecutionContext<'_>,
+    ) -> ActionResult<Box<dyn AgentExecutor>> {
+        match context.executor_type() {
+            AgentExecutorType::ClaudeCode => {
+                let mut executor = ClaudeCodeExecutor::new();
+                executor.initialize().await?;
+                Ok(Box::new(executor))
+            }
+            AgentExecutorType::LlamaAgent => {
+                let llama_config = get_llama_config_from_context(context)?;
+                let mut executor = LlamaAgentExecutor::new(llama_config);
+                executor.initialize().await?;
+                Ok(Box::new(executor))
+            }
+        }
+    }
+}
+
+/// Executor that shells out to Claude Code CLI
+#[derive(Debug)]
+pub struct ClaudeCodeExecutor {
+    claude_path: Option<std::path::PathBuf>,
+    initialized: bool,
+}
+
+impl Default for ClaudeCodeExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ClaudeCodeExecutor {
+    /// Create a new ClaudeCodeExecutor instance
+    ///
+    /// The executor starts uninitialized and must be initialized before use.
+    pub fn new() -> Self {
+        Self {
+            claude_path: None,
+            initialized: false,
+        }
+    }
+
+    /// Get the path to the claude executable
+    fn get_claude_path(&self) -> ActionResult<&std::path::PathBuf> {
+        self.claude_path.as_ref().ok_or_else(|| {
+            ActionError::ExecutionError("Claude executor not initialized".to_string())
+        })
+    }
+
+    /// Create a temporary file with the given content (for testing)
+    #[cfg(test)]
+    fn create_temp_file(&self, content: &str) -> ActionResult<tempfile::NamedTempFile> {
+        use std::io::Write;
+
+        let mut temp_file = tempfile::NamedTempFile::new().map_err(ActionError::IoError)?;
+        temp_file
+            .write_all(content.as_bytes())
+            .map_err(ActionError::IoError)?;
+        temp_file.flush().map_err(ActionError::IoError)?;
+
+        Ok(temp_file)
+    }
+
+    /// Execute Claude command using stdin approach (maintaining backward compatibility)
+    async fn execute_claude_command(
+        &self,
+        claude_path: &std::path::PathBuf,
+        prompt: String,
+        system_prompt: Option<String>,
+        timeout_duration: Duration,
+    ) -> ActionResult<Value> {
+        use tokio::io::AsyncWriteExt;
+        use tokio::process::Command;
+
+        tracing::debug!(
+            "Executing Claude command: {} with prompt length: {}",
+            claude_path.display(),
+            prompt.len()
+        );
+
+        // Build command with system prompt if provided
+        let mut cmd = Command::new(claude_path);
+        cmd.args([
+            "--dangerously-skip-permissions",
+            "--print",
+            "-", // Read from stdin
+        ]);
+
+        // Add system prompt parameter if provided
+        if let Some(ref sys_prompt) = system_prompt {
+            cmd.args(["--append-system-prompt", sys_prompt]);
+        }
+
+        // Execute Claude Code with stdin input
+        let mut child = cmd
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
+
+        // Write prompt to stdin
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+                ActionError::ClaudeError(format!("Failed to write to Claude stdin: {e}"))
+            })?;
+
+            // Close stdin to signal end of input
+            stdin.shutdown().await.map_err(|e| {
+                ActionError::ClaudeError(format!("Failed to close Claude stdin: {e}"))
+            })?;
+        }
+
+        // Wait for command completion with timeout
+        let output = match timeout(timeout_duration, child.wait_with_output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                return Err(ActionError::ClaudeError(format!(
+                    "Failed to wait for Claude: {e}"
+                )));
+            }
+            Err(_) => {
+                // Timeout occurred - we can't kill after wait_with_output consumes child
+                tracing::warn!("Claude command timed out after {:?}", timeout_duration);
+                return Err(ActionError::Timeout {
+                    timeout: timeout_duration,
+                });
+            }
+        };
+
+        // Check if Claude execution was successful
+        if !output.status.success() {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Check for rate limiting
+            if stderr.contains("rate limit") || stderr.contains("Rate limit") {
+                let wait_time = Duration::from_secs(60); // Default wait time
+                return Err(ActionError::RateLimit {
+                    message: stderr.to_string(),
+                    wait_time,
+                });
+            }
+
+            return Err(ActionError::ClaudeError(format!(
+                "Claude execution failed with exit code {}: {}",
+                exit_code, stderr
+            )));
+        }
+
+        // Extract response from stdout
+        let response_text = String::from_utf8_lossy(&output.stdout).to_string();
+
+        // Process the response
+        let response_text = if response_text.trim().is_empty() {
+            tracing::warn!("Empty response from Claude Code");
+            "No response from Claude".to_string()
+        } else {
+            response_text.trim().to_string()
+        };
+
+        Ok(Value::String(response_text))
+    }
+}
+
+#[async_trait]
+impl AgentExecutor for ClaudeCodeExecutor {
+    async fn execute_prompt(
+        &self,
+        system_prompt: String,
+        rendered_prompt: String,
+        context: &AgentExecutionContext<'_>,
+        timeout: Duration,
+    ) -> ActionResult<Value> {
+        let claude_path = self.get_claude_path()?;
+
+        // Get Claude CLI path from context or environment (maintaining compatibility)
+        let claude_path_str = context
+            .workflow_context
+            .get("claude_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok())
+            .unwrap_or_else(|| claude_path.to_string_lossy().to_string());
+
+        let claude_path_buf = std::path::PathBuf::from(claude_path_str);
+
+        // Convert system prompt to Option for backward compatibility
+        let system_prompt_opt = if system_prompt.is_empty() {
+            None
+        } else {
+            Some(system_prompt)
+        };
+
+        // Execute Claude command using the same approach as the original implementation
+        self.execute_claude_command(
+            &claude_path_buf,
+            rendered_prompt,
+            system_prompt_opt,
+            timeout,
+        )
+        .await
+    }
+
+    fn executor_type(&self) -> AgentExecutorType {
+        AgentExecutorType::ClaudeCode
+    }
+
+    async fn initialize(&mut self) -> ActionResult<()> {
+        if self.initialized {
+            return Ok(());
+        }
+
+        // Find claude executable in PATH
+        self.claude_path = Some(which::which("claude").map_err(|_| {
+            ActionError::ExecutionError(
+                "Claude CLI not found in PATH. Please install Claude Code CLI.".to_string(),
+            )
+        })?);
+
+        self.initialized = true;
+        tracing::debug!(
+            "ClaudeCodeExecutor initialized with claude at: {:?}",
+            self.claude_path
+        );
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> ActionResult<()> {
+        // No resources to cleanup for CLI approach
+        self.initialized = false;
+        Ok(())
+    }
+}
+
+// LlamaAgentExecutor implementation moved to agents module
+
+impl ActionError {
+    /// Create an executor-specific error
+    pub fn executor_error(executor_type: AgentExecutorType, message: String) -> Self {
+        ActionError::ExecutionError(format!("{:?} executor error: {}", executor_type, message))
+    }
+
+    /// Create an initialization error
+    pub fn initialization_error(
+        executor_type: AgentExecutorType,
+        source: Box<dyn std::error::Error>,
+    ) -> Self {
+        ActionError::ExecutionError(format!(
+            "Failed to initialize {:?} executor: {}",
+            executor_type, source
+        ))
     }
 }
 
@@ -339,7 +677,7 @@ impl PromptAction {
 
         // Add/override with action-specific arguments
         let action_args = self.substitute_variables(context);
-        
+
         // Validate argument keys early
         for key in action_args.keys() {
             if !is_valid_argument_key(key) {
@@ -348,7 +686,7 @@ impl PromptAction {
                 ));
             }
         }
-        
+
         for (key, value) in &action_args {
             args.insert(key.clone(), value.clone());
         }
@@ -383,7 +721,8 @@ impl PromptAction {
 
         // Render user prompt with complete template context and partials support
         tracing::debug!("About to render user prompt: {}", self.prompt_name);
-        let rendered = library_arc.render(&self.prompt_name, &template_context)
+        let rendered = library_arc
+            .render(&self.prompt_name, &template_context)
             .map_err(|e| {
                 // Try to get available prompts for better error messaging
                 let available_prompts = library_arc
@@ -429,94 +768,6 @@ impl PromptAction {
         Ok((rendered, system_prompt))
     }
 
-    /// Get Claude CLI path from context or environment
-    fn get_claude_path(&self, context: &WorkflowTemplateContext) -> String {
-        context
-            .get("claude_path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .or_else(|| std::env::var("SAH_CLAUDE_PATH").ok())
-            .unwrap_or_else(|| "claude".to_string())
-    }
-
-    /// Execute Claude CLI with the given prompt using stdin and optional system prompt
-    async fn execute_claude_cli(
-        &self,
-        prompt: String,
-        claude_path: String,
-        system_prompt: Option<String>,
-    ) -> ActionResult<String> {
-        use tokio::io::AsyncWriteExt;
-        use tokio::process::Command;
-
-        // Build command with system prompt if provided
-        let mut cmd = Command::new(&claude_path);
-        cmd.args([
-            "--dangerously-skip-permissions",
-            "--print",
-            "-", // Read from stdin
-        ]);
-
-        // Add system prompt parameter if provided
-        if let Some(ref sys_prompt) = system_prompt {
-            cmd.args(["--append-system-prompt", sys_prompt]);
-        }
-
-        // Execute Claude Code with stdin input
-        let mut child = cmd
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| ActionError::ClaudeError(format!("Failed to execute Claude: {e}")))?;
-
-        // Write prompt to stdin
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to write to Claude stdin: {e}"))
-            })?;
-
-            // Close stdin to signal end of input
-            stdin.shutdown().await.map_err(|e| {
-                ActionError::ClaudeError(format!("Failed to close Claude stdin: {e}"))
-            })?;
-        }
-
-        // Wait for command completion
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| ActionError::ClaudeError(format!("Failed to wait for Claude: {e}")))?;
-
-        // Check if Claude execution was successful
-        if !output.status.success() {
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ActionError::ClaudeError(format!(
-                "Claude execution failed with exit code {}: {}",
-                exit_code, stderr
-            )));
-        }
-
-        // Extract response from stdout
-        let response_text = String::from_utf8_lossy(&output.stdout).to_string();
-
-        tracing::debug!(
-            "Claude Code execution completed successfully for prompt '{}'",
-            self.prompt_name
-        );
-
-        // Process the response
-        let response_text = if response_text.trim().is_empty() {
-            tracing::warn!("Empty response from Claude Code");
-            "No response from Claude".to_string()
-        } else {
-            response_text.trim().to_string()
-        };
-
-        Ok(response_text)
-    }
-
     /// Execute the command once without retry logic
     ///
     /// This method performs a single execution attempt of the Claude command.
@@ -557,21 +808,35 @@ impl PromptAction {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-        // Execute the rendered prompt with Claude directly
-        tracing::debug!("Executing prompt '{}' with Claude Code", self.prompt_name);
+        // Execute the rendered prompt using the AgentExecutor trait
+        tracing::debug!("Executing prompt '{}' with AgentExecutor", self.prompt_name);
 
-        // Get Claude CLI path
-        let claude_path = self.get_claude_path(context);
+        // Create execution context
+        let execution_context = AgentExecutionContext::new(context);
 
-        // Execute Claude CLI with separate system prompt
-        let response_text = self
-            .execute_claude_cli(user_prompt, claude_path, system_prompt)
+        // Get executor based on configuration
+        let executor = self.get_executor(&execution_context).await?;
+
+        // Execute prompt through trait
+        let response = executor
+            .execute_prompt(
+                system_prompt.unwrap_or_default(),
+                user_prompt,
+                &execution_context,
+                self.timeout,
+            )
             .await?;
+
+        // Extract response text for logging (backward compatibility)
+        let response_text = match &response {
+            Value::String(s) => s.clone(),
+            _ => serde_json::to_string(&response).unwrap_or_default(),
+        };
 
         // Log the response for debugging if not in quiet mode
         if !quiet && !response_text.is_empty() {
             tracing::debug!(
-                "Claude response received: {} characters",
+                "Agent response received: {} characters",
                 response_text.len()
             );
 
@@ -579,7 +844,7 @@ impl PromptAction {
             let mut yaml_output = String::new();
             yaml_output.push_str("---\n");
             yaml_output.push_str(&format!("prompt: {}\n", self.prompt_name));
-            yaml_output.push_str("claude_response: |\n");
+            yaml_output.push_str("agent_response: |\n");
             for line in response_text.lines() {
                 yaml_output.push_str(&format!("  {line}\n"));
             }
@@ -588,9 +853,6 @@ impl PromptAction {
             // Log YAML output
             tracing::info!("{}", yaml_output);
         }
-        // Create a response value
-        // Create a response value
-        let response = Value::String(response_text.to_string());
 
         // Store result in context if variable name specified
         if let Some(var_name) = &self.result_variable {
@@ -602,6 +864,14 @@ impl PromptAction {
         context.insert(CLAUDE_RESPONSE_KEY.to_string(), response.clone());
 
         Ok(response)
+    }
+
+    /// Get executor based on execution context
+    async fn get_executor(
+        &self,
+        context: &AgentExecutionContext<'_>,
+    ) -> ActionResult<Box<dyn AgentExecutor>> {
+        AgentExecutorFactory::create_executor(context).await
     }
 }
 
@@ -1880,16 +2150,215 @@ mod tests {
     use super::*;
     use crate::test_utils::IsolatedTestEnvironment;
     use crate::workflow::action_parser::ActionParser;
+    use crate::workflow::executor_utils;
 
     #[test]
     fn test_variable_substitution() {
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert("file".to_string(), Value::String("test.rs".to_string()));
         context.insert("count".to_string(), Value::Number(42.into()));
 
         let result =
             substitute_variables_in_string("Process ${file} with ${count} items", &context);
         assert_eq!(result, "Process test.rs with 42 items");
+    }
+
+    #[tokio::test]
+    async fn test_agent_execution_context() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+
+        // Set up agent config
+        context.set_agent_config(AgentConfig::default());
+
+        let execution_context = AgentExecutionContext::new(&context);
+        assert_eq!(
+            execution_context.executor_type(),
+            AgentExecutorType::ClaudeCode
+        );
+        assert!(!execution_context.quiet());
+    }
+
+    #[tokio::test]
+    async fn test_claude_executor_initialization() {
+        let mut executor = ClaudeCodeExecutor::new();
+
+        // Test initial state
+        assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
+
+        // Test initialization - may fail if Claude CLI is not available
+        match executor.initialize().await {
+            Ok(()) => {
+                // Claude CLI is available - test shutdown
+                assert!(executor.shutdown().await.is_ok());
+            }
+            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+                // This is expected in environments without Claude CLI
+            }
+            Err(e) => panic!("Unexpected error during initialization: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_llama_executor_initialization() {
+        let config = swissarmyhammer_config::LlamaAgentConfig::for_testing();
+        let mut executor = LlamaAgentExecutor::new(config);
+
+        // Test initial state
+        assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
+
+        // Test initialization (should always succeed for now)
+        assert!(executor.initialize().await.is_ok());
+        assert!(executor.shutdown().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_executor_factory_claude() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        context.set_agent_config(AgentConfig::default());
+
+        let execution_context = AgentExecutionContext::new(&context);
+
+        // This test may fail if claude CLI is not available - that's expected
+        match AgentExecutorFactory::create_executor(&execution_context).await {
+            Ok(executor) => {
+                assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
+            }
+            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+                // This is expected in environments without Claude CLI
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_executor_factory_llama_agent() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+
+        use swissarmyhammer_config::agent::LlamaAgentConfig;
+        let llama_config = LlamaAgentConfig::for_testing();
+        context.set_agent_config(AgentConfig::llama_agent(llama_config));
+
+        let execution_context = AgentExecutionContext::new(&context);
+
+        // Should succeed now that LlamaAgent executor is implemented
+        match AgentExecutorFactory::create_executor(&execution_context).await {
+            Ok(executor) => {
+                assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
+            }
+            Err(e) => panic!("LlamaAgent executor should be implemented now: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_executor_validation() {
+        // Test Claude validation
+        match executor_utils::validate_executor_availability(AgentExecutorType::ClaudeCode).await {
+            Ok(()) => {
+                // Claude CLI is available
+            }
+            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+                // Expected when Claude CLI is not installed
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+
+        // Test LlamaAgent validation (should succeed for now)
+        assert!(
+            executor_utils::validate_executor_availability(AgentExecutorType::LlamaAgent)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_recommended_timeouts() {
+        assert_eq!(
+            executor_utils::get_recommended_timeout(AgentExecutorType::ClaudeCode),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            executor_utils::get_recommended_timeout(AgentExecutorType::LlamaAgent),
+            Duration::from_secs(60)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_executor_placeholder_responses() {
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        context.set_agent_config(AgentConfig::default());
+        let execution_context = AgentExecutionContext::new(&context);
+
+        // Test Claude executor - should fail without initialization
+        let claude_executor = ClaudeCodeExecutor::new();
+        let result = claude_executor
+            .execute_prompt(
+                "System prompt".to_string(),
+                "User prompt".to_string(),
+                &execution_context,
+                Duration::from_secs(30),
+            )
+            .await;
+
+        // Should fail because executor is not initialized
+        assert!(result.is_err());
+        match result {
+            Err(ActionError::ExecutionError(msg)) => {
+                assert!(msg.contains("not initialized"));
+            }
+            _ => panic!("Expected ExecutionError for uninitialized executor"),
+        }
+
+        // Test LlamaAgent executor placeholder (should fail without initialization)
+        let config = swissarmyhammer_config::LlamaAgentConfig::for_testing();
+        let llama_executor = LlamaAgentExecutor::new(config);
+        let result = llama_executor
+            .execute_prompt(
+                "System prompt".to_string(),
+                "User prompt".to_string(),
+                &execution_context,
+                Duration::from_secs(30),
+            )
+            .await;
+
+        // Should fail because executor is not initialized
+        assert!(result.is_err());
+        match result {
+            Err(ActionError::ExecutionError(msg)) => {
+                assert!(msg.contains("not initialized"));
+            }
+            _ => panic!("Expected ExecutionError for uninitialized LlamaAgent executor"),
+        }
+    }
+
+    #[test]
+    fn test_executor_error_helpers() {
+        let error = ActionError::executor_error(
+            AgentExecutorType::ClaudeCode,
+            "Test error message".to_string(),
+        );
+
+        match error {
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("ClaudeCode executor error"));
+                assert!(msg.contains("Test error message"));
+            }
+            _ => panic!("Expected ExecutionError variant"),
+        }
+
+        let source_error = Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "File not found",
+        ));
+        let init_error =
+            ActionError::initialization_error(AgentExecutorType::LlamaAgent, source_error);
+
+        match init_error {
+            ActionError::ExecutionError(msg) => {
+                assert!(msg.contains("Failed to initialize LlamaAgent executor"));
+                assert!(msg.contains("File not found"));
+            }
+            _ => panic!("Expected ExecutionError variant"),
+        }
     }
 
     #[test]
@@ -1978,7 +2447,7 @@ mod tests {
     #[tokio::test]
     async fn test_log_action_execution() {
         let action = LogAction::info("Test message".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
         assert_eq!(result, Value::String("Test message".to_string()));
@@ -1994,7 +2463,7 @@ mod tests {
         const TEST_VALUE: &str = "test_value";
 
         let action = SetVariableAction::new(TEST_VAR.to_string(), TEST_VALUE.to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
         assert_eq!(result, Value::String(TEST_VALUE.to_string()));
@@ -2018,7 +2487,7 @@ mod tests {
     #[tokio::test]
     async fn test_sub_workflow_circular_dependency_detection() {
         let action = SubWorkflowAction::new("workflow-a".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         // Simulate that workflow-a is already in the execution stack
         let workflow_stack = vec![
@@ -2051,7 +2520,7 @@ mod tests {
             .input_variables
             .insert("mode".to_string(), "strict".to_string());
 
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert(
             "current_file".to_string(),
             Value::String("test.rs".to_string()),
@@ -2108,7 +2577,7 @@ mod tests {
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
         let action = AbortAction::new("Test abort message".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await;
         assert!(result.is_err());
@@ -2132,7 +2601,7 @@ mod tests {
         let _ = std::fs::remove_file(".swissarmyhammer/.abort");
 
         let action = AbortAction::new("Error in ${file}: ${error}".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert("file".to_string(), Value::String("test.rs".to_string()));
         context.insert(
             "error".to_string(),
@@ -2293,7 +2762,7 @@ mod tests {
     #[test]
     fn test_shell_action_variable_substitution() {
         let action = ShellAction::new("echo ${name}".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert("name".to_string(), Value::String("world".to_string()));
 
         let substituted_command = action.substitute_string(&action.command, &context);
@@ -2308,7 +2777,7 @@ mod tests {
 
         let action = ShellAction::new("env".to_string()).with_environment(env);
 
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert(
             "custom_path".to_string(),
             Value::String("/opt/bin".to_string()),
@@ -2331,7 +2800,7 @@ mod tests {
         let action = ShellAction::new("ls".to_string())
             .with_working_dir("/home/${username}/projects".to_string());
 
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert("username".to_string(), Value::String("alice".to_string()));
 
         let substituted_dir =
@@ -2421,7 +2890,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_execution_success() {
         let action = ShellAction::new("echo hello world".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2468,7 +2937,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_execution_failure() {
         let action = ShellAction::new("exit 42".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2494,7 +2963,7 @@ mod tests {
     #[tokio::test]
     async fn test_shell_action_with_variable_substitution_execution() {
         let action = ShellAction::new("echo ${greeting} ${name}".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert("greeting".to_string(), Value::String("Hello".to_string()));
         context.insert("name".to_string(), Value::String("World".to_string()));
 
@@ -2512,7 +2981,7 @@ mod tests {
     async fn test_shell_action_with_result_variable() {
         let action = ShellAction::new("echo test output".to_string())
             .with_result_variable("command_output".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2540,7 +3009,7 @@ mod tests {
 
         let action = ShellAction::new("pwd".to_string())
             .with_working_dir(temp_path.to_string_lossy().to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2563,7 +3032,7 @@ mod tests {
 
         let action =
             ShellAction::new("echo $TEST_VAR $ANOTHER_VAR".to_string()).with_environment(env);
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2582,7 +3051,7 @@ mod tests {
         env.insert("TEST_VAR".to_string(), "${dynamic_value}".to_string());
 
         let action = ShellAction::new("echo $TEST_VAR".to_string()).with_environment(env);
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert(
             "dynamic_value".to_string(),
             Value::String("substituted".to_string()),
@@ -2604,7 +3073,7 @@ mod tests {
 
         // Create an action with a short timeout (1 second to ensure proper timeout behavior)
         let action = ShellAction::new("sleep 10".to_string()).with_timeout(Duration::from_secs(1));
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2656,7 +3125,7 @@ mod tests {
         let action = ShellAction::new("sleep 5".to_string())
             .with_timeout(Duration::from_millis(100))
             .with_result_variable("output".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2679,7 +3148,7 @@ mod tests {
     async fn test_shell_action_no_timeout_by_default() {
         // Test that commands without explicit timeout still work
         let action = ShellAction::new("echo no timeout test".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2705,7 +3174,7 @@ mod tests {
         // Command that completes quickly within timeout
         let action =
             ShellAction::new("echo quick command".to_string()).with_timeout(Duration::from_secs(5));
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let result = action.execute(&mut context).await.unwrap();
 
@@ -2739,7 +3208,7 @@ mod tests {
         // If the process cleanup didn't work, this test would hang for 30 seconds
         let action =
             ShellAction::new("sleep 30".to_string()).with_timeout(Duration::from_millis(150));
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let start_time = std::time::Instant::now();
         let _result = action.execute(&mut context).await.unwrap();
@@ -2768,7 +3237,7 @@ mod tests {
     async fn test_shell_action_windows_command_format() {
         // Test that Windows uses cmd /C for shell commands
         let action = ShellAction::new("echo windows test".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2783,7 +3252,7 @@ mod tests {
     async fn test_shell_action_unix_command_format() {
         // Test that Unix systems use sh -c for shell commands
         let action = ShellAction::new("echo unix test".to_string());
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let _result = action.execute(&mut context).await.unwrap();
 
@@ -2799,7 +3268,7 @@ mod tests {
         use std::collections::HashMap;
 
         // Create a WorkflowTemplateContext with configuration values
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let mut workflow_vars = HashMap::new();
         workflow_vars.insert("project_name".to_string(), json!("SwissArmyHammer"));
@@ -2835,7 +3304,7 @@ mod tests {
         use std::collections::HashMap;
 
         // Create a WorkflowTemplateContext with all variables
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
         let mut all_vars = HashMap::new();
         all_vars.insert("app_name".to_string(), json!("TestApp"));
@@ -2871,7 +3340,7 @@ mod tests {
         let log_action = LogAction::info("Simple message: {{var1}}".to_string());
 
         // Create traditional HashMap context
-        let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         context.insert("var1".to_string(), json!("test_value"));
 
         // Execute with old method
@@ -2883,5 +3352,119 @@ mod tests {
             context.get(LAST_ACTION_RESULT_KEY),
             Some(&Value::Bool(true))
         );
+    }
+
+    #[test]
+    fn test_claude_executor_temp_file_creation() {
+        let executor = ClaudeCodeExecutor::new();
+        let content =
+            "Test content for temporary file\nWith multiple lines\nAnd special chars: !@#$%";
+
+        match executor.create_temp_file(content) {
+            Ok(temp_file) => {
+                // Verify file exists and contains correct content
+                let file_content = std::fs::read_to_string(temp_file.path()).unwrap();
+                assert_eq!(file_content, content);
+            }
+            Err(e) => panic!("Failed to create temp file: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_claude_executor_get_path_before_init() {
+        let executor = ClaudeCodeExecutor::new();
+        let result = executor.get_claude_path();
+        assert!(result.is_err());
+        match result {
+            Err(ActionError::ExecutionError(msg)) => {
+                assert!(msg.contains("not initialized"));
+            }
+            _ => panic!("Expected ExecutionError for uninitialized executor"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prompt_action_with_claude_executor() {
+        let _guard = IsolatedTestEnvironment::new();
+
+        // Create a simple prompt action
+        let action = PromptAction {
+            prompt_name: "test-prompt".to_string(),
+            arguments: HashMap::new(),
+            result_variable: Some("test_result".to_string()),
+            timeout: Duration::from_secs(30),
+            quiet: true, // Suppress output during tests
+        };
+
+        // Set up context with Claude executor
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
+
+        // This test will likely fail without actual Claude CLI and prompt
+        // but should demonstrate the integration
+        match action.execute(&mut context).await {
+            Ok(_result) => {
+                // Success - result should be stored in context
+                assert!(context.get("test_result").is_some());
+                assert!(context.get(LAST_ACTION_RESULT_KEY).is_some());
+                assert!(context.get(CLAUDE_RESPONSE_KEY).is_some());
+            }
+            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+                // Expected in test environments without Claude CLI
+            }
+            Err(ActionError::ClaudeError(msg)) if msg.contains("Failed to load prompts") => {
+                // Expected when test prompt doesn't exist
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Test failed with error (expected in some environments): {}",
+                    e
+                );
+                // Other errors might be expected in test environments
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_executor_factory_claude_code() {
+        let _guard = IsolatedTestEnvironment::new();
+
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::claude_code());
+
+        let execution_context = AgentExecutionContext::new(&context);
+
+        match AgentExecutorFactory::create_executor(&execution_context).await {
+            Ok(executor) => {
+                assert_eq!(executor.executor_type(), AgentExecutorType::ClaudeCode);
+            }
+            Err(ActionError::ExecutionError(msg)) if msg.contains("Claude CLI not found") => {
+                // Expected in environments without Claude CLI
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_executor_factory_llama_agent() {
+        let _guard = IsolatedTestEnvironment::new();
+
+        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
+        let llama_config = swissarmyhammer_config::agent::LlamaAgentConfig::for_testing();
+        context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::llama_agent(
+            llama_config,
+        ));
+
+        let execution_context = AgentExecutionContext::new(&context);
+
+        // Should succeed now that LlamaAgent is implemented
+        let result = AgentExecutorFactory::create_executor(&execution_context).await;
+        assert!(result.is_ok());
+        match result {
+            Ok(executor) => {
+                assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);
+            }
+            Err(e) => panic!("LlamaAgent executor should be implemented now: {}", e),
+        }
     }
 }

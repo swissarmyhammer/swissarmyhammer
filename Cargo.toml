@@ -92,8 +92,17 @@ syntect = "5.2"
 once_cell = "1.19"
 html2text = "0.12"
 
+# HTTP server dependencies
+axum = "0.7"
+tower = "0.5"
+tower-http = "0.5"
+hyper = "1.0"
+
 # Web fetch dependencies
 markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown", version = "0.1.0" }
+
+# LlamaAgent integration (placeholder for future implementation)
+# llama-agent = { git = "https://github.com/your-org/llama-agent", branch = "main" }
 
 # Additional common dependencies
 encoding_rs = "0.8"

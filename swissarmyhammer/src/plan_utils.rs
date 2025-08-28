@@ -200,8 +200,6 @@ fn validate_plan_file_with_fs(
     })
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -79,7 +79,7 @@ async fn test_prompt_action_execution_with_invalid_argument_key() {
     let action = PromptAction::new("test-prompt".to_string())
         .with_argument("invalid key!".to_string(), "value".to_string());
 
-    let mut context = WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+    let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
     let result = action.execute(&mut context).await;
 
     assert!(result.is_err());

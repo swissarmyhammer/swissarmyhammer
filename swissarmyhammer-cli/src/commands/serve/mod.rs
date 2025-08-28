@@ -22,12 +22,13 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the serve command
 ///
-/// Starts the MCP server with stdio transport and waits for client communication.
+/// Starts the MCP server with stdio or HTTP transport based on subcommands.
 /// The server runs in blocking mode until the client disconnects or an error occurs.
 ///
 /// # Arguments
 ///
-/// * `_matches` - Command line arguments (currently unused for serve)
+/// * `matches` - Command line arguments for serve command and subcommands
+/// * `_template_context` - Template context (currently unused)
 ///
 /// # Returns
 ///
@@ -36,15 +37,79 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// - 1: Server encountered warnings or stopped unexpectedly
 /// - 2: Server failed to start or encountered critical errors
 pub async fn handle_command(
-    _matches: &clap::ArgMatches,
+    matches: &clap::ArgMatches,
     _template_context: &swissarmyhammer_config::TemplateContext,
 ) -> i32 {
+    // Check for HTTP subcommand
+    match matches.subcommand() {
+        Some(("http", http_matches)) => handle_http_serve(http_matches).await,
+        None => {
+            // Default to stdio mode (existing behavior)
+            handle_stdio_serve().await
+        }
+        Some((unknown, _)) => {
+            eprintln!("Unknown serve subcommand: {}", unknown);
+            EXIT_ERROR
+        }
+    }
+}
+
+/// Handle HTTP serve mode
+async fn handle_http_serve(matches: &clap::ArgMatches) -> i32 {
+    use crate::signal_handler::wait_for_shutdown;
+    use swissarmyhammer_tools::mcp::start_http_server;
+
+    // Parse port and host arguments from CLI
+    let port: u16 = matches.get_one::<u16>("port").copied().unwrap_or(8000);
+
+    let host = matches
+        .get_one::<String>("host")
+        .map(|s| s.as_str())
+        .unwrap_or("127.0.0.1");
+
+    let bind_addr = format!("{}:{}", host, port);
+
+    println!("Starting SwissArmyHammer MCP server on {}", bind_addr);
+
+    let server_handle = match start_http_server(&bind_addr).await {
+        Ok(handle) => {
+            println!("✅ MCP HTTP server running on {}", handle.url());
+            println!("💡 Use Ctrl+C to stop the server");
+            println!("🔍 Health check: {}/health", handle.url());
+            if port == 0 {
+                println!("📍 Server bound to random port: {}", handle.port());
+            }
+            handle
+        }
+        Err(e) => {
+            tracing::error!("Failed to start HTTP MCP server: {}", e);
+            eprintln!("Failed to start HTTP MCP server: {}", e);
+            return EXIT_ERROR;
+        }
+    };
+
+    // Wait for shutdown signal
+    wait_for_shutdown().await;
+
+    println!("🛑 Shutting down server...");
+    if let Err(e) = server_handle.shutdown().await {
+        tracing::error!("Failed to shutdown server gracefully: {}", e);
+        eprintln!("Warning: Server shutdown error: {}", e);
+        return EXIT_WARNING;
+    }
+    println!("✅ Server stopped");
+
+    EXIT_SUCCESS
+}
+
+/// Handle stdio serve mode (existing behavior)
+async fn handle_stdio_serve() -> i32 {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
     use swissarmyhammer::PromptLibrary;
     use swissarmyhammer_tools::McpServer;
 
-    tracing::debug!("Starting MCP server");
+    tracing::debug!("Starting MCP server in stdio mode");
 
     // Create library and server
     let library = PromptLibrary::new();

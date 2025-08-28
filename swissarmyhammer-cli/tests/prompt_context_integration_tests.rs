@@ -51,9 +51,7 @@ User: {{user_name}}"#;
         "Template context variables: {:?}",
         template_context.to_hash_map()
     );
-    let result = library
-        .render("test_project", &template_context)
-        .unwrap();
+    let result = library.render("test_project", &template_context).unwrap();
 
     // println!("Rendered result: {}", result);
     assert!(result.contains("Project: SwissArmyHammer v1.0.0"));
@@ -124,9 +122,7 @@ Current User: {{USER}}"#;
     }
 
     // Test rendering with config and environment variables
-    let result = library
-        .render("env_test", &template_context)
-        .unwrap();
+    let result = library.render("env_test", &template_context).unwrap();
 
     assert!(result.contains("App: TestApp")); // From config
                                               // Environment variables should be available (HOME and USER are typically set)

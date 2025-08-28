@@ -293,8 +293,9 @@ impl MermaidParser {
     /// Extract actions from markdown content
     fn extract_actions_from_markdown(input: &str) -> HashMap<String, String> {
         let mut actions = HashMap::new();
-        let mut in_actions_section = false;
 
+        // First try to extract from ## Actions section (legacy format)
+        let mut in_actions_section = false;
         for line in input.lines() {
             let trimmed = line.trim();
             if trimmed.eq_ignore_ascii_case("## Actions")
@@ -320,7 +321,73 @@ impl MermaidParser {
             }
         }
 
+        // If no actions found, try to extract from ## States section (new format)
+        if actions.is_empty() {
+            actions.extend(Self::extract_state_descriptions_from_markdown(input));
+        }
+
         actions
+    }
+
+    /// Extract state descriptions from ## States section
+    fn extract_state_descriptions_from_markdown(input: &str) -> HashMap<String, String> {
+        let mut state_descriptions = HashMap::new();
+        let mut in_states_section = false;
+        let mut current_state: Option<String> = None;
+        let mut current_description = Vec::new();
+
+        for line in input.lines() {
+            let trimmed = line.trim();
+
+            // Check if we're entering the States section
+            if trimmed.eq_ignore_ascii_case("## States") {
+                in_states_section = true;
+                continue;
+            }
+
+            // If we encounter another ## section (but not ###), we're done with States
+            if in_states_section
+                && trimmed.starts_with("## ")
+                && !trimmed.eq_ignore_ascii_case("## States")
+            {
+                // Store the last state if we have one
+                if let Some(state_name) = current_state.take() {
+                    if !current_description.is_empty() {
+                        state_descriptions.insert(state_name, current_description.join("\n"));
+                        current_description.clear();
+                    }
+                }
+                break;
+            }
+
+            if in_states_section {
+                // Check if this is a state header (### state_name)
+                if let Some(stripped) = trimmed.strip_prefix("### ") {
+                    // Store the previous state if we have one
+                    if let Some(state_name) = current_state.take() {
+                        if !current_description.is_empty() {
+                            state_descriptions.insert(state_name, current_description.join("\n"));
+                            current_description.clear();
+                        }
+                    }
+
+                    // Start tracking the new state
+                    current_state = Some(stripped.trim().to_string());
+                } else if current_state.is_some() {
+                    // We're inside a state section, collect the content
+                    current_description.push(line.to_string());
+                }
+            }
+        }
+
+        // Don't forget the last state
+        if let Some(state_name) = current_state {
+            if !current_description.is_empty() {
+                state_descriptions.insert(state_name, current_description.join("\n"));
+            }
+        }
+
+        state_descriptions
     }
 
     /// Convert a parsed state diagram to our Workflow type with actions

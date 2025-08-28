@@ -178,6 +178,8 @@
 //! }
 //! ```
 
+/// Agent configuration types and infrastructure
+pub mod agent;
 /// File discovery logic for configuration files
 pub mod discovery;
 /// Environment variable processing and substitution
@@ -190,6 +192,10 @@ pub mod provider;
 pub mod template_context;
 
 // Re-export main types for easier access
+pub use agent::{
+    AgentConfig, AgentExecutorConfig, AgentExecutorType, ClaudeCodeConfig, LlamaAgentConfig,
+    McpServerConfig, ModelConfig, ModelSource,
+};
 pub use discovery::{ConfigurationDiscovery, DiscoveryPaths};
 pub use env_vars::EnvVarSubstitution;
 pub use error::{ConfigurationError, ConfigurationResult};
@@ -347,4 +353,110 @@ pub fn load_configuration() -> ConfigurationResult<TemplateContext> {
 /// ```
 pub fn load_configuration_for_cli() -> ConfigurationResult<TemplateContext> {
     TemplateContext::load_for_cli()
+}
+
+/// Test configuration utilities for LlamaAgent testing
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_config {
+    use crate::agent::{
+        AgentConfig, AgentExecutorType, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
+    };
+    use std::env;
+
+    /// Test configuration for different environments
+    #[derive(Debug, Clone)]
+    pub struct TestConfig {
+        pub enable_llama_tests: bool,
+        pub enable_claude_tests: bool,
+        pub test_timeout_seconds: u64,
+        pub llama_model_repo: String,
+        pub llama_model_filename: String,
+    }
+
+    impl TestConfig {
+        pub fn from_environment() -> Self {
+            Self {
+                enable_llama_tests: env::var("SAH_TEST_LLAMA")
+                    .map(|v| v.to_lowercase() == "true" || v == "1")
+                    .unwrap_or(false),
+                enable_claude_tests: env::var("SAH_TEST_CLAUDE")
+                    .map(|v| v.to_lowercase() == "true" || v == "1")
+                    .unwrap_or(true),
+                test_timeout_seconds: env::var("SAH_TEST_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(120),
+                llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
+                    .unwrap_or_else(|_| "unsloth/Phi-4-mini-instruct-GGUF".to_string()),
+                llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
+                    .unwrap_or_else(|_| "Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
+            }
+        }
+
+        pub fn create_llama_config(&self) -> LlamaAgentConfig {
+            LlamaAgentConfig {
+                model: ModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: self.llama_model_repo.clone(),
+                        filename: Some(self.llama_model_filename.clone()),
+                    },
+                },
+                mcp_server: McpServerConfig {
+                    port: 0,
+                    timeout_seconds: 30,
+                },
+            }
+        }
+
+        pub fn create_claude_config() -> AgentConfig {
+            AgentConfig::claude_code()
+        }
+
+        pub fn create_llama_agent_config(&self) -> AgentConfig {
+            AgentConfig::llama_agent(self.create_llama_config())
+        }
+    }
+
+    /// Skip test if LlamaAgent testing is disabled
+    pub fn skip_if_llama_disabled() {
+        let config = TestConfig::from_environment();
+        if !config.enable_llama_tests {
+            println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        }
+    }
+
+    /// Skip test if Claude testing is disabled  
+    pub fn skip_if_claude_disabled() {
+        let config = TestConfig::from_environment();
+        if !config.enable_claude_tests {
+            println!("Skipping Claude test (set SAH_TEST_CLAUDE=false to disable)");
+        }
+    }
+
+    /// Check if LlamaAgent tests are enabled
+    pub fn is_llama_enabled() -> bool {
+        let config = TestConfig::from_environment();
+        config.enable_llama_tests
+    }
+
+    /// Check if Claude tests are enabled
+    pub fn is_claude_enabled() -> bool {
+        let config = TestConfig::from_environment();
+        config.enable_claude_tests
+    }
+
+    /// Get enabled executor types for testing
+    pub fn get_enabled_executors() -> Vec<AgentExecutorType> {
+        let mut executors = Vec::new();
+
+        if is_claude_enabled() {
+            executors.push(AgentExecutorType::ClaudeCode);
+        }
+
+        if is_llama_enabled() {
+            executors.push(AgentExecutorType::LlamaAgent);
+        }
+
+        executors
+    }
 }

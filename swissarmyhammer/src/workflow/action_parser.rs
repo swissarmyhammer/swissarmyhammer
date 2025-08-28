@@ -728,6 +728,9 @@ mod tests {
         assert_eq!(action.variable_name, "output");
         assert_eq!(action.value, "${claude_response}");
 
+        // Test new set_variable format (skip for now)
+        // TODO: Add support for set_variable format
+
         // Test invalid variable name
         let result = parser.parse_set_variable_action("Set 123invalid=\"value\"");
         assert!(result.unwrap().is_none());

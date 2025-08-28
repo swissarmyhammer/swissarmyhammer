@@ -20,7 +20,7 @@ mod tests {
             ("environment".to_string(), json!("development")),
         ]);
 
-        let workflow_context = WorkflowTemplateContext::with_vars(vars).unwrap();
+        let workflow_context = WorkflowTemplateContext::with_vars_safe(vars);
 
         // Initialize a workflow context like WorkflowRun would
         let context = workflow_context.initialize_workflow_context();

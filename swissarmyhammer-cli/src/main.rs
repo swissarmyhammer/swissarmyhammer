@@ -217,7 +217,9 @@ async fn handle_dynamic_matches(
 
     // Handle subcommands
     match matches.subcommand() {
-        Some(("serve", sub_matches)) => handle_serve_command(sub_matches, &template_context).await,
+        Some(("serve", sub_matches)) => {
+            commands::serve::handle_command(sub_matches, &template_context).await
+        }
         Some(("doctor", _)) => handle_doctor_command(&template_context).await,
         Some(("prompt", sub_matches)) => {
             handle_prompt_command(sub_matches, &template_context).await
@@ -243,13 +245,6 @@ async fn handle_dynamic_matches(
             EXIT_ERROR
         }
     }
-}
-
-async fn handle_serve_command(
-    matches: &clap::ArgMatches,
-    template_context: &TemplateContext,
-) -> i32 {
-    commands::serve::handle_command(matches, template_context).await
 }
 
 async fn handle_dynamic_tool_command(

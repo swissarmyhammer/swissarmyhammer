@@ -782,7 +782,7 @@ impl PromptLibrary {
         // Use environment if not already defined in the context
         // This allows args to be preserved -- and we're loading env vars as late as possible
         for (key, value) in std::env::vars() {
-            if let Some(_) = enhanced_context.get(&key) {
+            if enhanced_context.get(&key).is_some() {
                 // no op
             } else {
                 enhanced_context.set(key.clone(), value.into());

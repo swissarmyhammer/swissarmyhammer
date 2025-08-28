@@ -240,7 +240,7 @@ mod consolidation_metrics {
             "LogAction consolidation: {} tests → {} tests with {} creation cases, {} execution cases, {} property cases",
             original_test_count,
             consolidated_test_count,
-            creation_test_cases, 
+            creation_test_cases,
             execution_test_cases,
             property_test_cases
         );

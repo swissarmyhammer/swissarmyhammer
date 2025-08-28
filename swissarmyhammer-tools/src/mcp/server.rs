@@ -257,6 +257,58 @@ impl McpServer {
         Ok(workflows.iter().map(|w| w.name.to_string()).collect())
     }
 
+    /// List all available tools from the tool registry.
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<rmcp::model::Tool>` - List of all registered tools
+    pub fn list_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_registry.list_tools()
+    }
+
+    /// Get a tool by name for execution.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the tool to retrieve
+    ///
+    /// # Returns
+    ///
+    /// * `Option<&dyn McpTool>` - The tool if found, None otherwise
+    pub fn get_tool(&self, name: &str) -> Option<&dyn crate::mcp::tool_registry::McpTool> {
+        self.tool_registry.get_tool(name)
+    }
+
+    /// Execute a tool by name with the given arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The name of the tool to execute
+    /// * `arguments` - The arguments to pass to the tool
+    ///
+    /// # Returns
+    ///
+    /// * `Result<rmcp::model::CallToolResult, rmcp::ErrorData>` - The tool execution result
+    pub async fn execute_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> std::result::Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        if let Some(tool) = self.tool_registry.get_tool(name) {
+            // Convert Value to Map<String, Value> for tool execution
+            let arguments_map = match arguments {
+                serde_json::Value::Object(map) => map,
+                _ => serde_json::Map::new(), // Use empty map if not an object
+            };
+            tool.execute(arguments_map, &self.tool_context).await
+        } else {
+            Err(rmcp::ErrorData::invalid_request(
+                format!("Unknown tool: {}", name),
+                None,
+            ))
+        }
+    }
+
     /// Check if a prompt is a partial template that should not be exposed over MCP.
     ///
     /// Partial templates are identified by either:

@@ -292,8 +292,43 @@ invoked via stdio (e.g., by Claude Code). The server will:
 
 Example:
   swissarmyhammer serve
+  swissarmyhammer serve http --port 8080 --host 127.0.0.1
   # Or configure in Claude Code's MCP settings
                 ",
+                )
+                .subcommand(
+                    Command::new("http")
+                        .about("Start HTTP MCP server")
+                        .long_about(
+                            "
+Starts an HTTP MCP server for web clients, debugging, and LlamaAgent integration.
+The server exposes MCP tools through HTTP endpoints and provides:
+
+- RESTful MCP protocol implementation
+- Health check endpoint at /health
+- Support for random port allocation (use port 0)
+- Graceful shutdown with Ctrl+C
+
+Example:
+  swissarmyhammer serve http --port 8080 --host 127.0.0.1
+  swissarmyhammer serve http --port 0  # Random port
+                            ",
+                        )
+                        .arg(
+                            Arg::new("port")
+                                .long("port")
+                                .short('p')
+                                .help("Port to bind to (use 0 for random port)")
+                                .default_value("8000")
+                                .value_parser(clap::value_parser!(u16)),
+                        )
+                        .arg(
+                            Arg::new("host")
+                                .long("host")
+                                .short('H')
+                                .help("Host to bind to")
+                                .default_value("127.0.0.1"),
+                        ),
                 ),
         );
 
