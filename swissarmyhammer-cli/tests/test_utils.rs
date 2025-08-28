@@ -3,6 +3,7 @@
 //! This module extends the test utilities from the main crate with CLI-specific helpers.
 
 use anyhow::Result;
+
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -194,34 +195,27 @@ pub fn create_semantic_test_guard() -> SemanticTestGuard {
     SemanticTestGuard::new()
 }
 
-/// Setup a git repository in the given directory
+/// Setup a git repository in the given directory using libgit2
 ///
 /// Creates a basic git repository with initial commit for testing
 /// git-related CLI functionality.
 #[allow(dead_code)]
 pub fn setup_git_repo(dir: &Path) -> Result<()> {
-    use std::process::Command;
+    use git2::{Repository, Signature};
 
     // Initialize git repository
-    let output = Command::new("git")
-        .args(["init"])
-        .current_dir(dir)
-        .output()?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("Failed to initialize git repository"));
-    }
+    let repo = Repository::init(dir)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize git repository: {}", e))?;
 
     // Configure git user
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(dir)
-        .output()?;
-
-    Command::new("git")
-        .args(["config", "user.email", "test@example.com"])
-        .current_dir(dir)
-        .output()?;
+    let mut config = repo.config()
+        .map_err(|e| anyhow::anyhow!("Failed to get repository config: {}", e))?;
+    
+    config.set_str("user.name", "Test User")
+        .map_err(|e| anyhow::anyhow!("Failed to set user.name: {}", e))?;
+    
+    config.set_str("user.email", "test@example.com")
+        .map_err(|e| anyhow::anyhow!("Failed to set user.email: {}", e))?;
 
     // Create initial commit
     std::fs::write(
@@ -229,15 +223,34 @@ pub fn setup_git_repo(dir: &Path) -> Result<()> {
         "# Test Repository\n\nThis is a test repository for CLI testing.",
     )?;
 
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .output()?;
+    // Add file to index
+    let mut index = repo.index()
+        .map_err(|e| anyhow::anyhow!("Failed to get repository index: {}", e))?;
+    
+    index.add_path(std::path::Path::new("README.md"))
+        .map_err(|e| anyhow::anyhow!("Failed to add README.md to index: {}", e))?;
+    
+    index.write()
+        .map_err(|e| anyhow::anyhow!("Failed to write index: {}", e))?;
 
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(dir)
-        .output()?;
+    // Create tree and commit
+    let tree_oid = index.write_tree()
+        .map_err(|e| anyhow::anyhow!("Failed to write tree: {}", e))?;
+    
+    let tree = repo.find_tree(tree_oid)
+        .map_err(|e| anyhow::anyhow!("Failed to find tree: {}", e))?;
+
+    let signature = Signature::now("Test User", "test@example.com")
+        .map_err(|e| anyhow::anyhow!("Failed to create signature: {}", e))?;
+
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Initial commit",
+        &tree,
+        &[], // No parent commits for initial commit
+    ).map_err(|e| anyhow::anyhow!("Failed to create initial commit: {}", e))?;
 
     Ok(())
 }
@@ -590,3 +603,329 @@ mod tests {
 
     Ok(created_files)
 }
+
+/// Git2-based test utilities for replacing shell git commands
+#[allow(dead_code)]
+pub mod git2_test_utils {
+    use anyhow::Result;
+    use git2::{Repository, Signature, BranchType};
+    use std::path::Path;
+
+    /// Initialize a git repository at the specified path with basic configuration
+    pub fn init_repo(path: &Path) -> Result<Repository> {
+        let repo = Repository::init(path)?;
+        
+        // Configure git user
+        let mut config = repo.config()?;
+        config.set_str("user.name", "Test User")?;
+        config.set_str("user.email", "test@example.com")?;
+        
+        Ok(repo)
+    }
+
+    /// Add all files and create a commit with the given message
+    pub fn create_commit(repo: &Repository, message: &str) -> Result<git2::Oid> {
+        let mut index = repo.index()?;
+        index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let signature = Signature::now("Test User", "test@example.com")?;
+        
+        let commit_id = if let Ok(head) = repo.head() {
+            let parent = head.peel_to_commit()?;
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[&parent],
+            )?
+        } else {
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[],
+            )?
+        };
+        
+        Ok(commit_id)
+    }
+
+    /// Create a new branch with the given name from HEAD
+    pub fn create_branch<'a>(repo: &'a Repository, name: &str) -> Result<git2::Branch<'a>> {
+        let head_commit = repo.head()?.peel_to_commit()?;
+        let branch = repo.branch(name, &head_commit, false)?;
+        Ok(branch)
+    }
+
+    /// Checkout to the specified branch
+    pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
+        let branch = repo.find_branch(branch_name, BranchType::Local)?;
+        let branch_ref = branch.get();
+        let tree = branch_ref.peel_to_tree()?;
+        
+        repo.checkout_tree(tree.as_object(), None)?;
+        repo.set_head(&format!("refs/heads/{}", branch_name))?;
+        
+        Ok(())
+    }
+
+    /// Add specific files to the index
+    pub fn add_files(repo: &Repository, paths: &[&str]) -> Result<()> {
+        let mut index = repo.index()?;
+        for path in paths {
+            index.add_path(std::path::Path::new(path))?;
+        }
+        index.write()?;
+        Ok(())
+    }
+
+    /// Create a commit with specific parent commits
+    pub fn create_commit_with_parents(
+        repo: &Repository,
+        message: &str,
+        parents: &[&git2::Commit],
+    ) -> Result<git2::Oid> {
+        let mut index = repo.index()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let signature = Signature::now("Test User", "test@example.com")?;
+        
+        let commit_id = repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            parents,
+        )?;
+        
+        Ok(commit_id)
+    }
+
+    /// Get the current branch name
+    pub fn current_branch_name(repo: &Repository) -> Result<String> {
+        let head = repo.head()?;
+        if let Some(name) = head.shorthand() {
+            Ok(name.to_string())
+        } else {
+            Err(anyhow::anyhow!("Unable to determine current branch name"))
+        }
+    }
+
+    /// Check if repository has uncommitted changes
+    pub fn has_uncommitted_changes(repo: &Repository) -> Result<bool> {
+        let statuses = repo.statuses(None)?;
+        Ok(!statuses.is_empty())
+    }
+
+    /// Create multiple commits to simulate development history
+    pub fn create_commits_with_history(repo: &Repository, commits: &[(String, String)]) -> Result<Vec<git2::Oid>> {
+        let mut commit_ids = vec![];
+        
+        for (filename, content) in commits {
+            std::fs::write(repo.workdir().unwrap().join(filename), content)?;
+            add_files(repo, &[filename])?;
+            let commit_id = create_commit(repo, &format!("Add {}", filename))?;
+            commit_ids.push(commit_id);
+        }
+        
+        Ok(commit_ids)
+    }
+
+    /// Create a branch and switch to it (equivalent to git checkout -b)
+    pub fn create_and_checkout_branch<'a>(repo: &'a Repository, name: &str) -> Result<git2::Branch<'a>> {
+        let branch = create_branch(repo, name)?;
+        checkout_branch(repo, name)?;
+        Ok(branch)
+    }
+
+    /// Merge a branch into current branch
+    pub fn merge_branch(repo: &Repository, branch_name: &str) -> Result<git2::Oid> {
+        let current_head = repo.head()?.target().unwrap();
+        let branch = repo.find_branch(branch_name, BranchType::Local)?;
+        let branch_commit = branch.get().peel_to_commit()?;
+        
+        let merge_base = repo.merge_base(current_head, branch_commit.id())?;
+        let current_commit = repo.find_commit(current_head)?;
+        
+        if merge_base == branch_commit.id() {
+            // Already up to date
+            return Ok(current_head);
+        }
+        
+        if merge_base == current_head {
+            // Fast-forward merge
+            let branch_ref = branch.get();
+            let tree = branch_ref.peel_to_tree()?;
+            repo.checkout_tree(tree.as_object(), None)?;
+            repo.head()?.set_target(branch_commit.id(), "Fast-forward merge")?;
+            return Ok(branch_commit.id());
+        }
+        
+        // Create merge commit
+        let signature = Signature::now("Test User", "test@example.com")?;
+        let tree_id = repo.index()?.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        
+        let merge_commit_id = repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &format!("Merge branch '{}'", branch_name),
+            &tree,
+            &[&current_commit, &branch_commit],
+        )?;
+        
+        Ok(merge_commit_id)
+    }
+
+    /// Complete setup function that creates a repo with multiple branches for testing
+    pub fn setup_git_repo_with_branches(path: &Path) -> Result<Repository> {
+        let repo = init_repo(path)?;
+        
+        // Create initial commit on main branch
+        std::fs::write(path.join("README.md"), "# Test Project\n\nMain branch content")?;
+        add_files(&repo, &["README.md"])?;
+        create_commit(&repo, "Initial commit")?;
+        
+        // Create feature branch
+        create_and_checkout_branch(&repo, "feature/user-authentication")?;
+        
+        std::fs::write(path.join("auth.rs"), "// User authentication module")?;
+        add_files(&repo, &["auth.rs"])?;
+        create_commit(&repo, "Add authentication module")?;
+        
+        // Switch back to main
+        checkout_branch(&repo, "main")?;
+        
+        Ok(repo)
+    }
+
+    /// Advanced setup with development branch
+    pub fn setup_git_repo_with_dev_branch(path: &Path) -> Result<Repository> {
+        let repo = setup_git_repo_with_branches(path)?;
+        
+        // Create development branch
+        create_and_checkout_branch(&repo, "development")?;
+        
+        std::fs::write(path.join("dev_feature.rs"), "// Development feature")?;
+        add_files(&repo, &["dev_feature.rs"])?;
+        create_commit(&repo, "Add development feature")?;
+        
+        // Switch back to main
+        checkout_branch(&repo, "main")?;
+        
+        Ok(repo)
+    }
+
+    /// Setup for performance testing with many commits
+    pub fn setup_git_repo_for_performance_testing(path: &Path, commit_count: usize) -> Result<Repository> {
+        let repo = init_repo(path)?;
+        
+        // Create initial commit
+        std::fs::write(path.join("README.md"), "# Performance Test Repository")?;
+        add_files(&repo, &["README.md"])?;
+        create_commit(&repo, "Initial commit")?;
+        
+        // Create many commits for performance testing
+        for i in 1..=commit_count {
+            let filename = format!("file_{:04}.txt", i);
+            let content = format!("Content for file {}", i);
+            std::fs::write(path.join(&filename), content)?;
+            add_files(&repo, &[&filename])?;
+            create_commit(&repo, &format!("Add {}", filename))?;
+        }
+        
+        Ok(repo)
+    }
+
+    /// Get repository status (equivalent to git status --porcelain)
+    pub fn get_status_porcelain(repo: &Repository) -> Result<String> {
+        let statuses = repo.statuses(None)?;
+        let mut output = String::new();
+        
+        for entry in statuses.iter() {
+            let status = entry.status();
+            let path = entry.path().unwrap_or("");
+            
+            let prefix = if status.contains(git2::Status::INDEX_NEW) {
+                "A "
+            } else if status.contains(git2::Status::INDEX_MODIFIED) {
+                "M "
+            } else if status.contains(git2::Status::INDEX_DELETED) {
+                "D "
+            } else if status.contains(git2::Status::WT_NEW) {
+                "??"
+            } else if status.contains(git2::Status::WT_MODIFIED) {
+                " M"
+            } else if status.contains(git2::Status::WT_DELETED) {
+                " D"
+            } else {
+                "  "
+            };
+            
+            output.push_str(&format!("{} {}\n", prefix, path));
+        }
+        
+        Ok(output)
+    }
+
+    /// Create a tag at the current HEAD
+    pub fn create_tag(repo: &Repository, tag_name: &str, message: &str) -> Result<git2::Oid> {
+        let head_commit = repo.head()?.peel_to_commit()?;
+        let signature = Signature::now("Test User", "test@example.com")?;
+        
+        let tag_id = repo.tag(
+            tag_name,
+            head_commit.as_object(),
+            &signature,
+            message,
+            false,
+        )?;
+        
+        Ok(tag_id)
+    }
+
+    /// List all branches in the repository
+    pub fn list_branches(repo: &Repository) -> Result<Vec<String>> {
+        let branches = repo.branches(Some(BranchType::Local))?;
+        let mut branch_names = vec![];
+        
+        for branch_result in branches {
+            let (branch, _) = branch_result?;
+            if let Some(name) = branch.name()? {
+                branch_names.push(name.to_string());
+            }
+        }
+        
+        Ok(branch_names)
+    }
+
+    /// Delete a branch
+    pub fn delete_branch(repo: &Repository, branch_name: &str) -> Result<()> {
+        let mut branch = repo.find_branch(branch_name, BranchType::Local)?;
+        branch.delete()?;
+        Ok(())
+    }
+
+    /// Get commit count on current branch
+    pub fn commit_count(repo: &Repository) -> Result<usize> {
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push_head()?;
+        Ok(revwalk.count())
+    }
+
+    /// Check if a branch exists
+    pub fn branch_exists(repo: &Repository, branch_name: &str) -> bool {
+        repo.find_branch(branch_name, BranchType::Local).is_ok()
+    }
+}
+
+

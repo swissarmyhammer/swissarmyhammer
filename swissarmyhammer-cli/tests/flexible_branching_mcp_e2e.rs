@@ -2,8 +2,9 @@
 //!
 //! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
 
-use std::process::Command as StdCommand;
 use tempfile::TempDir;
+use git2::Repository;
+use swissarmyhammer::git::git2_utils;
 
 /// Test environment for MCP tool testing
 struct McpTestEnvironment {
@@ -26,84 +27,57 @@ impl McpTestEnvironment {
     fn setup_git_repo_with_branches(temp_dir: &TempDir) {
         let path = temp_dir.path();
 
-        // Initialize git repo
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["init"])
-            .output()
-            .unwrap();
-
+        // Initialize git repo using git2
+        let repo = Repository::init(path).unwrap();
+        
         // Configure git
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["config", "user.name", "Test User"])
-            .output()
-            .unwrap();
-
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
-            .unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
 
         // Create initial commit on main
         std::fs::write(path.join("README.md"), "# MCP Test Project")
             .expect("Failed to write README.md");
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["add", "README.md"])
-            .output()
-            .unwrap();
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Initial commit"])
-            .output()
-            .unwrap();
+        git2_utils::add_files(&repo, &["README.md"]).unwrap();
+        git2_utils::create_commit(&repo, "Initial commit", Some("Test User"), Some("test@example.com")).unwrap();
 
         // Create feature branch
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["checkout", "-b", "feature/user-management"])
-            .output()
-            .unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch("feature/user-management", &head_commit, false).unwrap();
+        
+        // Checkout the feature branch
+        let branch_ref = branch.get();
+        let tree = branch_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(tree.as_object(), None).unwrap();
+        repo.set_head("refs/heads/feature/user-management").unwrap();
 
         std::fs::write(path.join("user.rs"), "// User management module")
             .expect("Failed to write user.rs");
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["add", "user.rs"])
-            .output()
-            .unwrap();
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Add user management"])
-            .output()
-            .unwrap();
+        git2_utils::add_files(&repo, &["user.rs"]).unwrap();
+        git2_utils::create_commit(&repo, "Add user management", Some("Test User"), Some("test@example.com")).unwrap();
 
         // Create develop branch from main
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["checkout", "main"])
-            .output()
-            .unwrap();
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["checkout", "-b", "develop"])
-            .output()
-            .unwrap();
+        // First checkout main
+        let main_branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
+        let main_ref = main_branch.get();
+        let main_tree = main_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(main_tree.as_object(), None).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        
+        // Create develop branch
+        let main_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let develop_branch = repo.branch("develop", &main_commit, false).unwrap();
+        
+        // Checkout develop
+        let develop_ref = develop_branch.get();
+        let develop_tree = develop_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(develop_tree.as_object(), None).unwrap();
+        repo.set_head("refs/heads/develop").unwrap();
 
         std::fs::write(path.join("develop.md"), "# Development branch")
             .expect("Failed to write develop.md");
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["add", "develop.md"])
-            .output()
-            .unwrap();
-        StdCommand::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Add development documentation"])
-            .output()
-            .unwrap();
+        git2_utils::add_files(&repo, &["develop.md"]).unwrap();
+        git2_utils::create_commit(&repo, "Add development documentation", Some("Test User"), Some("test@example.com")).unwrap();
     }
 
     fn run_cli_command(&self, args: &[&str]) -> std::process::Output {
@@ -115,21 +89,22 @@ impl McpTestEnvironment {
     }
 
     fn get_current_branch(&self) -> String {
-        let output = StdCommand::new("git")
-            .current_dir(self.temp_dir.path())
-            .args(["branch", "--show-current"])
-            .output()
-            .unwrap();
-
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+        let repo = Repository::open(self.temp_dir.path()).unwrap();
+        let head = repo.head().unwrap();
+        if let Some(name) = head.shorthand() {
+            name.to_string()
+        } else {
+            "HEAD".to_string()
+        }
     }
 
     fn switch_to_branch(&self, branch: &str) {
-        StdCommand::new("git")
-            .current_dir(self.temp_dir.path())
-            .args(["checkout", branch])
-            .output()
-            .unwrap();
+        let repo = Repository::open(self.temp_dir.path()).unwrap();
+        let branch_ref = repo.find_branch(branch, git2::BranchType::Local).unwrap();
+        let branch_ref = branch_ref.get();
+        let tree = branch_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(tree.as_object(), None).unwrap();
+        repo.set_head(&format!("refs/heads/{}", branch)).unwrap();
     }
 }
 
@@ -233,16 +208,9 @@ fn test_mcp_issue_merge_requires_issue_branch() {
     std::fs::write(env.temp_dir.path().join("test.rs"), "// Test file")
         .expect("Failed to write test file");
 
-    StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "test.rs"])
-        .output()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add test file"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["test.rs"]).unwrap();
+    git2_utils::create_commit(&repo, "Add test file", Some("Test User"), Some("test@example.com")).unwrap();
 
     let output = env.run_cli_command(&["issue", "complete", "--name", "test-validation"]);
     assert!(output.status.success());
@@ -301,16 +269,9 @@ fn test_mcp_issue_merge_to_source_branch() {
     )
     .expect("Failed to write validation file");
 
-    StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "validation.rs"])
-        .output()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add user validation"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["validation.rs"]).unwrap();
+    git2_utils::create_commit(&repo, "Add user validation", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Mark issue complete
     let output = env.run_cli_command(&["issue", "complete", "--name", "user-validation"]);
@@ -425,16 +386,9 @@ fn test_mcp_backwards_compatibility_main_branch() {
     )
     .expect("Failed to write main feature file");
 
-    StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "main_feature.rs"])
-        .output()
-        .unwrap();
-    StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add main branch feature"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["main_feature.rs"]).unwrap();
+    git2_utils::create_commit(&repo, "Add main branch feature", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Mark complete and merge
     let output = env.run_cli_command(&["issue", "complete", "--name", "main-branch-issue"]);
@@ -517,15 +471,19 @@ fn test_mcp_multiple_issues_same_source() {
     assert_eq!(env.get_current_branch(), "issue/develop-feature-b");
 
     // Both issue branches should exist
-    let output = StdCommand::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["branch", "--list"])
-        .output()
-        .unwrap();
-
-    let branches = String::from_utf8_lossy(&output.stdout);
-    assert!(branches.contains("issue/develop-feature-a"));
-    assert!(branches.contains("issue/develop-feature-b"));
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    let branches = repo.branches(Some(git2::BranchType::Local)).unwrap();
+    
+    let mut branch_names = Vec::new();
+    for branch_result in branches {
+        let (branch, _) = branch_result.unwrap();
+        if let Some(name) = branch.name().unwrap() {
+            branch_names.push(name.to_string());
+        }
+    }
+    
+    assert!(branch_names.iter().any(|name| name == "issue/develop-feature-a"));
+    assert!(branch_names.iter().any(|name| name == "issue/develop-feature-b"));
 }
 
 /// Test issue list command shows source branch information

@@ -88,6 +88,9 @@ rayon = "1.8"
 base64 = "0.22"
 which = "8.0.0"
 
+# Git operations
+git2 = { workspace = true }
+
 # Configuration support
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 

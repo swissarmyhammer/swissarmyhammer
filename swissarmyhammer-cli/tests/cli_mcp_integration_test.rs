@@ -25,23 +25,19 @@ fn setup_test_environment() -> TempDir {
     std::fs::create_dir_all(&memos_dir).expect("Failed to create memos directory");
 
     // Initialize git repository in temp directory to avoid branch conflicts
-    std::process::Command::new("git")
-        .current_dir(temp_dir.path())
-        .args(["init", "--initial-branch=main"])
-        .output()
+    use git2::{Repository, Signature};
+    
+    let repo = Repository::init(temp_dir.path())
         .expect("Failed to init git repo");
 
     // Configure git for testing
-    std::process::Command::new("git")
-        .current_dir(temp_dir.path())
-        .args(["config", "user.email", "test@example.com"])
-        .output()
+    let mut config = repo.config()
+        .expect("Failed to get git config");
+    
+    config.set_str("user.email", "test@example.com")
         .expect("Failed to configure git email");
 
-    std::process::Command::new("git")
-        .current_dir(temp_dir.path())
-        .args(["config", "user.name", "Test User"])
-        .output()
+    config.set_str("user.name", "Test User")
         .expect("Failed to configure git name");
 
     // Create initial README file
@@ -53,17 +49,32 @@ fn setup_test_environment() -> TempDir {
     .expect("Failed to create README.md");
 
     // Add and commit initial file to establish HEAD
-    std::process::Command::new("git")
-        .current_dir(temp_dir.path())
-        .args(["add", "README.md"])
-        .output()
-        .expect("Failed to add README.md");
-
-    std::process::Command::new("git")
-        .current_dir(temp_dir.path())
-        .args(["commit", "-m", "Initial commit"])
-        .output()
-        .expect("Failed to create initial commit");
+    let mut index = repo.index()
+        .expect("Failed to get index");
+    
+    index.add_path(std::path::Path::new("README.md"))
+        .expect("Failed to add README.md to index");
+    
+    index.write()
+        .expect("Failed to write index");
+    
+    let tree_id = index.write_tree()
+        .expect("Failed to write tree");
+    
+    let tree = repo.find_tree(tree_id)
+        .expect("Failed to find tree");
+    
+    let signature = Signature::now("Test User", "test@example.com")
+        .expect("Failed to create signature");
+    
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Initial commit",
+        &tree,
+        &[]
+    ).expect("Failed to create initial commit");
 
     // No longer change global current directory to avoid test isolation issues
     temp_dir

@@ -95,6 +95,66 @@ pub enum SwissArmyHammerError {
         details: String,
     },
 
+    /// Git2 operation failed
+    #[error("Git2 operation failed: {operation}")]
+    Git2OperationFailed {
+        /// The git2 operation that failed
+        operation: String,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
+    /// Git2 repository error
+    #[error("Git2 repository error: {message}")]
+    Git2RepositoryError {
+        /// Error message providing context
+        message: String,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
+    /// Git2 authentication error with enhanced context
+    #[error("Authentication failed during {}: {}", context.operation, context.message)]
+    Git2AuthenticationError {
+        /// Enhanced error context (boxed to reduce enum size)
+        context: Box<Git2EnhancedErrorContext>,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
+    /// Git2 reference error with enhanced context
+    #[error("Reference error during {}: {}", context.operation, context.message)]
+    Git2ReferenceError {
+        /// Enhanced error context (boxed to reduce enum size)
+        context: Box<Git2EnhancedErrorContext>,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
+    /// Git2 index error with enhanced context
+    #[error("Index error during {}: {}", context.operation, context.message)]
+    Git2IndexError {
+        /// Enhanced error context (boxed to reduce enum size)
+        context: Box<Git2EnhancedErrorContext>,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
+    /// Git2 merge error with enhanced context
+    #[error("Merge error during {}: {}", context.operation, context.message)]
+    Git2MergeError {
+        /// Enhanced error context (boxed to reduce enum size)
+        context: Box<Git2EnhancedErrorContext>,
+        #[source]
+        /// The underlying git2 error
+        source: git2::Error,
+    },
+
     /// Memo not found
     #[error("Memo not found: {0}")]
     MemoNotFound(String),
@@ -571,6 +631,139 @@ pub enum PlanCommandError {
     },
 }
 
+/// Git2 error category for enhanced error handling and user-friendly messages
+#[derive(Debug, Clone, PartialEq)]
+pub enum Git2ErrorCategory {
+    /// Authentication and credential errors
+    Authentication,
+    /// Repository state and access errors
+    Repository,
+    /// Reference (branch/tag) errors
+    Reference,
+    /// Working directory and index errors
+    Index,
+    /// Merge conflict and resolution errors
+    Merge,
+    /// Generic git2 errors that don't fit specific categories
+    Generic,
+}
+
+/// Enhanced error context for git2 operations (boxed to reduce enum size)
+#[derive(Debug, Clone)]
+pub struct Git2EnhancedErrorContext {
+    /// The git2 operation that failed
+    pub operation: String,
+    /// Additional context about where the error occurred
+    pub context: String,
+    /// User-friendly error message
+    pub message: String,
+    /// Optional recovery hint
+    pub recovery_hint: Option<String>,
+}
+
+/// Repository state information for error context
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct RepositoryState {
+    /// Current branch name
+    pub current_branch: Option<String>,
+    /// HEAD commit hash
+    pub head_commit: Option<String>,
+    /// Whether HEAD is detached
+    pub head_detached: bool,
+    /// Whether repository is empty
+    pub repository_empty: bool,
+    /// Whether working directory is clean
+    pub working_directory_clean: bool,
+    /// Working directory path
+    pub workdir_path: Option<PathBuf>,
+    /// List of staged files
+    pub staged_files: Vec<String>,
+    /// List of modified files
+    pub modified_files: Vec<String>,
+}
+
+/// Environment information for error context
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EnvironmentInfo {
+    /// Git2 library version
+    pub git2_version: String,
+    /// Working directory
+    pub working_directory: PathBuf,
+    /// User git configuration
+    pub user_config: Option<UserConfig>,
+    /// Git configuration file locations
+    pub git_config_locations: Vec<PathBuf>,
+}
+
+/// User configuration information
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserConfig {
+    /// User name from git config
+    pub name: Option<String>,
+    /// User email from git config
+    pub email: Option<String>,
+}
+
+/// System information for error context
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SystemInfo {
+    /// Operating system platform
+    pub platform: String,
+    /// System architecture
+    pub arch: String,
+    /// Filesystem type
+    pub filesystem_type: Option<String>,
+    /// Permission information
+    pub permissions: PermissionInfo,
+}
+
+/// Permission information for error context
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PermissionInfo {
+    /// Whether the repository directory is readable
+    pub repo_readable: bool,
+    /// Whether the repository directory is writable
+    pub repo_writable: bool,
+    /// Whether the git directory is accessible
+    pub git_dir_accessible: bool,
+}
+
+/// Comprehensive error context for git2 operations
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GitErrorContext {
+    /// Repository state information
+    pub repository_state: RepositoryState,
+    /// Environment information
+    pub environment_info: EnvironmentInfo,
+    /// Recent operation history
+    pub operation_history: Vec<String>,
+    /// System information
+    pub system_info: SystemInfo,
+}
+
+/// Structured error report for debugging and support
+#[derive(Debug, serde::Serialize)]
+pub struct ErrorReport {
+    /// Unique error identifier
+    pub error_id: String,
+    /// Timestamp when error occurred
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Operation that failed
+    pub operation: String,
+    /// Error type description
+    pub error_type: String,
+    /// Error message
+    pub error_message: String,
+    /// Recovery suggestion
+    pub recovery_suggestion: Option<String>,
+    /// Error context
+    pub context: serde_json::Value, // Serialized GitErrorContext
+    /// Stack trace information
+    pub stack_trace: Vec<String>,
+    /// Environment variables
+    pub environment: std::collections::HashMap<String, String>,
+}
+
 /// Error severity levels for user-facing error messages
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ErrorSeverity {
@@ -934,6 +1127,327 @@ impl SwissArmyHammerError {
     pub fn memo_validation_failed(reason: &str) -> Self {
         SwissArmyHammerError::MemoValidationFailed(reason.to_string())
     }
+
+    /// Create a git2 operation error
+    pub fn git2_operation_failed(operation: &str, source: git2::Error) -> Self {
+        SwissArmyHammerError::Git2OperationFailed {
+            operation: operation.to_string(),
+            source,
+        }
+    }
+
+    /// Create a git2 repository error
+    pub fn git2_repository_error(message: &str, source: git2::Error) -> Self {
+        SwissArmyHammerError::Git2RepositoryError {
+            message: message.to_string(),
+            source,
+        }
+    }
+
+    /// Create detailed git2 error with context and recovery suggestions
+    pub fn from_git2_with_context(operation: &str, context: &str, source: git2::Error) -> Self {
+        let error_category = categorize_git2_error(&source);
+        let user_message = create_user_friendly_message(&source, operation, context);
+        let recovery_hint = suggest_recovery_action(&source, operation);
+
+        match error_category {
+            Git2ErrorCategory::Authentication => SwissArmyHammerError::Git2AuthenticationError {
+                context: Box::new(Git2EnhancedErrorContext {
+                    operation: operation.to_string(),
+                    context: context.to_string(),
+                    message: user_message,
+                    recovery_hint: Some(recovery_hint),
+                }),
+                source,
+            },
+            Git2ErrorCategory::Repository => SwissArmyHammerError::Git2RepositoryError {
+                message: format!("{} in context: {}", user_message, context),
+                source,
+            },
+            Git2ErrorCategory::Reference => SwissArmyHammerError::Git2ReferenceError {
+                context: Box::new(Git2EnhancedErrorContext {
+                    operation: operation.to_string(),
+                    context: context.to_string(),
+                    message: user_message,
+                    recovery_hint: Some(recovery_hint),
+                }),
+                source,
+            },
+            Git2ErrorCategory::Index => SwissArmyHammerError::Git2IndexError {
+                context: Box::new(Git2EnhancedErrorContext {
+                    operation: operation.to_string(),
+                    context: context.to_string(),
+                    message: user_message,
+                    recovery_hint: Some(recovery_hint),
+                }),
+                source,
+            },
+            Git2ErrorCategory::Merge => SwissArmyHammerError::Git2MergeError {
+                context: Box::new(Git2EnhancedErrorContext {
+                    operation: operation.to_string(),
+                    context: context.to_string(),
+                    message: user_message,
+                    recovery_hint: Some(recovery_hint),
+                }),
+                source,
+            },
+            Git2ErrorCategory::Generic => SwissArmyHammerError::Git2OperationFailed {
+                operation: format!("{} ({})", operation, context),
+                source,
+            },
+        }
+    }
+
+    /// Get error type as string for error reporting
+    pub fn error_type(&self) -> String {
+        match self {
+            SwissArmyHammerError::Git2AuthenticationError { .. } => "Git2AuthenticationError",
+            SwissArmyHammerError::Git2ReferenceError { .. } => "Git2ReferenceError",
+            SwissArmyHammerError::Git2IndexError { .. } => "Git2IndexError",
+            SwissArmyHammerError::Git2MergeError { .. } => "Git2MergeError",
+            SwissArmyHammerError::Git2OperationFailed { .. } => "Git2OperationFailed",
+            SwissArmyHammerError::Git2RepositoryError { .. } => "Git2RepositoryError",
+            SwissArmyHammerError::GitOperationFailed { .. } => "GitOperationFailed",
+            SwissArmyHammerError::GitCommandFailed { .. } => "GitCommandFailed",
+            SwissArmyHammerError::GitRepositoryNotFound { .. } => "GitRepositoryNotFound",
+            SwissArmyHammerError::GitBranchOperationFailed { .. } => "GitBranchOperationFailed",
+            _ => "SwissArmyHammerError",
+        }
+        .to_string()
+    }
+
+    /// Get recovery suggestion for the error
+    pub fn recovery_suggestion(&self) -> Option<String> {
+        match self {
+            SwissArmyHammerError::Git2AuthenticationError { context, .. } => {
+                context.recovery_hint.clone()
+            }
+            SwissArmyHammerError::Git2ReferenceError { context, .. } => {
+                context.recovery_hint.clone()
+            }
+            SwissArmyHammerError::Git2IndexError { context, .. } => context.recovery_hint.clone(),
+            SwissArmyHammerError::Git2MergeError { context, .. } => context.recovery_hint.clone(),
+            _ => None,
+        }
+    }
+
+    /// Get stack trace information for the error
+    pub fn stack_trace(&self) -> Vec<String> {
+        let mut trace = Vec::new();
+        trace.push(format!("{}", self));
+
+        let mut current = self.source();
+        while let Some(err) = current {
+            trace.push(format!("  caused by: {}", err));
+            current = err.source();
+        }
+
+        trace
+    }
+}
+
+/// Categorize git2 errors for better handling and user-friendly messages
+fn categorize_git2_error(error: &git2::Error) -> Git2ErrorCategory {
+    match error.code() {
+        git2::ErrorCode::Auth => Git2ErrorCategory::Authentication,
+        git2::ErrorCode::Certificate => Git2ErrorCategory::Authentication,
+        git2::ErrorCode::User => Git2ErrorCategory::Authentication,
+
+        git2::ErrorCode::NotFound => Git2ErrorCategory::Repository,
+        git2::ErrorCode::Exists => Git2ErrorCategory::Repository,
+        git2::ErrorCode::Ambiguous => Git2ErrorCategory::Repository,
+        git2::ErrorCode::Locked => Git2ErrorCategory::Repository,
+
+        git2::ErrorCode::Peel => Git2ErrorCategory::Reference,
+        git2::ErrorCode::InvalidSpec => Git2ErrorCategory::Reference,
+
+        git2::ErrorCode::IndexDirty => Git2ErrorCategory::Index,
+        git2::ErrorCode::Applied => Git2ErrorCategory::Index,
+
+        git2::ErrorCode::MergeConflict => Git2ErrorCategory::Merge,
+
+        _ => Git2ErrorCategory::Generic,
+    }
+}
+
+/// Generate user-friendly error messages based on git2 error and context
+fn create_user_friendly_message(error: &git2::Error, operation: &str, context: &str) -> String {
+    match error.code() {
+        git2::ErrorCode::NotFound => {
+            match operation {
+                "find_branch" => format!(
+                    "Branch '{}' does not exist. Use 'git branch -a' to see available branches.",
+                    extract_branch_name_from_context(context)
+                ),
+                "find_commit" => {
+                    "Commit not found. The commit may have been removed or the reference is invalid.".to_string()
+                },
+                "open_repository" => {
+                    "Not in a git repository. Initialize with 'git init' or clone an existing repository.".to_string()
+                },
+                _ => format!("Resource not found during {}: {}", operation, error.message()),
+            }
+        }
+        git2::ErrorCode::Exists => {
+            match operation {
+                "create_branch" => format!(
+                    "Branch '{}' already exists. Use 'git checkout {}' to switch to it or choose a different name.",
+                    extract_branch_name_from_context(context),
+                    extract_branch_name_from_context(context)
+                ),
+                _ => format!("Resource already exists during {}: {}", operation, error.message()),
+            }
+        }
+        git2::ErrorCode::MergeConflict => {
+            format!(
+                "Merge conflicts detected in {}. Resolve conflicts manually using 'git status' to see affected files, then use 'git add' and 'git commit' to complete the merge.",
+                context
+            )
+        }
+        git2::ErrorCode::IndexDirty => {
+            format!(
+                "Working directory has uncommitted changes. Commit or stash changes before {}.",
+                operation
+            )
+        }
+        git2::ErrorCode::Locked => {
+            "Repository is locked (another git operation in progress). Wait for the operation to complete or remove .git/index.lock if the process was interrupted.".to_string()
+        }
+        git2::ErrorCode::Auth => {
+            format!(
+                "Authentication failed for {}. Check your credentials, SSH keys, or access permissions.",
+                operation
+            )
+        }
+        git2::ErrorCode::Certificate => {
+            format!(
+                "Certificate verification failed for {}. Check SSL certificates or use HTTPS instead of SSH.",
+                operation
+            )
+        }
+        git2::ErrorCode::User => {
+            format!(
+                "User cancelled operation or invalid user configuration for {}. Check git user.name and user.email settings.",
+                operation
+            )
+        }
+        _ => {
+            format!("Git operation '{}' failed: {}", operation, error.message())
+        }
+    }
+}
+
+/// Suggest recovery actions for git2 errors
+fn suggest_recovery_action(error: &git2::Error, operation: &str) -> String {
+    match error.code() {
+        git2::ErrorCode::NotFound => {
+            match operation {
+                "find_branch" => "List available branches with 'git branch -a'".to_string(),
+                "open_repository" => "Ensure you are in a git repository or run 'git init'".to_string(),
+                _ => "Verify the resource exists and is accessible".to_string(),
+            }
+        }
+        git2::ErrorCode::MergeConflict => {
+            "Resolve conflicts with 'git status', edit conflicted files, then 'git add' and 'git commit'".to_string()
+        }
+        git2::ErrorCode::IndexDirty => {
+            "Commit changes with 'git commit' or stash with 'git stash'".to_string()
+        }
+        git2::ErrorCode::Locked => {
+            "Wait for other git operations to complete or remove .git/index.lock".to_string()
+        }
+        git2::ErrorCode::Auth => {
+            "Check authentication credentials, SSH keys, or repository access permissions".to_string()
+        }
+        git2::ErrorCode::Certificate => {
+            "Verify SSL certificates, update certificate store, or use SSH authentication".to_string()
+        }
+        git2::ErrorCode::User => {
+            "Set git user configuration with 'git config user.name' and 'git config user.email'".to_string()
+        }
+        _ => "Check git repository state and retry the operation".to_string(),
+    }
+}
+
+/// Extract branch name from operation context
+fn extract_branch_name_from_context(context: &str) -> &str {
+    // Simple extraction - could be enhanced based on actual context format
+    context.split_whitespace().next().unwrap_or("unknown")
+}
+
+/// Collect relevant environment variables for error reporting
+pub fn collect_environment_variables() -> std::collections::HashMap<String, String> {
+    let mut env = std::collections::HashMap::new();
+
+    let relevant_vars = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "HOME",
+        "USER",
+        "SHELL",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "SAH_GIT_BACKEND",
+        "SAH_DISABLE_GIT2",
+        "SAH_GIT_FALLBACK",
+    ];
+
+    for var in relevant_vars.iter() {
+        if let Ok(value) = std::env::var(var) {
+            env.insert(var.to_string(), value);
+        }
+    }
+
+    env
+}
+
+/// Enhanced display for git2 errors with user-friendly formatting
+impl SwissArmyHammerError {
+    /// Get formatted error message with recovery suggestions
+    pub fn display_with_suggestions(&self) -> String {
+        match self {
+            SwissArmyHammerError::Git2AuthenticationError { context, .. } => {
+                let mut output = format!("🔐 Authentication Error: {}\n", context.message);
+                output.push_str(&format!("   Operation: {}\n", context.operation));
+                output.push_str(&format!("   Context: {}\n", context.context));
+                if let Some(hint) = &context.recovery_hint {
+                    output.push_str(&format!("   💡 Suggestion: {}\n", hint));
+                }
+                output
+            }
+            SwissArmyHammerError::Git2MergeError { context, .. } => {
+                let mut output = format!("🔀 Merge Error: {}\n", context.message);
+                output.push_str(&format!("   Operation: {}\n", context.operation));
+                output.push_str(&format!("   Context: {}\n", context.context));
+                if let Some(hint) = &context.recovery_hint {
+                    output.push_str(&format!("   💡 Suggestion: {}\n", hint));
+                }
+                output
+            }
+            SwissArmyHammerError::Git2ReferenceError { context, .. } => {
+                let mut output = format!("🏷️  Reference Error: {}\n", context.message);
+                output.push_str(&format!("   Operation: {}\n", context.operation));
+                output.push_str(&format!("   Context: {}\n", context.context));
+                if let Some(hint) = &context.recovery_hint {
+                    output.push_str(&format!("   💡 Suggestion: {}\n", hint));
+                }
+                output
+            }
+            SwissArmyHammerError::Git2IndexError { context, .. } => {
+                let mut output = format!("📁 Index Error: {}\n", context.message);
+                output.push_str(&format!("   Operation: {}\n", context.operation));
+                output.push_str(&format!("   Context: {}\n", context.context));
+                if let Some(hint) = &context.recovery_hint {
+                    output.push_str(&format!("   💡 Suggestion: {}\n", hint));
+                }
+                output
+            }
+            _ => self.to_string(),
+        }
+    }
 }
 
 /// Extension trait for error types to format the full error chain
@@ -1254,5 +1768,198 @@ mod tests {
             length: 10,
         };
         assert_eq!(insufficient_content.severity(), ErrorSeverity::Warning);
+    }
+
+    // Enhanced Git2 Error Handling Tests
+
+    #[test]
+    fn test_git2_error_categorization() {
+        // Test authentication errors
+        let _auth_error = git2::Error::from_str("Authentication failed");
+        // Create an error with auth error code manually - git2::Error::from_str doesn't set code
+        // so we'll test the categorization function directly
+
+        // Test the categorization function with different error codes
+        let error_auth = git2::Error::from_str("test");
+        let category = categorize_git2_error(&error_auth);
+        // Default is Generic since from_str doesn't set specific codes
+        assert_eq!(category, Git2ErrorCategory::Generic);
+    }
+
+    #[test]
+    fn test_create_user_friendly_message() {
+        let error = git2::Error::from_str("Test error");
+
+        // Test find_branch operation message
+        let message = create_user_friendly_message(&error, "find_branch", "main");
+        assert!(message.contains("Git operation"));
+        assert!(message.contains("find_branch"));
+
+        // Test open_repository operation message
+        let message = create_user_friendly_message(&error, "open_repository", ".");
+        assert!(message.contains("Git operation"));
+        assert!(message.contains("open_repository"));
+    }
+
+    #[test]
+    fn test_suggest_recovery_action() {
+        let error = git2::Error::from_str("Test error");
+
+        let suggestion = suggest_recovery_action(&error, "find_branch");
+        assert!(suggestion.contains("Check git repository state"));
+
+        let suggestion = suggest_recovery_action(&error, "open_repository");
+        assert!(suggestion.contains("Check git repository state"));
+    }
+
+    #[test]
+    fn test_from_git2_with_context() {
+        let git_error = git2::Error::from_str("Test error");
+        let error = SwissArmyHammerError::from_git2_with_context(
+            "test_operation",
+            "test_context",
+            git_error,
+        );
+
+        // Should be categorized as Generic for errors created with from_str
+        match error {
+            SwissArmyHammerError::Git2OperationFailed { operation, .. } => {
+                assert_eq!(operation, "test_operation (test_context)");
+            }
+            _ => panic!("Expected Git2OperationFailed variant"),
+        }
+    }
+
+    #[test]
+    fn test_error_type_string() {
+        let error = SwissArmyHammerError::Git2AuthenticationError {
+            context: Box::new(Git2EnhancedErrorContext {
+                operation: "test".to_string(),
+                context: "test".to_string(),
+                message: "test".to_string(),
+                recovery_hint: None,
+            }),
+            source: git2::Error::from_str("test"),
+        };
+
+        assert_eq!(error.error_type(), "Git2AuthenticationError");
+
+        let error = SwissArmyHammerError::Git2OperationFailed {
+            operation: "test".to_string(),
+            source: git2::Error::from_str("test"),
+        };
+
+        assert_eq!(error.error_type(), "Git2OperationFailed");
+    }
+
+    #[test]
+    fn test_recovery_suggestion() {
+        let error = SwissArmyHammerError::Git2AuthenticationError {
+            context: Box::new(Git2EnhancedErrorContext {
+                operation: "test".to_string(),
+                context: "test".to_string(),
+                message: "test".to_string(),
+                recovery_hint: Some("Check credentials".to_string()),
+            }),
+            source: git2::Error::from_str("test"),
+        };
+
+        assert_eq!(
+            error.recovery_suggestion(),
+            Some("Check credentials".to_string())
+        );
+
+        let error = SwissArmyHammerError::Git2OperationFailed {
+            operation: "test".to_string(),
+            source: git2::Error::from_str("test"),
+        };
+
+        assert_eq!(error.recovery_suggestion(), None);
+    }
+
+    #[test]
+    fn test_stack_trace() {
+        let error = SwissArmyHammerError::Git2OperationFailed {
+            operation: "test".to_string(),
+            source: git2::Error::from_str("test"),
+        };
+
+        let trace = error.stack_trace();
+        assert!(!trace.is_empty());
+        assert!(trace[0].contains("Git2 operation failed"));
+    }
+
+    #[test]
+    fn test_display_with_suggestions() {
+        let error = SwissArmyHammerError::Git2AuthenticationError {
+            context: Box::new(Git2EnhancedErrorContext {
+                operation: "push".to_string(),
+                context: "origin/main".to_string(),
+                message: "Authentication failed".to_string(),
+                recovery_hint: Some("Check SSH keys".to_string()),
+            }),
+            source: git2::Error::from_str("test"),
+        };
+
+        let display = error.display_with_suggestions();
+        assert!(display.contains("🔐 Authentication Error"));
+        assert!(display.contains("Operation: push"));
+        assert!(display.contains("Context: origin/main"));
+        assert!(display.contains("💡 Suggestion: Check SSH keys"));
+    }
+
+    #[test]
+    fn test_collect_environment_variables() {
+        let env_vars = collect_environment_variables();
+
+        // Should include PATH and other standard variables
+        assert!(!env_vars.is_empty());
+
+        // Should include HOME or USER on most systems
+        assert!(env_vars.contains_key("HOME") || env_vars.contains_key("USER"));
+    }
+
+    #[test]
+    fn test_repository_state_default() {
+        let state = RepositoryState::default();
+
+        assert!(state.current_branch.is_none());
+        assert!(state.head_commit.is_none());
+        assert!(!state.head_detached);
+        assert!(!state.repository_empty);
+        assert!(!state.working_directory_clean); // Default is false, not true
+        assert!(state.workdir_path.is_none());
+        assert!(state.staged_files.is_empty());
+        assert!(state.modified_files.is_empty());
+    }
+
+    #[test]
+    fn test_git2_error_category_equality() {
+        assert_eq!(
+            Git2ErrorCategory::Authentication,
+            Git2ErrorCategory::Authentication
+        );
+        assert_eq!(Git2ErrorCategory::Repository, Git2ErrorCategory::Repository);
+        assert_eq!(Git2ErrorCategory::Reference, Git2ErrorCategory::Reference);
+        assert_eq!(Git2ErrorCategory::Index, Git2ErrorCategory::Index);
+        assert_eq!(Git2ErrorCategory::Merge, Git2ErrorCategory::Merge);
+        assert_eq!(Git2ErrorCategory::Generic, Git2ErrorCategory::Generic);
+
+        assert_ne!(
+            Git2ErrorCategory::Authentication,
+            Git2ErrorCategory::Repository
+        );
+        assert_ne!(Git2ErrorCategory::Index, Git2ErrorCategory::Merge);
+    }
+
+    #[test]
+    fn test_extract_branch_name_from_context() {
+        assert_eq!(extract_branch_name_from_context("main branch"), "main");
+        assert_eq!(
+            extract_branch_name_from_context("feature/new-feature"),
+            "feature/new-feature"
+        );
+        assert_eq!(extract_branch_name_from_context(""), "unknown");
+        assert_eq!(extract_branch_name_from_context("single"), "single");
     }
 }

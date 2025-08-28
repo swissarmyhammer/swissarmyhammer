@@ -884,12 +884,9 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     let temp_dir = TempDir::new().unwrap();
 
     // Initialize a git repository (required for ignore crate to work properly)
-    use std::process::Command;
+    use git2::Repository;
 
-    Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repo");
 
     // Write .gitignore file
@@ -982,11 +979,8 @@ async fn test_glob_tool_case_sensitivity() {
     let temp_dir = TempDir::new().unwrap();
 
     // Initialize git repo for ignore crate to work properly
-    use std::process::Command;
-    Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    use git2::Repository;
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repo");
 
     // Use different filenames to avoid filesystem case issues
@@ -1055,11 +1049,8 @@ async fn test_glob_tool_modification_time_sorting() {
     let temp_dir = TempDir::new().unwrap();
 
     // Initialize git repo for ignore crate to work properly
-    use std::process::Command;
-    Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    use git2::Repository;
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repo");
 
     let file1 = temp_dir.path().join("old_file.txt");
@@ -1119,11 +1110,8 @@ async fn test_glob_tool_no_matches() {
     let temp_dir = TempDir::new().unwrap();
 
     // Initialize git repo for ignore crate to work properly
-    use std::process::Command;
-    Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    use git2::Repository;
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repo");
 
     fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
@@ -2439,11 +2427,8 @@ async fn test_glob_then_grep_workflow() {
     let temp_dir = TempDir::new().unwrap();
 
     // Initialize git repo for ignore crate to work properly
-    use std::process::Command;
-    Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    use git2::Repository;
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repo");
 
     let test_files = vec![
@@ -2525,11 +2510,8 @@ async fn test_complex_file_workflow() {
     let temp_dir = TempDir::new().unwrap();
 
     // Initialize git repo
-    use std::process::Command;
-    Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    use git2::Repository;
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repo");
 
     let test_files = vec![

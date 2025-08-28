@@ -2,13 +2,17 @@
 //!
 //! This module tests performance characteristics and compatibility with various Git workflows.
 
-use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+
+// Import git2 utilities
+use git2::{Repository, Signature, BranchType};
+use swissarmyhammer::git::git2_utils;
+use anyhow::Result;
 
 /// Test environment for performance testing
 struct PerformanceTestEnvironment {
@@ -47,52 +51,57 @@ impl PerformanceTestEnvironment {
     }
 
     async fn setup_git_repo(path: &std::path::Path) {
+        Self::setup_git_repo_git2(path).unwrap();
+    }
+
+    fn setup_git_repo_git2(path: &std::path::Path) -> Result<()> {
         // Initialize git repo
-        Command::new("git")
-            .current_dir(path)
-            .args(["init"])
-            .output()
-            .unwrap();
-
-        // Configure git
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.name", "Test User"])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
-            .unwrap();
-
+        let repo = Repository::init(path)?;
+        
+        // Configure git user
+        let mut config = repo.config()?;
+        config.set_str("user.name", "Test User")?;
+        config.set_str("user.email", "test@example.com")?;
+        
         // Create initial commit
-        std::fs::write(path.join("README.md"), "# Performance Test Project")
-            .expect("Failed to write README.md");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "README.md"])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Initial commit"])
-            .output()
-            .unwrap();
+        std::fs::write(path.join("README.md"), "# Performance Test Project")?;
+        
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("README.md"))?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let signature = Signature::now("Test User", "test@example.com")?;
+        
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Initial commit",
+            &tree,
+            &[],
+        )?;
+        
+        Ok(())
     }
 
     /// Create many branches for performance testing
     async fn create_many_branches(&self, count: usize) {
+        let repo = Repository::open(self.temp_dir.path()).unwrap();
+        
         for i in 0..count {
             let branch_name = format!("feature/branch-{i:04}");
 
-            Command::new("git")
-                .current_dir(self.temp_dir.path())
-                .args(["checkout", "-b", &branch_name])
-                .output()
-                .unwrap();
+            // Create and checkout branch using git2
+            let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+            let branch = repo.branch(&branch_name, &head_commit, false).unwrap();
+            
+            // Checkout the branch
+            let branch_ref = branch.get();
+            let tree = branch_ref.peel_to_tree().unwrap();
+            repo.checkout_tree(tree.as_object(), None).unwrap();
+            repo.set_head(&format!("refs/heads/{}", branch_name)).unwrap();
 
             // Add unique content to each branch
             let content = format!("Content for branch {i}");
@@ -100,25 +109,32 @@ impl PerformanceTestEnvironment {
             std::fs::write(self.temp_dir.path().join(&filename), content)
                 .expect("Failed to write branch file");
 
-            Command::new("git")
-                .current_dir(self.temp_dir.path())
-                .args(["add", &filename])
-                .output()
-                .unwrap();
-
-            Command::new("git")
-                .current_dir(self.temp_dir.path())
-                .args(["commit", "-m", &format!("Add content for {branch_name}")])
-                .output()
-                .unwrap();
+            // Add and commit using git2
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new(&filename)).unwrap();
+            index.write().unwrap();
+            
+            let tree_id = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_id).unwrap();
+            let signature = Signature::now("Test User", "test@example.com").unwrap();
+            let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
+            
+            repo.commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                &format!("Add content for {branch_name}"),
+                &tree,
+                &[&parent_commit],
+            ).unwrap();
         }
 
-        // Return to main branch
-        Command::new("git")
-            .current_dir(self.temp_dir.path())
-            .args(["checkout", "main"])
-            .output()
-            .unwrap();
+        // Return to main branch using git2
+        let main_branch = repo.find_branch("main", BranchType::Local).unwrap();
+        let main_ref = main_branch.get();
+        let main_tree = main_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(main_tree.as_object(), None).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
     }
 
     /// Measure execution time of a function
@@ -143,6 +159,14 @@ impl PerformanceTestEnvironment {
         let result = f().await;
         let duration = start.elapsed();
         (result, duration)
+    }
+
+    /// Helper to add and commit files using git2
+    fn git_add_and_commit(&self, files: &[&str], message: &str) -> Result<()> {
+        let repo = Repository::open(self.temp_dir.path())?;
+        git2_utils::add_files(&repo, files)?;
+        git2_utils::create_commit(&repo, message, None, None)?;
+        Ok(())
     }
 }
 
@@ -279,17 +303,8 @@ async fn test_performance_merge_operations() {
         std::fs::write(env.temp_dir.path().join(&change_file), "merge test change")
             .expect("Failed to write change file");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", &change_file])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Change for {issue_name}")])
-            .output()
-            .unwrap();
+        env.git_add_and_commit(&[&change_file], &format!("Change for {issue_name}"))
+            .expect("Failed to add and commit change");
 
         // Measure merge time
         let (result, duration) = PerformanceTestEnvironment::measure_time(|| {
@@ -349,27 +364,22 @@ async fn test_git_flow_compatibility() {
     ];
 
     for (branch_name, description) in &branches {
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["checkout", "-b", branch_name])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch(branch_name, &head_commit, false).unwrap();
+        
+        // Checkout the branch
+        let branch_ref = branch.get();
+        let tree = branch_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(tree.as_object(), None).unwrap();
+        repo.set_head(&format!("refs/heads/{}", branch_name)).unwrap();
 
         let filename = format!("{}.md", branch_name.replace('/', "_"));
         std::fs::write(env.temp_dir.path().join(&filename), description)
             .expect("Failed to write branch description");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", &filename])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Initialize {branch_name}")])
-            .output()
-            .unwrap();
+        git2_utils::add_files(&repo, &[&filename]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Initialize {branch_name}"), Some("Test User"), Some("test@example.com")).unwrap();
     }
 
     // Test creating issues from each Git Flow branch type
@@ -386,17 +396,9 @@ async fn test_git_flow_compatibility() {
         std::fs::write(env.temp_dir.path().join(&change_file), "Git Flow test")
             .expect("Failed to write change");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", &change_file])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Change from {issue_name}")])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        git2_utils::add_files(&repo, &[&change_file]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Change from {issue_name}"), Some("Test User"), Some("test@example.com")).unwrap();
 
         // Merge back to original branch
         git.merge_issue_branch(&issue_name, branch_name).unwrap();
@@ -424,11 +426,15 @@ async fn test_github_flow_compatibility() {
     for feature_branch in &feature_branches {
         // Create feature branch from main
         git.checkout_branch("main").unwrap();
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["checkout", "-b", feature_branch])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch(feature_branch, &head_commit, false).unwrap();
+        
+        // Checkout the branch
+        let branch_ref = branch.get();
+        let tree = branch_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(tree.as_object(), None).unwrap();
+        repo.set_head(&format!("refs/heads/{}", feature_branch)).unwrap();
 
         // Add feature work
         let feature_file = format!("{}.rs", feature_branch.replace('/', "_"));
@@ -438,17 +444,9 @@ async fn test_github_flow_compatibility() {
         )
         .expect("Failed to write feature file");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", &feature_file])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Implement {feature_branch}")])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        git2_utils::add_files(&repo, &[&feature_file]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Implement {feature_branch}"), Some("Test User"), Some("test@example.com")).unwrap();
 
         // Create issue branch for additional work on the feature
         let issue_name = format!("tests-for-{}", feature_branch.replace("feature/", ""));
@@ -464,17 +462,9 @@ async fn test_github_flow_compatibility() {
         )
         .expect("Failed to write test file");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", &test_file])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Add tests for {feature_branch}")])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        git2_utils::add_files(&repo, &[&test_file]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Add tests for {feature_branch}"), Some("Test User"), Some("test@example.com")).unwrap();
 
         // Merge issue back to feature branch
         git.merge_issue_branch(&issue_name, feature_branch).unwrap();
@@ -486,24 +476,31 @@ async fn test_github_flow_compatibility() {
         // In GitHub Flow, feature branch would then be merged to main via PR
         // We can simulate this by merging to main
         git.checkout_branch("main").unwrap();
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args([
-                "merge",
-                "--no-ff",
-                feature_branch,
-                "-m",
-                &format!("Merge {feature_branch}"),
-            ])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        
+        // Get the feature branch commit
+        let feature_branch_ref = repo.find_branch(feature_branch, BranchType::Local).unwrap();
+        let feature_commit = feature_branch_ref.get().peel_to_commit().unwrap();
+        
+        // Get current HEAD (main branch)
+        let main_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        
+        // Create merge commit
+        let signature = Signature::now("Test User", "test@example.com").unwrap();
+        let tree = feature_commit.tree().unwrap();
+        
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &format!("Merge {feature_branch}"),
+            &tree,
+            &[&main_commit, &feature_commit],
+        ).unwrap();
 
         // Clean up feature branch (typical in GitHub Flow)
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["branch", "-d", feature_branch])
-            .output()
-            .unwrap();
+        let mut branch = repo.find_branch(feature_branch, BranchType::Local).unwrap();
+        branch.delete().unwrap();
     }
 
     // Verify all features were merged to main
@@ -531,31 +528,25 @@ async fn test_concurrent_issue_operations() {
     // Create several source branches (reduced for performance)
     let source_branches = ["develop", "feature/api"];
     for branch in &source_branches {
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["checkout", "-b", branch])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let git_branch = repo.branch(branch, &head_commit, false).unwrap();
+        
+        // Checkout the branch
+        let branch_ref = git_branch.get();
+        let tree = branch_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(tree.as_object(), None).unwrap();
+        repo.set_head(&format!("refs/heads/{}", branch)).unwrap();
 
+        let filename = format!("{}.txt", branch.replace('/', "_"));
         std::fs::write(
-            env.temp_dir
-                .path()
-                .join(format!("{}.txt", branch.replace('/', "_"))),
+            env.temp_dir.path().join(&filename),
             format!("Content for {branch}"),
         )
         .expect("Failed to write branch content");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", "."])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Initialize {branch}")])
-            .output()
-            .unwrap();
+        git2_utils::add_files(&repo, &[&filename]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Initialize {branch}"), Some("Test User"), Some("test@example.com")).unwrap();
     }
 
     // Simulate concurrent operations by rapidly creating issue branches
@@ -577,17 +568,9 @@ async fn test_concurrent_issue_operations() {
         std::fs::write(env.temp_dir.path().join(&change_file), "concurrent work")
             .expect("Failed to write concurrent file");
 
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["add", &change_file])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["commit", "-m", &format!("Concurrent work {i}")])
-            .output()
-            .unwrap();
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        git2_utils::add_files(&repo, &[&change_file]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Concurrent work {i}"), Some("Test User"), Some("test@example.com")).unwrap();
     }
 
     // All issue branches should exist

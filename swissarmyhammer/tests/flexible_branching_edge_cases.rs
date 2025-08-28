@@ -3,12 +3,16 @@
 //! This module tests error conditions, edge cases, and abort scenarios
 //! for the flexible branching functionality.
 
-use std::process::Command;
 use std::sync::Arc;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+
+// Import git2 utilities
+use git2::{Repository, Signature, BranchType};
+use swissarmyhammer::git::git2_utils;
+use anyhow::Result;
 
 /// Test environment for edge case testing
 struct EdgeCaseTestEnvironment {
@@ -48,49 +52,52 @@ impl EdgeCaseTestEnvironment {
     }
 
     async fn setup_git_repo(path: &std::path::Path) {
+        Self::setup_git_repo_git2(path).unwrap();
+    }
+
+    fn setup_git_repo_git2(path: &std::path::Path) -> Result<()> {
         // Initialize git repo
-        Command::new("git")
-            .current_dir(path)
-            .args(["init"])
-            .output()
-            .unwrap();
-
-        // Configure git
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.name", "Test User"])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
-            .unwrap();
-
+        let repo = Repository::init(path)?;
+        
+        // Configure git user
+        let mut config = repo.config()?;
+        config.set_str("user.name", "Test User")?;
+        config.set_str("user.email", "test@example.com")?;
+        
         // Create initial commit
-        std::fs::write(path.join("README.md"), "# Test Project")
-            .expect("Failed to write README.md");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "README.md"])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Initial commit"])
-            .output()
-            .unwrap();
+        std::fs::write(path.join("README.md"), "# Test Project")?;
+        
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("README.md"))?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let signature = Signature::now("Test User", "test@example.com")?;
+        
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Initial commit",
+            &tree,
+            &[],
+        )?;
+        
+        Ok(())
     }
 
     /// Create a test branch with some commits for testing
     async fn create_test_branch(&self, branch_name: &str) {
-        Command::new("git")
-            .current_dir(self.temp_dir.path())
-            .args(["checkout", "-b", branch_name])
-            .output()
-            .unwrap();
+        let repo = Repository::open(self.temp_dir.path()).unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch(branch_name, &head_commit, false).unwrap();
+        
+        // Checkout the branch
+        let branch_ref = branch.get();
+        let tree = branch_ref.peel_to_tree().unwrap();
+        repo.checkout_tree(tree.as_object(), None).unwrap();
+        repo.set_head(&format!("refs/heads/{}", branch_name)).unwrap();
 
         let test_file = format!("{}.txt", branch_name.replace('/', "_"));
         std::fs::write(
@@ -99,17 +106,8 @@ impl EdgeCaseTestEnvironment {
         )
         .expect("Failed to write test file");
 
-        Command::new("git")
-            .current_dir(self.temp_dir.path())
-            .args(["add", &test_file])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(self.temp_dir.path())
-            .args(["commit", "-m", &format!("Add content for {branch_name}")])
-            .output()
-            .unwrap();
+        git2_utils::add_files(&repo, &[&test_file]).unwrap();
+        git2_utils::create_commit(&repo, &format!("Add content for {branch_name}"), Some("Test User"), Some("test@example.com")).unwrap();
     }
 }
 
@@ -149,16 +147,9 @@ async fn test_source_branch_deleted_mid_workflow() {
     )
     .expect("Failed to write work file");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "work_file.txt"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add work file"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["work_file.txt"]).unwrap();
+    git2_utils::create_commit(&repo, "Add work file", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Now simulate the source branch being deleted by another developer
     {
@@ -225,16 +216,9 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     )
     .expect("Failed to write conflict file");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "conflict_file.txt"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add conflict file from issue branch"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["conflict_file.txt"]).unwrap();
+    git2_utils::create_commit(&repo, "Add conflict file from issue branch", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Switch to feature branch and make conflicting changes
     {
@@ -249,16 +233,9 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     )
     .expect("Failed to write conflicting content");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "conflict_file.txt"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add conflict file from feature branch"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["conflict_file.txt"]).unwrap();
+    git2_utils::create_commit(&repo, "Add conflict file from feature branch", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Switch back to issue branch
     {
@@ -288,15 +265,18 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let _git = git_ops.as_ref().unwrap();
-        let status_output = Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["status", "--porcelain"])
-            .output()
-            .unwrap();
-
-        let status_str = String::from_utf8_lossy(&status_output.stdout);
-        // Should not have unmerged files (UU status)
-        assert!(!status_str.contains("UU"));
+        let repo = Repository::open(env.temp_dir.path()).unwrap();
+        let statuses = repo.statuses(None).unwrap();
+        
+        // Should not have conflicted files
+        let mut has_conflicts = false;
+        for entry in statuses.iter() {
+            if entry.status().is_conflicted() {
+                has_conflicts = true;
+                break;
+            }
+        }
+        assert!(!has_conflicts, "Repository should not have conflicted files");
     }
 }
 
@@ -332,24 +312,18 @@ async fn test_source_branch_validation_before_merge() {
     )
     .expect("Failed to write validation file");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "validation.txt"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add validation content"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["validation.txt"]).unwrap();
+    git2_utils::create_commit(&repo, "Add validation content", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Now corrupt the source branch reference to simulate repository issues
     // This simulates various git repository corruption scenarios
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["checkout", "feature/valid"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    let branch = repo.find_branch("feature/valid", BranchType::Local).unwrap();
+    let branch_ref = branch.get();
+    let tree = branch_ref.peel_to_tree().unwrap();
+    repo.checkout_tree(tree.as_object(), None).unwrap();
+    repo.set_head(&format!("refs/heads/feature/valid")).unwrap();
 
     // Create a scenario where the branch exists but has issues
     // by creating an invalid ref
@@ -440,16 +414,9 @@ async fn test_uncommitted_changes_during_merge() {
     )
     .expect("Failed to write committed file");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "committed_work.txt"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add committed work"])
-        .output()
-        .unwrap();
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    git2_utils::add_files(&repo, &["committed_work.txt"]).unwrap();
+    git2_utils::create_commit(&repo, "Add committed work", Some("Test User"), Some("test@example.com")).unwrap();
 
     // Make uncommitted changes (dirty working directory)
     std::fs::write(

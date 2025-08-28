@@ -334,45 +334,37 @@ mod tests {
     #[test]
     fn test_get_current_issue_from_branch() {
         use crate::git::GitOperations;
-        use std::process::Command;
+
         use tempfile::TempDir;
 
         // Create a temporary git repository for testing
         let temp_dir = TempDir::new().unwrap();
         let repo_path = temp_dir.path();
 
-        // Initialize git repo
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["init"])
-            .output()
-            .unwrap();
+        // Initialize git repo using git2
+        let repo = git2::Repository::init(repo_path).unwrap();
 
         // Set git config for the test
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["config", "user.name", "Test User"])
-            .output()
-            .unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
 
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
-            .unwrap();
-
-        // Create initial commit
+        // Create initial commit using git2
         std::fs::write(repo_path.join("README.md"), "Test").unwrap();
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["add", "."])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["commit", "-m", "Initial commit"])
-            .output()
-            .unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("README.md")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Test User", "test@example.com").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Initial commit",
+            &tree,
+            &[],
+        ).unwrap();
 
         let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
 
@@ -380,23 +372,21 @@ mod tests {
         let result = get_current_issue_from_branch(&git_ops).unwrap();
         assert_eq!(result, None);
 
-        // Create and switch to issue branch
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["checkout", "-b", "issue/test_issue"])
-            .output()
-            .unwrap();
+        // Create and switch to issue branch using git2
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch("issue/test_issue", &head_commit, false).unwrap();
+        repo.set_head(branch.get().name().unwrap()).unwrap();
+        repo.checkout_head(None).unwrap();
 
         // Test issue branch (should return Some("test_issue"))
         let result = get_current_issue_from_branch(&git_ops).unwrap();
         assert_eq!(result, Some("test_issue".to_string()));
 
-        // Test complex issue name
-        Command::new("git")
-            .current_dir(repo_path)
-            .args(["checkout", "-b", "issue/01K0S1158ADEHEQ28YMNBJHW97"])
-            .output()
-            .unwrap();
+        // Test complex issue name using git2
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let branch = repo.branch("issue/01K0S1158ADEHEQ28YMNBJHW97", &head_commit, false).unwrap();
+        repo.set_head(branch.get().name().unwrap()).unwrap();
+        repo.checkout_head(None).unwrap();
 
         let result = get_current_issue_from_branch(&git_ops).unwrap();
         assert_eq!(result, Some("01K0S1158ADEHEQ28YMNBJHW97".to_string()));

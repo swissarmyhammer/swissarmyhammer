@@ -59,6 +59,9 @@ tempfile = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
 
+# Git integration
+git2 = { workspace = true }
+
 [dev-dependencies]
 swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
 predicates = { workspace = true }

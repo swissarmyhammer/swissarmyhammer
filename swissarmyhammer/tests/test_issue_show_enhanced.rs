@@ -5,7 +5,6 @@
 
 use rmcp::model::CallToolResult;
 use serde_json::json;
-use std::process::Command;
 use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::MockRateLimiter;
 use swissarmyhammer::config::Config;
@@ -88,40 +87,52 @@ impl IssueShowTestEnvironment {
     }
 
     async fn setup_git_repo(path: &std::path::Path) {
+        use git2::{Repository, Signature};
+
         // Initialize git repo
-        Command::new("git")
-            .current_dir(path)
-            .args(["init"])
-            .output()
+        let repo = Repository::init(path)
             .expect("Failed to init git");
 
         // Configure git
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.name", "Test User"])
-            .output()
+        let mut config = repo.config()
+            .expect("Failed to get git config");
+        
+        config.set_str("user.name", "Test User")
             .expect("Failed to configure git user");
 
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
+        config.set_str("user.email", "test@example.com")
             .expect("Failed to configure git email");
 
         // Create initial commit
         std::fs::write(path.join("README.md"), "# Test Project")
             .expect("Failed to write README.md");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "README.md"])
-            .output()
-            .expect("Failed to add README.md");
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Initial commit"])
-            .output()
-            .expect("Failed to create initial commit");
+            
+        let mut index = repo.index()
+            .expect("Failed to get index");
+        
+        index.add_path(std::path::Path::new("README.md"))
+            .expect("Failed to add README.md to index");
+        
+        index.write()
+            .expect("Failed to write index");
+        
+        let tree_id = index.write_tree()
+            .expect("Failed to write tree");
+        
+        let tree = repo.find_tree(tree_id)
+            .expect("Failed to find tree");
+        
+        let signature = Signature::now("Test User", "test@example.com")
+            .expect("Failed to create signature");
+        
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Initial commit",
+            &tree,
+            &[]
+        ).expect("Failed to create initial commit");
     }
 
     async fn create_test_issue(&self, name: &str, content: &str) -> String {
@@ -323,12 +334,23 @@ async fn test_issue_show_current_with_config_integration() {
     let git_ops = env.git_ops.lock().await;
     if let Some(_git) = git_ops.as_ref() {
         let full_branch_name = format!("{prefix}{issue_name}");
-        // Create branch manually using low-level git command
-        std::process::Command::new("git")
-            .current_dir(env.temp_dir.path())
-            .args(["checkout", "-b", &full_branch_name])
-            .output()
-            .unwrap();
+        // Create branch manually using libgit2
+        let repo = git2::Repository::open(env.temp_dir.path())
+            .expect("Failed to open repository");
+        
+        let head_commit = repo.head()
+            .expect("Failed to get HEAD")
+            .peel_to_commit()
+            .expect("Failed to peel to commit");
+        
+        repo.branch(&full_branch_name, &head_commit, false)
+            .expect("Failed to create branch");
+        
+        repo.set_head(&format!("refs/heads/{}", full_branch_name))
+            .expect("Failed to set HEAD");
+        
+        repo.checkout_head(None)
+            .expect("Failed to checkout head");
         // Branch already checked out by previous command
     }
     drop(git_ops);

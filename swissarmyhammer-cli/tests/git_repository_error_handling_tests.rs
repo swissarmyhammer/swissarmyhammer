@@ -111,10 +111,8 @@ async fn test_commands_work_in_git_repository() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
     // Initialize git repository
-    std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(temp_dir.path())
-        .output()
+    use git2::Repository;
+    Repository::init(temp_dir.path())
         .expect("Failed to initialize git repository");
 
     // Create .swissarmyhammer directory

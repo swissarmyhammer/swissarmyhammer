@@ -3,12 +3,15 @@
 //! This module provides comprehensive tests for the flexible branching functionality,
 //! covering complete workflows, MCP tool integration, and edge cases.
 
-use std::process::Command;
 use std::sync::Arc;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
+
+// Import git2 utilities
+use git2::{Repository, Signature, BranchType};
+use anyhow::Result;
 
 /// Test environment for flexible branching integration tests
 struct FlexibleBranchingTestEnvironment {
@@ -48,119 +51,137 @@ impl FlexibleBranchingTestEnvironment {
     }
 
     async fn setup_git_repo_with_branches(path: &std::path::Path) {
+        Self::setup_git_repo_with_branches_git2(path).unwrap();
+    }
+
+    fn setup_git_repo_with_branches_git2(path: &std::path::Path) -> Result<()> {
         // Initialize git repo
-        Command::new("git")
-            .current_dir(path)
-            .args(["init"])
-            .output()
-            .unwrap();
-
-        // Configure git
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.name", "Test User"])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
-            .unwrap();
-
+        let repo = Repository::init(path)?;
+        
+        // Configure git user
+        let mut config = repo.config()?;
+        config.set_str("user.name", "Test User")?;
+        config.set_str("user.email", "test@example.com")?;
+        
         // Create initial commit on main branch
         std::fs::write(
             path.join("README.md"),
             "# Test Project\n\nMain branch content",
-        )
-        .expect("Failed to write README.md");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "README.md"])
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Initial commit"])
-            .output()
-            .unwrap();
+        )?;
+        
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("README.md"))?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let signature = Signature::now("Test User", "test@example.com")?;
+        
+        let _commit_id = repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Initial commit",
+            &tree,
+            &[],
+        )?;
 
         // Create feature branch
-        Command::new("git")
-            .current_dir(path)
-            .args(["checkout", "-b", "feature/user-authentication"])
-            .output()
-            .unwrap();
+        let head_commit = repo.head()?.peel_to_commit()?;
+        let feature_branch = repo.branch("feature/user-authentication", &head_commit, false)?;
+        
+        // Checkout feature branch
+        let feature_ref = feature_branch.get();
+        let feature_tree = feature_ref.peel_to_tree()?;
+        repo.checkout_tree(feature_tree.as_object(), None)?;
+        repo.set_head("refs/heads/feature/user-authentication")?;
 
-        std::fs::write(path.join("auth.rs"), "// User authentication module")
-            .expect("Failed to write auth.rs");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "auth.rs"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Add authentication module"])
-            .output()
-            .unwrap();
+        std::fs::write(path.join("auth.rs"), "// User authentication module")?;
+        index.add_path(std::path::Path::new("auth.rs"))?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+        
+        let _auth_commit = repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Add authentication module",
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        // Switch back to main
+        let main_branch = repo.find_branch("main", BranchType::Local)?;
+        let main_ref = main_branch.get();
+        let main_tree = main_ref.peel_to_tree()?;
+        repo.checkout_tree(main_tree.as_object(), None)?;
+        repo.set_head("refs/heads/main")?;
 
         // Create development branch from main
-        Command::new("git")
-            .current_dir(path)
-            .args(["checkout", "main"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(path)
-            .args(["checkout", "-b", "develop"])
-            .output()
-            .unwrap();
+        let main_commit = repo.head()?.peel_to_commit()?;
+        let dev_branch = repo.branch("develop", &main_commit, false)?;
+        
+        // Checkout develop branch
+        let dev_ref = dev_branch.get();
+        let dev_tree = dev_ref.peel_to_tree()?;
+        repo.checkout_tree(dev_tree.as_object(), None)?;
+        repo.set_head("refs/heads/develop")?;
 
-        std::fs::write(path.join("dev.txt"), "Development branch")
-            .expect("Failed to write dev.txt");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "dev.txt"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Add development branch file"])
-            .output()
-            .unwrap();
+        std::fs::write(path.join("dev.txt"), "Development branch")?;
+        index.add_path(std::path::Path::new("dev.txt"))?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+        
+        let _dev_commit = repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Add development branch file",
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        // Switch back to main
+        repo.checkout_tree(main_tree.as_object(), None)?;
+        repo.set_head("refs/heads/main")?;
 
         // Create release branch from main
-        Command::new("git")
-            .current_dir(path)
-            .args(["checkout", "main"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(path)
-            .args(["checkout", "-b", "release/v1.0"])
-            .output()
-            .unwrap();
+        let release_branch = repo.branch("release/v1.0", &main_commit, false)?;
+        
+        // Checkout release branch
+        let release_ref = release_branch.get();
+        let release_tree = release_ref.peel_to_tree()?;
+        repo.checkout_tree(release_tree.as_object(), None)?;
+        repo.set_head("refs/heads/release/v1.0")?;
 
-        std::fs::write(path.join("version.txt"), "v1.0").expect("Failed to write version.txt");
-        Command::new("git")
-            .current_dir(path)
-            .args(["add", "version.txt"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .current_dir(path)
-            .args(["commit", "-m", "Version 1.0 release"])
-            .output()
-            .unwrap();
+        std::fs::write(path.join("version.txt"), "v1.0")?;
+        index.add_path(std::path::Path::new("version.txt"))?;
+        index.write()?;
+        
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent_commit = repo.head()?.peel_to_commit()?;
+        
+        let _version_commit = repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "Version 1.0 release",
+            &tree,
+            &[&parent_commit],
+        )?;
 
         // Return to main branch
-        Command::new("git")
-            .current_dir(path)
-            .args(["checkout", "main"])
-            .output()
-            .unwrap();
+        repo.checkout_tree(main_tree.as_object(), None)?;
+        repo.set_head("refs/heads/main")?;
+        
+        Ok(())
     }
 }
 
@@ -209,16 +230,25 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     )
     .expect("Failed to write auth_tests.rs");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "auth_tests.rs"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add authentication tests"])
-        .output()
-        .unwrap();
+    // Use git2 instead of shell commands
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("auth_tests.rs")).unwrap();
+    index.write().unwrap();
+    
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = Signature::now("Test User", "test@example.com").unwrap();
+    let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
+    
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Add authentication tests",
+        &tree,
+        &[&parent_commit],
+    ).unwrap();
 
     // Mark issue as completed
     {
@@ -355,16 +385,25 @@ async fn test_release_branch_issue_workflow() {
     )
     .expect("Failed to write security fix");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "security_fix.patch"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Apply critical security fix"])
-        .output()
-        .unwrap();
+    // Use git2 instead of shell commands
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("security_fix.patch")).unwrap();
+    index.write().unwrap();
+    
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = Signature::now("Test User", "test@example.com").unwrap();
+    let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
+    
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Apply critical security fix",
+        &tree,
+        &[&parent_commit],
+    ).unwrap();
 
     // Mark issue complete and merge back to release branch
     {
@@ -444,16 +483,25 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     )
     .expect("Failed to write traditional file");
 
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["add", "traditional.txt"])
-        .output()
-        .unwrap();
-    Command::new("git")
-        .current_dir(env.temp_dir.path())
-        .args(["commit", "-m", "Add traditional content"])
-        .output()
-        .unwrap();
+    // Use git2 instead of shell commands
+    let repo = Repository::open(env.temp_dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("traditional.txt")).unwrap();
+    index.write().unwrap();
+    
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = Signature::now("Test User", "test@example.com").unwrap();
+    let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
+    
+    repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Add traditional content",
+        &tree,
+        &[&parent_commit],
+    ).unwrap();
 
     // Use simple merge (should merge back to main)
     {
