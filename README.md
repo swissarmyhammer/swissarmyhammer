@@ -175,7 +175,7 @@ arguments:
 
 Research the cryptocurrency {{symbol}}:
 
-1. Use web_fetch to get current price and market data from CoinGecko API: `https://api.coingecko.com/api/v3/simple/price?ids={{symbol | downcase}}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`
+1. Use web_fetch to get current price and market data from CoinGecko API: `https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_market_cap=true` (Note: adjust coin ID based on symbol - bitcoin for BTC, ethereum for ETH, etc.)
 
 2. Use web_search to find recent news about {{symbol}} cryptocurrency
 
