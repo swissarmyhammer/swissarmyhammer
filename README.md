@@ -4,7 +4,7 @@
 
 # SwissArmyHammer
 
-**Program all the things, just by writing markdown. Really.**
+**The only coding assistant you'll ever need. Write specs, not code.**
 
 📚 **[Complete Documentation & Guides](https://swissarmyhammer.github.io/swissarmyhammer)** 📚
 
@@ -19,420 +19,256 @@
 
 ---
 
-## ✨ What is SwissArmyHammer?
+## 🎯 Why SwissArmyHammer?
 
-**SwissArmyHammer transforms AI prompt and workflow management by treating them as simple markdown files.**
+**Tired of babysitting AI while it codes? Want to describe what you want and come back to finished software?**
 
-### The Problem
-Working with AI assistants involves repetitive prompt crafting, context loss, inconsistent results, limited automation, and poor organization of prompts scattered across different tools.
+SwissArmyHammer is the **full-featured coding assistant** that works while you sleep. Write a simple spec, kick off a workflow, and return to find your project implemented, tested, and ready to ship.
 
-### The Solution
-SwissArmyHammer provides a unified, file-based approach with three integrated components:
+### 🚀 **Set It and Forget It Coding**
+- Write a 4-sentence spec in markdown
+- Run `sah`
+- Go get coffee (or take a nap)
+- Return to a fully implemented, tested CLI application
 
-- **Command Line Application** - A powerful CLI that uses Claude Code as a sub-agent for executing prompts and workflows
-- **MCP Server** - Seamless integration with Claude Code via the Model Context Protocol, providing a comprehensive tool suite  
-- **Rust Library** - A flexible library for building prompt-based applications with comprehensive APIs
+### 🛠️ **Complete MCP Tool Suite**
+SwissArmyHammer **IS** an MCP server with 25+ professional-grade tools:
+- **File Operations** - Read, write, edit, search across any codebase
+- **Git Integration** - Branch management, commit workflows, PR automation
+- **Issue Tracking** - Built-in project management with markdown files
+- **Semantic Search** - Vector-powered code understanding and navigation
+- **Web Integration** - Fetch docs, search APIs, gather requirements
+- **Shell Execution** - Safe, controlled system interaction
+- **Memory System** - Persistent context and note-taking
 
-## TLDR
+### 🧠 **Agentic Intelligence**
+- **Multi-hour autonomous execution** without human intervention
+- **Planning and replanning** as requirements evolve
+- **Error recovery** and self-correction
+- **Context preservation** across long-running tasks
+- **Tool orchestration** that rivals human developers
 
-Install and get started:
+### 📝 **Markdown-Driven Everything**
+- **Prompts** are markdown files with Liquid templating
+- **Workflows** are state machines defined in markdown
+- **Issues** are tracked as markdown files in your repo
+- **Specs** are simple markdown documents
+- **No databases, no cloud, no lock-in** - just files
+
+### ⚡ **Industrial Strength**
+Built for real software development, not toy examples:
+- **Rust-powered** performance and reliability
+- **Type-safe** tool integration
+- **Memory-efficient** for large codebases
+- **Battle-tested** on production systems
+
+## 🏃‍♂️ Get Started in 5 Minutes
+
+**Build a weather CLI that fetches data from OpenWeatherMap - from idea to working code in minutes:**
+
+### 1. Installation
 ```bash
+# Install SwissArmyHammer
 cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
+
+# Add to Claude Code as MCP server
 claude mcp add --scope user sah sah serve
 ```
 
-## 🎯 Key Features
-
-- **📁 File-based Management** - Store prompts and sub agent workflows as markdown files with YAML front matter
-- **🔄 Live Reloading** - Changes are automatically detected and reloaded
-- **🎨 Liquid Templates** - Use Liquid templating with variables, conditionals, loops, and custom filters to make templates and workflows
-- **⚡ MCP Integration** - Works seamlessly with Claude Code via Model Context Protocol with comprehensive tool suite
-- **🗂️ Organized Hierarchy** - Built-in, user, and local prompt directories with override precedence
-- **⚙️ Flexible Configuration** - Multi-format configuration (TOML, YAML, JSON) with environment variables and precedence rules
-- **🛠️ Developer Tools** - Rich CLI with diagnostics, validation, and shell completions
-- **📚 Rust Library** - Use as a dependency in your own Rust projects with comprehensive API
-- **🔍 Built-in Prompts** - 20+ ready-to-use prompts for common development tasks
-- **🔧 Workflow Engine** - Advanced state-based workflow execution with Mermaid diagrams
-- **📝 Issue Management** - Git-integrated issue tracking with automatic branch management
-- **💾 Memoranda System** - Note-taking and knowledge management with full-text search
-- **🔍 Semantic Search** - Vector-based search with TreeSitter parsing and embedding models
-- **⚡ Dynamic CLI** - CLI commands automatically generated from MCP tools, eliminating code duplication
-
-### Common Commands
-
+### 2. Create Your Project
 ```bash
-# Get help
-sah --help
-
-# Run as MCP server (default when invoked via stdio)
-sah serve
-
-# Check configuration and diagnose issues
-sah doctor
-
-# Manage prompts
-sah prompt list
-sah prompt test my-prompt --var task="help me"
-
-# Execute workflows
-sah flow run my-workflow
-
-# Issue management (automatically generated from MCP tools)
-sah issue list
-sah issue create --name "feature-xyz" --content "# Feature XYZ\n\nImplement new feature"
-sah issue work feature-xyz
-
-# Memoranda (notes) management (automatically generated from MCP tools)
-sah memo list
-sah memo create --title "Meeting Notes" --content "# Team Meeting\n\n- Discussed roadmap"
-
-# Semantic search (automatically generated from MCP tools)
-sah search index --patterns "**/*.rs"
-sah search query --query "error handling"
-
-# File operations (automatically generated from MCP tools)
-sah files read --absolute-path ./src/main.rs
-sah files write --file-path ./output.txt --content "Hello World"
-
-# Validate configurations
-sah validate
+# Set up a new project
+mkdir weather-cli && cd weather-cli
+git init
 ```
 
-## ⚙️ Configuration System
+### 3. Write Your Spec (30 seconds)
+Create `spec.md`:
+```markdown
+# Weather CLI
 
-SwissArmyHammer uses a powerful, multi-format configuration system that supports TOML, YAML, and JSON formats with proper precedence handling and environment variable substitution.
-
-### Configuration File Discovery
-
-SwissArmyHammer automatically discovers configuration files in the following locations and formats:
-
-**Supported file names:**
-- `sah.{toml,yaml,yml,json}`
-- `swissarmyhammer.{toml,yaml,yml,json}`
-
-**Search locations (in precedence order):**
-1. **Global Configuration** - `~/.swissarmyhammer/`
-2. **Project Configuration** - `./.swissarmyhammer/`
-
-### Precedence Order
-
-Configuration values are merged with the following precedence (later sources override earlier ones):
-
-1. **Default values** (built into the application)
-2. **Global config files** (`~/.swissarmyhammer/sah.*`)
-3. **Project config files** (`./.swissarmyhammer/sah.*`)
-4. **Environment variables** (`SAH_*` and `SWISSARMYHAMMER_*` prefixes)
-5. **CLI arguments** (highest priority)
-
-### Configuration Formats
-
-#### TOML Example (`sah.toml`)
-```toml
-# Application settings
-[app]
-name = "MyProject"
-version = "1.0.0"
-debug = false
-
-# Database configuration
-[database]
-host = "localhost"
-port = 5432
-ssl_enabled = true
-
-[database.credentials]
-username = "admin"
-database = "production"
-
-# Feature flags
-[features]
-experimental = false
-telemetry = true
-
-# Custom template variables
-[variables]
-project_root = "/path/to/project"
-author = "Your Name"
+Build a command-line tool that fetches current weather for any city using the OpenWeatherMap API.
+The CLI should accept a city name as an argument and display temperature, humidity, and conditions in a clean format.
+Include error handling for invalid cities and network issues.
+Add configuration for API key via environment variable or config file.
+Include basic tests and a README with usage examples.
 ```
 
-#### YAML Example (`sah.yaml`)
-```yaml
-# Application settings
-app:
-  name: MyProject
-  version: "1.0.0"
-  debug: false
-
-# Database configuration
-database:
-  host: localhost
-  port: 5432
-  ssl_enabled: true
-  credentials:
-    username: admin
-    database: production
-
-# Feature flags
-features:
-  experimental: false
-  telemetry: true
-
-# Custom template variables
-variables:
-  project_root: /path/to/project
-  author: "Your Name"
-```
-
-#### JSON Example (`sah.json`)
-```json
-{
-  "app": {
-    "name": "MyProject",
-    "version": "1.0.0",
-    "debug": false
-  },
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "ssl_enabled": true,
-    "credentials": {
-      "username": "admin",
-      "database": "production"
-    }
-  },
-  "features": {
-    "experimental": false,
-    "telemetry": true
-  },
-  "variables": {
-    "project_root": "/path/to/project",
-    "author": "Your Name"
-  }
-}
-```
-
-### Environment Variables
-
-Configuration values can be set via environment variables using either prefix:
-
+### 4. Let SwissArmyHammer Build It
 ```bash
-# SAH_ prefix (shorter)
-export SAH_APP_NAME="MyProject"
-export SAH_DATABASE_HOST="localhost"
-export SAH_DATABASE_PORT="5432"
-export SAH_DEBUG="true"
+# Plan the implementation from your spec
+sah plan spec.md
 
-# SWISSARMYHAMMER_ prefix (explicit)
-export SWISSARMYHAMMER_APP_NAME="MyProject"
-export SWISSARMYHAMMER_DATABASE_HOST="localhost"
-export SWISSARMYHAMMER_DATABASE_PORT="5432"
-export SWISSARMYHAMMER_DEBUG="true"
+# Let SwissArmyHammer implement everything autonomously
+sah implement
 ```
 
-**Environment Variable Mapping:**
-- `SAH_APP_NAME` → `app.name`
-- `SAH_DATABASE_HOST` → `database.host`
-- `SAH_DATABASE_CREDENTIALS_USERNAME` → `database.credentials.username`
+### 5. Watch the Magic ✨
+SwissArmyHammer will autonomously:
+- Break down your spec into focused development issues
+- Initialize a Rust CLI project with proper structure
+- Implement HTTP client for OpenWeatherMap API
+- Add command-line argument parsing with clap
+- Handle configuration and environment variables
+- Write comprehensive error handling
+- Create unit and integration tests
+- Generate documentation and usage examples
+- Work through each issue systematically until complete
 
-### Environment Variable Substitution
+**No chatting. No hand-holding. No babysitting. Just working software.**
 
-Configuration files support environment variable substitution:
+---
 
-```toml
-# With default values
-database_url = "${DATABASE_URL:-postgresql://localhost:5432/mydb}"
-api_key = "${API_KEY}"
-debug = "${DEBUG:-false}"
+**That's the power of SwissArmyHammer - from idea to implementation while you focus on what matters.**
 
-# In nested structures
-[app]
-name = "${APP_NAME:-SwissArmyHammer}"
-version = "${VERSION:-1.0.0}"
-```
+## 🎯 What Makes SwissArmyHammer Different
 
-### Using Configuration in Templates
+### **Real Autonomy, Not Chat Theater**
+Other AI coding tools make you supervise every step. SwissArmyHammer works like a senior developer - give it requirements and check back when it's done.
 
-Configuration values are automatically available in all Liquid templates:
+### **Production-Ready from Day One**
+- **File-based architecture** - No databases, no cloud dependencies
+- **Git-native workflows** - Branches, commits, and PRs handled automatically
+- **Industrial tooling** - Shell execution, file operations, web integration
+- **Type-safe everywhere** - Rust's safety guarantees throughout
 
-```liquid
-# Application Configuration
+### **MCP Integration Leader**
+SwissArmyHammer pioneered comprehensive MCP server implementation:
+- **40+ professional tools** available to any MCP client
+- **Semantic code search** with vector embeddings
+- **Workflow orchestration** across tool boundaries
+- **Context preservation** spanning hours of work
 
-**Project:** {{app.name}} v{{app.version}}
-**Debug Mode:** {% if debug %}enabled{% else %}disabled{% endif %}
+### **Markdown-Driven Development**
+Everything is a markdown file you can read, edit, and version control:
+- **Prompts** with Liquid templating and variables
+- **Workflows** as state machines with visual diagrams
+- **Issues** tracked in your repository
+- **Specs** that become working software
 
-## Database Connection
+### **Built for Scale**
+- **Memory-efficient** operation on large codebases
+- **Incremental processing** - only analyze what changed
+- **Parallel execution** where safe
+- **Resource controls** prevent runaway processes
 
-```
-Host: {{database.host}}:{{database.port}}
-Database: {{database.credentials.database}}
-SSL: {% if database.ssl_enabled %}enabled{% else %}disabled{% endif %}
-```
+---
 
-## Features
+## 🎮 Build Your First Workflow
 
-{% for feature in features -%}
-- {{feature[0] | capitalize}}: {% if feature[1] %}✓{% else %}✗{% endif %}
-{% endfor %}
+**Create a fun "Daily Crypto Report" workflow that fetches live data and generates a formatted report.**
 
-Connection: postgresql://{{database.credentials.username}}@{{database.host}}:{{database.port}}/{{database.credentials.database}}
-```
+SwissArmyHammer workflows aren't just for coding - you can build multi-step agents for any task using nothing but markdown files.
 
-### Configuration in Different Contexts
-
-- **CLI Usage** - Configuration loaded automatically when using `sah` commands
-- **MCP Integration** - Configuration available in all MCP tools and workflows
-- **Template Rendering** - All config values accessible via `{{config.key}}` syntax
-- **Workflow Execution** - Configuration merged with workflow variables
-
-### Quick Configuration Setup
-
-Create a basic configuration:
-
-```bash
-# Create global config directory
-mkdir -p ~/.swissarmyhammer
-
-# Create a basic TOML config
-cat > ~/.swissarmyhammer/sah.toml << 'EOF'
-[app]
-name = "MyApp"
-debug = true
-
-[variables]
-author = "Your Name"
-project_type = "web"
-EOF
-```
-
-Your configuration is now available in all templates and workflows!
-
-### Standard Locations
-
-1. **Builtin** - Embedded in the SwissArmyHammer binary
-   - Pre-installed prompts and workflows for common tasks
-   - Always available, no setup required
-
-2. **User** - Your personal collection
-   - Prompts: `~/.swissarmyhammer/prompts/`
-   - Workflows: `~/.swissarmyhammer/workflows/`
-   - Shared across all your projects
-
-3. **Local** - Project-specific files
-   - Prompts: `./.swissarmyhammer/prompts/`
-   - Workflows: `./.swissarmyhammer/workflows/`
-   - Searched in current directory and parent directories
-   - Perfect for project-specific customizations
-
-### Example Structure
-
-```
-~/.swissarmyhammer/          # User directory
-├── prompts/
-│   ├── code-review.md       # Personal code review prompt
-│   └── daily-standup.md     # Your daily standup template
-├── workflows/
-│   └── release-process.md   # Your release workflow
-├── memoranda/               # Personal notes and documentation
-│   ├── project-notes.md
-│   └── meeting-logs.md
-├── issues/                  # Issue tracking (managed automatically)
-│   ├── active/
-│   └── complete/
-└── search.db               # Semantic search index (auto-generated)
-
-./my-project/                # Project directory
-└── .swissarmyhammer/        # Local directory
-    ├── prompts/
-    │   └── api-docs.md      # Project-specific API documentation prompt
-    ├── workflows/
-    │   └── ci-cd.md         # Project CI/CD workflow
-    ├── memoranda/           # Project-specific notes
-    │   └── architecture.md
-    └── issues/              # Project issues
-        ├── active/
-        └── complete/
-```
-
-## 🚀 Quick Start
-
-### Install
-
-```bash
-cargo install --git https://github.com/swissarmyhammer/swissarmyhammer swissarmyhammer-cli
-```
-
-See [installation guide](https://swissarmyhammer.github.io/swissarmyhammer/installation.html) for detailed instructions.
-
-### Configure Claude Code
-
-Add to your Claude Code [MCP configuration](https://docs.anthropic.com/en/docs/claude-code/mcp)
-
-```bash
-claude mcp add --scope user sah sah serve
-```
-
-### Create Your First Prompt
-
+### 1. Create a Research Prompt
 ```bash
 mkdir -p ~/.swissarmyhammer/prompts
-cat > ~/.swissarmyhammer/prompts/helper.md << 'EOF'
+cat > ~/.swissarmyhammer/prompts/crypto-research.md << 'EOF'
 ---
-title: Task Helper
-description: Helps with various tasks
+title: Crypto Research
+description: Research cryptocurrency information
 arguments:
-  - name: task
-    description: What you need help with
+  - name: symbol
+    description: Crypto symbol (e.g. BTC, ETH)
     required: true
 ---
 
-Please help me with: {{task}}
+Research the cryptocurrency {{symbol}}:
 
-Provide clear, actionable advice.
+1. Use web_fetch to get current price and market data from CoinGecko API: `https://api.coingecko.com/api/v3/simple/price?ids={{symbol | downcase}}&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`
+
+2. Use web_search to find recent news about {{symbol}} cryptocurrency
+
+3. Analyze the collected data and create a comprehensive research summary
+
+4. Use memo_create to save your research with title "{{symbol}} Research Data" so it can be used for the final report
+
+Include: current price, 24h change, market cap, recent news highlights, and key developments.
 EOF
 ```
 
-That's it! Your prompt is now available in Claude Code. You can use it via MCP with `/helper`.
-
-### Try a Built-in Workflow
-
-SwissArmyHammer comes with built-in workflows. Try the hello-world example:
-
+### 2. Create a Report Formatter Prompt
 ```bash
-sah flow run hello-world
+cat > ~/.swissarmyhammer/prompts/format-report.md << 'EOF'
+---
+title: Format Report
+description: Format crypto research into a beautiful report
+arguments:
+  - name: symbol
+    description: Crypto symbol for the report
+    required: true
+---
+
+Create a beautiful daily crypto report for {{symbol}}:
+
+1. Use memo_search to find the research data for "{{symbol}} Research Data"
+
+2. Transform the research into a professional daily report with:
+   - 📊 Executive summary
+   - 💰 Key metrics table (price, change, market cap)
+   - 📈 Trend analysis
+   - ⚠️ Risk assessment
+   - 💡 Final recommendation
+
+3. Use professional formatting with emojis and clear sections
+
+4. Save the final report using file_write as "daily-{{symbol}}-report.md"
+EOF
 ```
 
-This simple workflow demonstrates:
-- Basic state transitions
-- Prompt execution with templating
-- Variable passing between states
+### 3. Create the Workflow
+```bash
+mkdir -p ~/.swissarmyhammer/workflows
+cat > ~/.swissarmyhammer/workflows/crypto-report.md << 'EOF'
+---
+name: crypto-report
+title: Daily Crypto Report
+description: Generate comprehensive cryptocurrency reports
+arguments:
+  - name: crypto
+    description: Cryptocurrency symbol to research
+    default: "BTC"
+---
 
-You can also run it through Claude Code using the MCP integration to see how workflows integrate with AI interactions.
+# Daily Crypto Report Workflow
 
-## 🔧 MCP Tools & Dynamic CLI
+```mermaid
+stateDiagram-v2
+    [*] --> Start
+    Start --> ResearchCrypto
+    ResearchCrypto --> FormatReport
+    FormatReport --> Complete
+    Complete --> [*]
+```
 
-SwissArmyHammer features a **dynamic CLI architecture** that automatically generates command-line interfaces from MCP tool definitions. This eliminates code duplication and ensures perfect consistency between MCP and CLI interfaces.
+## Actions
 
-### Available Tool Categories
+- Start: Log "Starting crypto report for ${crypto}"
+- ResearchCrypto: Execute prompt "crypto-research" with symbol="${crypto}"
+- FormatReport: Execute prompt "format-report" with symbol="${crypto}"
+- Complete: Log "Crypto report completed and saved as daily-${crypto}-report.md"
+EOF
+```
 
-- **Issue Management** - Complete issue tracking with Git branch integration (`sah issue create`, `sah issue work`, etc.)
-- **Memoranda System** - Note-taking and knowledge management (`sah memo create`, `sah memo search`, etc.)
-- **File Operations** - Comprehensive file manipulation (`sah files read`, `sah files write`, `sah files grep`, etc.)
-- **Semantic Search** - Vector-based code and content search (`sah search index`, `sah search query`, etc.)
-- **Web Tools** - Web fetching and search capabilities (`sah web fetch`, `sah web search`, etc.)
-- **Shell Integration** - Safe shell command execution (`sah shell execute`, etc.)
-- **Todo Management** - Ephemeral task tracking (`sah todo create`, `sah todo show`, etc.)
-- **Workflow Control** - Abort and notification tools (`sah abort create`, `sah notify create`, etc.)
+### 4. Run Your Workflow
+```bash
+# Generate report for Bitcoin
+sah flow run crypto-report --crypto "BTC"
 
-### Dynamic Architecture Benefits
+# Or try different cryptos
+sah flow run crypto-report --crypto "ETH"
+sah flow run crypto-report --crypto "SOL"
+```
 
-- **Single Source of Truth** - MCP tool schemas drive both MCP and CLI interfaces
-- **Automatic CLI Generation** - New MCP tools appear in CLI without code changes  
-- **Consistent Help Text** - Tool descriptions automatically become CLI help
-- **Zero Maintenance** - Adding tools requires no CLI-specific code
-- **Perfect Consistency** - CLI and MCP interfaces never drift apart
+**This workflow demonstrates SwissArmyHammer's power:**
+- **Web integration** - Fetches live API data and searches news
+- **Prompt orchestration** - Chains research and formatting prompts
+- **File operations** - Saves professional reports
+- **Memory management** - Passes data between workflow states
+- **Parameterization** - Customizable with different crypto symbols
 
-All tools integrate seamlessly with Claude Code's MCP protocol and provide structured, typed responses. The system uses JSON Schema to automatically generate appropriate CLI arguments, validation, and help text.
+**The result:** A beautiful daily crypto report with live data, news analysis, and professional formatting - all from a simple markdown workflow file.
 
-For detailed information about the architecture, see [`docs/dynamic-cli-architecture.md`](docs/dynamic-cli-architecture.md).
+---
 
-
+**Ready to automate your world? Install SwissArmyHammer and start building workflows that work while you sleep.** 🚀
