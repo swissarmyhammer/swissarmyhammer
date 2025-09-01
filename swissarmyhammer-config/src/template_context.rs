@@ -327,7 +327,7 @@ impl TemplateContext {
 
         // Extract the final configuration
         let config_value: Value = figment.extract().map_err(|e| {
-            ConfigurationError::template_context(format!("Failed to extract configuration: {}", e))
+            ConfigurationError::template_context(format!("Failed to extract configuration: {e}"))
         })?;
 
         // Apply environment variable substitution to the final configuration

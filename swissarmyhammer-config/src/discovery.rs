@@ -119,7 +119,7 @@ impl ConfigurationDiscovery {
     /// Returns directories in ascending precedence order (parent directories first)
     fn find_all_project_config_dirs() -> ConfigurationResult<Vec<PathBuf>> {
         let current_dir = std::env::current_dir().map_err(|e| {
-            ConfigurationError::discovery(format!("Could not get current directory: {}", e))
+            ConfigurationError::discovery(format!("Could not get current directory: {e}"))
         })?;
 
         let mut config_dirs = Vec::new();
@@ -164,7 +164,7 @@ impl ConfigurationDiscovery {
 
         for base_name in &base_names {
             for extension in &extensions {
-                let filename = format!("{}.{}", base_name, extension);
+                let filename = format!("{base_name}.{extension}");
                 let file_path = dir.join(&filename);
                 if file_path.is_file() {
                     debug!("Found config file: {}", file_path.display());
