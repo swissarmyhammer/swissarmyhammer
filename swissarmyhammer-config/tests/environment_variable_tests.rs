@@ -4,10 +4,16 @@
 //! key transformation, type conversion, and precedence handling.
 
 use serde_json::json;
+use serial_test::serial;
 use std::env;
 use std::fs;
+use std::sync::Mutex;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
+
+/// Global mutex to serialize environment variable tests
+/// This prevents race conditions when multiple tests modify environment variables
+static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
@@ -15,13 +21,30 @@ struct IsolatedEnvTest {
     original_cwd: std::path::PathBuf,
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
+    original_sah_vars: std::collections::HashMap<String, String>,
+    #[allow(dead_code)]
+    _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl IsolatedEnvTest {
     fn new() -> Self {
+        // Acquire the global test lock to prevent race conditions
+        let lock_guard = ENV_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            eprintln!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
         let original_home = env::var("HOME").ok();
+
+        // Capture all existing SAH_ and SWISSARMYHAMMER_ environment variables
+        let mut original_sah_vars = std::collections::HashMap::new();
+        for (key, value) in env::vars() {
+            if key.starts_with("SAH_") || key.starts_with("SWISSARMYHAMMER_") {
+                original_sah_vars.insert(key, value);
+            }
+        }
 
         // Set up isolated environment
         let home_dir = temp_dir.path().join("home");
@@ -34,6 +57,8 @@ impl IsolatedEnvTest {
             original_cwd,
             original_home,
             env_vars_to_restore: Vec::new(),
+            original_sah_vars,
+            _lock_guard: lock_guard,
         }
     }
 
@@ -55,25 +80,53 @@ impl IsolatedEnvTest {
 
 impl Drop for IsolatedEnvTest {
     fn drop(&mut self) {
-        // Restore environment variables
-        for (key, original_value) in &self.env_vars_to_restore {
-            match original_value {
-                Some(value) => env::set_var(key, value),
-                None => env::remove_var(key),
-            }
-        }
-
-        // Restore original environment
+        // FIRST: Restore original working directory before temp directory is cleaned up
         let _ = env::set_current_dir(&self.original_cwd);
+
+        // SECOND: Restore original HOME environment
         if let Some(home) = &self.original_home {
             env::set_var("HOME", home);
         } else {
             env::remove_var("HOME");
         }
+
+        // THIRD: Clean up environment variables completely
+        // Remove ALL current SAH_ and SWISSARMYHAMMER_ environment variables
+        let current_sah_vars: Vec<String> = env::vars()
+            .filter_map(|(key, _)| {
+                if key.starts_with("SAH_") || key.starts_with("SWISSARMYHAMMER_") {
+                    Some(key)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in current_sah_vars {
+            env::remove_var(&key);
+        }
+
+        // Restore ONLY the original SAH_ and SWISSARMYHAMMER_ variables that existed before the test
+        for (key, value) in &self.original_sah_vars {
+            env::set_var(key, value);
+        }
+
+        // Restore other environment variables that were explicitly tracked
+        for (key, original_value) in &self.env_vars_to_restore {
+            if !key.starts_with("SAH_") && !key.starts_with("SWISSARMYHAMMER_") {
+                match original_value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+        }
+
+        // FINALLY: The temp_dir will be cleaned up automatically when this struct is dropped
     }
 }
 
 #[test]
+#[serial]
 fn test_sah_prefix_basic_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -107,6 +160,7 @@ fn test_sah_prefix_basic_variables() {
 }
 
 #[test]
+#[serial]
 fn test_swissarmyhammer_prefix_basic_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -128,6 +182,7 @@ fn test_swissarmyhammer_prefix_basic_variables() {
 }
 
 #[test]
+#[serial]
 fn test_nested_environment_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -157,6 +212,7 @@ fn test_nested_environment_variables() {
 }
 
 #[test]
+#[serial]
 fn test_both_prefixes_simultaneously() {
     let mut test = IsolatedEnvTest::new();
 
@@ -176,6 +232,7 @@ fn test_both_prefixes_simultaneously() {
 }
 
 #[test]
+#[serial]
 fn test_prefix_precedence_when_both_set() {
     let mut test = IsolatedEnvTest::new();
 
@@ -213,6 +270,7 @@ fn test_prefix_precedence_when_both_set() {
 }
 
 #[test]
+#[serial]
 fn test_environment_variable_type_conversion() {
     let mut test = IsolatedEnvTest::new();
 
@@ -276,6 +334,7 @@ fn test_environment_variable_type_conversion() {
 }
 
 #[test]
+#[serial]
 fn test_environment_variable_with_special_characters() {
     let mut test = IsolatedEnvTest::new();
 
@@ -315,6 +374,7 @@ fn test_environment_variable_with_special_characters() {
 }
 
 #[test]
+#[serial]
 fn test_environment_variable_override_config_file() {
     let mut test = IsolatedEnvTest::new();
 
@@ -351,6 +411,7 @@ config_only = "config_value"
 }
 
 #[test]
+#[serial]
 fn test_case_sensitivity_in_env_vars() {
     let mut test = IsolatedEnvTest::new();
 
@@ -393,6 +454,7 @@ fn test_case_sensitivity_in_env_vars() {
 }
 
 #[test]
+#[serial]
 fn test_env_var_with_numbers_in_keys() {
     let mut test = IsolatedEnvTest::new();
 
@@ -427,6 +489,7 @@ fn test_env_var_with_numbers_in_keys() {
 }
 
 #[test]
+#[serial]
 fn test_env_vars_with_no_config_files() {
     let mut test = IsolatedEnvTest::new();
 
@@ -454,6 +517,7 @@ fn test_env_vars_with_no_config_files() {
 }
 
 #[test]
+#[serial]
 fn test_invalid_env_var_names() {
     let mut test = IsolatedEnvTest::new();
 
@@ -478,6 +542,7 @@ fn test_invalid_env_var_names() {
 }
 
 #[test]
+#[serial]
 fn test_env_var_substitution_in_values() {
     let mut test = IsolatedEnvTest::new();
 
@@ -527,6 +592,7 @@ fn test_env_var_substitution_in_values() {
 }
 
 #[test]
+#[serial]
 fn test_unset_environment_variables() {
     let mut test = IsolatedEnvTest::new();
 
@@ -548,6 +614,7 @@ fn test_unset_environment_variables() {
 }
 
 #[test]
+#[serial]
 fn test_env_var_precedence_order_consistency() {
     let mut test = IsolatedEnvTest::new();
 

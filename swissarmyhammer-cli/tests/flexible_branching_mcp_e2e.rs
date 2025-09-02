@@ -2,9 +2,9 @@
 //!
 //! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
 
-use tempfile::TempDir;
 use git2::Repository;
 use swissarmyhammer::git::git2_utils;
+use tempfile::TempDir;
 
 /// Test environment for MCP tool testing
 struct McpTestEnvironment {
@@ -29,7 +29,7 @@ impl McpTestEnvironment {
 
         // Initialize git repo using git2
         let repo = Repository::init(path).unwrap();
-        
+
         // Configure git
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Test User").unwrap();
@@ -39,12 +39,20 @@ impl McpTestEnvironment {
         std::fs::write(path.join("README.md"), "# MCP Test Project")
             .expect("Failed to write README.md");
         git2_utils::add_files(&repo, &["README.md"]).unwrap();
-        git2_utils::create_commit(&repo, "Initial commit", Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            "Initial commit",
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Create feature branch
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        let branch = repo.branch("feature/user-management", &head_commit, false).unwrap();
-        
+        let branch = repo
+            .branch("feature/user-management", &head_commit, false)
+            .unwrap();
+
         // Checkout the feature branch
         let branch_ref = branch.get();
         let tree = branch_ref.peel_to_tree().unwrap();
@@ -54,7 +62,13 @@ impl McpTestEnvironment {
         std::fs::write(path.join("user.rs"), "// User management module")
             .expect("Failed to write user.rs");
         git2_utils::add_files(&repo, &["user.rs"]).unwrap();
-        git2_utils::create_commit(&repo, "Add user management", Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            "Add user management",
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Create develop branch from main
         // First checkout main
@@ -63,11 +77,11 @@ impl McpTestEnvironment {
         let main_tree = main_ref.peel_to_tree().unwrap();
         repo.checkout_tree(main_tree.as_object(), None).unwrap();
         repo.set_head("refs/heads/main").unwrap();
-        
+
         // Create develop branch
         let main_commit = repo.head().unwrap().peel_to_commit().unwrap();
         let develop_branch = repo.branch("develop", &main_commit, false).unwrap();
-        
+
         // Checkout develop
         let develop_ref = develop_branch.get();
         let develop_tree = develop_ref.peel_to_tree().unwrap();
@@ -77,7 +91,13 @@ impl McpTestEnvironment {
         std::fs::write(path.join("develop.md"), "# Development branch")
             .expect("Failed to write develop.md");
         git2_utils::add_files(&repo, &["develop.md"]).unwrap();
-        git2_utils::create_commit(&repo, "Add development documentation", Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            "Add development documentation",
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
     }
 
     fn run_cli_command(&self, args: &[&str]) -> std::process::Output {
@@ -210,7 +230,13 @@ fn test_mcp_issue_merge_requires_issue_branch() {
 
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     git2_utils::add_files(&repo, &["test.rs"]).unwrap();
-    git2_utils::create_commit(&repo, "Add test file", Some("Test User"), Some("test@example.com")).unwrap();
+    git2_utils::create_commit(
+        &repo,
+        "Add test file",
+        Some("Test User"),
+        Some("test@example.com"),
+    )
+    .unwrap();
 
     let output = env.run_cli_command(&["issue", "complete", "--name", "test-validation"]);
     assert!(output.status.success());
@@ -271,7 +297,13 @@ fn test_mcp_issue_merge_to_source_branch() {
 
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     git2_utils::add_files(&repo, &["validation.rs"]).unwrap();
-    git2_utils::create_commit(&repo, "Add user validation", Some("Test User"), Some("test@example.com")).unwrap();
+    git2_utils::create_commit(
+        &repo,
+        "Add user validation",
+        Some("Test User"),
+        Some("test@example.com"),
+    )
+    .unwrap();
 
     // Mark issue complete
     let output = env.run_cli_command(&["issue", "complete", "--name", "user-validation"]);
@@ -388,7 +420,13 @@ fn test_mcp_backwards_compatibility_main_branch() {
 
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     git2_utils::add_files(&repo, &["main_feature.rs"]).unwrap();
-    git2_utils::create_commit(&repo, "Add main branch feature", Some("Test User"), Some("test@example.com")).unwrap();
+    git2_utils::create_commit(
+        &repo,
+        "Add main branch feature",
+        Some("Test User"),
+        Some("test@example.com"),
+    )
+    .unwrap();
 
     // Mark complete and merge
     let output = env.run_cli_command(&["issue", "complete", "--name", "main-branch-issue"]);
@@ -473,7 +511,7 @@ fn test_mcp_multiple_issues_same_source() {
     // Both issue branches should exist
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     let branches = repo.branches(Some(git2::BranchType::Local)).unwrap();
-    
+
     let mut branch_names = Vec::new();
     for branch_result in branches {
         let (branch, _) = branch_result.unwrap();
@@ -481,9 +519,13 @@ fn test_mcp_multiple_issues_same_source() {
             branch_names.push(name.to_string());
         }
     }
-    
-    assert!(branch_names.iter().any(|name| name == "issue/develop-feature-a"));
-    assert!(branch_names.iter().any(|name| name == "issue/develop-feature-b"));
+
+    assert!(branch_names
+        .iter()
+        .any(|name| name == "issue/develop-feature-a"));
+    assert!(branch_names
+        .iter()
+        .any(|name| name == "issue/develop-feature-b"));
 }
 
 /// Test issue list command shows source branch information

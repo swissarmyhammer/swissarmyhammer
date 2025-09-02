@@ -9,6 +9,11 @@ use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
 
 #[tokio::test]
 async fn test_multi_step_workflow_simulation() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing multi-step workflow simulation");
@@ -84,6 +89,11 @@ async fn test_multi_step_workflow_simulation() {
 
 #[tokio::test]
 async fn test_error_recovery_scenarios() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing error recovery scenarios");
@@ -140,6 +150,11 @@ async fn test_error_recovery_scenarios() {
 
 #[tokio::test]
 async fn test_variable_templating_patterns() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing variable templating patterns");
@@ -185,6 +200,11 @@ async fn test_variable_templating_patterns() {
 
 #[tokio::test]
 async fn test_conditional_execution_simulation() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing conditional execution simulation");
@@ -257,6 +277,11 @@ async fn test_conditional_execution_simulation() {
 
 #[tokio::test]
 async fn test_workflow_state_persistence() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing workflow state persistence simulation");
@@ -332,6 +357,11 @@ async fn test_workflow_state_persistence() {
 
 #[tokio::test]
 async fn test_intentional_error_handling() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing intentional error handling");

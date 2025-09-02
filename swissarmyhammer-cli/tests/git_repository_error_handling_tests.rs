@@ -112,8 +112,7 @@ async fn test_commands_work_in_git_repository() {
 
     // Initialize git repository
     use git2::Repository;
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repository");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repository");
 
     // Create .swissarmyhammer directory
     fs::create_dir_all(temp_dir.path().join(".swissarmyhammer"))

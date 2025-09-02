@@ -60,11 +60,8 @@ pub struct EmbeddingModelInfo {
 
 /// Embedding model backend type
 enum EmbeddingBackend {
-    /// Production model using fastembed neural embeddings
+    /// Neural model using fastembed neural embeddings
     Neural(Box<TextEmbedding>),
-    /// Mock model for testing (deterministic embeddings)
-    #[allow(dead_code)] // Only used in test code
-    Mock,
 }
 
 /// Embedding engine using fastembed-rs neural embeddings
@@ -258,22 +255,10 @@ impl EmbeddingEngine {
 
     /// Create a neural embedding using fastembed (or mock for testing)
     async fn create_neural_embedding(&self, text: &str) -> Result<Vec<f32>> {
-        // Check if this is a mock/test instance
-        #[cfg(test)]
-        if self.model_info.model_id == "mock-test-model" {
-            // Return deterministic mock embedding for testing
-            return Ok(self.generate_deterministic_mock_embedding(text));
-        }
-
         // Use fastembed to generate high-quality neural embeddings
         let mut backend = self.backend.lock().await;
         let model = match &mut *backend {
             EmbeddingBackend::Neural(model) => model.as_mut(),
-            EmbeddingBackend::Mock => {
-                return Err(SemanticError::Embedding(
-                    "Neural model not available in test mode".to_string(),
-                ))
-            }
         };
 
         // Format text appropriately for embedding (code context)
@@ -294,56 +279,9 @@ impl EmbeddingEngine {
         }
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    #[allow(dead_code)]
-    /// Generate a simple deterministic mock embedding for testing
-    /// Creates consistent embeddings without complex semantic modeling
-    fn generate_deterministic_mock_embedding(&self, text: &str) -> Vec<f32> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        // Simple hash-based approach for deterministic but varied embeddings
-        let mut hasher = DefaultHasher::new();
-        text.hash(&mut hasher);
-        let base_hash = hasher.finish();
-
-        // Generate embedding vector using the hash as a seed
-        let mut embedding = Vec::with_capacity(self.model_info.dimensions);
-        for i in 0..self.model_info.dimensions {
-            // Use dimension index to vary the values across dimensions
-            let dim_hash = base_hash.wrapping_add(i as u64 * 37);
-            // Convert to float in range [-1.0, 1.0]
-            let value = ((dim_hash % 2000) as f32 / 1000.0) - 1.0;
-            embedding.push(value);
-        }
-
-        // Normalize the vector to unit length (like real embeddings)
-        let magnitude: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if magnitude > 0.0 {
-            for value in &mut embedding {
-                *value /= magnitude;
-            }
-        }
-
-        embedding
-    }
-
     async fn process_text_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
-        }
-
-        // Check if this is a mock/test instance
-        #[cfg(test)]
-        if self.model_info.model_id == "mock-test-model" {
-            // Generate mock embeddings for each text
-            let mut embeddings = Vec::new();
-            for text in texts {
-                let cleaned = self.clean_text(text);
-                let mock_embedding = self.generate_deterministic_mock_embedding(&cleaned);
-                embeddings.push(mock_embedding);
-            }
-            return Ok(embeddings);
         }
 
         // Clean and format texts for fastembed
@@ -359,11 +297,6 @@ impl EmbeddingEngine {
         let mut backend = self.backend.lock().await;
         let model = match &mut *backend {
             EmbeddingBackend::Neural(model) => model.as_mut(),
-            EmbeddingBackend::Mock => {
-                return Err(SemanticError::Embedding(
-                    "Neural batch processing not available in test mode".to_string(),
-                ))
-            }
         };
 
         debug!("Processing batch of {} texts", texts.len());
@@ -430,59 +363,60 @@ impl EmbeddingEngine {
         result.chars().take(self.config.max_text_length).collect()
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    /// Create embedding engine for testing using mock model (no network required)
+    /// Create embedding engine for testing using small real model
     pub async fn new_for_testing() -> Result<Self> {
         Self::new_for_testing_with_config(EmbeddingConfig {
-            model_id: "mock-test-model".to_string(),
-            embedding_model: EmbeddingModel::NomicEmbedTextV15, // Not used for mock
+            model_id: swissarmyhammer_config::DEFAULT_TEST_EMBEDDING_MODEL.to_string(),
+            embedding_model: EmbeddingModel::BGESmallENV15, // Small, fast embedding model for testing
             batch_size: 1,
             max_text_length: 1000,
             batch_delay_ms: 0,
             show_download_progress: false,
-            dimensions: Some(768), // Standard dimension for NomicEmbedTextV15
+            dimensions: Some(384), // BGE-small-en-v1.5 has 384 dimensions
             max_sequence_length: 256,
             quantization: "FP32".to_string(),
         })
         .await
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
-    /// Create embedding engine for testing with custom config (no network required)
+    /// Create embedding engine for testing with custom config using real small model
     pub async fn new_for_testing_with_config(config: EmbeddingConfig) -> Result<Self> {
-        info!("Creating mock embedding engine for testing (no network required)");
+        info!("Creating embedding engine for testing with real small model");
 
-        info!(
-            "Creating mock embedding engine with {} dimensions",
-            config.dimensions.unwrap_or(768)
-        );
+        info!("Creating embedding engine with model: {}", config.model_id);
 
-        // Create a mock model info without initializing the actual fastembed model
+        // Initialize real fastembed model for testing
+        let init_options = InitOptions::new(config.embedding_model.clone())
+            .with_show_download_progress(config.show_download_progress)
+            .with_cache_dir("/tmp/.cache/fastembed".into());
+
+        let mut model = TextEmbedding::try_new(init_options).map_err(|e| {
+            SemanticError::Embedding(format!("Failed to initialize test embedding model: {e}"))
+        })?;
+
+        // Get actual model dimensions by generating a test embedding
+        let test_embedding = model.embed(vec!["test".to_string()], None).map_err(|e| {
+            SemanticError::Embedding(format!("Failed to get test model dimensions: {e}"))
+        })?;
+
+        let actual_dimensions = test_embedding.first().map(|e| e.len()).unwrap_or(384);
+
         let model_info = EmbeddingModelInfo {
             model_id: config.model_id.clone(),
-            dimensions: config.dimensions.unwrap_or(768), // Use config dimensions or default
+            dimensions: actual_dimensions,
             max_sequence_length: config.max_sequence_length,
             quantization: config.quantization.clone(),
         };
 
-        // For testing, we need to provide a dummy TextEmbedding model
-        // Since we can't create one without network access, we'll use a different strategy
-        // We'll create a minimal engine that uses the mock path in create_neural_embedding
-
-        info!("Mock embedding engine created successfully");
+        info!(
+            "Test embedding engine created successfully with {} dimensions",
+            actual_dimensions
+        );
         Ok(Self {
             config,
             model_info,
-            backend: Arc::new(Mutex::new(EmbeddingBackend::Mock)),
+            backend: Arc::new(Mutex::new(EmbeddingBackend::Neural(Box::new(model)))),
         })
-    }
-
-    #[cfg(test)]
-    /// Generate a deterministic mock embedding for testing
-    pub async fn generate_mock_embedding_for_test(&self, text: &str) -> Vec<f32> {
-        self.generate_embedding(text)
-            .await
-            .unwrap_or_else(|_| vec![0.0f32; self.model_info.dimensions])
     }
 }
 
@@ -510,7 +444,7 @@ mod tests {
             max_text_length: 1000,
             batch_delay_ms: 0,
             show_download_progress: false,
-            dimensions: Some(768),
+            dimensions: Some(384),
             max_sequence_length: 256,
             quantization: "FP32".to_string(),
         };
@@ -542,7 +476,7 @@ mod tests {
 
         assert!(embedding.is_ok());
         let embedding = embedding.unwrap();
-        assert_eq!(embedding.len(), 768);
+        assert_eq!(embedding.len(), 384); // BGE-small-en-v1.5 has 384 dimensions
 
         // Check that embedding values are normalized (typical for embeddings)
         let magnitude: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -580,7 +514,7 @@ mod tests {
 
         let embedding = embedding.unwrap();
         assert_eq!(embedding.chunk_id, "test_chunk");
-        assert_eq!(embedding.vector.len(), 768);
+        assert_eq!(embedding.vector.len(), 384);
     }
 
     #[tokio::test]
@@ -593,8 +527,8 @@ mod tests {
         assert!(embeddings.is_ok());
         let embeddings = embeddings.unwrap();
         assert_eq!(embeddings.len(), 2);
-        assert_eq!(embeddings[0].len(), 768);
-        assert_eq!(embeddings[1].len(), 768);
+        assert_eq!(embeddings[0].len(), 384);
+        assert_eq!(embeddings[1].len(), 384);
     }
 
     #[tokio::test]
@@ -625,12 +559,15 @@ mod tests {
     #[tokio::test]
     async fn test_model_info() {
         let _guard = IsolatedTestHome::new();
-        // Use mock engine for testing to avoid network dependencies
+        // Use real small model for testing
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
         let info = engine.model_info();
-        assert_eq!(info.model_id, "mock-test-model");
-        assert_eq!(info.dimensions, 768);
+        assert_eq!(
+            info.model_id,
+            swissarmyhammer_config::DEFAULT_TEST_EMBEDDING_MODEL
+        );
+        assert_eq!(info.dimensions, 384); // BGE-small-en-v1.5 has 384 dimensions
         assert_eq!(info.max_sequence_length, 256);
         assert_eq!(info.quantization, "FP32");
     }
@@ -679,15 +616,15 @@ mod tests {
     #[tokio::test]
     async fn test_clean_text_truncation() {
         let _guard = IsolatedTestHome::new();
-        // Create a mock config with limited text length for testing
+        // Create a config with limited text length for testing text truncation
         let config = EmbeddingConfig {
-            model_id: "mock-test-model".to_string(),
-            embedding_model: EmbeddingModel::NomicEmbedTextV15, // Not used for mock
+            model_id: swissarmyhammer_config::DEFAULT_TEST_EMBEDDING_MODEL.to_string(),
+            embedding_model: EmbeddingModel::BGESmallENV15,
             batch_size: 1,
             max_text_length: 10, // Test truncation at 10 characters
             batch_delay_ms: 0,
             show_download_progress: false,
-            dimensions: Some(768),
+            dimensions: Some(384), // BGE-small-en-v1.5 has 384 dimensions
             max_sequence_length: 256,
             quantization: "FP32".to_string(),
         };

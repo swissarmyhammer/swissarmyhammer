@@ -10,8 +10,8 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 // Import git2 utilities
-use git2::{Repository, Signature, BranchType};
 use anyhow::Result;
+use git2::{BranchType, Repository, Signature};
 
 /// Test environment for flexible branching integration tests
 struct FlexibleBranchingTestEnvironment {
@@ -57,26 +57,26 @@ impl FlexibleBranchingTestEnvironment {
     fn setup_git_repo_with_branches_git2(path: &std::path::Path) -> Result<()> {
         // Initialize git repo
         let repo = Repository::init(path)?;
-        
+
         // Configure git user
         let mut config = repo.config()?;
         config.set_str("user.name", "Test User")?;
         config.set_str("user.email", "test@example.com")?;
-        
+
         // Create initial commit on main branch
         std::fs::write(
             path.join("README.md"),
             "# Test Project\n\nMain branch content",
         )?;
-        
+
         let mut index = repo.index()?;
         index.add_path(std::path::Path::new("README.md"))?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let signature = Signature::now("Test User", "test@example.com")?;
-        
+
         let _commit_id = repo.commit(
             Some("HEAD"),
             &signature,
@@ -89,7 +89,7 @@ impl FlexibleBranchingTestEnvironment {
         // Create feature branch
         let head_commit = repo.head()?.peel_to_commit()?;
         let feature_branch = repo.branch("feature/user-authentication", &head_commit, false)?;
-        
+
         // Checkout feature branch
         let feature_ref = feature_branch.get();
         let feature_tree = feature_ref.peel_to_tree()?;
@@ -99,11 +99,11 @@ impl FlexibleBranchingTestEnvironment {
         std::fs::write(path.join("auth.rs"), "// User authentication module")?;
         index.add_path(std::path::Path::new("auth.rs"))?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let parent_commit = repo.head()?.peel_to_commit()?;
-        
+
         let _auth_commit = repo.commit(
             Some("HEAD"),
             &signature,
@@ -123,7 +123,7 @@ impl FlexibleBranchingTestEnvironment {
         // Create development branch from main
         let main_commit = repo.head()?.peel_to_commit()?;
         let dev_branch = repo.branch("develop", &main_commit, false)?;
-        
+
         // Checkout develop branch
         let dev_ref = dev_branch.get();
         let dev_tree = dev_ref.peel_to_tree()?;
@@ -133,11 +133,11 @@ impl FlexibleBranchingTestEnvironment {
         std::fs::write(path.join("dev.txt"), "Development branch")?;
         index.add_path(std::path::Path::new("dev.txt"))?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let parent_commit = repo.head()?.peel_to_commit()?;
-        
+
         let _dev_commit = repo.commit(
             Some("HEAD"),
             &signature,
@@ -153,7 +153,7 @@ impl FlexibleBranchingTestEnvironment {
 
         // Create release branch from main
         let release_branch = repo.branch("release/v1.0", &main_commit, false)?;
-        
+
         // Checkout release branch
         let release_ref = release_branch.get();
         let release_tree = release_ref.peel_to_tree()?;
@@ -163,11 +163,11 @@ impl FlexibleBranchingTestEnvironment {
         std::fs::write(path.join("version.txt"), "v1.0")?;
         index.add_path(std::path::Path::new("version.txt"))?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let parent_commit = repo.head()?.peel_to_commit()?;
-        
+
         let _version_commit = repo.commit(
             Some("HEAD"),
             &signature,
@@ -180,7 +180,7 @@ impl FlexibleBranchingTestEnvironment {
         // Return to main branch
         repo.checkout_tree(main_tree.as_object(), None)?;
         repo.set_head("refs/heads/main")?;
-        
+
         Ok(())
     }
 }
@@ -233,14 +233,16 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     // Use git2 instead of shell commands
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     let mut index = repo.index().unwrap();
-    index.add_path(std::path::Path::new("auth_tests.rs")).unwrap();
+    index
+        .add_path(std::path::Path::new("auth_tests.rs"))
+        .unwrap();
     index.write().unwrap();
-    
+
     let tree_id = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
     let signature = Signature::now("Test User", "test@example.com").unwrap();
     let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
-    
+
     repo.commit(
         Some("HEAD"),
         &signature,
@@ -248,7 +250,8 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
         "Add authentication tests",
         &tree,
         &[&parent_commit],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Mark issue as completed
     {
@@ -388,14 +391,16 @@ async fn test_release_branch_issue_workflow() {
     // Use git2 instead of shell commands
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     let mut index = repo.index().unwrap();
-    index.add_path(std::path::Path::new("security_fix.patch")).unwrap();
+    index
+        .add_path(std::path::Path::new("security_fix.patch"))
+        .unwrap();
     index.write().unwrap();
-    
+
     let tree_id = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
     let signature = Signature::now("Test User", "test@example.com").unwrap();
     let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
-    
+
     repo.commit(
         Some("HEAD"),
         &signature,
@@ -403,7 +408,8 @@ async fn test_release_branch_issue_workflow() {
         "Apply critical security fix",
         &tree,
         &[&parent_commit],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Mark issue complete and merge back to release branch
     {
@@ -486,14 +492,16 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     // Use git2 instead of shell commands
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     let mut index = repo.index().unwrap();
-    index.add_path(std::path::Path::new("traditional.txt")).unwrap();
+    index
+        .add_path(std::path::Path::new("traditional.txt"))
+        .unwrap();
     index.write().unwrap();
-    
+
     let tree_id = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
     let signature = Signature::now("Test User", "test@example.com").unwrap();
     let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
-    
+
     repo.commit(
         Some("HEAD"),
         &signature,
@@ -501,7 +509,8 @@ async fn test_backwards_compatibility_main_branch_workflow() {
         "Add traditional content",
         &tree,
         &[&parent_commit],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Use simple merge (should merge back to main)
     {

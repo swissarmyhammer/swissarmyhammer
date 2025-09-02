@@ -563,7 +563,22 @@ impl TemplateContext {
             }
         }
 
-        // 3. Fall back to system default (Claude Code)
+        // 3. Check for config directly under "agent" key (sah.yaml format)
+        // Try flat key access first (for programmatically set configs)
+        if let Some(config) = self.variables.get("agent") {
+            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
+                return agent_config;
+            }
+        }
+
+        // Try nested access (for file-loaded configs)
+        if let Some(config) = self.get("agent") {
+            if let Ok(agent_config) = serde_json::from_value::<AgentConfig>(config.clone()) {
+                return agent_config;
+            }
+        }
+
+        // 4. Fall back to system default (Claude Code)
         AgentConfig::default()
     }
 
@@ -877,6 +892,61 @@ version = "1.0.0"
 
         assert_eq!(context.get("test_key"), Some(&json!("test_value")));
         assert_eq!(context.len(), 1);
+    }
+
+    #[test]
+    fn test_get_agent_config_direct_agent_key() {
+        use crate::agent::{
+            AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+            ModelSource,
+        };
+
+        let mut context = TemplateContext::new();
+
+        // Set up agent config directly under the "agent" key (sah.yaml style)
+        let agent_config = AgentConfig {
+            quiet: false,
+            executor: AgentExecutorConfig::LlamaAgent(LlamaAgentConfig {
+                model: ModelConfig {
+                    source: ModelSource::HuggingFace {
+                        repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
+                        filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                    },
+                    batch_size: 256,
+                    use_hf_params: true,
+                    debug: false,
+                },
+                mcp_server: McpServerConfig {
+                    port: 0,
+                    timeout_seconds: 30,
+                },
+
+                repetition_detection: Default::default(),
+            }),
+        };
+
+        context.set(
+            "agent".to_string(),
+            serde_json::to_value(&agent_config).unwrap(),
+        );
+
+        // Test that get_agent_config finds the config under the direct "agent" key
+        let retrieved_config = context.get_agent_config(None);
+
+        // Verify it's the correct config type and not the default
+        match retrieved_config.executor {
+            AgentExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
+                ModelSource::HuggingFace { repo, filename } => {
+                    assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
+                    assert_eq!(
+                        filename.as_ref().unwrap(),
+                        "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+                    );
+                }
+                _ => panic!("Expected HuggingFace model source"),
+            },
+            _ => panic!("Expected LlamaAgent executor"),
+        }
     }
 
     #[test]

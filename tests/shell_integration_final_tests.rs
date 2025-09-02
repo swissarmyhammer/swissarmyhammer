@@ -215,9 +215,8 @@ mod performance_optimization {
     }
 
     fn get_memory_usage() -> u64 {
-        // Simple memory usage approximation for testing
-        // In production, would use more sophisticated memory monitoring
-        std::process::id() as u64 * 1024 // Placeholder implementation
+        // Use proper memory measurement from test utilities
+        swissarmyhammer::test_utils::memory_measurement::get_approximate_memory_usage()
     }
 }
 
@@ -570,8 +569,7 @@ mod benchmarks {
     }
 
     fn get_approximate_memory_usage() -> u64 {
-        // Placeholder for memory usage measurement
-        // In production, would use proper memory profiling
-        std::process::id() as u64 * 1000
+        // Use proper memory measurement from test utilities
+        swissarmyhammer::test_utils::memory_measurement::get_approximate_memory_usage()
     }
 }

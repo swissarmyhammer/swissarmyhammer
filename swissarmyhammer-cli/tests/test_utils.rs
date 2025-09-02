@@ -122,11 +122,15 @@ pub struct SemanticTestGuard {
     original_api_key: Option<String>,
     original_db_path: Option<String>,
     test_db_path: std::path::PathBuf,
+    _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl SemanticTestGuard {
     /// Create a new semantic test guard with isolated environment
     pub fn new() -> Self {
+        // Acquire the global semantic DB environment lock to prevent race conditions
+        let lock_guard = swissarmyhammer::test_utils::acquire_semantic_db_lock();
+
         let home_guard = create_test_home_guard();
         let temp_dir =
             TempDir::new().expect("Failed to create temporary directory for semantic test");
@@ -153,6 +157,7 @@ impl SemanticTestGuard {
             original_api_key,
             original_db_path,
             test_db_path,
+            _lock_guard: lock_guard,
         }
     }
 }
@@ -208,13 +213,16 @@ pub fn setup_git_repo(dir: &Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize git repository: {}", e))?;
 
     // Configure git user
-    let mut config = repo.config()
+    let mut config = repo
+        .config()
         .map_err(|e| anyhow::anyhow!("Failed to get repository config: {}", e))?;
-    
-    config.set_str("user.name", "Test User")
+
+    config
+        .set_str("user.name", "Test User")
         .map_err(|e| anyhow::anyhow!("Failed to set user.name: {}", e))?;
-    
-    config.set_str("user.email", "test@example.com")
+
+    config
+        .set_str("user.email", "test@example.com")
         .map_err(|e| anyhow::anyhow!("Failed to set user.email: {}", e))?;
 
     // Create initial commit
@@ -224,20 +232,25 @@ pub fn setup_git_repo(dir: &Path) -> Result<()> {
     )?;
 
     // Add file to index
-    let mut index = repo.index()
+    let mut index = repo
+        .index()
         .map_err(|e| anyhow::anyhow!("Failed to get repository index: {}", e))?;
-    
-    index.add_path(std::path::Path::new("README.md"))
+
+    index
+        .add_path(std::path::Path::new("README.md"))
         .map_err(|e| anyhow::anyhow!("Failed to add README.md to index: {}", e))?;
-    
-    index.write()
+
+    index
+        .write()
         .map_err(|e| anyhow::anyhow!("Failed to write index: {}", e))?;
 
     // Create tree and commit
-    let tree_oid = index.write_tree()
+    let tree_oid = index
+        .write_tree()
         .map_err(|e| anyhow::anyhow!("Failed to write tree: {}", e))?;
-    
-    let tree = repo.find_tree(tree_oid)
+
+    let tree = repo
+        .find_tree(tree_oid)
         .map_err(|e| anyhow::anyhow!("Failed to find tree: {}", e))?;
 
     let signature = Signature::now("Test User", "test@example.com")
@@ -250,7 +263,8 @@ pub fn setup_git_repo(dir: &Path) -> Result<()> {
         "Initial commit",
         &tree,
         &[], // No parent commits for initial commit
-    ).map_err(|e| anyhow::anyhow!("Failed to create initial commit: {}", e))?;
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to create initial commit: {}", e))?;
 
     Ok(())
 }
@@ -608,18 +622,18 @@ mod tests {
 #[allow(dead_code)]
 pub mod git2_test_utils {
     use anyhow::Result;
-    use git2::{Repository, Signature, BranchType};
+    use git2::{BranchType, Repository, Signature};
     use std::path::Path;
 
     /// Initialize a git repository at the specified path with basic configuration
     pub fn init_repo(path: &Path) -> Result<Repository> {
         let repo = Repository::init(path)?;
-        
+
         // Configure git user
         let mut config = repo.config()?;
         config.set_str("user.name", "Test User")?;
         config.set_str("user.email", "test@example.com")?;
-        
+
         Ok(repo)
     }
 
@@ -628,11 +642,11 @@ pub mod git2_test_utils {
         let mut index = repo.index()?;
         index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let signature = Signature::now("Test User", "test@example.com")?;
-        
+
         let commit_id = if let Ok(head) = repo.head() {
             let parent = head.peel_to_commit()?;
             repo.commit(
@@ -644,16 +658,9 @@ pub mod git2_test_utils {
                 &[&parent],
             )?
         } else {
-            repo.commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                message,
-                &tree,
-                &[],
-            )?
+            repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])?
         };
-        
+
         Ok(commit_id)
     }
 
@@ -669,10 +676,10 @@ pub mod git2_test_utils {
         let branch = repo.find_branch(branch_name, BranchType::Local)?;
         let branch_ref = branch.get();
         let tree = branch_ref.peel_to_tree()?;
-        
+
         repo.checkout_tree(tree.as_object(), None)?;
         repo.set_head(&format!("refs/heads/{}", branch_name))?;
-        
+
         Ok(())
     }
 
@@ -696,7 +703,7 @@ pub mod git2_test_utils {
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let signature = Signature::now("Test User", "test@example.com")?;
-        
+
         let commit_id = repo.commit(
             Some("HEAD"),
             &signature,
@@ -705,7 +712,7 @@ pub mod git2_test_utils {
             &tree,
             parents,
         )?;
-        
+
         Ok(commit_id)
     }
 
@@ -726,21 +733,27 @@ pub mod git2_test_utils {
     }
 
     /// Create multiple commits to simulate development history
-    pub fn create_commits_with_history(repo: &Repository, commits: &[(String, String)]) -> Result<Vec<git2::Oid>> {
+    pub fn create_commits_with_history(
+        repo: &Repository,
+        commits: &[(String, String)],
+    ) -> Result<Vec<git2::Oid>> {
         let mut commit_ids = vec![];
-        
+
         for (filename, content) in commits {
             std::fs::write(repo.workdir().unwrap().join(filename), content)?;
             add_files(repo, &[filename])?;
             let commit_id = create_commit(repo, &format!("Add {}", filename))?;
             commit_ids.push(commit_id);
         }
-        
+
         Ok(commit_ids)
     }
 
     /// Create a branch and switch to it (equivalent to git checkout -b)
-    pub fn create_and_checkout_branch<'a>(repo: &'a Repository, name: &str) -> Result<git2::Branch<'a>> {
+    pub fn create_and_checkout_branch<'a>(
+        repo: &'a Repository,
+        name: &str,
+    ) -> Result<git2::Branch<'a>> {
         let branch = create_branch(repo, name)?;
         checkout_branch(repo, name)?;
         Ok(branch)
@@ -751,29 +764,30 @@ pub mod git2_test_utils {
         let current_head = repo.head()?.target().unwrap();
         let branch = repo.find_branch(branch_name, BranchType::Local)?;
         let branch_commit = branch.get().peel_to_commit()?;
-        
+
         let merge_base = repo.merge_base(current_head, branch_commit.id())?;
         let current_commit = repo.find_commit(current_head)?;
-        
+
         if merge_base == branch_commit.id() {
             // Already up to date
             return Ok(current_head);
         }
-        
+
         if merge_base == current_head {
             // Fast-forward merge
             let branch_ref = branch.get();
             let tree = branch_ref.peel_to_tree()?;
             repo.checkout_tree(tree.as_object(), None)?;
-            repo.head()?.set_target(branch_commit.id(), "Fast-forward merge")?;
+            repo.head()?
+                .set_target(branch_commit.id(), "Fast-forward merge")?;
             return Ok(branch_commit.id());
         }
-        
+
         // Create merge commit
         let signature = Signature::now("Test User", "test@example.com")?;
         let tree_id = repo.index()?.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
-        
+
         let merge_commit_id = repo.commit(
             Some("HEAD"),
             &signature,
@@ -782,58 +796,64 @@ pub mod git2_test_utils {
             &tree,
             &[&current_commit, &branch_commit],
         )?;
-        
+
         Ok(merge_commit_id)
     }
 
     /// Complete setup function that creates a repo with multiple branches for testing
     pub fn setup_git_repo_with_branches(path: &Path) -> Result<Repository> {
         let repo = init_repo(path)?;
-        
+
         // Create initial commit on main branch
-        std::fs::write(path.join("README.md"), "# Test Project\n\nMain branch content")?;
+        std::fs::write(
+            path.join("README.md"),
+            "# Test Project\n\nMain branch content",
+        )?;
         add_files(&repo, &["README.md"])?;
         create_commit(&repo, "Initial commit")?;
-        
+
         // Create feature branch
         create_and_checkout_branch(&repo, "feature/user-authentication")?;
-        
+
         std::fs::write(path.join("auth.rs"), "// User authentication module")?;
         add_files(&repo, &["auth.rs"])?;
         create_commit(&repo, "Add authentication module")?;
-        
+
         // Switch back to main
         checkout_branch(&repo, "main")?;
-        
+
         Ok(repo)
     }
 
     /// Advanced setup with development branch
     pub fn setup_git_repo_with_dev_branch(path: &Path) -> Result<Repository> {
         let repo = setup_git_repo_with_branches(path)?;
-        
+
         // Create development branch
         create_and_checkout_branch(&repo, "development")?;
-        
+
         std::fs::write(path.join("dev_feature.rs"), "// Development feature")?;
         add_files(&repo, &["dev_feature.rs"])?;
         create_commit(&repo, "Add development feature")?;
-        
+
         // Switch back to main
         checkout_branch(&repo, "main")?;
-        
+
         Ok(repo)
     }
 
     /// Setup for performance testing with many commits
-    pub fn setup_git_repo_for_performance_testing(path: &Path, commit_count: usize) -> Result<Repository> {
+    pub fn setup_git_repo_for_performance_testing(
+        path: &Path,
+        commit_count: usize,
+    ) -> Result<Repository> {
         let repo = init_repo(path)?;
-        
+
         // Create initial commit
         std::fs::write(path.join("README.md"), "# Performance Test Repository")?;
         add_files(&repo, &["README.md"])?;
         create_commit(&repo, "Initial commit")?;
-        
+
         // Create many commits for performance testing
         for i in 1..=commit_count {
             let filename = format!("file_{:04}.txt", i);
@@ -842,7 +862,7 @@ pub mod git2_test_utils {
             add_files(&repo, &[&filename])?;
             create_commit(&repo, &format!("Add {}", filename))?;
         }
-        
+
         Ok(repo)
     }
 
@@ -850,11 +870,11 @@ pub mod git2_test_utils {
     pub fn get_status_porcelain(repo: &Repository) -> Result<String> {
         let statuses = repo.statuses(None)?;
         let mut output = String::new();
-        
+
         for entry in statuses.iter() {
             let status = entry.status();
             let path = entry.path().unwrap_or("");
-            
+
             let prefix = if status.contains(git2::Status::INDEX_NEW) {
                 "A "
             } else if status.contains(git2::Status::INDEX_MODIFIED) {
@@ -870,10 +890,10 @@ pub mod git2_test_utils {
             } else {
                 "  "
             };
-            
+
             output.push_str(&format!("{} {}\n", prefix, path));
         }
-        
+
         Ok(output)
     }
 
@@ -881,7 +901,7 @@ pub mod git2_test_utils {
     pub fn create_tag(repo: &Repository, tag_name: &str, message: &str) -> Result<git2::Oid> {
         let head_commit = repo.head()?.peel_to_commit()?;
         let signature = Signature::now("Test User", "test@example.com")?;
-        
+
         let tag_id = repo.tag(
             tag_name,
             head_commit.as_object(),
@@ -889,7 +909,7 @@ pub mod git2_test_utils {
             message,
             false,
         )?;
-        
+
         Ok(tag_id)
     }
 
@@ -897,14 +917,14 @@ pub mod git2_test_utils {
     pub fn list_branches(repo: &Repository) -> Result<Vec<String>> {
         let branches = repo.branches(Some(BranchType::Local))?;
         let mut branch_names = vec![];
-        
+
         for branch_result in branches {
             let (branch, _) = branch_result?;
             if let Some(name) = branch.name()? {
                 branch_names.push(name.to_string());
             }
         }
-        
+
         Ok(branch_names)
     }
 
@@ -927,5 +947,3 @@ pub mod git2_test_utils {
         repo.find_branch(branch_name, BranchType::Local).is_ok()
     }
 }
-
-

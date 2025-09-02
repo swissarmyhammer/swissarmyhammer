@@ -6,8 +6,11 @@
 
 use std::env;
 use std::sync::OnceLock;
-use swissarmyhammer_config::agent::{
-    AgentConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
+use swissarmyhammer_config::{
+    DEFAULT_TEST_LLM_MODEL_REPO, DEFAULT_TEST_LLM_MODEL_FILENAME,
+    agent::{
+        AgentConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
+    },
 };
 
 /// Test configuration for different environments
@@ -60,9 +63,9 @@ impl TestConfig {
                         .unwrap_or(120) // Longer timeout for local development
                 },
                 llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
-                    .unwrap_or_else(|_| "unsloth/Phi-4-mini-instruct-GGUF".to_string()),
+                    .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
                 llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
-                    .unwrap_or_else(|_| "Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
+                    .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
                 max_concurrent_tests: if is_ci {
                     env::var("SAH_TEST_MAX_CONCURRENT")
                         .ok()
@@ -85,8 +88,8 @@ impl TestConfig {
             enable_llama_tests: true,
             enable_claude_tests: true,
             test_timeout_seconds: 120,
-            llama_model_repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
-            llama_model_filename: "Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+            llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
             max_concurrent_tests: 5,
             is_ci: false,
         }
@@ -98,8 +101,8 @@ impl TestConfig {
             enable_llama_tests: false, // Disabled by default in CI (no models)
             enable_claude_tests: true,
             test_timeout_seconds: 60,
-            llama_model_repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
-            llama_model_filename: "Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            llama_model_repo: DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+            llama_model_filename: DEFAULT_TEST_LLM_MODEL_FILENAME.to_string(),
             max_concurrent_tests: 3,
             is_ci: true,
         }
@@ -113,11 +116,16 @@ impl TestConfig {
                     repo: self.llama_model_repo.clone(),
                     filename: Some(self.llama_model_filename.clone()),
                 },
+                batch_size: 256, // Smaller batch size for testing
+                use_hf_params: true,
+                debug: true, // Enable debug for testing
             },
             mcp_server: McpServerConfig {
                 port: 0,                                           // Random available port for testing
                 timeout_seconds: if self.is_ci { 10 } else { 30 }, // Shorter timeout in CI
             },
+
+            repetition_detection: Default::default(),
         }
     }
 
@@ -354,10 +362,10 @@ mod tests {
 
         match llama_config.model.source {
             ModelSource::HuggingFace { repo, filename } => {
-                assert_eq!(repo, "unsloth/Phi-4-mini-instruct-GGUF");
+                assert_eq!(repo, DEFAULT_TEST_LLM_MODEL_REPO);
                 assert_eq!(
                     filename,
-                    Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string())
+                    Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string())
                 );
             }
             ModelSource::Local { .. } => panic!("Should be HuggingFace source"),

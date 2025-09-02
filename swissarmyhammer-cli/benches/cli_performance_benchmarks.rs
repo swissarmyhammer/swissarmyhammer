@@ -84,18 +84,18 @@ pub fn performance_critical_{i}() {{
     }
 
     // Initialize git repository for issue operations
-    use git2::{Repository, Config};
-    
-    let repo = Repository::init(&temp_path)
-        .expect("Failed to init git repo");
-    
-    let mut config = repo.config()
-        .expect("Failed to get git config");
-    
-    config.set_str("user.name", "Benchmark User")
+    use git2::Repository;
+
+    let repo = Repository::init(&temp_path).expect("Failed to init git repo");
+
+    let mut config = repo.config().expect("Failed to get git config");
+
+    config
+        .set_str("user.name", "Benchmark User")
         .expect("Failed to set git user name");
-    
-    config.set_str("user.email", "benchmark@example.com")
+
+    config
+        .set_str("user.email", "benchmark@example.com")
         .expect("Failed to set git user email");
 
     (temp_dir, temp_path)

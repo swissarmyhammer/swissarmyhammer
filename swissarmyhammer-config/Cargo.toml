@@ -42,6 +42,6 @@ liquid = { workspace = true }
 tempfile = { workspace = true }
 serial_test = "3.1"
 
-[features]
-default = []
-test-utils = []
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!

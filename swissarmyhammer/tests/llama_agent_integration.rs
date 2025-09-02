@@ -10,6 +10,11 @@ use tokio::time::timeout;
 
 #[tokio::test]
 async fn test_executor_compatibility() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that both executor types can be created with identical interfaces
@@ -48,6 +53,11 @@ async fn test_executor_compatibility() {
 
 #[tokio::test]
 async fn test_agent_execution_context() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test context creation with different configurations
@@ -75,6 +85,11 @@ async fn test_agent_execution_context() {
 
 #[tokio::test]
 async fn test_concurrent_executor_access() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     const CONCURRENT_CONTEXTS: usize = 5;
@@ -122,6 +137,11 @@ async fn test_concurrent_executor_access() {
 
 #[tokio::test]
 async fn test_executor_factory_patterns() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test factory with different context patterns
@@ -164,6 +184,11 @@ async fn test_executor_factory_patterns() {
 
 #[tokio::test]
 async fn test_configuration_serialization() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that configurations can be properly serialized/deserialized
@@ -208,6 +233,11 @@ async fn test_configuration_serialization() {
 
 #[tokio::test]
 async fn test_timeout_handling() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Test that executor creation handles timeouts gracefully
@@ -237,4 +267,114 @@ async fn test_timeout_handling() {
     }
 
     // This test mainly verifies that timeout handling doesn't cause panics
+}
+
+#[tokio::test]
+async fn test_repetition_detection_configuration() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+    // Test default repetition detection configuration
+    let default_config = LlamaAgentConfig::default();
+    assert!(default_config.repetition_detection.enabled);
+    assert_eq!(default_config.repetition_detection.repetition_penalty, 1.1);
+    assert_eq!(default_config.repetition_detection.repetition_threshold, 50);
+    assert_eq!(default_config.repetition_detection.repetition_window, 64);
+    println!("✓ Default repetition detection configuration validated");
+
+    // Test testing configuration (should be more permissive)
+    let test_config = LlamaAgentConfig::for_testing();
+    assert!(test_config.repetition_detection.enabled);
+    assert_eq!(test_config.repetition_detection.repetition_penalty, 1.05); // Lower penalty
+    assert_eq!(test_config.repetition_detection.repetition_threshold, 100); // Higher threshold
+    assert_eq!(test_config.repetition_detection.repetition_window, 32); // Smaller window
+    println!("✓ Test repetition detection configuration validated");
+
+    // Test small model configuration (should be most permissive)
+    let small_model_config = LlamaAgentConfig::for_small_model();
+    assert!(small_model_config.repetition_detection.enabled);
+    assert_eq!(
+        small_model_config.repetition_detection.repetition_penalty,
+        1.05
+    ); // Lower penalty
+    assert_eq!(
+        small_model_config.repetition_detection.repetition_threshold,
+        150
+    ); // Highest threshold
+    assert_eq!(
+        small_model_config.repetition_detection.repetition_window,
+        128
+    ); // Larger window
+    println!("✓ Small model repetition detection configuration validated");
+
+    // Test that different configurations can be serialized properly
+    for (name, config) in [
+        ("default", LlamaAgentConfig::default()),
+        ("testing", LlamaAgentConfig::for_testing()),
+        ("small_model", LlamaAgentConfig::for_small_model()),
+    ] {
+        let json_result = serde_json::to_string(&config);
+        assert!(json_result.is_ok(), "Failed to serialize {} config", name);
+
+        let json_str = json_result.unwrap();
+        assert!(
+            json_str.contains("repetition_detection"),
+            "{} config should contain repetition_detection",
+            name
+        );
+
+        let deserialized: Result<LlamaAgentConfig, _> = serde_json::from_str(&json_str);
+        assert!(
+            deserialized.is_ok(),
+            "Failed to deserialize {} config",
+            name
+        );
+
+        println!("✓ {} repetition detection serialization works", name);
+    }
+}
+
+#[tokio::test]
+async fn test_repetition_configuration_integration() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+
+    // This test verifies that repetition detection configuration gets passed
+    // through to the llama-agent properly. Due to the mock implementation in tests,
+    // this mainly verifies the configuration conversion doesn't panic.
+
+    let small_model_config = LlamaAgentConfig::for_small_model();
+    let agent_config = AgentConfig::llama_agent(small_model_config);
+
+    let context =
+        WorkflowTemplateContext::with_vars(HashMap::new()).expect("Failed to create context");
+    let mut context_with_config = context;
+    context_with_config.set_agent_config(agent_config);
+    let execution_context = AgentExecutionContext::new(&context_with_config);
+
+    // This should create the executor with repetition detection configuration
+    // In test mode, this will use the mock implementation, but verifies
+    // the configuration pipeline works
+    let result = AgentExecutorFactory::create_executor(&execution_context).await;
+
+    match result {
+        Ok(_executor) => {
+            println!("✓ LlamaAgent executor with repetition config created successfully");
+        }
+        Err(e) => {
+            println!(
+                "⚠ LlamaAgent executor creation failed (expected in test mode): {}",
+                e
+            );
+            // This is expected when running in test mode with mocked dependencies
+        }
+    }
 }

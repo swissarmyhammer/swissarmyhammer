@@ -33,38 +33,6 @@ fn should_run_fast() -> bool {
         || std::env::var("SKIP_SLOW_TESTS").is_ok()
 }
 
-/// Check if we should run expensive ML tests
-fn should_run_expensive_ml_tests() -> bool {
-    // Check for explicit request to run expensive tests
-    if std::env::var("RUN_ML_TESTS").is_ok() {
-        return true;
-    }
-
-    // Skip in CI unless explicitly requested
-    if std::env::var("CI").is_ok() {
-        return false;
-    }
-
-    // Skip if user explicitly opts out
-    if std::env::var("SKIP_ML_TESTS").is_ok() {
-        return false;
-    }
-
-    // Default to skipping in tests for safety
-    false
-}
-
-/// Check if we should use mock implementations for ML operations
-fn should_use_mock_ml_operations() -> bool {
-    // Use mocks if explicitly requested
-    if std::env::var("MOCK_ML_TESTS").is_ok() {
-        return true;
-    }
-
-    // Use mocks by default when not running full ML tests
-    !should_run_expensive_ml_tests()
-}
-
 /// Global persistent cache for search model downloads - shared across test runs for efficiency
 ///
 /// Cache Strategy:
@@ -99,40 +67,15 @@ static MODEL_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
         })
 });
 
-/// Mock search indexing that simulates success without expensive operations
-async fn mock_search_index(
-    _temp_path: &std::path::Path,
-    patterns: &[&str],
-    _force: bool,
-) -> Result<bool> {
-    // Simulate successful indexing with realistic output
-    eprintln!("🔄 Mock search indexing for patterns: {:?}", patterns);
-
-    // Add a small delay to simulate some work
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-    eprintln!(
-        "✅ Mock search indexing completed successfully - indexed {} files with {} chunks",
-        patterns.len() * 3,
-        patterns.len() * 15
-    );
-    Ok(true)
-}
-
 /// Helper function to perform search indexing with timeout and graceful failure
 async fn try_search_index(
-    temp_path: &std::path::Path,
+    _temp_path: &std::path::Path,
     patterns: &[&str],
     force: bool,
 ) -> Result<bool> {
-    // Use mock implementation if configured
-    if should_use_mock_ml_operations() {
-        return mock_search_index(temp_path, patterns, force).await;
-    }
-
-    // Skip search indexing in CI or when SKIP_SEARCH_TESTS is set
-    if std::env::var("CI").is_ok() || std::env::var("SKIP_SEARCH_TESTS").is_ok() {
-        eprintln!("⚠️  Skipping search indexing (CI environment or SKIP_SEARCH_TESTS set)");
+    // Skip search indexing if SKIP_ML_TESTS is set
+    if std::env::var("SKIP_ML_TESTS").is_ok() {
+        eprintln!("⚠️  Skipping search indexing (SKIP_ML_TESTS set)");
         return Ok(false);
     }
 
@@ -204,57 +147,23 @@ async fn try_search_index(
     final_result
 }
 
-/// Mock search query that returns realistic test data without ML operations
-async fn mock_search_query(
+/// Helper function to run search query
+async fn try_search_query(
     _temp_path: &std::path::Path,
     query: &str,
     limit: usize,
 ) -> Result<in_process_test_utils::CapturedOutput> {
-    eprintln!("🔄 Mock search query: '{}' with limit: {}", query, limit);
-
-    // Add a small delay to simulate some work
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Generate mock search results that look realistic
-    let mock_results = if query.is_empty() {
-        "Error: Empty search query".to_string()
-    } else {
-        format!(
-            "Found {} matches for query '{}'\n\nResults:\n{}\n",
-            std::cmp::min(limit, 3),
-            query,
-            (1..=std::cmp::min(limit, 3))
-                .map(|i| format!(
-                    "  {}. mock_file_{}.rs:{}  // Mock result for '{}'",
-                    i,
-                    i,
-                    i * 10,
-                    query
-                ))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
-
-    Ok(in_process_test_utils::CapturedOutput {
-        stdout: mock_results,
-        stderr: String::new(),
-        exit_code: 0,
-    })
-}
-
-/// Helper function to run search query with mock support
-async fn try_search_query(
-    temp_path: &std::path::Path,
-    query: &str,
-    limit: usize,
-) -> Result<in_process_test_utils::CapturedOutput> {
-    // Use mock implementation if configured
-    if should_use_mock_ml_operations() {
-        return mock_search_query(temp_path, query, limit).await;
+    // Skip search query if SKIP_ML_TESTS is set
+    if std::env::var("SKIP_ML_TESTS").is_ok() {
+        eprintln!("⚠️  Skipping search query (SKIP_ML_TESTS set)");
+        return Ok(in_process_test_utils::CapturedOutput {
+            stdout: "Search skipped due to SKIP_ML_TESTS".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        });
     }
 
-    // Run real search query
+    // Run real search query with small model
     run_sah_command_in_process(&[
         "search",
         "query",
@@ -515,56 +424,44 @@ async fn test_complete_issue_lifecycle() -> Result<()> {
     Ok(())
 }
 
-/// Test complete search workflow with mock ML operations by default or real ML operations when enabled.
+/// Test complete search workflow with real small models.
 ///
 /// This test verifies the end-to-end search functionality including:
-/// - Mock ML operations by default (fast, no downloads)
-/// - Real ML model downloads with timeout protection when enabled (nomic-embed-code model, ~100MB)
-/// - File indexing using TreeSitter parsing for code files (mocked by default)
-/// - Search query execution with vector similarity matching (mocked by default)
+/// - Real ML model downloads with small models (Qwen3-1.7B, ~1.2GB)
+/// - File indexing using TreeSitter parsing for code files
+/// - Search query execution with vector similarity matching
 /// - Graceful timeout handling for infrastructure issues
 /// - System recovery after model download failures
 ///
 /// **Environment Controls:**
-/// - Default: Uses mock ML operations (fast, always works)
-/// - Set `RUN_ML_TESTS=1` to enable real ML operations (slow, requires network)
-/// - Set `MOCK_ML_TESTS=1` to explicitly use mocks (same as default)
+/// - Default: Uses real small models (fast, ~1.2GB download)
 /// - Set `SKIP_ML_TESTS=1` to completely skip test
-/// - Uses 120-second timeout to prevent indefinite hanging in real mode
+/// - Uses 120-second timeout to prevent indefinite hanging
 ///
 /// **Test Strategy:**
-/// - Mock Mode (default): Tests workflow logic with simulated ML operations
-/// - Real Mode: Downloads ML models, indexes files, performs real searches
-/// - Verifies graceful handling of timeout scenarios in real mode
-/// - Always tests the complete workflow logic and error handling
+/// - Always uses real models but with small, fast models for testing
+/// - Downloads ML models, indexes files, performs real searches
+/// - Verifies graceful handling of timeout scenarios
+/// - Tests complete workflow logic and error handling
 ///
 /// **Performance Notes:**
-/// - Mock mode: ~1-2 seconds (default)
-/// - Real mode first run: ~2-5 minutes (model download + indexing)
-/// - Real mode subsequent runs: ~10-30 seconds (cached models)
+/// - First run: ~2-5 minutes (small model download + indexing)
+/// - Subsequent runs: ~10-30 seconds (cached models)
+/// - Small model ensures reasonable CI execution time
 #[tokio::test]
 async fn test_complete_search_workflow_full() -> Result<()> {
-    // This test now runs by default using mocks, or with real ML operations if enabled
+    // This test always uses real small models for authentic integration testing
     if std::env::var("SKIP_ML_TESTS").is_ok() {
         eprintln!("⚠️  Skipping search workflow test (SKIP_ML_TESTS set).");
         return Ok(());
     }
 
-    let is_using_mocks = should_use_mock_ml_operations();
-    if is_using_mocks {
-        eprintln!("🔄 Running search workflow test with mock ML operations (fast mode)");
-    } else {
-        eprintln!("🔄 Running search workflow test with real ML operations (full mode)");
-    }
+    eprintln!("🔄 Running search workflow test with real small models");
 
     let test_env = E2ETestEnvironment::new()?;
 
-    // Apply timeout protection - short for mock mode, longer for real ML operations
-    let timeout_duration = if is_using_mocks {
-        std::time::Duration::from_secs(30) // Mock mode: should be fast
-    } else {
-        std::time::Duration::from_secs(120) // Real mode: model download + indexing + buffer
-    };
+    // Apply timeout protection for real ML operations with small models
+    let timeout_duration = std::time::Duration::from_secs(120); // Small model download + indexing + buffer
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Try to index some test files
@@ -589,27 +486,17 @@ async fn test_complete_search_workflow_full() -> Result<()> {
     match result {
         Ok(workflow_result) => workflow_result,
         Err(_timeout) => {
-            if is_using_mocks {
-                // Mock mode timeout is unexpected and indicates a real problem
-                return Err(anyhow::anyhow!(
-                    "Mock search workflow test timed out after {} seconds - this indicates a bug in mock implementation",
-                    timeout_duration.as_secs()
-                ));
-            } else {
-                // Real mode timeout - graceful degradation for infrastructure issues
-                eprintln!(
-                    "⚠️  Real ML search workflow test timed out after {} seconds - may indicate:",
-                    timeout_duration.as_secs()
-                );
-                eprintln!("    • Slow network connection during model download");
-                eprintln!("    • Limited CPU/memory resources in CI environment");
-                eprintln!("    • Model download server issues");
-                eprintln!("    • DuckDB locking or file system issues");
-                eprintln!(
-                    "    Test continues - this is expected infrastructure resilience behavior"
-                );
-                Ok(()) // Return success to avoid breaking CI due to infrastructure issues
-            }
+            // Real mode timeout - graceful degradation for infrastructure issues
+            eprintln!(
+                "⚠️  Real ML search workflow test timed out after {} seconds - may indicate:",
+                timeout_duration.as_secs()
+            );
+            eprintln!("    • Slow network connection during small model download");
+            eprintln!("    • Limited CPU/memory resources in CI environment");
+            eprintln!("    • Model download server issues");
+            eprintln!("    • DuckDB locking or file system issues");
+            eprintln!("    Test continues - this is expected infrastructure resilience behavior");
+            Ok(()) // Return success to avoid breaking CI due to infrastructure issues
         }
     }
 }
@@ -619,7 +506,7 @@ async fn test_complete_search_workflow_full() -> Result<()> {
 /// This test verifies cross-system integration by:
 /// - Creating issues through the CLI interface
 /// - Creating memos for documentation and notes
-/// - Indexing created content for semantic search
+/// - Indexing created content for semantic search with small models
 /// - Testing search across multiple content types
 /// - Validating data consistency across all systems
 ///
@@ -631,20 +518,20 @@ async fn test_complete_search_workflow_full() -> Result<()> {
 /// - CLI command chaining and error propagation
 ///
 /// **Environment Controls:**
-/// - Set `RUN_ML_TESTS=1` to enable (disabled by default)
+/// - Default: Uses real small models (Qwen3-1.7B)
+/// - Set `SKIP_ML_TESTS=1` to skip test entirely
 /// - Uses 120-second timeout for ML model operations
 /// - Gracefully handles timeout scenarios without failing
-/// - Skipped in CI environments unless explicitly enabled
 ///
 /// **Test Workflow:**
 /// 1. Create test issue with structured content
 /// 2. Create test memo with markdown formatting
-/// 3. Index all content using ML embeddings
+/// 3. Index all content using real ML embeddings with small model
 /// 4. Verify cross-system data retrieval works
 /// 5. Test search functionality across content types
 ///
 /// **Performance Expectations:**
-/// - First run: 2-4 minutes (model download)
+/// - First run: 2-4 minutes (small model download)
 /// - Cached run: 15-45 seconds (indexing only)
 /// - Network failures handled gracefully with warnings
 #[tokio::test]
@@ -654,21 +541,12 @@ async fn test_mixed_workflow() -> Result<()> {
         return Ok(());
     }
 
-    let is_using_mocks = should_use_mock_ml_operations();
-    if is_using_mocks {
-        eprintln!("🔄 Running mixed workflow test with mock ML operations");
-    } else {
-        eprintln!("🔄 Running mixed workflow test with real ML operations");
-    }
+    eprintln!("🔄 Running mixed workflow test with real small models");
 
     let test_env = E2ETestEnvironment::new()?;
 
-    // Apply timeout protection for mixed workflow operations
-    let timeout_duration = if is_using_mocks {
-        std::time::Duration::from_secs(30) // Mock mode: should be fast
-    } else {
-        std::time::Duration::from_secs(120) // Real mode: CLI + model download + indexing
-    };
+    // Apply timeout protection for mixed workflow operations with small models
+    let timeout_duration = std::time::Duration::from_secs(120); // CLI + small model download + indexing
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Create test content
@@ -711,23 +589,16 @@ async fn test_mixed_workflow() -> Result<()> {
     match result {
         Ok(workflow_result) => workflow_result,
         Err(_timeout) => {
-            if is_using_mocks {
-                return Err(anyhow::anyhow!(
-                    "Mock mixed workflow test timed out after {} seconds - this indicates a bug in mock implementation", 
-                    timeout_duration.as_secs()
-                ));
-            } else {
-                eprintln!(
-                    "⚠️  Mixed workflow test timed out after {} seconds during:",
-                    timeout_duration.as_secs()
-                );
-                eprintln!("    • Issue creation and markdown file generation");
-                eprintln!("    • Memo creation and ULID-based storage");
-                eprintln!("    • ML model download for search indexing");
-                eprintln!("    • Cross-system content indexing and retrieval");
-                eprintln!("    Mixed workflow timeout is acceptable for infrastructure resilience");
-                Ok(()) // Graceful degradation preserves test suite stability
-            }
+            eprintln!(
+                "⚠️  Mixed workflow test timed out after {} seconds during:",
+                timeout_duration.as_secs()
+            );
+            eprintln!("    • Issue creation and markdown file generation");
+            eprintln!("    • Memo creation and ULID-based storage");
+            eprintln!("    • Small ML model download for search indexing");
+            eprintln!("    • Cross-system content indexing and retrieval");
+            eprintln!("    Mixed workflow timeout is acceptable for infrastructure resilience");
+            Ok(()) // Graceful degradation preserves test suite stability
         }
     }
 }
@@ -779,21 +650,12 @@ async fn test_error_recovery_workflow() -> Result<()> {
         return Ok(());
     }
 
-    let is_using_mocks = should_use_mock_ml_operations();
-    if is_using_mocks {
-        eprintln!("🔄 Running error recovery test with mock ML operations");
-    } else {
-        eprintln!("🔄 Running error recovery test with real ML operations");
-    }
+    eprintln!("🔄 Running error recovery test with real small models");
 
     let test_env = E2ETestEnvironment::new()?;
 
-    // Apply timeout for error recovery testing
-    let timeout_duration = if is_using_mocks {
-        std::time::Duration::from_secs(30) // Mock mode: should be fast
-    } else {
-        std::time::Duration::from_secs(120) // Real mode: handles model downloads during error testing
-    };
+    // Apply timeout for error recovery testing with small models
+    let timeout_duration = std::time::Duration::from_secs(120); // Handles small model downloads during error testing
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test error recovery scenarios
@@ -825,23 +687,16 @@ async fn test_error_recovery_workflow() -> Result<()> {
     match result {
         Ok(workflow_result) => workflow_result,
         Err(_timeout) => {
-            if is_using_mocks {
-                return Err(anyhow::anyhow!(
-                    "Mock error recovery test timed out after {} seconds - this indicates a bug in mock implementation", 
-                    timeout_duration.as_secs()
-                ));
-            } else {
-                eprintln!(
-                    "⚠️  Error recovery workflow test timed out after {} seconds while:",
-                    timeout_duration.as_secs()
-                );
-                eprintln!("    • Testing graceful error handling across components");
-                eprintln!("    • Validating system recovery after infrastructure failures");
-                eprintln!("    • Downloading ML models during error condition simulation");
-                eprintln!("    • Verifying cross-component consistency after errors");
-                eprintln!("    Timeout during error recovery testing indicates infrastructure resilience working as intended");
-                Ok(()) // Error recovery test should not fail on infrastructure timeouts
-            }
+            eprintln!(
+                "⚠️  Error recovery workflow test timed out after {} seconds while:",
+                timeout_duration.as_secs()
+            );
+            eprintln!("    • Testing graceful error handling across components");
+            eprintln!("    • Validating system recovery after infrastructure failures");
+            eprintln!("    • Downloading small ML models during error condition simulation");
+            eprintln!("    • Verifying cross-component consistency after errors");
+            eprintln!("    Timeout during error recovery testing indicates infrastructure resilience working as intended");
+            Ok(()) // Error recovery test should not fail on infrastructure timeouts
         }
     }
 }

@@ -138,8 +138,8 @@ impl Default for ActionTimeouts {
                 std::env::var("SWISSARMYHAMMER_SUB_WORKFLOW_TIMEOUT")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600),
-            ), // 10 minutes default
+                    .unwrap_or(60),
+            ), // 1 minute default (was 3600s/1 hour)
         }
     }
 }
@@ -162,13 +162,11 @@ fn get_llama_config_from_context(
 
 /// Agent execution context for prompt execution
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct AgentExecutionContext<'a> {
     /// Reference to the workflow template context
     pub workflow_context: &'a WorkflowTemplateContext,
 }
 
-#[allow(dead_code)]
 impl<'a> AgentExecutionContext<'a> {
     /// Create a new agent execution context
     /// Create a new agent execution context
@@ -192,9 +190,78 @@ impl<'a> AgentExecutionContext<'a> {
     }
 }
 
+/// Response type from agent execution
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentResponse {
+    /// The primary response content from the agent
+    pub content: String,
+    /// Optional metadata about the response
+    pub metadata: Option<serde_json::Value>,
+    /// Response status/type for different kinds of responses
+    pub response_type: AgentResponseType,
+}
+
+/// Type of agent response
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum AgentResponseType {
+    /// Standard successful text response
+    Success,
+    /// Partial response (streaming, timeout, etc.)
+    Partial,
+    /// Error response with error details
+    Error,
+}
+
+impl AgentResponse {
+    /// Create a successful response
+    pub fn success(content: String) -> Self {
+        Self {
+            content,
+            metadata: None,
+            response_type: AgentResponseType::Success,
+        }
+    }
+
+    /// Create a successful response with metadata
+    pub fn success_with_metadata(content: String, metadata: serde_json::Value) -> Self {
+        Self {
+            content,
+            metadata: Some(metadata),
+            response_type: AgentResponseType::Success,
+        }
+    }
+
+    /// Create an error response
+    pub fn error(content: String) -> Self {
+        Self {
+            content,
+            metadata: None,
+            response_type: AgentResponseType::Error,
+        }
+    }
+
+    /// Create a partial response
+    pub fn partial(content: String) -> Self {
+        Self {
+            content,
+            metadata: None,
+            response_type: AgentResponseType::Partial,
+        }
+    }
+
+    /// Check if this is a successful response
+    pub fn is_success(&self) -> bool {
+        matches!(self.response_type, AgentResponseType::Success)
+    }
+
+    /// Check if this is an error response
+    pub fn is_error(&self) -> bool {
+        matches!(self.response_type, AgentResponseType::Error)
+    }
+}
+
 /// Agent executor trait for abstracting prompt execution across different AI backends
 #[async_trait]
-#[allow(dead_code)]
 pub trait AgentExecutor: Send + Sync {
     /// Execute a rendered prompt and return the response
     async fn execute_prompt(
@@ -203,7 +270,7 @@ pub trait AgentExecutor: Send + Sync {
         rendered_prompt: String,
         context: &AgentExecutionContext<'_>,
         timeout: Duration,
-    ) -> ActionResult<Value>;
+    ) -> ActionResult<AgentResponse>;
 
     /// Get the executor type enum
     fn executor_type(&self) -> AgentExecutorType;
@@ -216,10 +283,8 @@ pub trait AgentExecutor: Send + Sync {
 }
 
 /// Factory for creating agent executors
-#[allow(dead_code)]
 pub struct AgentExecutorFactory;
 
-#[allow(dead_code)]
 impl AgentExecutorFactory {
     /// Create an executor based on the execution context
     pub async fn create_executor(
@@ -227,15 +292,21 @@ impl AgentExecutorFactory {
     ) -> ActionResult<Box<dyn AgentExecutor>> {
         match context.executor_type() {
             AgentExecutorType::ClaudeCode => {
+                tracing::info!("Using ClaudeCode");
                 let mut executor = ClaudeCodeExecutor::new();
                 executor.initialize().await?;
                 Ok(Box::new(executor))
             }
             AgentExecutorType::LlamaAgent => {
                 let llama_config = get_llama_config_from_context(context)?;
-                let mut executor = LlamaAgentExecutor::new(llama_config);
-                executor.initialize().await?;
-                Ok(Box::new(executor))
+                tracing::info!("Using {:?} (global instance)", llama_config);
+
+                // Use the global singleton to avoid repeated model loading
+                let global_executor = LlamaAgentExecutor::get_global_executor(llama_config).await?;
+
+                // Create a wrapper that owns the Arc<Mutex<>> to satisfy the Box<dyn AgentExecutor> requirement
+                let wrapper = LlamaAgentExecutorWrapper::new(global_executor);
+                Ok(Box::new(wrapper))
             }
         }
     }
@@ -293,7 +364,7 @@ impl ClaudeCodeExecutor {
         prompt: String,
         system_prompt: Option<String>,
         timeout_duration: Duration,
-    ) -> ActionResult<Value> {
+    ) -> ActionResult<AgentResponse> {
         use tokio::io::AsyncWriteExt;
         use tokio::process::Command;
 
@@ -384,7 +455,7 @@ impl ClaudeCodeExecutor {
             response_text.trim().to_string()
         };
 
-        Ok(Value::String(response_text))
+        Ok(AgentResponse::success(response_text))
     }
 }
 
@@ -396,7 +467,7 @@ impl AgentExecutor for ClaudeCodeExecutor {
         rendered_prompt: String,
         context: &AgentExecutionContext<'_>,
         timeout: Duration,
-    ) -> ActionResult<Value> {
+    ) -> ActionResult<AgentResponse> {
         let claude_path = self.get_claude_path()?;
 
         // Get Claude CLI path from context or environment (maintaining compatibility)
@@ -459,6 +530,48 @@ impl AgentExecutor for ClaudeCodeExecutor {
 }
 
 // LlamaAgentExecutor implementation moved to agents module
+
+/// Wrapper around global LlamaAgent executor to implement AgentExecutor trait
+pub struct LlamaAgentExecutorWrapper {
+    global_executor: Arc<tokio::sync::Mutex<LlamaAgentExecutor>>,
+}
+
+impl LlamaAgentExecutorWrapper {
+    /// Create a new wrapper around the global LlamaAgent executor
+    pub fn new(global_executor: Arc<tokio::sync::Mutex<LlamaAgentExecutor>>) -> Self {
+        Self { global_executor }
+    }
+}
+
+#[async_trait]
+impl AgentExecutor for LlamaAgentExecutorWrapper {
+    async fn initialize(&mut self) -> ActionResult<()> {
+        // Global executor is already initialized
+        Ok(())
+    }
+
+    async fn execute_prompt(
+        &self,
+        system_prompt: String,
+        rendered_prompt: String,
+        context: &AgentExecutionContext<'_>,
+        timeout: Duration,
+    ) -> ActionResult<AgentResponse> {
+        let executor = self.global_executor.lock().await;
+        executor
+            .execute_prompt(system_prompt, rendered_prompt, context, timeout)
+            .await
+    }
+
+    fn executor_type(&self) -> AgentExecutorType {
+        AgentExecutorType::LlamaAgent
+    }
+
+    async fn shutdown(&mut self) -> ActionResult<()> {
+        // Don't shut down global executor, just release our reference
+        Ok(())
+    }
+}
 
 impl ActionError {
     /// Create an executor-specific error
@@ -799,7 +912,7 @@ impl PromptAction {
         };
 
         // Log the actual prompt being sent to Claude
-        tracing::debug!("Piping prompt to Claude:\n{}", user_prompt);
+        tracing::debug!("Piping prompt:\n{}", user_prompt);
 
         // Check if quiet mode is enabled in the context
         let quiet = self.quiet
@@ -809,7 +922,6 @@ impl PromptAction {
                 .unwrap_or(false);
 
         // Execute the rendered prompt using the AgentExecutor trait
-        tracing::debug!("Executing prompt '{}' with AgentExecutor", self.prompt_name);
 
         // Create execution context
         let execution_context = AgentExecutionContext::new(context);
@@ -827,11 +939,8 @@ impl PromptAction {
             )
             .await?;
 
-        // Extract response text for logging (backward compatibility)
-        let response_text = match &response {
-            Value::String(s) => s.clone(),
-            _ => serde_json::to_string(&response).unwrap_or_default(),
-        };
+        // Extract response text for logging
+        let response_text = response.content.clone();
 
         // Log the response for debugging if not in quiet mode
         if !quiet && !response_text.is_empty() {
@@ -856,14 +965,24 @@ impl PromptAction {
 
         // Store result in context if variable name specified
         if let Some(var_name) = &self.result_variable {
-            context.insert(var_name.clone(), response.clone());
+            // Convert AgentResponse to JSON Value for context storage
+            let response_value = serde_json::to_value(&response).unwrap_or_default();
+            context.insert(var_name.clone(), response_value);
         }
 
         // Always store in special last_action_result key
         context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));
-        context.insert(CLAUDE_RESPONSE_KEY.to_string(), response.clone());
+        // Store the response content as a string for backward compatibility
+        context.insert(
+            CLAUDE_RESPONSE_KEY.to_string(),
+            Value::String(response.content.clone()),
+        );
 
-        Ok(response)
+        // Convert AgentResponse back to Value for the Action trait compatibility
+        let response_value = serde_json::to_value(&response)
+            .unwrap_or_else(|_| Value::String(response.content.clone()));
+
+        Ok(response_value)
     }
 
     /// Get executor based on execution context
@@ -917,13 +1036,8 @@ impl Action for WaitAction {
                     tracing::info!("Waiting: {}", message);
                 }
 
-                // In test mode, use much shorter wait times for faster test execution
-                let actual_duration = if cfg!(test) || std::env::var("RUST_TEST").is_ok() {
-                    // Cap wait time at 50ms in test mode for performance
-                    Duration::from_millis(std::cmp::min(50, duration.as_millis() as u64))
-                } else {
-                    duration
-                };
+                // Use the actual duration specified
+                let actual_duration = duration;
 
                 tokio::time::sleep(actual_duration).await;
             }
@@ -2151,6 +2265,7 @@ mod tests {
     use crate::test_utils::IsolatedTestEnvironment;
     use crate::workflow::action_parser::ActionParser;
     use crate::workflow::executor_utils;
+    use serial_test::serial;
 
     #[test]
     fn test_variable_substitution() {
@@ -2161,6 +2276,75 @@ mod tests {
         let result =
             substitute_variables_in_string("Process ${file} with ${count} items", &context);
         assert_eq!(result, "Process test.rs with 42 items");
+    }
+
+    #[test]
+    fn test_agent_response_success() {
+        let response = AgentResponse::success("test content".to_string());
+
+        assert_eq!(response.content, "test content");
+        assert!(response.metadata.is_none());
+        assert!(matches!(response.response_type, AgentResponseType::Success));
+        assert!(response.is_success());
+        assert!(!response.is_error());
+    }
+
+    #[test]
+    fn test_agent_response_success_with_metadata() {
+        let metadata = serde_json::json!({
+            "status": "ok",
+            "tokens": 150
+        });
+        let response =
+            AgentResponse::success_with_metadata("test content".to_string(), metadata.clone());
+
+        assert_eq!(response.content, "test content");
+        assert_eq!(response.metadata, Some(metadata));
+        assert!(matches!(response.response_type, AgentResponseType::Success));
+        assert!(response.is_success());
+        assert!(!response.is_error());
+    }
+
+    #[test]
+    fn test_agent_response_error() {
+        let response = AgentResponse::error("error message".to_string());
+
+        assert_eq!(response.content, "error message");
+        assert!(response.metadata.is_none());
+        assert!(matches!(response.response_type, AgentResponseType::Error));
+        assert!(!response.is_success());
+        assert!(response.is_error());
+    }
+
+    #[test]
+    fn test_agent_response_partial() {
+        let response = AgentResponse::partial("partial content".to_string());
+
+        assert_eq!(response.content, "partial content");
+        assert!(response.metadata.is_none());
+        assert!(matches!(response.response_type, AgentResponseType::Partial));
+        assert!(!response.is_success());
+        assert!(!response.is_error());
+    }
+
+    #[test]
+    fn test_agent_response_serialization() {
+        let response = AgentResponse::success_with_metadata(
+            "test".to_string(),
+            serde_json::json!({"key": "value"}),
+        );
+
+        // Test that it can be serialized and deserialized
+        let serialized = serde_json::to_string(&response).expect("Should serialize");
+        let deserialized: AgentResponse =
+            serde_json::from_str(&serialized).expect("Should deserialize");
+
+        assert_eq!(deserialized.content, response.content);
+        assert_eq!(deserialized.metadata, response.metadata);
+        assert!(matches!(
+            deserialized.response_type,
+            AgentResponseType::Success
+        ));
     }
 
     #[tokio::test]
@@ -2199,7 +2383,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_llama_executor_initialization() {
+        // Skip test if LlamaAgent testing is disabled
+        if !swissarmyhammer_config::test_config::is_llama_enabled() {
+            println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+            return;
+        }
+
         let config = swissarmyhammer_config::LlamaAgentConfig::for_testing();
         let mut executor = LlamaAgentExecutor::new(config);
 
@@ -3447,19 +3638,39 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_executor_factory_llama_agent() {
+        // Skip test if LlamaAgent testing is disabled
+        if !swissarmyhammer_config::test_config::is_llama_enabled() {
+            println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+            return;
+        }
         let _guard = IsolatedTestEnvironment::new();
 
         let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
         let llama_config = swissarmyhammer_config::agent::LlamaAgentConfig::for_testing();
+        println!("DEBUG: Created llama_config for testing");
         context.set_agent_config(swissarmyhammer_config::agent::AgentConfig::llama_agent(
             llama_config,
         ));
 
         let execution_context = AgentExecutionContext::new(&context);
 
+        // Debug: Print the executor type and config
+        println!(
+            "DEBUG: executor_type = {:?}",
+            execution_context.executor_type()
+        );
+        if let Ok(_config) = get_llama_config_from_context(&execution_context) {
+            println!("DEBUG: Retrieved config for real model testing");
+        }
+
         // Should succeed now that LlamaAgent is implemented
         let result = AgentExecutorFactory::create_executor(&execution_context).await;
-        assert!(result.is_ok());
+        if let Err(e) = &result {
+            println!("DEBUG: create_executor failed with error: {}", e);
+        }
+        if let Err(ref e) = result {
+            panic!("create_executor failed: {}", e);
+        }
         match result {
             Ok(executor) => {
                 assert_eq!(executor.executor_type(), AgentExecutorType::LlamaAgent);

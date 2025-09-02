@@ -997,7 +997,7 @@ mod tests {
 // ============================================================================
 // Git Operations Wrapper Functions
 // ============================================================================
-// 
+//
 // This section provides libgit2-based replacements for common shell git commands
 // to eliminate subprocess overhead and improve error handling.
 
@@ -1047,7 +1047,8 @@ pub struct GitStatus {
 /// * `Err(SwissArmyHammerError)` - Status check failed
 pub fn get_status(repo: &Repository) -> Result<GitStatus> {
     with_git2_logging("get_status", || {
-        let statuses = repo.statuses(None)
+        let statuses = repo
+            .statuses(None)
             .map_err(|e| convert_git2_error("get_statuses", e))?;
 
         let mut files = Vec::new();
@@ -1057,7 +1058,9 @@ pub fn get_status(repo: &Repository) -> Result<GitStatus> {
                 files.push(GitFileStatus {
                     path: path.to_string(),
                     status,
-                    is_staged: status.is_index_new() || status.is_index_modified() || status.is_index_deleted(),
+                    is_staged: status.is_index_new()
+                        || status.is_index_modified()
+                        || status.is_index_deleted(),
                     is_modified: status.is_wt_modified() || status.is_wt_deleted(),
                     is_untracked: status.is_wt_new(),
                     is_deleted: status.is_wt_deleted() || status.is_index_deleted(),
@@ -1104,9 +1107,10 @@ pub fn get_status(repo: &Repository) -> Result<GitStatus> {
 /// * `Err(SwissArmyHammerError)` - Reference resolution failed
 pub fn rev_parse(repo: &Repository, reference: &str) -> Result<String> {
     with_git2_logging("rev_parse", || {
-        let obj = repo.revparse_single(reference)
+        let obj = repo
+            .revparse_single(reference)
             .map_err(|e| convert_git2_error("revparse_single", e))?;
-        
+
         Ok(obj.id().to_string())
     })
 }
@@ -1126,14 +1130,17 @@ pub fn rev_parse(repo: &Repository, reference: &str) -> Result<String> {
 /// * `Err(SwissArmyHammerError)` - Operation failed
 pub fn is_ancestor(repo: &Repository, ancestor: &str, descendant: &str) -> Result<bool> {
     with_git2_logging("is_ancestor", || {
-        let ancestor_oid = repo.revparse_single(ancestor)
+        let ancestor_oid = repo
+            .revparse_single(ancestor)
             .map_err(|e| convert_git2_error("revparse ancestor", e))?
             .id();
-        let descendant_oid = repo.revparse_single(descendant)
+        let descendant_oid = repo
+            .revparse_single(descendant)
             .map_err(|e| convert_git2_error("revparse descendant", e))?
             .id();
 
-        let merge_base = repo.merge_base(ancestor_oid, descendant_oid)
+        let merge_base = repo
+            .merge_base(ancestor_oid, descendant_oid)
             .map_err(|e| convert_git2_error("merge_base", e))?;
 
         Ok(merge_base == ancestor_oid)
@@ -1152,18 +1159,22 @@ pub fn is_ancestor(repo: &Repository, ancestor: &str, descendant: &str) -> Resul
 ///
 /// * `Ok(())` - Branch created successfully
 /// * `Err(SwissArmyHammerError)` - Branch creation failed
-pub fn create_branch(repo: &Repository, branch_name: &str, start_point: Option<&str>) -> Result<()> {
+pub fn create_branch(
+    repo: &Repository,
+    branch_name: &str,
+    start_point: Option<&str>,
+) -> Result<()> {
     with_git2_logging("create_branch", || {
         // Get the starting commit
         let target_commit = if let Some(start) = start_point {
-            let oid = repo.revparse_single(start)
+            let oid = repo
+                .revparse_single(start)
                 .map_err(|e| convert_git2_error("revparse start_point", e))?
                 .id();
             repo.find_commit(oid)
                 .map_err(|e| convert_git2_error("find_commit", e))?
         } else {
-            let head = repo.head()
-                .map_err(|e| convert_git2_error("get_head", e))?;
+            let head = repo.head().map_err(|e| convert_git2_error("get_head", e))?;
             head.peel_to_commit()
                 .map_err(|e| convert_git2_error("peel_to_commit", e))?
         };
@@ -1190,12 +1201,14 @@ pub fn create_branch(repo: &Repository, branch_name: &str, start_point: Option<&
 pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
     with_git2_logging("checkout_branch", || {
         // Find the branch
-        let branch = repo.find_branch(branch_name, git2::BranchType::Local)
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
             .map_err(|e| convert_git2_error("find_branch", e))?;
 
         let branch_ref = branch.get();
-        let _branch_oid = branch_ref.target()
-            .ok_or_else(|| SwissArmyHammerError::Other("Branch has no target commit".to_string()))?;
+        let _branch_oid = branch_ref.target().ok_or_else(|| {
+            SwissArmyHammerError::Other("Branch has no target commit".to_string())
+        })?;
 
         // Set HEAD to the branch
         repo.set_head(&format!("refs/heads/{}", branch_name))
@@ -1204,7 +1217,7 @@ pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
         // Checkout the files
         let mut checkout_opts = git2::build::CheckoutBuilder::new();
         checkout_opts.force();
-        
+
         repo.checkout_head(Some(&mut checkout_opts))
             .map_err(|e| convert_git2_error("checkout_head", e))?;
 
@@ -1224,7 +1237,11 @@ pub fn checkout_branch(repo: &Repository, branch_name: &str) -> Result<()> {
 ///
 /// * `Ok(())` - Branch created and switched successfully
 /// * `Err(SwissArmyHammerError)` - Operation failed
-pub fn checkout_new_branch(repo: &Repository, branch_name: &str, start_point: Option<&str>) -> Result<()> {
+pub fn checkout_new_branch(
+    repo: &Repository,
+    branch_name: &str,
+    start_point: Option<&str>,
+) -> Result<()> {
     create_branch(repo, branch_name, start_point)?;
     checkout_branch(repo, branch_name)
 }
@@ -1243,32 +1260,36 @@ pub fn checkout_new_branch(repo: &Repository, branch_name: &str, start_point: Op
 /// * `Err(SwissArmyHammerError)` - Branch deletion failed
 pub fn delete_branch(repo: &Repository, branch_name: &str, force: bool) -> Result<()> {
     with_git2_logging("delete_branch", || {
-        let mut branch = repo.find_branch(branch_name, git2::BranchType::Local)
+        let mut branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
             .map_err(|e| convert_git2_error("find_branch", e))?;
 
         if !force {
             // Check if branch is merged (simplified check)
-            let head = repo.head()
-                .map_err(|e| convert_git2_error("get_head", e))?;
-            let head_oid = head.target()
+            let head = repo.head().map_err(|e| convert_git2_error("get_head", e))?;
+            let head_oid = head
+                .target()
                 .ok_or_else(|| SwissArmyHammerError::Other("HEAD has no target".to_string()))?;
 
             let branch_ref = branch.get();
-            let branch_oid = branch_ref.target()
+            let branch_oid = branch_ref
+                .target()
                 .ok_or_else(|| SwissArmyHammerError::Other("Branch has no target".to_string()))?;
 
             // Simple check: if branch points to HEAD, it's safe to delete
             if branch_oid != head_oid {
                 // Check if branch is ancestor of HEAD
                 if !is_ancestor(repo, &branch_oid.to_string(), &head_oid.to_string())? {
-                    return Err(SwissArmyHammerError::Other(
-                        format!("Branch '{}' is not fully merged", branch_name)
-                    ));
+                    return Err(SwissArmyHammerError::Other(format!(
+                        "Branch '{}' is not fully merged",
+                        branch_name
+                    )));
                 }
             }
         }
 
-        branch.delete()
+        branch
+            .delete()
             .map_err(|e| convert_git2_error("delete_branch", e))?;
 
         Ok(())
@@ -1288,22 +1309,26 @@ pub fn delete_branch(repo: &Repository, branch_name: &str, force: bool) -> Resul
 /// * `Err(SwissArmyHammerError)` - Add operation failed
 pub fn add_files(repo: &Repository, paths: &[&str]) -> Result<()> {
     with_git2_logging("add_files", || {
-        let mut index = repo.index()
+        let mut index = repo
+            .index()
             .map_err(|e| convert_git2_error("get_index", e))?;
 
         if paths.is_empty() {
             // Add all files (equivalent to `git add .`)
-            index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            index
+                .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
                 .map_err(|e| convert_git2_error("add_all", e))?;
         } else {
             // Add specific paths
             for path in paths {
-                index.add_path(std::path::Path::new(path))
+                index
+                    .add_path(std::path::Path::new(path))
                     .map_err(|e| convert_git2_error("add_path", e))?;
             }
         }
 
-        index.write()
+        index
+            .write()
             .map_err(|e| convert_git2_error("write_index", e))?;
 
         Ok(())
@@ -1324,10 +1349,10 @@ pub fn add_files(repo: &Repository, paths: &[&str]) -> Result<()> {
 /// * `Ok(String)` - Commit hash
 /// * `Err(SwissArmyHammerError)` - Commit creation failed
 pub fn create_commit(
-    repo: &Repository, 
+    repo: &Repository,
     message: &str,
     author_name: Option<&str>,
-    author_email: Option<&str>
+    author_email: Option<&str>,
 ) -> Result<String> {
     with_git2_logging("create_commit", || {
         // Get signature (author and committer)
@@ -1341,17 +1366,21 @@ pub fn create_commit(
         };
 
         // Get the index and write tree
-        let mut index = repo.index()
+        let mut index = repo
+            .index()
             .map_err(|e| convert_git2_error("get_index", e))?;
-        let tree_oid = index.write_tree()
+        let tree_oid = index
+            .write_tree()
             .map_err(|e| convert_git2_error("write_tree", e))?;
-        let tree = repo.find_tree(tree_oid)
+        let tree = repo
+            .find_tree(tree_oid)
             .map_err(|e| convert_git2_error("find_tree", e))?;
 
         // Get parent commit(s)
         let parents: Vec<git2::Commit> = match repo.head() {
             Ok(head) => {
-                let commit = head.peel_to_commit()
+                let commit = head
+                    .peel_to_commit()
                     .map_err(|e| convert_git2_error("peel_to_commit", e))?;
                 vec![commit]
             }
@@ -1361,14 +1390,16 @@ pub fn create_commit(
         let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
         // Create the commit
-        let commit_oid = repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            message,
-            &tree,
-            &parent_refs,
-        ).map_err(|e| convert_git2_error("create_commit", e))?;
+        let commit_oid = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parent_refs,
+            )
+            .map_err(|e| convert_git2_error("create_commit", e))?;
 
         Ok(commit_oid.to_string())
     })
@@ -1386,20 +1417,28 @@ pub fn create_commit(
 ///
 /// * `Ok(Vec<CommitInfo>)` - List of commit information
 /// * `Err(SwissArmyHammerError)` - Log operation failed
-pub fn get_log(repo: &Repository, max_count: Option<usize>, start_ref: Option<&str>) -> Result<Vec<CommitInfo>> {
+pub fn get_log(
+    repo: &Repository,
+    max_count: Option<usize>,
+    start_ref: Option<&str>,
+) -> Result<Vec<CommitInfo>> {
     with_git2_logging("get_log", || {
-        let mut revwalk = repo.revwalk()
+        let mut revwalk = repo
+            .revwalk()
             .map_err(|e| convert_git2_error("create_revwalk", e))?;
 
         // Set starting point
         if let Some(start) = start_ref {
-            let oid = repo.revparse_single(start)
+            let oid = repo
+                .revparse_single(start)
                 .map_err(|e| convert_git2_error("revparse_start", e))?
                 .id();
-            revwalk.push(oid)
+            revwalk
+                .push(oid)
                 .map_err(|e| convert_git2_error("revwalk_push", e))?;
         } else {
-            revwalk.push_head()
+            revwalk
+                .push_head()
                 .map_err(|e| convert_git2_error("revwalk_push_head", e))?;
         }
 
@@ -1413,7 +1452,8 @@ pub fn get_log(repo: &Repository, max_count: Option<usize>, start_ref: Option<&s
             }
 
             let oid = oid.map_err(|e| convert_git2_error("revwalk_next", e))?;
-            let commit = repo.find_commit(oid)
+            let commit = repo
+                .find_commit(oid)
                 .map_err(|e| convert_git2_error("find_commit", e))?;
 
             let commit_info = CommitInfo {
@@ -1454,31 +1494,37 @@ pub fn get_log(repo: &Repository, max_count: Option<usize>, start_ref: Option<&s
 pub fn merge_branch(repo: &Repository, branch_name: &str, message: Option<&str>) -> Result<String> {
     with_git2_logging("merge_branch", || {
         // Find the branch to merge
-        let branch = repo.find_branch(branch_name, git2::BranchType::Local)
+        let branch = repo
+            .find_branch(branch_name, git2::BranchType::Local)
             .map_err(|e| convert_git2_error("find_branch", e))?;
 
         let branch_ref = branch.get();
-        let branch_oid = branch_ref.target()
-            .ok_or_else(|| SwissArmyHammerError::Other("Branch has no target commit".to_string()))?;
+        let branch_oid = branch_ref.target().ok_or_else(|| {
+            SwissArmyHammerError::Other("Branch has no target commit".to_string())
+        })?;
 
         // Get the branch commit
-        let branch_commit = repo.find_commit(branch_oid)
+        let branch_commit = repo
+            .find_commit(branch_oid)
             .map_err(|e| convert_git2_error("find_commit", e))?;
 
         // Get HEAD commit
-        let head = repo.head()
-            .map_err(|e| convert_git2_error("get_head", e))?;
-        let head_oid = head.target()
+        let head = repo.head().map_err(|e| convert_git2_error("get_head", e))?;
+        let head_oid = head
+            .target()
             .ok_or_else(|| SwissArmyHammerError::Other("HEAD has no target".to_string()))?;
-        let head_commit = repo.find_commit(head_oid)
+        let head_commit = repo
+            .find_commit(head_oid)
             .map_err(|e| convert_git2_error("find_head_commit", e))?;
 
         // Create annotated commit for merge analysis
-        let annotated_commit = repo.find_annotated_commit(branch_oid)
+        let annotated_commit = repo
+            .find_annotated_commit(branch_oid)
             .map_err(|e| convert_git2_error("find_annotated_commit", e))?;
 
         // Analyze merge
-        let analysis = repo.merge_analysis(&[&annotated_commit])
+        let analysis = repo
+            .merge_analysis(&[&annotated_commit])
             .map_err(|e| convert_git2_error("merge_analysis", e))?;
 
         if analysis.0.is_fast_forward() {
@@ -1489,59 +1535,72 @@ pub fn merge_branch(repo: &Repository, branch_name: &str, message: Option<&str>)
             repo.checkout_tree(branch_commit.as_object(), Some(&mut checkout_opts))
                 .map_err(|e| convert_git2_error("checkout_tree", e))?;
 
-            repo.set_head(&format!("refs/heads/{}", 
-                head.shorthand().unwrap_or("HEAD")))
-                .map_err(|e| convert_git2_error("set_head", e))?;
+            repo.set_head(&format!(
+                "refs/heads/{}",
+                head.shorthand().unwrap_or("HEAD")
+            ))
+            .map_err(|e| convert_git2_error("set_head", e))?;
 
             Ok(branch_oid.to_string())
         } else if analysis.0.is_normal() {
             // Normal merge - create merge commit
-            let signature = repo.signature()
+            let signature = repo
+                .signature()
                 .map_err(|e| convert_git2_error("get_signature", e))?;
 
             // Merge trees
-            let head_tree = head_commit.tree()
+            let head_tree = head_commit
+                .tree()
                 .map_err(|e| convert_git2_error("get_head_tree", e))?;
-            let branch_tree = branch_commit.tree()
+            let branch_tree = branch_commit
+                .tree()
                 .map_err(|e| convert_git2_error("get_branch_tree", e))?;
-            
-            let merge_base = repo.merge_base(head_oid, branch_oid)
+
+            let merge_base = repo
+                .merge_base(head_oid, branch_oid)
                 .map_err(|e| convert_git2_error("merge_base", e))?;
-            let base_commit = repo.find_commit(merge_base)
+            let base_commit = repo
+                .find_commit(merge_base)
                 .map_err(|e| convert_git2_error("find_base_commit", e))?;
-            let base_tree = base_commit.tree()
+            let base_tree = base_commit
+                .tree()
                 .map_err(|e| convert_git2_error("get_base_tree", e))?;
 
-            let mut index = repo.merge_trees(&base_tree, &head_tree, &branch_tree, None)
+            let mut index = repo
+                .merge_trees(&base_tree, &head_tree, &branch_tree, None)
                 .map_err(|e| convert_git2_error("merge_trees", e))?;
 
             if index.has_conflicts() {
                 return Err(SwissArmyHammerError::Other(
-                    "Merge conflicts detected - manual resolution required".to_string()
+                    "Merge conflicts detected - manual resolution required".to_string(),
                 ));
             }
 
-            let tree_oid = index.write_tree_to(repo)
+            let tree_oid = index
+                .write_tree_to(repo)
                 .map_err(|e| convert_git2_error("write_tree", e))?;
-            let tree = repo.find_tree(tree_oid)
+            let tree = repo
+                .find_tree(tree_oid)
                 .map_err(|e| convert_git2_error("find_tree", e))?;
 
             let default_message = format!("Merge branch '{}'", branch_name);
             let merge_message = message.unwrap_or(&default_message);
 
-            let commit_oid = repo.commit(
-                Some("HEAD"),
-                &signature,
-                &signature,
-                merge_message,
-                &tree,
-                &[&head_commit, &branch_commit],
-            ).map_err(|e| convert_git2_error("create_merge_commit", e))?;
+            let commit_oid = repo
+                .commit(
+                    Some("HEAD"),
+                    &signature,
+                    &signature,
+                    merge_message,
+                    &tree,
+                    &[&head_commit, &branch_commit],
+                )
+                .map_err(|e| convert_git2_error("create_merge_commit", e))?;
 
             Ok(commit_oid.to_string())
         } else {
             Err(SwissArmyHammerError::Other(
-                "Cannot merge - branches are up to date or unrelated".to_string()
+                "Cannot merge - branches are up to date or unrelated".to_string(),
             ))
         }
     })
@@ -1561,14 +1620,17 @@ pub fn merge_branch(repo: &Repository, branch_name: &str, message: Option<&str>)
 /// * `Err(SwissArmyHammerError)` - Merge base operation failed
 pub fn get_merge_base(repo: &Repository, commit1: &str, commit2: &str) -> Result<String> {
     with_git2_logging("get_merge_base", || {
-        let oid1 = repo.revparse_single(commit1)
+        let oid1 = repo
+            .revparse_single(commit1)
             .map_err(|e| convert_git2_error("revparse commit1", e))?
             .id();
-        let oid2 = repo.revparse_single(commit2)
+        let oid2 = repo
+            .revparse_single(commit2)
             .map_err(|e| convert_git2_error("revparse commit2", e))?
             .id();
 
-        let merge_base = repo.merge_base(oid1, oid2)
+        let merge_base = repo
+            .merge_base(oid1, oid2)
             .map_err(|e| convert_git2_error("merge_base", e))?;
 
         Ok(merge_base.to_string())
@@ -1588,14 +1650,14 @@ pub fn get_merge_base(repo: &Repository, commit1: &str, commit2: &str) -> Result
 /// * `Err(SwissArmyHammerError)` - List operation failed
 pub fn list_branches(repo: &Repository, branch_type: git2::BranchType) -> Result<Vec<String>> {
     with_git2_logging("list_branches", || {
-        let branches = repo.branches(Some(branch_type))
+        let branches = repo
+            .branches(Some(branch_type))
             .map_err(|e| convert_git2_error("get_branches", e))?;
 
         let mut branch_names = Vec::new();
         for branch in branches {
-            let (branch, _type) = branch
-                .map_err(|e| convert_git2_error("iterate_branch", e))?;
-            
+            let (branch, _type) = branch.map_err(|e| convert_git2_error("iterate_branch", e))?;
+
             if let Some(name) = branch.name().unwrap_or(None) {
                 branch_names.push(name.to_string());
             }
@@ -1649,11 +1711,12 @@ pub fn get_current_branch(repo: &Repository) -> Result<Option<String>> {
 /// * `Err(SwissArmyHammerError)` - Push operation failed
 pub fn push_to_remote(repo: &Repository, remote_name: &str, refspec: &str) -> Result<()> {
     with_git2_logging("push_to_remote", || {
-        let mut remote = repo.find_remote(remote_name)
+        let mut remote = repo
+            .find_remote(remote_name)
             .map_err(|e| convert_git2_error("find_remote", e))?;
 
         let mut callbacks = git2::RemoteCallbacks::new();
-        
+
         // Basic authentication callback - in real usage, this would need
         // proper credential handling
         callbacks.credentials(|_url, username_from_url, _allowed_types| {
@@ -1667,7 +1730,8 @@ pub fn push_to_remote(repo: &Repository, remote_name: &str, refspec: &str) -> Re
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(callbacks);
 
-        remote.push(&[refspec], Some(&mut push_options))
+        remote
+            .push(&[refspec], Some(&mut push_options))
             .map_err(|e| convert_git2_error("push", e))?;
 
         Ok(())
@@ -1688,11 +1752,12 @@ pub fn push_to_remote(repo: &Repository, remote_name: &str, refspec: &str) -> Re
 /// * `Err(SwissArmyHammerError)` - Fetch operation failed
 pub fn fetch_from_remote(repo: &Repository, remote_name: &str, refspecs: &[&str]) -> Result<()> {
     with_git2_logging("fetch_from_remote", || {
-        let mut remote = repo.find_remote(remote_name)
+        let mut remote = repo
+            .find_remote(remote_name)
             .map_err(|e| convert_git2_error("find_remote", e))?;
 
         let mut callbacks = git2::RemoteCallbacks::new();
-        
+
         // Basic authentication callback
         callbacks.credentials(|_url, username_from_url, _allowed_types| {
             if let Some(username) = username_from_url {
@@ -1707,9 +1772,10 @@ pub fn fetch_from_remote(repo: &Repository, remote_name: &str, refspecs: &[&str]
 
         let refspecs_to_fetch: Vec<String> = if refspecs.is_empty() {
             // Fetch all refspecs configured for this remote
-            let fetch_refspecs = remote.fetch_refspecs()
+            let fetch_refspecs = remote
+                .fetch_refspecs()
                 .map_err(|e| convert_git2_error("get_fetch_refspecs", e))?;
-            
+
             // Convert StringArray to Vec<String>
             let mut specs = Vec::new();
             for i in 0..fetch_refspecs.len() {
@@ -1724,7 +1790,8 @@ pub fn fetch_from_remote(repo: &Repository, remote_name: &str, refspecs: &[&str]
 
         // Convert to string references for the fetch call
         let refspec_refs: Vec<&str> = refspecs_to_fetch.iter().map(|s| s.as_str()).collect();
-        remote.fetch(&refspec_refs, Some(&mut fetch_options), None)
+        remote
+            .fetch(&refspec_refs, Some(&mut fetch_options), None)
             .map_err(|e| convert_git2_error("fetch", e))?;
 
         Ok(())

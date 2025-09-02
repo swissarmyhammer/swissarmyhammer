@@ -3,7 +3,7 @@
 use super::*;
 use crate::workflow::WorkflowTemplateContext;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 #[tokio::test]

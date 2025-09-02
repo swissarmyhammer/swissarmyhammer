@@ -22,7 +22,6 @@ async fn run_workflow_with_vars_in_process(
         vars,
         interactive: false,
         dry_run,
-        test: false,
         timeout: Some("2s".to_string()), // Use 2 second timeout for fast tests
         quiet: true,
     };

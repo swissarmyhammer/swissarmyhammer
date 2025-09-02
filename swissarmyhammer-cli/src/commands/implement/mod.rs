@@ -15,7 +15,6 @@ pub async fn handle_command(template_context: &swissarmyhammer_config::TemplateC
         vars: vec![],
         interactive: false,
         dry_run: false,
-        test: false,
         timeout: None,
         quiet: false,
     };

@@ -512,7 +512,6 @@ async fn handle_flow_command(
                 .unwrap_or_default();
             let interactive = sub_matches.get_flag("interactive");
             let dry_run = sub_matches.get_flag("dry-run");
-            let test = sub_matches.get_flag("test");
             let timeout = sub_matches.get_one::<String>("timeout").cloned();
             let quiet = sub_matches.get_flag("quiet");
 
@@ -521,7 +520,6 @@ async fn handle_flow_command(
                 vars,
                 interactive,
                 dry_run,
-                test,
                 timeout,
                 quiet,
             }

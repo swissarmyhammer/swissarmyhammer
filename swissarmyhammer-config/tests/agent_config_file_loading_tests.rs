@@ -20,7 +20,7 @@ executor = { type = "claude-code", config = { claude_path = "/usr/local/bin/clau
 quiet = false
 
 [agent.configs.testing]
-executor = { type = "llama-agent", config = { model = { source = { HuggingFace = { repo = "unsloth/Phi-4-mini-instruct-GGUF", filename = "Phi-4-mini-instruct-Q4_K_M.gguf" } } }, mcp_server = { port = 0, timeout_seconds = 10 } } }
+executor = { type = "llama-agent", config = { model = { source = { HuggingFace = { repo = "unsloth/Qwen3-1.7B-GGUF", filename = "Qwen3-1.7B-UD-Q6_K_XL.gguf" } } }, mcp_server = { port = 0, timeout_seconds = 10 } } }
 quiet = true
 
 [agent.configs.production]
@@ -102,8 +102,8 @@ agent:
           model:
             source:
               HuggingFace:
-                repo: "unsloth/Phi-4-mini-instruct-GGUF"
-                filename: "Phi-4-mini-instruct-Q4_K_M.gguf"
+                repo: "unsloth/Qwen3-1.7B-GGUF"
+                filename: "Qwen3-1.7B-UD-Q6_K_XL.gguf"
           mcp_server:
             port: 0
             timeout_seconds: 10

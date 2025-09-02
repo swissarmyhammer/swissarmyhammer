@@ -45,7 +45,7 @@ impl SearchQueryTool {
 
         SemanticConfig {
             database_path: db_path,
-            embedding_model: "test-model".to_string(),
+            embedding_model: swissarmyhammer_config::DEFAULT_TEST_EMBEDDING_MODEL.to_string(),
             chunk_size: 512,
             chunk_overlap: 64,
             similarity_threshold: 0.7,

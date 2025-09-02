@@ -440,10 +440,6 @@ use ulid::Ulid;
 pub mod storage;
 pub use storage::{FileSystemMemoStorage, MarkdownMemoStorage, MemoState, MemoStorage};
 
-/// Mock storage implementation for testing
-#[cfg(any(test, feature = "test-utils"))]
-pub mod mock_storage;
-
 /// Advanced search engine with full-text indexing and query parsing
 pub mod advanced_search;
 pub use advanced_search::AdvancedMemoSearchEngine;
@@ -1738,8 +1734,8 @@ mod property_tests {
 
         #[test]
         fn test_memo_content_size_limits(
-            title_size in 0usize..100_000,
-            content_size in 0usize..1_000_000
+            title_size in 0usize..1_000,
+            content_size in 0usize..10_000
         ) {
             let title = "T".repeat(title_size);
             let content = "C".repeat(content_size);

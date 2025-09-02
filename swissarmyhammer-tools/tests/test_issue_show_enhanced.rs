@@ -6,7 +6,7 @@
 use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::sync::Arc;
-use swissarmyhammer::common::rate_limiter::MockRateLimiter;
+use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer::config::Config;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
@@ -72,7 +72,12 @@ impl IssueShowTestEnvironment {
             issue_storage.clone(),
             git_ops.clone(),
             memo_storage,
-            Arc::new(MockRateLimiter),
+            Arc::new(RateLimiter::with_config(RateLimiterConfig {
+                global_limit: 10000,
+                per_client_limit: 1000,
+                expensive_operation_limit: 500,
+                window_duration: std::time::Duration::from_secs(1),
+            })),
         );
 
         let tool = ShowIssueTool::new();
@@ -90,49 +95,47 @@ impl IssueShowTestEnvironment {
         use git2::{Repository, Signature};
 
         // Initialize git repo
-        let repo = Repository::init(path)
-            .expect("Failed to init git");
+        let repo = Repository::init(path).expect("Failed to init git");
 
         // Configure git
-        let mut config = repo.config()
-            .expect("Failed to get git config");
-        
-        config.set_str("user.name", "Test User")
+        let mut config = repo.config().expect("Failed to get git config");
+
+        config
+            .set_str("user.name", "Test User")
             .expect("Failed to configure git user");
 
-        config.set_str("user.email", "test@example.com")
+        config
+            .set_str("user.email", "test@example.com")
             .expect("Failed to configure git email");
 
         // Create initial commit
         std::fs::write(path.join("README.md"), "# Test Project")
             .expect("Failed to write README.md");
-            
-        let mut index = repo.index()
-            .expect("Failed to get index");
-        
-        index.add_path(std::path::Path::new("README.md"))
+
+        let mut index = repo.index().expect("Failed to get index");
+
+        index
+            .add_path(std::path::Path::new("README.md"))
             .expect("Failed to add README.md to index");
-        
-        index.write()
-            .expect("Failed to write index");
-        
-        let tree_id = index.write_tree()
-            .expect("Failed to write tree");
-        
-        let tree = repo.find_tree(tree_id)
-            .expect("Failed to find tree");
-        
-        let signature = Signature::now("Test User", "test@example.com")
-            .expect("Failed to create signature");
-        
+
+        index.write().expect("Failed to write index");
+
+        let tree_id = index.write_tree().expect("Failed to write tree");
+
+        let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+        let signature =
+            Signature::now("Test User", "test@example.com").expect("Failed to create signature");
+
         repo.commit(
             Some("HEAD"),
             &signature,
             &signature,
             "Initial commit",
             &tree,
-            &[]
-        ).expect("Failed to create initial commit");
+            &[],
+        )
+        .expect("Failed to create initial commit");
     }
 
     async fn create_test_issue(&self, name: &str, content: &str) -> String {
@@ -335,22 +338,21 @@ async fn test_issue_show_current_with_config_integration() {
     if let Some(_git) = git_ops.as_ref() {
         let full_branch_name = format!("{prefix}{issue_name}");
         // Create branch manually using libgit2
-        let repo = git2::Repository::open(env.temp_dir.path())
-            .expect("Failed to open repository");
-        
-        let head_commit = repo.head()
+        let repo = git2::Repository::open(env.temp_dir.path()).expect("Failed to open repository");
+
+        let head_commit = repo
+            .head()
             .expect("Failed to get HEAD")
             .peel_to_commit()
             .expect("Failed to peel to commit");
-        
+
         repo.branch(&full_branch_name, &head_commit, false)
             .expect("Failed to create branch");
-        
+
         repo.set_head(&format!("refs/heads/{}", full_branch_name))
             .expect("Failed to set HEAD");
-        
-        repo.checkout_head(None)
-            .expect("Failed to checkout head");
+
+        repo.checkout_head(None).expect("Failed to checkout head");
         // Branch already checked out by previous command
     }
     drop(git_ops);
@@ -730,7 +732,12 @@ async fn test_issue_show_concurrent_access() {
             env.issue_storage.clone(),
             env.git_ops.clone(),
             memo_storage,
-            Arc::new(MockRateLimiter),
+            Arc::new(RateLimiter::with_config(RateLimiterConfig {
+                global_limit: 10000,
+                per_client_limit: 1000,
+                expensive_operation_limit: 500,
+                window_duration: std::time::Duration::from_secs(1),
+            })),
         );
 
         let handle = tokio::spawn(async move {
