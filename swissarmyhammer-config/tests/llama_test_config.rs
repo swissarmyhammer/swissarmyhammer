@@ -7,10 +7,8 @@
 use std::env;
 use std::sync::OnceLock;
 use swissarmyhammer_config::{
-    DEFAULT_TEST_LLM_MODEL_REPO, DEFAULT_TEST_LLM_MODEL_FILENAME,
-    agent::{
-        AgentConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
-    },
+    agent::{AgentConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource},
+    DEFAULT_TEST_LLM_MODEL_FILENAME, DEFAULT_TEST_LLM_MODEL_REPO,
 };
 
 /// Test configuration for different environments
@@ -363,10 +361,7 @@ mod tests {
         match llama_config.model.source {
             ModelSource::HuggingFace { repo, filename } => {
                 assert_eq!(repo, DEFAULT_TEST_LLM_MODEL_REPO);
-                assert_eq!(
-                    filename,
-                    Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string())
-                );
+                assert_eq!(filename, Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()));
             }
             ModelSource::Local { .. } => panic!("Should be HuggingFace source"),
         }
