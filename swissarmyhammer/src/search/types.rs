@@ -506,13 +506,31 @@ mod tests {
 
     #[test]
     fn test_semantic_config_default() {
+        use std::sync::{Mutex, OnceLock};
+
+        static ENV_LOCK_DEFAULT: OnceLock<Mutex<()>> = OnceLock::new();
+
+        // Use mutex to prevent race conditions between tests
+        let _guard = ENV_LOCK_DEFAULT
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+
+        // Save original environment variable state
+        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
+
+        // Ensure no environment variable override is set for this test
+        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+
+        // Create config WHILE environment variable is cleared
         let config = SemanticConfig::default();
-        // The database path should be local-first: either absolute (home directory)
-        // or relative (.swissarmyhammer in current directory), but always containing semantic.db
+
+        // Perform all assertions BEFORE restoring environment
         assert!(config
             .database_path
             .to_string_lossy()
             .contains("semantic.db"));
+
         // The path should end with either .swissarmyhammer/semantic.db or semantic.db
         assert!(
             config
@@ -537,6 +555,12 @@ mod tests {
         assert_eq!(config.max_chunk_size, 2000);
         assert_eq!(config.max_chunks_per_file, 100);
         assert_eq!(config.max_file_size_bytes, 10 * 1024 * 1024);
+
+        // Restore original environment variable state after all assertions
+        match original_db_path {
+            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+        }
     }
 
     #[test]
@@ -897,6 +921,18 @@ mod tests {
 
     #[test]
     fn test_semantic_config_git_repository_path() {
+        use std::sync::{Mutex, OnceLock};
+        static ENV_LOCK_GIT: OnceLock<Mutex<()>> = OnceLock::new();
+
+        // Use mutex to prevent race conditions between tests
+        let _guard = ENV_LOCK_GIT.get_or_init(|| Mutex::new(())).lock().unwrap();
+
+        // Save original environment variable state
+        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
+
+        // Ensure no environment variable override is set for this test
+        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+
         // This test verifies that the new Git-centric approach works by testing that
         // when we're in a Git repository with .swissarmyhammer, the database path
         // points to that directory. Since the exact path comparison is difficult
@@ -904,6 +940,12 @@ mod tests {
 
         // Create a simple config and verify it follows expected patterns
         let config = SemanticConfig::default();
+
+        // Restore original environment variable state before any assertions
+        match original_db_path {
+            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+        }
 
         // Should always contain semantic.db
         assert!(config
@@ -927,12 +969,24 @@ mod tests {
     fn test_semantic_config_home_fallback() {
         use tempfile::TempDir;
 
+        // Acquire the global semantic DB environment lock to prevent race conditions
+        let _lock_guard = crate::test_utils::acquire_semantic_db_lock();
+
+        // Store original environment variable and remove it for test isolation
+        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
+        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
+
         // Create a temporary directory that doesn't have .git (not a Git repository)
         let temp_dir = TempDir::new().unwrap();
 
         // Change to a directory without .git repository
         let original_dir = std::env::current_dir().ok();
         if std::env::set_current_dir(temp_dir.path()).is_err() {
+            // Restore environment variable if test setup failed
+            match original_db_path {
+                Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+                None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+            }
             return; // Skip test if can't change directory
         }
 
@@ -944,22 +998,40 @@ mod tests {
         }
 
         // Should fallback to home directory since no Git repository was found
-        assert!(config
-            .database_path
-            .to_string_lossy()
-            .contains("semantic.db"));
+        let path_str = config.database_path.to_string_lossy();
+
+        // Since we cleared the environment variable, we should get normal fallback behavior
+        assert!(
+            path_str.contains("semantic.db"),
+            "Expected path to contain 'semantic.db', got: {}",
+            path_str
+        );
 
         // Should either be absolute (home) or relative (.swissarmyhammer/semantic.db)
-        let path_str = config.database_path.to_string_lossy();
         assert!(
-            path_str.ends_with(".swissarmyhammer/semantic.db") || path_str.ends_with("semantic.db")
+            path_str.ends_with(".swissarmyhammer/semantic.db") || path_str.ends_with("semantic.db"),
+            "Expected path to end with '.swissarmyhammer/semantic.db' or 'semantic.db', got: {}",
+            path_str
         );
+
+        // Restore original environment variable
+        match original_db_path {
+            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+        }
     }
 
     #[test]
     fn test_semantic_config_git_repo_no_swissarmyhammer() {
         use std::fs;
         use tempfile::TempDir;
+
+        // Acquire the global semantic DB environment lock to prevent race conditions
+        let _lock_guard = crate::test_utils::acquire_semantic_db_lock();
+
+        // Store original environment variable and remove it for test isolation
+        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
+        std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
 
         let temp_dir = TempDir::new().unwrap();
 
@@ -970,6 +1042,11 @@ mod tests {
         // Change to the temp directory to simulate being in a Git repository
         let original_dir = std::env::current_dir().ok();
         if std::env::set_current_dir(temp_dir.path()).is_err() {
+            // Restore environment variable if test setup failed
+            match original_db_path {
+                Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+                None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+            }
             return; // Skip test if can't change directory
         }
 
@@ -981,10 +1058,20 @@ mod tests {
         }
 
         // Should fallback to home directory since Git repository exists but no .swissarmyhammer
-        assert!(config
-            .database_path
-            .to_string_lossy()
-            .contains("semantic.db"));
+        let path_str = config.database_path.to_string_lossy();
+
+        // Since we cleared the environment variable, we should get normal fallback behavior
+        assert!(
+            path_str.contains("semantic.db"),
+            "Expected path to contain 'semantic.db', got: {}",
+            path_str
+        );
+
+        // Restore original environment variable
+        match original_db_path {
+            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
+            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
+        }
 
         // Should either be home directory or relative fallback
         let path_str = config.database_path.to_string_lossy();

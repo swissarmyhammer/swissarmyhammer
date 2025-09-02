@@ -9,10 +9,14 @@ mod integration_tests {
     struct SemanticTestGuard {
         _temp_dir: TempDir,
         original_db_path: Option<String>,
+        _lock_guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl SemanticTestGuard {
         fn new() -> Self {
+            // Acquire the global semantic DB environment lock to prevent race conditions
+            let lock_guard = crate::test_utils::acquire_semantic_db_lock();
+
             let temp_dir = TempDir::new().expect("Failed to create temp dir for semantic test");
             let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
 
@@ -22,6 +26,7 @@ mod integration_tests {
             Self {
                 _temp_dir: temp_dir,
                 original_db_path,
+                _lock_guard: lock_guard,
             }
         }
     }

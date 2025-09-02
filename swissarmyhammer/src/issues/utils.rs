@@ -364,7 +364,8 @@ mod tests {
             "Initial commit",
             &tree,
             &[],
-        ).unwrap();
+        )
+        .unwrap();
 
         let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf()).unwrap();
 
@@ -374,7 +375,9 @@ mod tests {
 
         // Create and switch to issue branch using git2
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        let branch = repo.branch("issue/test_issue", &head_commit, false).unwrap();
+        let branch = repo
+            .branch("issue/test_issue", &head_commit, false)
+            .unwrap();
         repo.set_head(branch.get().name().unwrap()).unwrap();
         repo.checkout_head(None).unwrap();
 
@@ -384,7 +387,9 @@ mod tests {
 
         // Test complex issue name using git2
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        let branch = repo.branch("issue/01K0S1158ADEHEQ28YMNBJHW97", &head_commit, false).unwrap();
+        let branch = repo
+            .branch("issue/01K0S1158ADEHEQ28YMNBJHW97", &head_commit, false)
+            .unwrap();
         repo.set_head(branch.get().name().unwrap()).unwrap();
         repo.checkout_head(None).unwrap();
 

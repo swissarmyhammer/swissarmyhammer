@@ -32,11 +32,6 @@ use chrono::{DateTime, Utc};
 use git2::Repository;
 use std::path::{Path, PathBuf};
 
-
-
-
-
-
 /// Exit code used when a command's exit status cannot be determined
 /// Detailed status summary for git repository state
 #[derive(Debug, Default)]
@@ -248,7 +243,7 @@ impl GitOperations {
     pub fn with_work_dir(work_dir: PathBuf) -> Result<Self> {
         // Verify this is a git repository
         Self::verify_git_repo_git2(&work_dir)?;
-        
+
         let git2_repo = git2_utils::discover_repository(&work_dir)?;
 
         Ok(Self {
@@ -308,8 +303,6 @@ impl GitOperations {
         &self.git2_repo
     }
 
-
-
     /// Get current branch name using selected backend
     /// Get current branch name using git2-rs native operations
     pub fn current_branch(&self) -> Result<String> {
@@ -331,8 +324,6 @@ impl GitOperations {
             ))
         }
     }
-
-
 
     /// Get the main branch name (main or master) for backward compatibility testing.
     ///
@@ -470,8 +461,6 @@ impl GitOperations {
         Ok(())
     }
 
-
-
     /// Check if a branch name follows the issue branch pattern
     fn is_issue_branch(&self, branch: &str) -> bool {
         branch.starts_with("issue/")
@@ -535,8 +524,6 @@ impl GitOperations {
 
         Ok(branch_name)
     }
-
-
 
     /// Create and switch to issue work branch (simple backward compatibility)
     ///
@@ -637,8 +624,6 @@ impl GitOperations {
         Ok(())
     }
 
-
-
     /// Merge issue branch to specified source branch
     ///
     /// # Arguments
@@ -692,7 +677,11 @@ impl GitOperations {
         self.checkout_branch(target_branch)?;
 
         // Merge the issue branch
-        self.merge_branch(&branch_name, target_branch, &format!("Merge {branch_name} into {target_branch}"))?;
+        self.merge_branch(
+            &branch_name,
+            target_branch,
+            &format!("Merge {branch_name} into {target_branch}"),
+        )?;
 
         Ok(())
     }
@@ -702,50 +691,70 @@ impl GitOperations {
         let repo = &self.git2_repo;
 
         // Find the source branch reference
-        let source_ref = repo.find_reference(&format!("refs/heads/{}", source_branch))
-            .map_err(|e| git2_utils::convert_git2_error(&format!("find source branch {}", source_branch), e))?;
-        
+        let source_ref = repo
+            .find_reference(&format!("refs/heads/{}", source_branch))
+            .map_err(|e| {
+                git2_utils::convert_git2_error(&format!("find source branch {}", source_branch), e)
+            })?;
+
         // Get the commit to merge
-        let source_commit = source_ref.peel_to_commit()
+        let source_commit = source_ref
+            .peel_to_commit()
             .map_err(|e| git2_utils::convert_git2_error("get source commit", e))?;
 
         // Get current HEAD commit (target branch should be checked out)
-        let head_commit = repo.head()
+        let head_commit = repo
+            .head()
             .and_then(|head_ref| head_ref.peel_to_commit())
             .map_err(|e| git2_utils::convert_git2_error("get head commit", e))?;
 
         // Create annotated commit for merge analysis
-        let annotated_commit = repo.find_annotated_commit(source_commit.id())
+        let annotated_commit = repo
+            .find_annotated_commit(source_commit.id())
             .map_err(|e| git2_utils::convert_git2_error("create annotated commit", e))?;
 
         // Perform merge analysis
-        let merge_analysis = repo.merge_analysis(&[&annotated_commit])
+        let merge_analysis = repo
+            .merge_analysis(&[&annotated_commit])
             .map_err(|e| git2_utils::convert_git2_error("merge analysis", e))?;
 
         if merge_analysis.0.is_fast_forward() {
             // Fast forward merge - update HEAD to source commit
-            let mut head_ref = repo.head()
+            let mut head_ref = repo
+                .head()
                 .map_err(|e| git2_utils::convert_git2_error("get head reference", e))?;
-            head_ref.set_target(source_commit.id(), message)
+            head_ref
+                .set_target(source_commit.id(), message)
                 .map_err(|e| git2_utils::convert_git2_error("fast forward merge", e))?;
-            
+
             // Update working directory for fast-forward merge
             let mut checkout_builder = git2::build::CheckoutBuilder::new();
             checkout_builder.force();
             repo.checkout_head(Some(&mut checkout_builder))
-                .map_err(|e| git2_utils::convert_git2_error("checkout working directory after fast-forward", e))?;
+                .map_err(|e| {
+                    git2_utils::convert_git2_error(
+                        "checkout working directory after fast-forward",
+                        e,
+                    )
+                })?;
         } else if merge_analysis.0.is_normal() {
             // Normal merge - create merge commit
-            let mut index = repo.merge_commits(&head_commit, &source_commit, None)
+            let mut index = repo
+                .merge_commits(&head_commit, &source_commit, None)
                 .map_err(|e| git2_utils::convert_git2_error("create merge", e))?;
 
             if index.has_conflicts() {
                 // Handle merge conflicts
-                let conflicts: Vec<String> = index.conflicts()
+                let conflicts: Vec<String> = index
+                    .conflicts()
                     .map_err(|e| git2_utils::convert_git2_error("get conflicts", e))?
                     .flatten()
-                    .filter_map(|conflict| conflict.our.as_ref().map(|entry| 
-                        String::from_utf8_lossy(&entry.path).to_string()))
+                    .filter_map(|conflict| {
+                        conflict
+                            .our
+                            .as_ref()
+                            .map(|entry| String::from_utf8_lossy(&entry.path).to_string())
+                    })
                     .collect();
 
                 let conflict_details = if conflicts.is_empty() {
@@ -761,21 +770,22 @@ impl GitOperations {
 
                 return Err(SwissArmyHammerError::git_operation_failed(
                     "merge",
-                    &format!("Merge conflicts in {}", conflict_details)
+                    &format!("Merge conflicts in {}", conflict_details),
                 ));
             }
 
             // Write the merged index
-            let tree_id = index.write_tree_to(repo)
+            let tree_id = index
+                .write_tree_to(repo)
                 .map_err(|e| git2_utils::convert_git2_error("write merge tree", e))?;
-            let tree = repo.find_tree(tree_id)
+            let tree = repo
+                .find_tree(tree_id)
                 .map_err(|e| git2_utils::convert_git2_error("find merge tree", e))?;
 
             // Create signature for the merge commit
-            let signature = repo.signature()
-                .or_else(|_| {
-                    git2::Signature::now("SwissArmyHammer", "sah@example.com")
-                })
+            let signature = repo
+                .signature()
+                .or_else(|_| git2::Signature::now("SwissArmyHammer", "sah@example.com"))
                 .map_err(|e| git2_utils::convert_git2_error("get signature", e))?;
 
             // Create merge commit
@@ -786,7 +796,8 @@ impl GitOperations {
                 message,
                 &tree,
                 &[&head_commit, &source_commit],
-            ).map_err(|e| git2_utils::convert_git2_error("create merge commit", e))?;
+            )
+            .map_err(|e| git2_utils::convert_git2_error("create merge commit", e))?;
 
             // Update working directory to match the new HEAD
             let mut checkout_builder = git2::build::CheckoutBuilder::new();
@@ -795,11 +806,13 @@ impl GitOperations {
                 .map_err(|e| git2_utils::convert_git2_error("checkout working directory", e))?;
         } else {
             return Err(SwissArmyHammerError::git_operation_failed(
-                "merge", 
-                &format!("No merge needed for {} into {}", source_branch, target_branch)
+                "merge",
+                &format!(
+                    "No merge needed for {} into {}",
+                    source_branch, target_branch
+                ),
             ));
         }
-
 
         Ok(())
     }
@@ -945,8 +958,6 @@ impl GitOperations {
 
         Ok(target_branch)
     }
-
-
 
     /// Delete a branch
     pub fn delete_branch(&self, branch_name: &str, force: bool) -> Result<()> {
@@ -1300,8 +1311,6 @@ impl GitOperations {
         Ok(format!("{}|{}|{}|{}", hash, message, author_name, iso_date))
     }
 
-
-
     /// Get commit history using git2-rs revwalk
     pub fn get_commit_history(&self, limit: Option<usize>) -> Result<Vec<CommitInfo>> {
         let repo = self.open_git2_repository()?;
@@ -1612,8 +1621,6 @@ impl GitOperations {
         Ok(changes)
     }
 
-
-
     /// Check if working directory has uncommitted changes using selected backend
     pub fn has_uncommitted_changes(&self) -> Result<bool> {
         self.has_uncommitted_changes_git2()
@@ -1624,8 +1631,6 @@ impl GitOperations {
         let summary = self.get_status_summary()?;
         Ok(!summary.is_clean())
     }
-
-
 
     /// Get detailed status summary with categorized changes
     pub fn get_status_summary(&self) -> Result<StatusSummary> {
@@ -1788,7 +1793,7 @@ impl GitOperations {
         match is_ancestor(&repo, source_branch, &issue_branch) {
             Ok(_) => {
                 // Ancestor check succeeded - no significant divergence issues
-            },
+            }
             Err(e) => {
                 tracing::warn!(
                     "Source branch '{}' divergence check failed for issue '{}': {}",
@@ -1909,7 +1914,7 @@ impl GitOperations {
     ///
     /// Attempts to determine the target branch for an issue from configuration files.
     /// This function provides extensibility for future configuration-based branch targeting.
-    /// 
+    ///
     /// Currently returns None to trigger automatic branch detection via reflog analysis,
     /// which provides robust target branch identification based on git history.
     ///
@@ -2358,47 +2363,58 @@ mod tests {
 
     // Helper to create a git command with proper PATH handling for tests
 
-
     // Helper to create a temporary git repository
     fn create_test_git_repo() -> Result<TempDir> {
         let temp_dir = TempDir::new()?;
         let repo_path = temp_dir.path();
 
         // Initialize git repo using libgit2
-        let repo = Repository::init(repo_path)
-            .map_err(|e| SwissArmyHammerError::Other(format!("Failed to initialize git repository: {}", e)))?;
+        let repo = Repository::init(repo_path).map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to initialize git repository: {}", e))
+        })?;
 
         // Set up user config for tests
-        let mut config = repo.config()
+        let mut config = repo
+            .config()
             .map_err(|e| SwissArmyHammerError::Other(format!("Failed to get config: {}", e)))?;
-        config.set_str("user.name", "Test User")
+        config
+            .set_str("user.name", "Test User")
             .map_err(|e| SwissArmyHammerError::Other(format!("Failed to set user.name: {}", e)))?;
-        config.set_str("user.email", "test@example.com")
+        config
+            .set_str("user.email", "test@example.com")
             .map_err(|e| SwissArmyHammerError::Other(format!("Failed to set user.email: {}", e)))?;
 
         // Create initial commit
         fs::write(repo_path.join("README.md"), "# Test Repository")?;
 
         add_files(&repo, &["README.md"])?;
-        let commit_oid = create_commit(&repo, "Initial commit", Some("Test User"), Some("test@example.com"))?;
-        
+        let commit_oid = create_commit(
+            &repo,
+            "Initial commit",
+            Some("Test User"),
+            Some("test@example.com"),
+        )?;
+
         // After creating the initial commit, the repository should have a default branch
         // Check what branch already exists and ensure it's named "main" for consistency
         let oid = git2::Oid::from_str(&commit_oid)
             .map_err(|e| SwissArmyHammerError::Other(format!("Invalid commit OID: {}", e)))?;
-        let commit = repo.find_commit(oid)
+        let commit = repo
+            .find_commit(oid)
             .map_err(|e| SwissArmyHammerError::Other(format!("Failed to find commit: {}", e)))?;
 
         // Only create the main branch if it doesn't exist yet
         // This avoids the "cannot force update current HEAD" error
         if repo.find_branch("main", git2::BranchType::Local).is_err() {
-            repo.branch("main", &commit, false)
-                .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create main branch: {}", e)))?;
+            repo.branch("main", &commit, false).map_err(|e| {
+                SwissArmyHammerError::Other(format!("Failed to create main branch: {}", e))
+            })?;
         }
-            
+
         // Set HEAD to point to main branch (this is safe even if main already exists)
-        repo.set_head("refs/heads/main")
-            .map_err(|e| SwissArmyHammerError::Other(format!("Failed to set HEAD to main: {}", e)))?;
+        repo.set_head("refs/heads/main").map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to set HEAD to main: {}", e))
+        })?;
 
         Ok(temp_dir)
     }
@@ -2467,8 +2483,7 @@ mod tests {
         let temp_dir = create_test_git_repo().unwrap();
 
         // Try shell backend directly
-        let shell_ops =
-            GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
+        let shell_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
         // Test that shell backend can get current branch
         let current_branch = shell_ops.current_branch().unwrap();
@@ -2490,9 +2505,7 @@ mod tests {
             Err(e) => {
                 // Expected: Shell backend fails due to PATH issues, verify git2 backend works
                 let temp_dir = create_test_git_repo().unwrap();
-                let git2_ops =
-                    GitOperations::with_work_dir(temp_dir.path().to_path_buf())
-                        .unwrap();
+                let git2_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
                 let git2_branch = git2_ops.current_branch().unwrap();
                 assert!(git2_branch == "main" || git2_branch == "master");
 
@@ -2525,9 +2538,7 @@ mod tests {
             Err(e) => {
                 // Expected: Shell backend fails, verify git2 backend works
                 let temp_dir = create_test_git_repo().unwrap();
-                let git2_ops =
-                    GitOperations::with_work_dir(temp_dir.path().to_path_buf())
-                        .unwrap();
+                let git2_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
                 let git2_main = git2_ops.main_branch().unwrap();
                 assert!(git2_main == "main" || git2_main == "master");
                 println!(
@@ -2554,9 +2565,7 @@ mod tests {
             Err(e) => {
                 // Expected: Shell backend fails, verify git2 backend works
                 let temp_dir = create_test_git_repo().unwrap();
-                let git2_ops =
-                    GitOperations::with_work_dir(temp_dir.path().to_path_buf())
-                        .unwrap();
+                let git2_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
                 let git2_main = git2_ops.main_branch().unwrap();
                 assert!(git2_ops.branch_exists(&git2_main).unwrap());
                 assert!(!git2_ops.branch_exists("non-existent-branch").unwrap());
@@ -2659,9 +2668,9 @@ mod tests {
                 // Verify git2 backend still works independently
                 match create_test_git_repo() {
                     Ok(temp_dir) => {
-                        if let Ok(git2_ops) = GitOperations::with_work_dir(
-                            temp_dir.path().to_path_buf()
-                        ) {
+                        if let Ok(git2_ops) =
+                            GitOperations::with_work_dir(temp_dir.path().to_path_buf())
+                        {
                             if let Ok(git2_branch) = git2_ops.current_branch() {
                                 assert!(git2_branch == "main" || git2_branch == "master");
                                 println!("✓ Git2 backend works independently despite shell backend failure: {}", e);
@@ -2683,9 +2692,9 @@ mod tests {
                 // Expected: Shell backend fails, verify git2 backend works
                 match create_test_git_repo() {
                     Ok(temp_dir) => {
-                        if let Ok(git2_ops) = GitOperations::with_work_dir(
-                            temp_dir.path().to_path_buf()
-                        ) {
+                        if let Ok(git2_ops) =
+                            GitOperations::with_work_dir(temp_dir.path().to_path_buf())
+                        {
                             if let Ok(git2_main) = git2_ops.main_branch() {
                                 assert!(git2_main == "main" || git2_main == "master");
                                 println!("✓ Git2 backend works independently for main_branch despite shell failure: {}", e);
@@ -2710,9 +2719,9 @@ mod tests {
                 // Expected: Shell backend fails, verify git2 backend works
                 match create_test_git_repo() {
                     Ok(temp_dir) => {
-                        if let Ok(git2_ops) = GitOperations::with_work_dir(
-                            temp_dir.path().to_path_buf()
-                        ) {
+                        if let Ok(git2_ops) =
+                            GitOperations::with_work_dir(temp_dir.path().to_path_buf())
+                        {
                             if let Ok(git2_main) = git2_ops.main_branch() {
                                 if let Ok(git2_exists) = git2_ops.branch_exists(&git2_main) {
                                     assert!(git2_exists); // Main branch should exist
@@ -2907,7 +2916,13 @@ mod tests {
             fs::write(git_ops.work_dir().join("test.txt"), "test content").unwrap();
             let repo = git2::Repository::open(git_ops.work_dir()).unwrap();
             super::git2_utils::add_files(&repo, &["test.txt"]).unwrap();
-            super::git2_utils::create_commit(&repo, "Add test file", Some("Test User"), Some("test@example.com")).unwrap();
+            super::git2_utils::create_commit(
+                &repo,
+                "Add test file",
+                Some("Test User"),
+                Some("test@example.com"),
+            )
+            .unwrap();
 
             // Merge the branch
             git_ops.merge_issue_branch_auto("test_issue")?;
@@ -2954,7 +2969,13 @@ mod tests {
             // Stage and commit the file
             let repo = git2::Repository::open(git_ops.work_dir()).unwrap();
             super::git2_utils::add_files(&repo, &["test.txt"]).unwrap();
-            super::git2_utils::create_commit(&repo, "Add test file", Some("Test User"), Some("test@example.com")).unwrap();
+            super::git2_utils::create_commit(
+                &repo,
+                "Add test file",
+                Some("Test User"),
+                Some("test@example.com"),
+            )
+            .unwrap();
 
             // Should have no uncommitted changes again
             assert!(!git_ops.has_uncommitted_changes()?);
@@ -3059,9 +3080,8 @@ mod tests {
 
     #[test]
     fn test_create_work_branch_without_main_branch_succeeds() {
-        use std::fs;
         use super::git2_utils;
-        
+        use std::fs;
 
         // Create a temporary directory and initialize a git repo
         let temp_dir = tempfile::tempdir().unwrap();
@@ -3069,7 +3089,7 @@ mod tests {
 
         // Initialize git repo using libgit2
         let repo = git2::Repository::init(repo_path).unwrap();
-        
+
         // Set up git configuration
         let mut config = repo.config().unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
@@ -3078,29 +3098,37 @@ mod tests {
         // Create a test file and make initial commit on custom branch
         fs::write(repo_path.join("test.txt"), "test content").unwrap();
         git2_utils::add_files(&repo, &["test.txt"]).unwrap();
-        
+
         // Create initial commit with custom branch name
-        let signature = git2::Signature::new("Test User", "test@example.com", &git2::Time::new(0, 0)).unwrap();
+        let signature =
+            git2::Signature::new("Test User", "test@example.com", &git2::Time::new(0, 0)).unwrap();
         let tree_id = {
             let mut index = repo.index().unwrap();
             index.write().unwrap();
             index.write_tree().unwrap()
         };
         let tree = repo.find_tree(tree_id).unwrap();
-        
-        let _commit_id = repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "Initial commit",
-            &tree,
-            &[],
-        ).unwrap();
+
+        let _commit_id = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Initial commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
 
         // Rename current branch to custom_branch
         let head = repo.head().unwrap();
-        let _branch = repo.branch_from_annotated_commit("custom_branch", 
-            &repo.reference_to_annotated_commit(&head).unwrap(), false).unwrap();
+        let _branch = repo
+            .branch_from_annotated_commit(
+                "custom_branch",
+                &repo.reference_to_annotated_commit(&head).unwrap(),
+                false,
+            )
+            .unwrap();
         repo.set_head("refs/heads/custom_branch").unwrap();
 
         // Cleanup any default branches that may exist
@@ -3455,9 +3483,11 @@ mod tests {
         let temp_dir = create_test_git_repo().unwrap();
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Create a feature branch
-        let repo = git2::Repository::open(temp_dir.path()).unwrap();
-        super::git2_utils::checkout_new_branch(&repo, "feature/cool", None).unwrap();
+        // Create a feature branch - scope the repo to ensure cleanup
+        {
+            let repo = git2::Repository::open(temp_dir.path()).unwrap();
+            super::git2_utils::checkout_new_branch(&repo, "feature/cool", None).unwrap();
+        }
 
         // Create issue branch from feature branch
         let branch_name = git_ops.create_work_branch("resume_issue").unwrap();
@@ -3503,9 +3533,11 @@ mod tests {
 
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
 
-        // Create and switch to feature branch
-        let repo = git2::Repository::open(temp_dir.path()).unwrap();
-        super::git2_utils::checkout_new_branch(&repo, "feature/test", None).unwrap();
+        // Create and switch to feature branch - scope the repo to ensure cleanup
+        {
+            let repo = git2::Repository::open(temp_dir.path()).unwrap();
+            super::git2_utils::checkout_new_branch(&repo, "feature/test", None).unwrap();
+        }
 
         // Create issue branch from feature branch
         git_ops.create_work_branch("test_issue").unwrap();
@@ -3580,7 +3612,8 @@ mod tests {
         std::fs::write(temp_dir.path().join("conflict.txt"), "feature content").unwrap();
         let repo = git2::Repository::open(temp_dir.path()).unwrap();
         super::git2_utils::add_files(&repo, &["conflict.txt"]).unwrap();
-        super::git2_utils::create_commit(&repo, "Add conflict file on feature", None, None).unwrap();
+        super::git2_utils::create_commit(&repo, "Add conflict file on feature", None, None)
+            .unwrap();
 
         // Switch to main and create different content
         let main_branch = git_ops.main_branch().unwrap();
@@ -3758,29 +3791,25 @@ mod tests {
         .unwrap();
     }
 
-
-
-
-
-    #[test] 
+    #[test]
     fn test_repository_setup_works() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
-        
+
         // Test the repository setup directly without test_with_git2_backend
         let temp_dir = create_test_git_repo().unwrap();
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf()).unwrap();
-        
+
         // This should work if the repository is set up correctly
         let current_branch = git_ops.current_branch().unwrap();
         assert!(!current_branch.is_empty());
-        
+
         // Check if we can list branches
         let branches = git_ops.list_branches().unwrap();
         assert!(!branches.is_empty());
         assert!(branches.contains(&current_branch));
     }
 
-    #[test] 
+    #[test]
     fn test_delete_branch_existing_succeeds() {
         let _test_env = IsolatedTestEnvironment::new().unwrap();
 
@@ -3794,11 +3823,11 @@ mod tests {
 
         // First, get what the actual default branch is instead of assuming "main"
         let default_branch = git_ops.current_branch().unwrap();
-        
+
         // Create a test branch
         let result = git_ops.create_work_branch("delete-test");
         assert!(result.is_ok());
-        
+
         // Switch back to the default branch
         git_ops.checkout_branch(&default_branch).unwrap();
 
@@ -4037,7 +4066,13 @@ mod tests {
         fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
 
         add_files(&repo, &["feature.txt"]).unwrap();
-        create_commit(&repo, "Add feature", Some("Test User"), Some("test@example.com")).unwrap();
+        create_commit(
+            &repo,
+            "Add feature",
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Switch back to main and merge
         checkout_branch(&repo, "main").unwrap();
@@ -4052,11 +4087,10 @@ mod tests {
 
         // Verify merge commit was created
         let commits = get_log(&repo, Some(3), None).unwrap();
-        let has_merge = commits.iter().any(|c| c.message.contains("Merge feature into main"));
-        assert!(
-            has_merge,
-            "Should create explicit merge commit"
-        );
+        let has_merge = commits
+            .iter()
+            .any(|c| c.message.contains("Merge feature into main"));
+        assert!(has_merge, "Should create explicit merge commit");
     }
 
     #[test]
@@ -4071,13 +4105,25 @@ mod tests {
 
         fs::write(temp_dir.path().join("feature.txt"), "feature content").unwrap();
         add_files(&repo, &["feature.txt"]).unwrap();
-        create_commit(&repo, "Add feature", Some("Test User"), Some("test@example.com")).unwrap();
+        create_commit(
+            &repo,
+            "Add feature",
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Switch back to main and make a different commit
         checkout_branch(&repo, "main").unwrap();
         fs::write(temp_dir.path().join("main.txt"), "main content").unwrap();
         add_files(&repo, &["main.txt"]).unwrap();
-        create_commit(&repo, "Add main feature", Some("Test User"), Some("test@example.com")).unwrap();
+        create_commit(
+            &repo,
+            "Add main feature",
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Test git2 merge (should perform 3-way merge)
         let result = git_ops.merge_branches_git2("feature", "main", "Merge feature branch");
@@ -4098,7 +4144,10 @@ mod tests {
         let head = repo.head().unwrap();
         let commit = head.peel_to_commit().unwrap();
         assert!(
-            commit.message().unwrap_or("").contains("Merge feature branch"),
+            commit
+                .message()
+                .unwrap_or("")
+                .contains("Merge feature branch"),
             "Should create merge commit with message"
         );
     }
@@ -4427,7 +4476,9 @@ mod tests {
         let git_ops = GitOperations::with_work_dir(temp_dir.path().to_path_buf())?;
 
         // Create additional commits
-        let repo = git2::Repository::open(temp_dir.path()).map_err(|e| SwissArmyHammerError::Other(format!("Failed to open repository: {}", e)))?;
+        let repo = git2::Repository::open(temp_dir.path()).map_err(|e| {
+            SwissArmyHammerError::Other(format!("Failed to open repository: {}", e))
+        })?;
         for i in 1..=3 {
             fs::write(
                 temp_dir.path().join(format!("file{}.txt", i)),
@@ -4677,13 +4728,20 @@ mod tests {
 
         // Parse output to validate format
         let git2_parts: Vec<&str> = git2_output.split('|').collect();
-        
+
         // Should have 4 parts: hash|subject|author|date
-        assert_eq!(git2_parts.len(), 4, "Output should have 4 pipe-separated parts");
+        assert_eq!(
+            git2_parts.len(),
+            4,
+            "Output should have 4 pipe-separated parts"
+        );
 
         // Validate hash (40 character hex string)
         assert_eq!(git2_parts[0].len(), 40, "Hash should be 40 characters");
-        assert!(git2_parts[0].chars().all(|c| c.is_ascii_hexdigit()), "Hash should be hex");
+        assert!(
+            git2_parts[0].chars().all(|c| c.is_ascii_hexdigit()),
+            "Hash should be hex"
+        );
 
         // Validate subject exists
         assert!(!git2_parts[1].is_empty(), "Subject should not be empty");
@@ -4692,13 +4750,7 @@ mod tests {
         assert!(!git2_parts[2].is_empty(), "Author should not be empty");
 
         // Validate date format
-        assert!(
-            git2_parts[3].contains(' '),
-            "Date should contain space"
-        );
-        assert!(
-            git2_parts[3].len() > 10,
-            "Date should be reasonable length"
-        );
+        assert!(git2_parts[3].contains(' '), "Date should contain space");
+        assert!(git2_parts[3].len() > 10, "Date should be reasonable length");
     }
 }

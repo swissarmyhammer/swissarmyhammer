@@ -132,11 +132,14 @@ impl WorkflowTemplateContext {
                     repo: model_repo,
                     filename: model_filename,
                 },
+                ..Default::default()
             },
             mcp_server: McpServerConfig {
                 port: mcp_port,
                 timeout_seconds: mcp_timeout,
             },
+
+            repetition_detection: Default::default(),
         })
     }
 
@@ -411,9 +414,23 @@ impl WorkflowTemplateContext {
 
     /// Get agent configuration from workflow context
     pub fn get_agent_config(&self) -> AgentConfig {
-        self.get("_agent_config")
+        // First check if there's an agent config set in workflow variables
+        if let Some(config) = self
+            .get("_agent_config")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default()
+        {
+            return config;
+        }
+
+        // Otherwise, try to get it from the underlying template context (from sah.yaml)
+        if let Some(agent_value) = self.template_context.get("agent") {
+            if let Ok(config) = serde_json::from_value::<AgentConfig>(agent_value.clone()) {
+                return config;
+            }
+        }
+
+        // Fall back to default (ClaudeCode)
+        AgentConfig::default()
     }
 
     /// Get the executor type from agent configuration
@@ -726,7 +743,7 @@ mod tests {
         assert!(context.is_quiet());
 
         // Model name should be the test model repo
-        assert!(context.get_model_name().contains("Phi-4"));
+        assert!(context.get_model_name().contains("Qwen3"));
     }
 
     #[test]
@@ -763,7 +780,7 @@ mod tests {
 
         context.set_agent_config(config);
         let model_name = context.get_model_name();
-        assert!(model_name.contains("Phi-4"));
+        assert!(model_name.contains("Qwen3"));
 
         // Should be available as template variable after setting
         context.set_model_name(model_name.clone());

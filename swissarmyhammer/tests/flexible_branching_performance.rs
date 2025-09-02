@@ -10,9 +10,9 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 // Import git2 utilities
-use git2::{Repository, Signature, BranchType};
-use swissarmyhammer::git::git2_utils;
 use anyhow::Result;
+use git2::{BranchType, Repository, Signature};
+use swissarmyhammer::git::git2_utils;
 
 /// Test environment for performance testing
 struct PerformanceTestEnvironment {
@@ -57,23 +57,23 @@ impl PerformanceTestEnvironment {
     fn setup_git_repo_git2(path: &std::path::Path) -> Result<()> {
         // Initialize git repo
         let repo = Repository::init(path)?;
-        
+
         // Configure git user
         let mut config = repo.config()?;
         config.set_str("user.name", "Test User")?;
         config.set_str("user.email", "test@example.com")?;
-        
+
         // Create initial commit
         std::fs::write(path.join("README.md"), "# Performance Test Project")?;
-        
+
         let mut index = repo.index()?;
         index.add_path(std::path::Path::new("README.md"))?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let signature = Signature::now("Test User", "test@example.com")?;
-        
+
         repo.commit(
             Some("HEAD"),
             &signature,
@@ -82,26 +82,27 @@ impl PerformanceTestEnvironment {
             &tree,
             &[],
         )?;
-        
+
         Ok(())
     }
 
     /// Create many branches for performance testing
     async fn create_many_branches(&self, count: usize) {
         let repo = Repository::open(self.temp_dir.path()).unwrap();
-        
+
         for i in 0..count {
             let branch_name = format!("feature/branch-{i:04}");
 
             // Create and checkout branch using git2
             let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
             let branch = repo.branch(&branch_name, &head_commit, false).unwrap();
-            
+
             // Checkout the branch
             let branch_ref = branch.get();
             let tree = branch_ref.peel_to_tree().unwrap();
             repo.checkout_tree(tree.as_object(), None).unwrap();
-            repo.set_head(&format!("refs/heads/{}", branch_name)).unwrap();
+            repo.set_head(&format!("refs/heads/{}", branch_name))
+                .unwrap();
 
             // Add unique content to each branch
             let content = format!("Content for branch {i}");
@@ -113,12 +114,12 @@ impl PerformanceTestEnvironment {
             let mut index = repo.index().unwrap();
             index.add_path(std::path::Path::new(&filename)).unwrap();
             index.write().unwrap();
-            
+
             let tree_id = index.write_tree().unwrap();
             let tree = repo.find_tree(tree_id).unwrap();
             let signature = Signature::now("Test User", "test@example.com").unwrap();
             let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
-            
+
             repo.commit(
                 Some("HEAD"),
                 &signature,
@@ -126,7 +127,8 @@ impl PerformanceTestEnvironment {
                 &format!("Add content for {branch_name}"),
                 &tree,
                 &[&parent_commit],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         // Return to main branch using git2
@@ -367,19 +369,26 @@ async fn test_git_flow_compatibility() {
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         let branch = repo.branch(branch_name, &head_commit, false).unwrap();
-        
+
         // Checkout the branch
         let branch_ref = branch.get();
         let tree = branch_ref.peel_to_tree().unwrap();
         repo.checkout_tree(tree.as_object(), None).unwrap();
-        repo.set_head(&format!("refs/heads/{}", branch_name)).unwrap();
+        repo.set_head(&format!("refs/heads/{}", branch_name))
+            .unwrap();
 
         let filename = format!("{}.md", branch_name.replace('/', "_"));
         std::fs::write(env.temp_dir.path().join(&filename), description)
             .expect("Failed to write branch description");
 
         git2_utils::add_files(&repo, &[&filename]).unwrap();
-        git2_utils::create_commit(&repo, &format!("Initialize {branch_name}"), Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            &format!("Initialize {branch_name}"),
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
     }
 
     // Test creating issues from each Git Flow branch type
@@ -398,7 +407,13 @@ async fn test_git_flow_compatibility() {
 
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         git2_utils::add_files(&repo, &[&change_file]).unwrap();
-        git2_utils::create_commit(&repo, &format!("Change from {issue_name}"), Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            &format!("Change from {issue_name}"),
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Merge back to original branch
         git.merge_issue_branch(&issue_name, branch_name).unwrap();
@@ -429,12 +444,13 @@ async fn test_github_flow_compatibility() {
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         let branch = repo.branch(feature_branch, &head_commit, false).unwrap();
-        
+
         // Checkout the branch
         let branch_ref = branch.get();
         let tree = branch_ref.peel_to_tree().unwrap();
         repo.checkout_tree(tree.as_object(), None).unwrap();
-        repo.set_head(&format!("refs/heads/{}", feature_branch)).unwrap();
+        repo.set_head(&format!("refs/heads/{}", feature_branch))
+            .unwrap();
 
         // Add feature work
         let feature_file = format!("{}.rs", feature_branch.replace('/', "_"));
@@ -446,7 +462,13 @@ async fn test_github_flow_compatibility() {
 
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         git2_utils::add_files(&repo, &[&feature_file]).unwrap();
-        git2_utils::create_commit(&repo, &format!("Implement {feature_branch}"), Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            &format!("Implement {feature_branch}"),
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Create issue branch for additional work on the feature
         let issue_name = format!("tests-for-{}", feature_branch.replace("feature/", ""));
@@ -464,7 +486,13 @@ async fn test_github_flow_compatibility() {
 
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         git2_utils::add_files(&repo, &[&test_file]).unwrap();
-        git2_utils::create_commit(&repo, &format!("Add tests for {feature_branch}"), Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            &format!("Add tests for {feature_branch}"),
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
 
         // Merge issue back to feature branch
         git.merge_issue_branch(&issue_name, feature_branch).unwrap();
@@ -477,18 +505,18 @@ async fn test_github_flow_compatibility() {
         // We can simulate this by merging to main
         git.checkout_branch("main").unwrap();
         let repo = Repository::open(env.temp_dir.path()).unwrap();
-        
+
         // Get the feature branch commit
         let feature_branch_ref = repo.find_branch(feature_branch, BranchType::Local).unwrap();
         let feature_commit = feature_branch_ref.get().peel_to_commit().unwrap();
-        
+
         // Get current HEAD (main branch)
         let main_commit = repo.head().unwrap().peel_to_commit().unwrap();
-        
+
         // Create merge commit
         let signature = Signature::now("Test User", "test@example.com").unwrap();
         let tree = feature_commit.tree().unwrap();
-        
+
         repo.commit(
             Some("HEAD"),
             &signature,
@@ -496,7 +524,8 @@ async fn test_github_flow_compatibility() {
             &format!("Merge {feature_branch}"),
             &tree,
             &[&main_commit, &feature_commit],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Clean up feature branch (typical in GitHub Flow)
         let mut branch = repo.find_branch(feature_branch, BranchType::Local).unwrap();
@@ -531,7 +560,7 @@ async fn test_concurrent_issue_operations() {
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
         let git_branch = repo.branch(branch, &head_commit, false).unwrap();
-        
+
         // Checkout the branch
         let branch_ref = git_branch.get();
         let tree = branch_ref.peel_to_tree().unwrap();
@@ -546,7 +575,13 @@ async fn test_concurrent_issue_operations() {
         .expect("Failed to write branch content");
 
         git2_utils::add_files(&repo, &[&filename]).unwrap();
-        git2_utils::create_commit(&repo, &format!("Initialize {branch}"), Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            &format!("Initialize {branch}"),
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
     }
 
     // Simulate concurrent operations by rapidly creating issue branches
@@ -570,7 +605,13 @@ async fn test_concurrent_issue_operations() {
 
         let repo = Repository::open(env.temp_dir.path()).unwrap();
         git2_utils::add_files(&repo, &[&change_file]).unwrap();
-        git2_utils::create_commit(&repo, &format!("Concurrent work {i}"), Some("Test User"), Some("test@example.com")).unwrap();
+        git2_utils::create_commit(
+            &repo,
+            &format!("Concurrent work {i}"),
+            Some("Test User"),
+            Some("test@example.com"),
+        )
+        .unwrap();
     }
 
     // All issue branches should exist

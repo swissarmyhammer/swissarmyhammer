@@ -39,6 +39,15 @@ fn test_parse_action_from_description_set_variable() {
 }
 
 #[test]
+fn test_parse_action_from_description_set_variable_format() {
+    let description = r#"set_variable result="success""#;
+    let action = parse_action_from_description(description).unwrap().unwrap();
+
+    assert_eq!(action.action_type(), "set_variable");
+    assert!(action.description().contains("result"));
+}
+
+#[test]
 fn test_parse_action_from_description_sub_workflow() {
     let description = r#"Run workflow "test-workflow" with input="value""#;
     let action = parse_action_from_description(description).unwrap().unwrap();

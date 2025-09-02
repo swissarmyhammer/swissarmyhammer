@@ -87,7 +87,13 @@ impl ConfigurationDiscovery {
 
     /// Find global config directory (~/.swissarmyhammer/)
     fn find_global_config_dir() -> ConfigurationResult<Option<PathBuf>> {
-        match dirs::home_dir() {
+        // First try to get HOME environment variable (respects test environment)
+        let home = std::env::var("HOME")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(dirs::home_dir); // Fallback to dirs::home_dir() if HOME not set
+
+        match home {
             Some(home) => {
                 let config_dir = home.join(".swissarmyhammer");
                 if config_dir.is_dir() {
@@ -118,9 +124,16 @@ impl ConfigurationDiscovery {
     /// Find ALL project config directories by walking up the directory tree
     /// Returns directories in ascending precedence order (parent directories first)
     fn find_all_project_config_dirs() -> ConfigurationResult<Vec<PathBuf>> {
-        let current_dir = std::env::current_dir().map_err(|e| {
-            ConfigurationError::discovery(format!("Could not get current directory: {}", e))
-        })?;
+        let current_dir = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                debug!(
+                    "Could not get current directory ({}), no project config directories found",
+                    e
+                );
+                return Ok(Vec::new());
+            }
+        };
 
         let mut config_dirs = Vec::new();
         let mut dir = Some(current_dir.as_path());

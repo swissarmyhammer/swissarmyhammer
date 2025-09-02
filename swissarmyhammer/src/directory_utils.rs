@@ -161,8 +161,13 @@ pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> 
 /// * `NotInGitRepository` - If not currently in a Git repository
 /// * `DirectoryCreation` - If .swissarmyhammer directory cannot be created
 pub fn get_or_create_swissarmyhammer_directory() -> crate::error::Result<PathBuf> {
-    let current_dir =
-        std::env::current_dir().map_err(crate::error::SwissArmyHammerError::directory_creation)?;
+    let current_dir = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::debug!("Could not get current directory: {}", e);
+            return Err(crate::error::SwissArmyHammerError::directory_creation(e));
+        }
+    };
     get_or_create_swissarmyhammer_directory_from(&current_dir)
 }
 

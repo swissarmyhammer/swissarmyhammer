@@ -1,3 +1,7 @@
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!
+
 [package]
 name = "swissarmyhammer-tools"
 version.workspace = true
@@ -11,7 +15,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 # Core library dependency
-swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
+swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
 # Async and JSON processing

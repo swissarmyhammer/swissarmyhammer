@@ -1404,7 +1404,7 @@ mod tests {
     async fn test_tool_execution() {
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
-        use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
+        use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create temporary directory for test
@@ -1416,8 +1416,10 @@ mod tests {
             swissarmyhammer::issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
+        // Create memo storage using temporary directory
+        let memo_dir = _temp_dir.path().join("memos");
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(MockMemoStorage::new())));
+            Arc::new(RwLock::new(Box::new(FileSystemMemoStorage::new(memo_dir))));
 
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let context = ToolContext::new(
@@ -1425,7 +1427,16 @@ mod tests {
             issue_storage,
             git_ops,
             memo_storage,
-            Arc::new(swissarmyhammer::common::rate_limiter::MockRateLimiter),
+            Arc::new(
+                swissarmyhammer::common::rate_limiter::RateLimiter::with_config(
+                    swissarmyhammer::common::rate_limiter::RateLimiterConfig {
+                        global_limit: 10000,
+                        per_client_limit: 1000,
+                        expensive_operation_limit: 500,
+                        window_duration: std::time::Duration::from_secs(1),
+                    },
+                ),
+            ),
         );
 
         let tool = MockTool {

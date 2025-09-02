@@ -260,16 +260,6 @@ impl RateLimitChecker for RateLimiter {
     }
 }
 
-/// Mock rate limiter for testing that always allows operations
-#[derive(Debug, Default)]
-pub struct MockRateLimiter;
-
-impl RateLimitChecker for MockRateLimiter {
-    fn check_rate_limit(&self, _client_id: &str, _operation: &str, _cost: u32) -> Result<()> {
-        Ok(())
-    }
-}
-
 /// Rate limit status for monitoring and headers
 #[derive(Debug, Clone)]
 pub struct RateLimitStatus {
@@ -377,5 +367,53 @@ mod tests {
         assert_eq!(status.client_limit, 5);
         assert_eq!(status.global_limit, 10);
         assert_eq!(status.client_remaining, 5);
+    }
+
+    #[test]
+    fn test_real_rate_limiting_behavior_replaces_mock() {
+        // This test verifies that real rate limiting works correctly
+        // and demonstrates the replacement of MockRateLimiter functionality
+        let limiter = RateLimiter::with_config(RateLimiterConfig {
+            per_client_limit: 3,
+            global_limit: 10,
+            expensive_operation_limit: 2,
+            window_duration: Duration::from_secs(60),
+        });
+
+        // Test basic rate limiting with real enforcement
+        assert!(limiter
+            .check_rate_limit("test_client", "operation", 1)
+            .is_ok());
+        assert!(limiter
+            .check_rate_limit("test_client", "operation", 1)
+            .is_ok());
+        assert!(limiter
+            .check_rate_limit("test_client", "operation", 1)
+            .is_ok());
+
+        // Should be rate limited now - this is real rate limiting, not a mock
+        let result = limiter.check_rate_limit("test_client", "operation", 1);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Client rate limit exceeded"));
+
+        // Different client should still work
+        assert!(limiter
+            .check_rate_limit("different_client", "operation", 1)
+            .is_ok());
+
+        // Test expensive operations are really limited
+        assert!(limiter.check_rate_limit("new_client", "search", 1).is_ok());
+        assert!(limiter.check_rate_limit("new_client", "search", 1).is_ok());
+
+        // Should fail on expensive operation limit
+        let expensive_result = limiter.check_rate_limit("new_client", "search", 1);
+        assert!(expensive_result.is_err());
+        assert!(expensive_result
+            .unwrap_err()
+            .to_string()
+            .contains("Global rate limit exceeded"));
     }
 }

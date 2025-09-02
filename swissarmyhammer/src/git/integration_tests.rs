@@ -20,19 +20,31 @@ mod tests {
         let repo_path = temp_dir.path();
 
         // Initialize git repo using git2
-        let repo = git2::Repository::init(repo_path).map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        let repo = git2::Repository::init(repo_path)
+            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
 
         // Set up user config for tests
-        let mut config = repo.config().map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
-        config.set_str("user.name", "Test User").map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
-        config.set_str("user.email", "test@example.com").map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        let mut config = repo
+            .config()
+            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        config
+            .set_str("user.name", "Test User")
+            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
+        config
+            .set_str("user.email", "test@example.com")
+            .map_err(|e| SwissArmyHammerError::Other(e.to_string()))?;
         drop(config);
 
         // Create initial commit
         fs::write(repo_path.join("README.md"), "# Test Repository")?;
-        
+
         git2_utils::add_files(&repo, &["README.md"])?;
-        git2_utils::create_commit(&repo, "Initial commit", Some("Test User"), Some("test@example.com"))?;
+        git2_utils::create_commit(
+            &repo,
+            "Initial commit",
+            Some("Test User"),
+            Some("test@example.com"),
+        )?;
 
         Ok(temp_dir)
     }
@@ -242,16 +254,16 @@ mod tests {
 
         // Both success and error are acceptable in detached HEAD
         match result {
-                Ok(branch_or_commit) => {
-                    // Should return something (commit hash or branch name)
-                    assert!(!branch_or_commit.is_empty());
-                }
-                Err(error) => {
-                    // Error should be properly structured (not generic Other)
-                    let error_msg = error.to_string();
-                    assert!(!error_msg.contains("SwissArmyHammerError::Other"));
-                }
+            Ok(branch_or_commit) => {
+                // Should return something (commit hash or branch name)
+                assert!(!branch_or_commit.is_empty());
             }
+            Err(error) => {
+                // Error should be properly structured (not generic Other)
+                let error_msg = error.to_string();
+                assert!(!error_msg.contains("SwissArmyHammerError::Other"));
+            }
+        }
     }
 
     #[test]

@@ -1,3 +1,7 @@
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!
+
 [package]
 name = "swissarmyhammer-cli"
 version.workspace = true
@@ -58,12 +62,13 @@ tempfile = { workspace = true }
 # Utils
 regex = { workspace = true }
 once_cell = { workspace = true }
+libc = { workspace = true }
 
 # Git integration
 git2 = { workspace = true }
 
 [dev-dependencies]
-swissarmyhammer = { path = "../swissarmyhammer", features = ["test-utils"] }
+swissarmyhammer = { path = "../swissarmyhammer" }
 predicates = { workspace = true }
 tempfile = { workspace = true }
 

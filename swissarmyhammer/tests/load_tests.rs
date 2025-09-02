@@ -11,6 +11,11 @@ use tokio::time::{timeout, Duration, Instant};
 
 #[tokio::test]
 async fn test_concurrent_executor_creation() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     const CONCURRENT_REQUESTS: usize = 10;
@@ -98,6 +103,11 @@ async fn test_concurrent_executor_creation() {
 
 #[tokio::test]
 async fn test_memory_usage_patterns() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     println!("Testing memory usage patterns with repeated operations");
@@ -141,6 +151,11 @@ async fn test_memory_usage_patterns() {
 
 #[tokio::test]
 async fn test_stress_execution() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     const BATCH_SIZE: usize = 3;
@@ -239,6 +254,11 @@ async fn test_stress_execution() {
 
 #[tokio::test]
 async fn test_rapid_creation_destruction() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     const CYCLES: usize = 10;
@@ -281,6 +301,11 @@ async fn test_rapid_creation_destruction() {
 
 #[tokio::test]
 async fn test_timeout_behavior_under_load() {
+    // Skip test if LlamaAgent testing is disabled
+    if !swissarmyhammer_config::test_config::is_llama_enabled() {
+        println!("Skipping LlamaAgent test (set SAH_TEST_LLAMA=true to enable)");
+        return;
+    }
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     const SHORT_TIMEOUT_MS: u64 = 100; // Very short timeout

@@ -355,8 +355,47 @@ pub fn load_configuration_for_cli() -> ConfigurationResult<TemplateContext> {
     TemplateContext::load_for_cli()
 }
 
+/// Default LLM model repository for testing
+///
+/// This constant specifies the Hugging Face repository for the default test LLM model.
+/// Qwen3-1.7B is chosen as the test model because it provides:
+/// - Small size (suitable for CI/CD environments)
+/// - Fast inference (minimizes test execution time)
+/// - High quality instruction following (reliable test behavior)
+/// - Local execution capability (no API dependencies)
+///
+/// Used in conjunction with [`DEFAULT_TEST_LLM_MODEL_FILENAME`] to configure
+/// test LlamaAgent instances across all packages.
+pub const DEFAULT_TEST_LLM_MODEL_REPO: &str = "unsloth/Qwen3-1.7B-GGUF";
+
+/// Default LLM model filename for testing
+///
+/// This constant specifies the specific GGUF file within the repository
+/// defined by [`DEFAULT_TEST_LLM_MODEL_REPO`]. The Q6_K_XL quantization
+/// provides an optimal balance between:
+/// - Model quality (maintains instruction following capability)  
+/// - File size (~1.2GB - efficient downloads and storage)
+/// - Inference speed (fast enough for test suites with 1.7B parameters)
+/// - Memory usage (runs on typical development machines with ~2-3GB RAM)
+///
+/// This file will be automatically downloaded by llama.cpp when first accessed.
+pub const DEFAULT_TEST_LLM_MODEL_FILENAME: &str = "Qwen3-1.7B-UD-Q6_K_XL.gguf";
+
+/// Default embedding model for testing
+///
+/// This constant specifies the embedding model used for all semantic search
+/// and embedding-related tests. BGE-small-en-v1.5 is selected because it:
+/// - Generates 384-dimensional embeddings (manageable size for tests)
+/// - Provides good semantic understanding for English text
+/// - Has fast inference speed suitable for test environments
+/// - Is well-supported by the fastembed library
+/// - Maintains consistent behavior across different platforms
+///
+/// All embedding tests use this model to ensure consistent vector dimensions
+/// and semantic behavior across the test suite.
+pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "BAAI/bge-small-en-v1.5";
+
 /// Test configuration utilities for LlamaAgent testing
-#[cfg(any(test, feature = "test-utils"))]
 pub mod test_config {
     use crate::agent::{
         AgentConfig, AgentExecutorType, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource,
@@ -387,9 +426,9 @@ pub mod test_config {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(120),
                 llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
-                    .unwrap_or_else(|_| "unsloth/Phi-4-mini-instruct-GGUF".to_string()),
+                    .unwrap_or_else(|_| crate::DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
                 llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
-                    .unwrap_or_else(|_| "Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
+                    .unwrap_or_else(|_| crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
             }
         }
 
@@ -400,11 +439,16 @@ pub mod test_config {
                         repo: self.llama_model_repo.clone(),
                         filename: Some(self.llama_model_filename.clone()),
                     },
+                    batch_size: 256, // Smaller batch size for testing
+                    use_hf_params: true,
+                    debug: true, // Enable debug for testing
                 },
                 mcp_server: McpServerConfig {
                     port: 0,
                     timeout_seconds: 30,
                 },
+
+                repetition_detection: Default::default(),
             }
         }
 

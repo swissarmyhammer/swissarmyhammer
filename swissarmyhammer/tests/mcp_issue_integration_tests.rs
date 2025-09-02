@@ -5,8 +5,8 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 
 // Import git2 utilities
-use git2::{Repository, Signature};
 use anyhow::Result;
+use git2::{Repository, Signature};
 
 // Performance test constants
 const MAX_CREATION_TIME_SECS: u64 = 10;
@@ -56,23 +56,23 @@ impl TestEnvironment {
     fn setup_git_repo_git2(path: &std::path::Path) -> Result<()> {
         // Initialize git repo
         let repo = Repository::init(path)?;
-        
+
         // Configure git user
         let mut config = repo.config()?;
         config.set_str("user.name", "Test User")?;
         config.set_str("user.email", "test@example.com")?;
-        
+
         // Create initial commit
         std::fs::write(path.join("README.md"), "# Test Project")?;
-        
+
         let mut index = repo.index()?;
         index.add_path(std::path::Path::new("README.md"))?;
         index.write()?;
-        
+
         let tree_id = index.write_tree()?;
         let tree = repo.find_tree(tree_id)?;
         let signature = Signature::now("Test User", "test@example.com")?;
-        
+
         repo.commit(
             Some("HEAD"),
             &signature,
@@ -81,7 +81,7 @@ impl TestEnvironment {
             &tree,
             &[],
         )?;
-        
+
         Ok(())
     }
 }
@@ -319,14 +319,16 @@ async fn test_git_integration_edge_cases() {
     // Commit the changes using git2
     let repo = Repository::open(env.temp_dir.path()).unwrap();
     let mut index = repo.index().unwrap();
-    index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None).unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
     index.write().unwrap();
-    
+
     let tree_id = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
     let signature = Signature::now("Test User", "test@example.com").unwrap();
     let parent_commit = repo.head().unwrap().peel_to_commit().unwrap();
-    
+
     repo.commit(
         Some("HEAD"),
         &signature,
@@ -334,7 +336,8 @@ async fn test_git_integration_edge_cases() {
         "Add test file",
         &tree,
         &[&parent_commit],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Switch back to main branch first (required per issue 000184)
     let git_ops = env.git_ops.lock().await;

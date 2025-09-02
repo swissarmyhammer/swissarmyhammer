@@ -8,9 +8,11 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer::memoranda::{mock_storage::MockMemoStorage, MemoStorage};
+use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::files;
@@ -20,6 +22,16 @@ use tempfile::TempDir;
 use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::io::{BufRead, BufReader};
+
+/// Creates a test rate limiter with generous limits suitable for testing
+fn create_test_rate_limiter() -> Arc<RateLimiter> {
+    Arc::new(RateLimiter::with_config(RateLimiterConfig {
+        global_limit: 10000,                     // Very high global limit
+        per_client_limit: 1000,                  // High per-client limit
+        expensive_operation_limit: 500,          // High expensive operation limit
+        window_duration: Duration::from_secs(1), // Short refill window for tests
+    }))
+}
 
 /// Memory usage profiling utilities for performance testing
 struct MemoryProfiler {
@@ -103,10 +115,14 @@ async fn create_test_context() -> ToolContext {
         )));
     let git_ops: Arc<tokio::sync::Mutex<Option<GitOperations>>> =
         Arc::new(tokio::sync::Mutex::new(None));
-    let memo_storage: Arc<tokio::sync::RwLock<Box<dyn MemoStorage>>> =
-        Arc::new(tokio::sync::RwLock::new(Box::new(MockMemoStorage::new())));
+    // Create temporary directory for memo storage in tests
+    let temp_dir = tempfile::tempdir().unwrap();
+    let memo_temp_dir = temp_dir.path().join("memos");
+    let memo_storage: Arc<tokio::sync::RwLock<Box<dyn MemoStorage>>> = Arc::new(
+        tokio::sync::RwLock::new(Box::new(FileSystemMemoStorage::new(memo_temp_dir))),
+    );
 
-    let rate_limiter = Arc::new(swissarmyhammer::common::rate_limiter::MockRateLimiter);
+    let rate_limiter = create_test_rate_limiter();
 
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
@@ -886,8 +902,7 @@ async fn test_glob_tool_advanced_gitignore_integration() {
     // Initialize a git repository (required for ignore crate to work properly)
     use git2::Repository;
 
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repo");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
 
     // Write .gitignore file
     let gitignore_content = "*.log\n/build/\ntemp_*\n!important.log\n";
@@ -980,8 +995,7 @@ async fn test_glob_tool_case_sensitivity() {
 
     // Initialize git repo for ignore crate to work properly
     use git2::Repository;
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repo");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
 
     // Use different filenames to avoid filesystem case issues
     let test_files = vec!["Test.TXT", "other.txt", "README.md", "readme.MD"];
@@ -1050,8 +1064,7 @@ async fn test_glob_tool_modification_time_sorting() {
 
     // Initialize git repo for ignore crate to work properly
     use git2::Repository;
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repo");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
 
     let file1 = temp_dir.path().join("old_file.txt");
     fs::write(&file1, "Old content").unwrap();
@@ -1111,8 +1124,7 @@ async fn test_glob_tool_no_matches() {
 
     // Initialize git repo for ignore crate to work properly
     use git2::Repository;
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repo");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
 
     fs::write(temp_dir.path().join("test.txt"), "content").unwrap();
 
@@ -2428,8 +2440,7 @@ async fn test_glob_then_grep_workflow() {
 
     // Initialize git repo for ignore crate to work properly
     use git2::Repository;
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repo");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
 
     let test_files = vec![
         ("src/main.rs", "fn main() {\n    println!(\"Hello, world!\");\n    let result = calculate();\n}"),
@@ -2511,8 +2522,7 @@ async fn test_complex_file_workflow() {
 
     // Initialize git repo
     use git2::Repository;
-    Repository::init(temp_dir.path())
-        .expect("Failed to initialize git repo");
+    Repository::init(temp_dir.path()).expect("Failed to initialize git repo");
 
     let test_files = vec![
         (

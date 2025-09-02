@@ -63,12 +63,66 @@ pub struct LlamaAgentConfig {
     /// MCP server configuration
     #[serde(default)]
     pub mcp_server: McpServerConfig,
+
+    /// Repetition detection configuration
+    #[serde(default)]
+    pub repetition_detection: RepetitionDetectionConfig,
+}
+
+/// Configuration for repetition detection in model responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepetitionDetectionConfig {
+    /// Enable repetition detection (default: true)
+    #[serde(default = "default_repetition_enabled")]
+    pub enabled: bool,
+    /// Repetition penalty factor (default: 1.1, higher = more penalty)
+    #[serde(default = "default_repetition_penalty")]
+    pub repetition_penalty: f64,
+    /// Repetition threshold - max allowed repetitive tokens before blocking (default: 50)
+    #[serde(default = "default_repetition_threshold")]
+    pub repetition_threshold: usize,
+    /// Window size for repetition detection (default: 64)
+    #[serde(default = "default_repetition_window")]
+    pub repetition_window: usize,
+}
+
+fn default_repetition_enabled() -> bool {
+    true
+}
+
+fn default_repetition_penalty() -> f64 {
+    1.1
+}
+
+fn default_repetition_threshold() -> usize {
+    50
+}
+
+fn default_repetition_window() -> usize {
+    64
 }
 
 /// Model configuration for LlamaAgent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub source: ModelSource,
+    /// Batch size for model inference
+    #[serde(default = "default_batch_size")]
+    pub batch_size: u32,
+    /// Whether to use HuggingFace parameters
+    #[serde(default = "default_use_hf_params")]
+    pub use_hf_params: bool,
+    /// Enable debug mode
+    #[serde(default)]
+    pub debug: bool,
+}
+
+fn default_batch_size() -> u32 {
+    512
+}
+
+fn default_use_hf_params() -> bool {
+    true
 }
 
 /// Model source specification
@@ -109,6 +163,9 @@ impl Default for ModelConfig {
                 repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
                 filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
             },
+            batch_size: default_batch_size(),
+            use_hf_params: default_use_hf_params(),
+            debug: false,
         }
     }
 }
@@ -118,6 +175,17 @@ impl Default for McpServerConfig {
         Self {
             port: 0, // Random available port
             timeout_seconds: 30,
+        }
+    }
+}
+
+impl Default for RepetitionDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_repetition_enabled(),
+            repetition_penalty: default_repetition_penalty(),
+            repetition_threshold: default_repetition_threshold(),
+            repetition_window: default_repetition_window(),
         }
     }
 }
@@ -149,18 +217,51 @@ impl AgentConfig {
 }
 
 impl LlamaAgentConfig {
-    /// Configuration for unit testing with a small model
+    /// Configuration for unit testing with a small model - optimized for speed
     pub fn for_testing() -> Self {
         Self {
             model: ModelConfig {
                 source: ModelSource::HuggingFace {
-                    repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
-                    filename: Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
+                    repo: crate::DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
+                    filename: Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
                 },
+                batch_size: 64, // Much smaller batch size for faster testing
+                use_hf_params: true,
+                debug: false, // Disable debug to reduce output overhead
             },
             mcp_server: McpServerConfig {
                 port: 0,
-                timeout_seconds: 10, // Shorter timeout for tests
+                timeout_seconds: 5, // Shorter timeout for tests
+            },
+
+            repetition_detection: RepetitionDetectionConfig {
+                enabled: true,             // Keep enabled to match test expectations
+                repetition_penalty: 1.05,  // Lower penalty for small models
+                repetition_threshold: 100, // Higher threshold to be more permissive
+                repetition_window: 32,     // Smaller window for testing
+            },
+        }
+    }
+
+    /// Configuration optimized for small models like Qwen3-1.7B
+    pub fn for_small_model() -> Self {
+        Self {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "unsloth/Qwen3-Coder-1.5B-Instruct-GGUF".to_string(),
+                    filename: Some("Qwen3-Coder-1.5B-Instruct-Q4_K_M.gguf".to_string()),
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: false,
+            },
+            mcp_server: McpServerConfig::default(),
+
+            repetition_detection: RepetitionDetectionConfig {
+                enabled: true,
+                repetition_penalty: 1.05,  // Lower penalty for small models
+                repetition_threshold: 150, // Higher threshold to be more permissive
+                repetition_window: 128,    // Larger window for better context
             },
         }
     }
@@ -212,16 +313,17 @@ mod tests {
         let config = LlamaAgentConfig::for_testing();
         match config.model.source {
             ModelSource::HuggingFace { repo, filename } => {
-                assert_eq!(repo, "unsloth/Phi-4-mini-instruct-GGUF");
+                assert_eq!(repo, crate::DEFAULT_TEST_LLM_MODEL_REPO);
                 assert_eq!(
                     filename,
-                    Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string())
+                    Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string())
                 );
             }
             ModelSource::Local { .. } => panic!("Testing config should be HuggingFace"),
         }
         assert_eq!(config.mcp_server.port, 0);
-        assert_eq!(config.mcp_server.timeout_seconds, 10);
+        assert_eq!(config.mcp_server.timeout_seconds, 5);
+        // Removed test_mode field - now always uses real models
     }
 
     #[test]
@@ -249,7 +351,7 @@ mod tests {
 
         match config.executor {
             AgentExecutorConfig::LlamaAgent(agent_config) => {
-                assert_eq!(agent_config.mcp_server.timeout_seconds, 10);
+                assert_eq!(agent_config.mcp_server.timeout_seconds, 5);
             }
             AgentExecutorConfig::ClaudeCode(_) => panic!("Should be LlamaAgent config"),
         }

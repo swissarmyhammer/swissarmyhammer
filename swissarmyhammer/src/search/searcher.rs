@@ -814,7 +814,6 @@ impl SemanticSearcher {
         vector.iter().map(|x| x * x).sum::<f32>().sqrt()
     }
 
-    #[cfg(any(test, feature = "test-utils"))]
     /// Create a SemanticSearcher for testing with mock embedding engine (no network required)
     pub async fn new_for_testing(storage: VectorStorage, config: SemanticConfig) -> Result<Self> {
         let embedding_engine = EmbeddingEngine::new_for_testing().await?;

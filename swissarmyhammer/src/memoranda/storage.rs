@@ -771,6 +771,8 @@ impl MemoStorage for FileSystemMemoStorage {
     }
 
     async fn update_memo(&self, id: &MemoId, content: String) -> Result<Memo> {
+        let _lock = self.creation_lock.lock().await;
+
         let mut memo = self.get_memo(id).await?;
         memo.update_content(content);
         self.save_memo_to_file(&memo).await?;
@@ -1224,6 +1226,8 @@ impl MemoStorage for MarkdownMemoStorage {
     }
 
     async fn update_memo(&self, id: &MemoId, content: String) -> Result<Memo> {
+        let _lock = self.creation_lock.lock().await;
+
         let mut memo = self.get_memo(id).await?;
         memo.update_content(content);
 

@@ -218,8 +218,50 @@ impl ActionParser {
     }
 
     /// Parse a set variable action from description
-    /// Format: Set variable_name="${value}"
+    /// Supports both formats:
+    /// - New format: set_variable variable_name="value"
+    /// - Legacy format: Set variable_name="value"
     pub fn parse_set_variable_action(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<SetVariableAction>> {
+        // Try new format first
+        if let Some(action) = self.parse_set_variable_format_action(description)? {
+            return Ok(Some(action));
+        }
+
+        // Fall back to legacy format
+        let value_parser = choice((
+            Self::quoted_string(),
+            none_of('"').repeated().at_least(1).collect::<String>(),
+        ));
+
+        let parser = Self::case_insensitive("set")
+            .then_ignore(Self::whitespace())
+            .ignore_then(Self::identifier())
+            .then_ignore(Self::opt_whitespace())
+            .then_ignore(just('='))
+            .then_ignore(Self::opt_whitespace())
+            .then(value_parser);
+
+        match parser.parse(description.trim()).into_result() {
+            Ok((var_name, value)) => {
+                // Validate variable name
+                if !self.is_valid_variable_name(&var_name) {
+                    return Err(ActionError::ParseError(
+                        format!("Invalid variable name '{var_name}': must start with letter or underscore and contain only alphanumeric characters and underscores")
+                    ));
+                }
+
+                Ok(Some(SetVariableAction::new(var_name, value)))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Parse a set variable action with new format from description
+    /// Format: set_variable variable_name="value"
+    pub fn parse_set_variable_format_action(
         &self,
         description: &str,
     ) -> ActionResult<Option<SetVariableAction>> {
@@ -228,7 +270,8 @@ impl ActionParser {
             none_of('"').repeated().at_least(1).collect::<String>(),
         ));
 
-        let parser = Self::case_insensitive("set")
+        let parser = just("set_variable")
+            .ignored()
             .then_ignore(Self::whitespace())
             .ignore_then(Self::identifier())
             .then_ignore(Self::opt_whitespace())
@@ -728,11 +771,81 @@ mod tests {
         assert_eq!(action.variable_name, "output");
         assert_eq!(action.value, "${claude_response}");
 
-        // Test new set_variable format (skip for now)
-        // TODO: Add support for set_variable format
+        // Test new set_variable format
+        let action = parser
+            .parse_set_variable_action("set_variable result=\"success\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "result");
+        assert_eq!(action.value, "success");
+
+        // Test new format with variable substitution
+        let action = parser
+            .parse_set_variable_action("set_variable output=\"${claude_response}\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "output");
+        assert_eq!(action.value, "${claude_response}");
+
+        // Test new format with underscore in variable name
+        let action = parser
+            .parse_set_variable_action("set_variable user_name=\"John Doe\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "user_name");
+        assert_eq!(action.value, "John Doe");
+
+        // Test new format invalid variable name
+        let result = parser.parse_set_variable_action("set_variable 123invalid=\"value\"");
+        assert!(result.unwrap().is_none());
 
         // Test invalid variable name
         let result = parser.parse_set_variable_action("Set 123invalid=\"value\"");
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_set_variable_format_action() {
+        let parser = ActionParser::new().unwrap();
+
+        // Test basic set_variable format
+        let action = parser
+            .parse_set_variable_format_action("set_variable result=\"success\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "result");
+        assert_eq!(action.value, "success");
+
+        // Test with complex value containing spaces
+        let action = parser
+            .parse_set_variable_format_action("set_variable message=\"Hello World from Claude\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "message");
+        assert_eq!(action.value, "Hello World from Claude");
+
+        // Test with variable substitution
+        let action = parser
+            .parse_set_variable_format_action("set_variable output=\"${previous_result}\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "output");
+        assert_eq!(action.value, "${previous_result}");
+
+        // Test with underscore in variable name
+        let action = parser
+            .parse_set_variable_format_action("set_variable user_data=\"John Doe\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.variable_name, "user_data");
+        assert_eq!(action.value, "John Doe");
+
+        // Test invalid variable name starting with number
+        let result = parser.parse_set_variable_format_action("set_variable 123invalid=\"value\"");
+        assert!(result.unwrap().is_none());
+
+        // Test wrong command
+        let result = parser.parse_set_variable_format_action("set result=\"value\"");
         assert!(result.unwrap().is_none());
     }
 

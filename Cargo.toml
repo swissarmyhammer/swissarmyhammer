@@ -1,3 +1,7 @@
+# NEVER add features or feature flags to this workspace!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!
+
 [workspace]
 members = ["swissarmyhammer", "swissarmyhammer-cli", "swissarmyhammer-tools", "swissarmyhammer-config"]
 resolver = "2"
@@ -101,10 +105,11 @@ hyper = "1.0"
 # Web fetch dependencies
 markdowndown = { git = "https://github.com/swissarmyhammer/markdowndown", version = "0.1.0" }
 
-# LlamaAgent integration (placeholder for future implementation)
-# llama-agent = { git = "https://github.com/your-org/llama-agent", branch = "main" }
+# LlamaAgent integration  
+llama-agent = { git = "https://github.com/swissarmyhammer/llama-agent.git", branch = "main" }
 
 # Additional common dependencies
+libc = "0.2"
 encoding_rs = "0.8"
 filetime = "0.2"
 html2md = "0.2"
@@ -118,6 +123,7 @@ assert_cmd = "2.0"
 predicates = "3.0"
 proptest = "1.0"
 criterion = "0.5"
+sysinfo = "0.30"
 
 
 [workspace.lints.rust]

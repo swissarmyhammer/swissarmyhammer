@@ -26,18 +26,18 @@ fn setup_test_environment() -> TempDir {
 
     // Initialize git repository in temp directory to avoid branch conflicts
     use git2::{Repository, Signature};
-    
-    let repo = Repository::init(temp_dir.path())
-        .expect("Failed to init git repo");
+
+    let repo = Repository::init(temp_dir.path()).expect("Failed to init git repo");
 
     // Configure git for testing
-    let mut config = repo.config()
-        .expect("Failed to get git config");
-    
-    config.set_str("user.email", "test@example.com")
+    let mut config = repo.config().expect("Failed to get git config");
+
+    config
+        .set_str("user.email", "test@example.com")
         .expect("Failed to configure git email");
 
-    config.set_str("user.name", "Test User")
+    config
+        .set_str("user.name", "Test User")
         .expect("Failed to configure git name");
 
     // Create initial README file
@@ -49,32 +49,30 @@ fn setup_test_environment() -> TempDir {
     .expect("Failed to create README.md");
 
     // Add and commit initial file to establish HEAD
-    let mut index = repo.index()
-        .expect("Failed to get index");
-    
-    index.add_path(std::path::Path::new("README.md"))
+    let mut index = repo.index().expect("Failed to get index");
+
+    index
+        .add_path(std::path::Path::new("README.md"))
         .expect("Failed to add README.md to index");
-    
-    index.write()
-        .expect("Failed to write index");
-    
-    let tree_id = index.write_tree()
-        .expect("Failed to write tree");
-    
-    let tree = repo.find_tree(tree_id)
-        .expect("Failed to find tree");
-    
-    let signature = Signature::now("Test User", "test@example.com")
-        .expect("Failed to create signature");
-    
+
+    index.write().expect("Failed to write index");
+
+    let tree_id = index.write_tree().expect("Failed to write tree");
+
+    let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+
+    let signature =
+        Signature::now("Test User", "test@example.com").expect("Failed to create signature");
+
     repo.commit(
         Some("HEAD"),
         &signature,
         &signature,
         "Initial commit",
         &tree,
-        &[]
-    ).expect("Failed to create initial commit");
+        &[],
+    )
+    .expect("Failed to create initial commit");
 
     // No longer change global current directory to avoid test isolation issues
     temp_dir

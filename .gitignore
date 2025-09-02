@@ -40,6 +40,7 @@ TEST_RESULTS_SUMMARY.md
 
 # Test issue files
 swissarmyhammer/issues/
+.swissarmyhammer/issues/
 tests/test-home
 
 # PropTest regression files
@@ -75,5 +76,8 @@ Cargo.lock
 
 # Test workflow files (not part of the project source)
 builtin/workflows/*-test.md
+
+# Output scratch files
+output_*.txt
 
 test_validation

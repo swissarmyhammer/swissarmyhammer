@@ -168,6 +168,9 @@ pub fn display_mcp_result(result: CallToolResult) -> Result<()> {
                 RawContent::Resource(_) => {
                     eprintln!("(Error result contains resource content)");
                 }
+                RawContent::ResourceLink(_) => {
+                    eprintln!("(Error result contains resource link content)");
+                }
                 RawContent::Audio(_) => {
                     eprintln!("(Error result contains audio content)");
                 }
@@ -187,6 +190,9 @@ pub fn display_mcp_result(result: CallToolResult) -> Result<()> {
             }
             RawContent::Resource(_) => {
                 println!("(Result contains resource content - cannot display in terminal)");
+            }
+            RawContent::ResourceLink(_) => {
+                println!("(Result contains resource link content - cannot display in terminal)");
             }
             RawContent::Audio(_) => {
                 println!("(Result contains audio content - cannot display in terminal)");

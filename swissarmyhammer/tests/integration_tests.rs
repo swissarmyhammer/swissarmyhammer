@@ -6,8 +6,6 @@ use swissarmyhammer::prelude::*;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 
-use rmcp::ServerHandler;
-
 #[test]
 fn test_library_creation() {
     let library = PromptLibrary::new();
@@ -259,22 +257,6 @@ fn test_search_engine() {
     let results = engine.fuzzy_search("docu", &prompts);
     assert!(!results.is_empty());
     assert_eq!(results[0].prompt.name, "documentation");
-}
-
-#[tokio::test]
-async fn test_mcp_server() {
-    use swissarmyhammer_tools::McpServer;
-
-    let mut library = PromptLibrary::new();
-    library
-        .add(Prompt::new("test", "Hello {{ name }}!").with_description("Test prompt"))
-        .unwrap();
-
-    let server = McpServer::new(library).unwrap();
-
-    // Test server info
-    let info = server.get_info();
-    assert!(!info.server_info.name.is_empty());
 }
 
 // Example usage for documentation

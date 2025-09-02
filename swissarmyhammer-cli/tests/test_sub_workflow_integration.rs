@@ -32,7 +32,7 @@ stateDiagram-v2
 ## Actions
 
 - Start: Set parent_var="parent_value"
-- CallSubWorkflow: Run workflow "hello-world" with greeting="Hello from parent" result="sub_result"
+- CallSubWorkflow: Run workflow "non-existent-workflow-12345" with greeting="Hello from parent" result="sub_result"
 - ProcessResult: Log "Sub-workflow completed"
 "#;
 
@@ -44,6 +44,12 @@ stateDiagram-v2
 
     // Start the parent workflow
     let mut run = WorkflowRun::new(parent_workflow);
+
+    // Set a shorter timeout for sub-workflow operations to prevent long delays in test
+    run.context.insert(
+        "_timeout_secs".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(5)),
+    );
 
     // Execute the workflow
     let result = executor.execute_state(&mut run).await;
@@ -64,7 +70,7 @@ stateDiagram-v2
             let error_msg = e.to_string();
             assert!(
                 error_msg.contains("Failed to load sub-workflow")
-                    || error_msg.contains("workflow 'hello-world'"),
+                    || error_msg.contains("workflow 'non-existent-workflow-12345'"),
                 "Expected workflow loading error, got: {error_msg}"
             );
             assert!(
@@ -417,12 +423,11 @@ stateDiagram-v2
     let result = executor.execute_state(&mut run).await;
     let duration = start.elapsed();
 
-    // The workflow should fail when it can't find the sub-workflow
-    // In test environments, filesystem operations may take longer due to concurrent access
-    // Allow up to 40 seconds to account for potential test interference or slow CI environments
+    // The workflow should fail quickly when it can't find the sub-workflow
+    // Allow up to 5 seconds for filesystem operations and error propagation
     assert!(
-        duration.as_secs() < 40,
-        "Workflow execution took too long: {duration:?}. Expected failure when workflow not found."
+        duration.as_secs() < 5,
+        "Workflow execution took too long: {duration:?}. Expected quick failure when workflow not found."
     );
 
     // The result should be an error since the sub-workflow doesn't exist
