@@ -984,11 +984,8 @@ impl LlamaAgentExecutor {
                             "Model filename cannot be empty".to_string(),
                         ));
                     }
-                    if !filename.ends_with(".gguf") {
-                        return Err(ActionError::ExecutionError(
-                            "Model filename must end with .gguf".to_string(),
-                        ));
-                    }
+                    // Allow both single .gguf files and folder names for chunked models
+                    // The llama-agent crate will handle model discovery within folders
                 }
             }
             ModelSource::Local { filename } => {
@@ -1040,7 +1037,7 @@ impl LlamaAgentExecutor {
     /// # Returns
     ///
     /// A string in one of these formats:
-    /// - HuggingFace with filename: `"repo_name/model_file.gguf"`
+    /// - HuggingFace with filename: `"repo_name/model_file.gguf"` or `"repo_name/model_folder"`
     /// - HuggingFace without filename: `"repo_name"`
     /// - Local model: `"local:/path/to/model.gguf"`
     pub fn get_model_display_name(&self) -> String {
@@ -1508,12 +1505,12 @@ mod tests {
             .to_string()
             .contains("filename cannot be empty"));
 
-        // Test invalid configuration - wrong file extension
-        let invalid_config = LlamaAgentConfig {
+        // Test folder-based model (should be valid now)
+        let folder_model_config = LlamaAgentConfig {
             model: ModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "test/repo".to_string(),
-                    filename: Some("model.bin".to_string()),
+                    filename: Some("model-folder".to_string()), // Folder name, not .gguf
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -1523,13 +1520,28 @@ mod tests {
 
             repetition_detection: Default::default(),
         };
-        let executor = LlamaAgentExecutor::new(invalid_config);
+        let executor = LlamaAgentExecutor::new(folder_model_config);
         let result = executor.validate_config();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must end with .gguf"));
+        assert!(result.is_ok()); // Should now be valid
+
+        // Test single .gguf file model (should still be valid)
+        let gguf_model_config = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "test/repo".to_string(),
+                    filename: Some("model.gguf".to_string()),
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: true,
+            },
+            mcp_server: McpServerConfig::default(),
+
+            repetition_detection: Default::default(),
+        };
+        let executor = LlamaAgentExecutor::new(gguf_model_config);
+        let result = executor.validate_config();
+        assert!(result.is_ok()); // Should still be valid
 
         // Test invalid timeout - zero
         let invalid_timeout_config = LlamaAgentConfig {
@@ -1943,6 +1955,66 @@ mod tests {
         // Verify the remaining fields
         assert!(stopping_config.eos_detection);
         assert_eq!(stopping_config.max_tokens, None);
+    }
+
+    #[test]
+    fn test_folder_based_model_validation() {
+        // Test that folder-based models (not ending in .gguf) are now valid
+        let folder_model_config = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
+                    filename: Some("Phi-3-mini-4k-instruct-q4".to_string()), // Folder name containing chunks
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: true,
+            },
+            mcp_server: McpServerConfig::default(),
+            repetition_detection: Default::default(),
+        };
+        
+        let executor = LlamaAgentExecutor::new(folder_model_config);
+        let result = executor.validate_config();
+        
+        // Should be valid now that we support folder-based models
+        assert!(result.is_ok(), "Folder-based model validation should succeed");
+        
+        // Test display name format for folder-based model
+        assert_eq!(
+            executor.get_model_display_name(),
+            "microsoft/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-q4"
+        );
+    }
+    
+    #[test]
+    fn test_single_file_model_still_works() {
+        // Ensure single .gguf files still work as before
+        let single_file_config = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
+                    filename: Some("Phi-3-mini-4k-instruct-q4.gguf".to_string()), // Single .gguf file
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: true,
+            },
+            mcp_server: McpServerConfig::default(),
+            repetition_detection: Default::default(),
+        };
+        
+        let executor = LlamaAgentExecutor::new(single_file_config);
+        let result = executor.validate_config();
+        
+        // Should still be valid
+        assert!(result.is_ok(), "Single .gguf file model validation should still succeed");
+        
+        // Test display name format for single file model
+        assert_eq!(
+            executor.get_model_display_name(),
+            "microsoft/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-q4.gguf"
+        );
     }
 
     /// Helper function for creating test execution context
