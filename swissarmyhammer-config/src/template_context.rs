@@ -804,6 +804,12 @@ mod tests {
 
     #[test]
     fn test_load_with_config_file() {
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().join(".swissarmyhammer");
         fs::create_dir(&config_dir).unwrap();
