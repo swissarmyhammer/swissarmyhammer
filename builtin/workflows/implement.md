@@ -12,7 +12,7 @@ stateDiagram-v2
     [*] --> start
     start --> are_issues_complete
     are_issues_complete --> loop
-    loop --> done: result.matches("(?i)YES")
+    loop --> done: result.content.matches("(?i)YES")
     loop --> work: default
     work --> are_issues_complete
     done --> [*]

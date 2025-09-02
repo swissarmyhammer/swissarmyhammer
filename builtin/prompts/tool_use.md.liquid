@@ -3,14 +3,15 @@
 ## Code Search and Navigation
 
 ### Using Search Tools
-The SwissArmyHammer (SAH) search tools provide semantic code search capabilities. Use these for efficient code navigation and understanding.
+The SwissArmyHammer (SAH) search tools provide semantic code search capabilities.
+Use these for efficient code navigation and understanding.
 
 #### Index Files First
 Before searching, index the source files in the project.
 
 For example, if this is a TypeScript project:
 ```
-mcp__sah__search_index with patterns: ["packages/**/*.ts", "packages/**/*.tsx"]
+search_index with patterns: ["packages/**/*.ts", "packages/**/*.tsx"]
 ```
 - Run this after cloning the repo or major file changes
 - Use `force: true` to re-index all files when needed
@@ -19,7 +20,7 @@ mcp__sah__search_index with patterns: ["packages/**/*.ts", "packages/**/*.tsx"]
 #### 2. Search for Code
 Use semantic search to find relevant code:
 ```
-mcp__sah__search_query with query: "your search terms"
+search_query with query: "your search terms"
 ```
 - Returns results ranked by semantic similarity (not just keyword matching)
 - Includes file path, line numbers, and code context
