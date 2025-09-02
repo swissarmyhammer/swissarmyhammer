@@ -128,13 +128,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_llama_agent_with_invalid_file_extension() {
-        // Test validation fails with invalid file extension
+    async fn test_validate_llama_agent_with_invalid_local_file_extension() {
+        // Test validation fails with invalid file extension for LOCAL models
+        // (HuggingFace models now support folder-based models, so they don't require .gguf)
         let invalid_config = LlamaAgentConfig {
             model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "valid-repo".to_string(),
-                    filename: Some("model.bin".to_string()), // Wrong extension
+                source: ModelSource::Local {
+                    filename: PathBuf::from("/tmp/model.bin"), // Wrong extension for local file
                 },
                 ..Default::default()
             },
@@ -146,12 +146,36 @@ mod tests {
 
         assert!(
             result.is_err(),
-            "Invalid file extension should fail validation"
+            "Invalid file extension should fail validation for local models"
         );
         assert!(result
             .unwrap_err()
             .to_string()
             .contains("must end with .gguf"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_llama_agent_with_huggingface_folder_model() {
+        // Test validation passes with folder-based model names for HuggingFace models
+        // (This should now pass since HuggingFace models support folder-based models)
+        let valid_config = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
+                    filename: Some("Phi-3-mini-4k-instruct-q4".to_string()), // Folder name, not .gguf
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let executor = LlamaAgentExecutor::new(valid_config);
+        let result = executor.validate_config();
+
+        assert!(
+            result.is_ok(),
+            "HuggingFace models should support folder-based model names"
+        );
     }
 
     #[tokio::test]
