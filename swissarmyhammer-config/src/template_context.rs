@@ -833,6 +833,9 @@ version = "1.0.0"
         let original_dir = env::current_dir().unwrap();
         env::set_current_dir(temp_dir.path()).unwrap();
 
+        // Add a small delay to ensure directory change is fully processed
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
         let context = TemplateContext::load_for_cli().unwrap();
 
         assert_eq!(context.get("database.host"), Some(&json!("localhost")));
