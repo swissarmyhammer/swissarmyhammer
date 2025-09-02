@@ -1124,6 +1124,12 @@ Generated for {{app.name}} by liquid templating engine.
         use std::fs;
         use tempfile::TempDir;
 
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Environment variable test lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
         // Test case: with_template_vars should handle config loading gracefully
         let mut template_vars = HashMap::new();
         template_vars.insert("test_var".to_string(), json!("test_value"));

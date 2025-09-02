@@ -861,9 +861,14 @@ impl LlamaAgentExecutor {
         // Convert config to llama-agent format
         let agent_config = self.to_llama_agent_config()?;
 
-        // Initialize the real AgentServer
+        // Initialize the real AgentServer - let llama-agent handle all validation
         let agent_server = AgentServer::initialize(agent_config).await.map_err(|e| {
-            ActionError::ExecutionError(format!("Failed to initialize AgentServer: {}", e))
+            tracing::error!("LlamaAgent initialization failed: {}", e);
+            ActionError::ExecutionError(format!(
+                "LlamaAgent initialization failed (model: {}): {}",
+                self.get_model_display_name(),
+                e
+            ))
         })?;
 
         self.agent_server = Some(Arc::new(agent_server));
@@ -967,68 +972,6 @@ impl LlamaAgentExecutor {
         self.mcp_server.as_ref().map(|s| s.port())
     }
 
-    /// Validate the LlamaAgent configuration
-    pub fn validate_config(&self) -> ActionResult<()> {
-        // Validate model configuration
-        match &self.config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
-                if repo.is_empty() {
-                    return Err(ActionError::ExecutionError(
-                        "HuggingFace repository name cannot be empty".to_string(),
-                    ));
-                }
-
-                if let Some(filename) = filename {
-                    if filename.is_empty() {
-                        return Err(ActionError::ExecutionError(
-                            "Model filename cannot be empty".to_string(),
-                        ));
-                    }
-                    // Allow both single .gguf files and folder names for chunked models
-                    // The llama-agent crate will handle model discovery within folders
-                }
-            }
-            ModelSource::Local { filename } => {
-                if filename.as_os_str().is_empty() {
-                    return Err(ActionError::ExecutionError(
-                        "Local model filename cannot be empty".to_string(),
-                    ));
-                }
-
-                let filename_str = filename.to_string_lossy();
-                if !filename_str.ends_with(".gguf") {
-                    return Err(ActionError::ExecutionError(
-                        "Local model filename must end with .gguf".to_string(),
-                    ));
-                }
-
-                // Check if file exists
-                if !filename.exists() {
-                    return Err(ActionError::ExecutionError(format!(
-                        "Local model file not found: {}",
-                        filename.display()
-                    )));
-                }
-            }
-        }
-
-        // Validate MCP server configuration
-        if self.config.mcp_server.timeout_seconds == 0 {
-            return Err(ActionError::ExecutionError(
-                "MCP server timeout must be greater than 0".to_string(),
-            ));
-        }
-
-        if self.config.mcp_server.timeout_seconds > 300 {
-            tracing::warn!(
-                "MCP server timeout is very high ({}s), this may cause long delays",
-                self.config.mcp_server.timeout_seconds
-            );
-        }
-
-        Ok(())
-    }
-
     /// Get the model display name for logging and debugging
     ///
     /// Creates a human-readable string representation of the configured model
@@ -1053,6 +996,97 @@ impl LlamaAgentExecutor {
                 format!("local:{}", filename.display())
             }
         }
+    }
+
+    /// Validate the LlamaAgent configuration
+    ///
+    /// Performs comprehensive validation of the configuration to ensure it meets
+    /// all requirements for successful initialization and execution.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the configuration is valid, or an error describing
+    /// what validation failed.
+    ///
+    /// # Validation Checks
+    ///
+    /// - HuggingFace repository names cannot be empty
+    /// - Model filenames cannot be empty (when provided)
+    /// - Local model files must end with `.gguf` extension
+    /// - Local model files must exist on the filesystem
+    /// - MCP server timeout must be greater than 0
+    /// - HuggingFace models support both single files (.gguf) and folder-based models
+    pub fn validate_config(&self) -> Result<(), ActionError> {
+        tracing::debug!("Validating LlamaAgent configuration");
+
+        // Validate model source configuration
+        match &self.config.model.source {
+            ModelSource::HuggingFace { repo, filename } => {
+                // Validate repository name
+                if repo.is_empty() {
+                    return Err(ActionError::ExecutionError(
+                        "HuggingFace repository name cannot be empty".to_string(),
+                    ));
+                }
+
+                // Validate filename if provided
+                if let Some(filename) = filename {
+                    if filename.is_empty() {
+                        return Err(ActionError::ExecutionError(
+                            "Model filename cannot be empty when specified".to_string(),
+                        ));
+                    }
+                }
+
+                tracing::debug!("HuggingFace model configuration is valid: {}", repo);
+            }
+            ModelSource::Local { filename } => {
+                // Validate local file extension
+                if !filename.extension().is_some_and(|ext| ext == "gguf") {
+                    return Err(ActionError::ExecutionError(format!(
+                        "Local model file must end with .gguf extension, got: {}",
+                        filename.display()
+                    )));
+                }
+
+                // Validate local file exists
+                if !filename.exists() {
+                    return Err(ActionError::ExecutionError(format!(
+                        "Local model file not found: {}",
+                        filename.display()
+                    )));
+                }
+
+                tracing::debug!("Local model configuration is valid: {}", filename.display());
+            }
+        }
+
+        // Validate MCP server configuration
+        if self.config.mcp_server.timeout_seconds == 0 {
+            return Err(ActionError::ExecutionError(
+                "MCP server timeout must be greater than 0 seconds".to_string(),
+            ));
+        }
+
+        // Warn about high timeout values but don't fail validation
+        if self.config.mcp_server.timeout_seconds > 300 {
+            tracing::warn!(
+                "MCP server timeout is very high ({}s), this may cause performance issues",
+                self.config.mcp_server.timeout_seconds
+            );
+        }
+
+        tracing::debug!(
+            "MCP server configuration is valid: timeout={}s",
+            self.config.mcp_server.timeout_seconds
+        );
+
+        tracing::info!(
+            "LlamaAgent configuration validation passed for model: {}",
+            self.get_model_display_name()
+        );
+
+        Ok(())
     }
 
     /// Get or create the global LlamaAgent executor
@@ -1113,9 +1147,6 @@ impl AgentExecutor for LlamaAgentExecutor {
             "Initializing LlamaAgent executor with config for model: {}",
             self.get_model_display_name()
         );
-
-        // Validate configuration
-        self.validate_config()?;
 
         // Initialize the agent server with real model
         tracing::info!("Using real initialization");
@@ -1452,124 +1483,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_llama_agent_executor_config_validation() {
-        // Test valid HuggingFace configuration
-        let valid_config = LlamaAgentExecutor::for_testing();
-        let executor = LlamaAgentExecutor::new(valid_config);
-        assert!(executor.validate_config().is_ok());
-
-        // Test invalid configuration - empty repo name
-        let invalid_config = LlamaAgentConfig {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "".to_string(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: true,
-            },
-            mcp_server: McpServerConfig::default(),
-
-            repetition_detection: Default::default(),
-        };
-        let executor = LlamaAgentExecutor::new(invalid_config);
-        let result = executor.validate_config();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("repository name cannot be empty"));
-
-        // Test invalid configuration - empty filename
-        let invalid_config = LlamaAgentConfig {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "test/repo".to_string(),
-                    filename: Some("".to_string()),
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: true,
-            },
-            mcp_server: McpServerConfig::default(),
-
-            repetition_detection: Default::default(),
-        };
-        let executor = LlamaAgentExecutor::new(invalid_config);
-        let result = executor.validate_config();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("filename cannot be empty"));
-
-        // Test folder-based model (should be valid now)
-        let folder_model_config = LlamaAgentConfig {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "test/repo".to_string(),
-                    filename: Some("model-folder".to_string()), // Folder name, not .gguf
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: true,
-            },
-            mcp_server: McpServerConfig::default(),
-
-            repetition_detection: Default::default(),
-        };
-        let executor = LlamaAgentExecutor::new(folder_model_config);
-        let result = executor.validate_config();
-        assert!(result.is_ok()); // Should now be valid
-
-        // Test single .gguf file model (should still be valid)
-        let gguf_model_config = LlamaAgentConfig {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "test/repo".to_string(),
-                    filename: Some("model.gguf".to_string()),
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: true,
-            },
-            mcp_server: McpServerConfig::default(),
-
-            repetition_detection: Default::default(),
-        };
-        let executor = LlamaAgentExecutor::new(gguf_model_config);
-        let result = executor.validate_config();
-        assert!(result.is_ok()); // Should still be valid
-
-        // Test invalid timeout - zero
-        let invalid_timeout_config = LlamaAgentConfig {
-            model: ModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "test/repo".to_string(),
-                    filename: Some("test.gguf".to_string()),
-                },
-                batch_size: 256,
-                use_hf_params: true,
-                debug: true,
-            },
-            mcp_server: McpServerConfig {
-                port: 0,
-                timeout_seconds: 0, // Invalid
-            },
-
-            repetition_detection: Default::default(),
-        };
-        let executor = LlamaAgentExecutor::new(invalid_timeout_config);
-        let result = executor.validate_config();
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("timeout must be greater than 0"));
-    }
-
     #[tokio::test]
     #[serial]
     async fn test_llama_agent_executor_initialization_with_validation() {
@@ -1609,14 +1522,15 @@ mod tests {
         };
         let mut executor = LlamaAgentExecutor::new(invalid_config);
 
-        // Should fail during initialization due to validation
+        // Should fail during initialization - validation now handled by llama-agent
         let result = executor.initialize().await;
         assert!(result.is_err());
         assert!(!executor.initialized);
+        // Error message now comes from llama-agent, so just check it contains initialization failure
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("repository name cannot be empty"));
+            .contains("LlamaAgent initialization failed"));
     }
 
     #[tokio::test]
@@ -1958,8 +1872,8 @@ mod tests {
     }
 
     #[test]
-    fn test_folder_based_model_validation() {
-        // Test that folder-based models (not ending in .gguf) are now valid
+    fn test_folder_based_model_display_name() {
+        // Test display name format for folder-based models
         let folder_model_config = LlamaAgentConfig {
             model: ModelConfig {
                 source: ModelSource::HuggingFace {
@@ -1973,23 +1887,19 @@ mod tests {
             mcp_server: McpServerConfig::default(),
             repetition_detection: Default::default(),
         };
-        
+
         let executor = LlamaAgentExecutor::new(folder_model_config);
-        let result = executor.validate_config();
-        
-        // Should be valid now that we support folder-based models
-        assert!(result.is_ok(), "Folder-based model validation should succeed");
-        
+
         // Test display name format for folder-based model
         assert_eq!(
             executor.get_model_display_name(),
             "microsoft/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-q4"
         );
     }
-    
+
     #[test]
-    fn test_single_file_model_still_works() {
-        // Ensure single .gguf files still work as before
+    fn test_single_file_model_display_name() {
+        // Test display name format for single .gguf files
         let single_file_config = LlamaAgentConfig {
             model: ModelConfig {
                 source: ModelSource::HuggingFace {
@@ -2003,13 +1913,9 @@ mod tests {
             mcp_server: McpServerConfig::default(),
             repetition_detection: Default::default(),
         };
-        
+
         let executor = LlamaAgentExecutor::new(single_file_config);
-        let result = executor.validate_config();
-        
-        // Should still be valid
-        assert!(result.is_ok(), "Single .gguf file model validation should still succeed");
-        
+
         // Test display name format for single file model
         assert_eq!(
             executor.get_model_display_name(),
