@@ -156,8 +156,6 @@ impl Default for AgentConfig {
             quiet: false,
         }
     }
-
-
 }
 
 impl Default for ModelConfig {
@@ -172,8 +170,6 @@ impl Default for ModelConfig {
             debug: false,
         }
     }
-
-
 }
 
 impl Default for McpServerConfig {
@@ -443,7 +439,7 @@ mod tests {
 
         let json = serde_json::to_string(&local_source_with_folder)
             .expect("Failed to serialize Local source with folder");
-        
+
         let deserialized: ModelSource =
             serde_json::from_str(&json).expect("Failed to deserialize Local source with folder");
 
@@ -463,7 +459,7 @@ mod tests {
 
         let json = serde_json::to_string(&local_source_no_folder)
             .expect("Failed to serialize Local source without folder");
-        
+
         // The JSON should not contain "folder" field when None
         assert!(!json.contains("folder"));
     }

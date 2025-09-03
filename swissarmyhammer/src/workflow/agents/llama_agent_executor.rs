@@ -1930,7 +1930,7 @@ mod tests {
     #[test]
     fn test_folder_property_conversion() {
         use std::path::PathBuf;
-        
+
         // Test ModelSource::Local with explicit folder
         let config_with_folder = LlamaAgentConfig {
             model: ModelConfig {
@@ -1968,12 +1968,18 @@ mod tests {
         // Both executors should have valid display names (just testing they don't panic)
         assert!(!executor_with_folder.get_model_display_name().is_empty());
         assert!(!executor_without_folder.get_model_display_name().is_empty());
-        
+
         // The executor without folder should show the full path
-        assert_eq!(executor_without_folder.get_model_display_name(), "local:/path/to/model.gguf");
-        
+        assert_eq!(
+            executor_without_folder.get_model_display_name(),
+            "local:/path/to/model.gguf"
+        );
+
         // The executor with folder should show the filename only since that's what the filename field contains
-        assert_eq!(executor_with_folder.get_model_display_name(), "local:model.gguf");
+        assert_eq!(
+            executor_with_folder.get_model_display_name(),
+            "local:model.gguf"
+        );
     }
 
     /// Helper function for creating test execution context
