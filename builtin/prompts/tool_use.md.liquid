@@ -17,7 +17,7 @@ search_index with patterns: ["packages/**/*.ts", "packages/**/*.tsx"]
 - Use `force: true` to re-index all files when needed
 - The index is stored in `.swissarmyhammer/search.db` (automatically gitignored)
 
-#### 2. Search for Code
+#### Search for Code
 Use semantic search to find relevant code:
 ```
 search_query with query: "your search terms"
@@ -26,6 +26,41 @@ search_query with query: "your search terms"
 - Includes file path, line numbers, and code context
 - Higher similarity scores (closer to 1.0) indicate better matches
 
-### Using Memo Tools
+## Using Memo Tools
+- Use the memo_get_all_context tool now. This will provide you with important repository specific rules.
 
-Use the memo_get_all_context tool now. This will provide you with important repository specific rules.
+## File Tools
+- **File Paths:** Always use absolute paths when referring to files with tools like 'read_file' or 'write_file'. Relative paths are not supported. You must provide an absolute path.
+- **Command Execution:** Use the 'shell_execute' tool for running shell commands, remembering the safety rule to explain modifying commands first.
+- **Background Processes:** Use background processes (via `&`) for commands that are unlikely to stop on their own, e.g. `node server.js &`. If unsure, ask the user.
+- **Interactive Commands:** Try to avoid shell commands that are likely to require user interaction (e.g. `git rebase -i`). Use non-interactive versions of commands (e.g. `npm init -y` instead of `npm init`) when available, and otherwise remind the user that interactive shell commands are not supported and may cause hangs until canceled by the user.
+
+
+## Task Management
+You have access to the todo_create, todo_show, and todo_mark_complete tools to help you manage and plan tasks.
+Use these tools VERY frequently to ensure that you are tracking your tasks and giving the user visibility into your progress.
+These tools are also EXTREMELY helpful for planning tasks, and for breaking down larger complex tasks into smaller steps.
+If you do not use this tool when planning, you may forget to do important tasks - and that is unacceptable.
+
+It is critical that you mark todos as completed as soon as you are done with a task.
+Do not batch up multiple tasks before marking them as completed.
+
+Examples:
+
+<example>
+user: Run the build and fix any type errors
+assistant: I'm going to use the TodoWrite tool to write the following items to the todo list:
+- Run the build
+- Fix any type errors
+
+I'm now going to run the build using Bash.
+
+Looks like I found 10 type errors. I'm going to use the todo_create tool to write 10 items to the todo list.
+
+Let me start working on the first item...
+
+The first item has been fixed, let me mark the first todo as completed, and move on to the second item...
+..
+..
+</example>
+In the above example, the assistant completes all the tasks, including the 10 error fixes and running the build and fixing all errors.
