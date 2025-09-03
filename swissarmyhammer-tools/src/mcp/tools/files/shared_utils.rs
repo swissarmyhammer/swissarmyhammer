@@ -288,6 +288,10 @@ impl FilePathValidator {
         blocked_patterns.insert("\\..\\".to_string());
         blocked_patterns.insert("..\\".to_string());
 
+        // Add current directory patterns (also considered dangerous)
+        blocked_patterns.insert("./".to_string());
+        blocked_patterns.insert(".\\".to_string());
+
         // Add null byte and other dangerous patterns
         blocked_patterns.insert("\0".to_string());
         blocked_patterns.insert("\\0".to_string());

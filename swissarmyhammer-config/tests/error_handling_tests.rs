@@ -7,76 +7,29 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 
-/// Test helper for isolated error handling testing
-struct IsolatedErrorTest {
-    temp_dir: TempDir,
-    original_cwd: std::path::PathBuf,
-    original_home: Option<String>,
-    env_vars_to_restore: Vec<(String, Option<String>)>,
-}
-
-impl IsolatedErrorTest {
-    fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let original_cwd = env::current_dir().expect("Failed to get current dir");
-        let original_home = env::var("HOME").ok();
-
-        // Set up isolated environment
-        let home_dir = temp_dir.path().join("home");
-        fs::create_dir(&home_dir).expect("Failed to create home dir");
-        env::set_var("HOME", &home_dir);
-        env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
-
-        Self {
-            temp_dir,
-            original_cwd,
-            original_home,
-            env_vars_to_restore: Vec::new(),
-        }
-    }
-
-    fn set_env_var(&mut self, key: &str, value: &str) {
-        // Store original value for restoration
-        let original = env::var(key).ok();
-        self.env_vars_to_restore.push((key.to_string(), original));
-
-        env::set_var(key, value);
-    }
-
-    fn project_config_dir(&self) -> std::path::PathBuf {
-        let config_dir = self.temp_dir.path().join(".swissarmyhammer");
-        fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
-        config_dir
-    }
-}
-
-impl Drop for IsolatedErrorTest {
-    fn drop(&mut self) {
-        // Restore environment variables
-        for (key, original_value) in &self.env_vars_to_restore {
-            match original_value {
-                Some(value) => env::set_var(key, value),
-                None => env::remove_var(key),
-            }
-        }
-
-        // Restore original environment
-        let _ = env::set_current_dir(&self.original_cwd);
-        if let Some(home) = &self.original_home {
-            env::set_var("HOME", home);
-        } else {
-            env::remove_var("HOME");
-        }
-    }
+/// Helper to create a project config directory for testing with proper isolation
+fn create_project_config_dir() -> std::path::PathBuf {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let config_dir = temp_dir.path().join(".swissarmyhammer");
+    fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
+    
+    // Change to the temp directory so config discovery works
+    env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
+    
+    // Keep temp dir alive by leaking it - IsolatedTestEnvironment will handle proper cleanup
+    std::mem::forget(temp_dir);
+    
+    config_dir
 }
 
 #[test]
 fn test_malformed_toml_config_error() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Test 1: Verify we can load a valid config
     let valid_toml = r#"app_name = "ValidTestApp""#;
@@ -129,8 +82,8 @@ fn test_malformed_toml_config_error() {
 
 #[test]
 fn test_malformed_yaml_config_error() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Test 1: Verify we can load a valid YAML config
     let valid_yaml = r#"app_name: "ValidTestApp""#;
@@ -184,8 +137,8 @@ fn test_malformed_yaml_config_error() {
 
 #[test]
 fn test_malformed_json_config_error() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create malformed JSON files with the correct names that the config system will load
     let malformed_configs = vec![
@@ -227,8 +180,8 @@ fn test_malformed_json_config_error() {
 
 #[test]
 fn test_unsupported_file_extension_error() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create config files with unsupported extensions
     let unsupported_files = vec![
@@ -267,8 +220,8 @@ fn test_unsupported_file_extension_error() {
 
 #[test]
 fn test_file_permission_errors() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create a valid config file
     let config_content = r#"
@@ -311,8 +264,8 @@ port = 8080
 
 #[test]
 fn test_directory_permission_errors() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create a valid config file
     let config_content = r#"app_name = "TestApp""#;
@@ -351,14 +304,32 @@ fn test_directory_permission_errors() {
 
 #[test]
 fn test_circular_environment_variable_references() {
-    let mut test = IsolatedErrorTest::new();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    // Set up circular environment variable references
-    test.set_env_var("VAR1", "${VAR2}");
-    test.set_env_var("VAR2", "${VAR3}");
-    test.set_env_var("VAR3", "${VAR1}"); // Circular reference
+    // Set up circular environment variable references  
+    env::set_var("VAR1", "${VAR2}");
+    env::set_var("VAR2", "${VAR3}");
+    env::set_var("VAR3", "${VAR1}"); // Circular reference
 
-    test.set_env_var("SAH_CIRCULAR_VALUE", "${VAR1}");
+    env::set_var("SAH_CIRCULAR_VALUE", "${VAR1}");
+
+    // Ensure cleanup happens regardless of test outcome
+    let cleanup = || {
+        env::remove_var("VAR1");
+        env::remove_var("VAR2");
+        env::remove_var("VAR3");
+        env::remove_var("SAH_CIRCULAR_VALUE");
+    };
+    
+    struct CleanupGuard<F: FnOnce()>(Option<F>);
+    impl<F: FnOnce()> Drop for CleanupGuard<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() {
+                f();
+            }
+        }
+    }
+    let _cleanup_guard = CleanupGuard(Some(cleanup));
 
     // This should either resolve gracefully or provide informative error
     let result = TemplateContext::load_for_cli();
@@ -390,14 +361,33 @@ fn test_circular_environment_variable_references() {
 
 #[test]
 fn test_invalid_environment_variable_substitution() {
-    let mut test = IsolatedErrorTest::new();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
     // Set up environment variables with invalid substitution syntax
-    test.set_env_var("SAH_INVALID_SYNTAX1", "${");
-    test.set_env_var("SAH_INVALID_SYNTAX2", "${}");
-    test.set_env_var("SAH_INVALID_SYNTAX3", "${UNCLOSED");
-    test.set_env_var("SAH_INVALID_SYNTAX4", "REGULAR${UNCLOSED");
-    test.set_env_var("SAH_INVALID_SYNTAX5", "${NESTED${INNER}}");
+    env::set_var("SAH_INVALID_SYNTAX1", "${");
+    env::set_var("SAH_INVALID_SYNTAX2", "${}");
+    env::set_var("SAH_INVALID_SYNTAX3", "${UNCLOSED");
+    env::set_var("SAH_INVALID_SYNTAX4", "REGULAR${UNCLOSED");
+    env::set_var("SAH_INVALID_SYNTAX5", "${NESTED${INNER}}");
+
+    // Ensure cleanup happens regardless of test outcome
+    let cleanup = || {
+        env::remove_var("SAH_INVALID_SYNTAX1");
+        env::remove_var("SAH_INVALID_SYNTAX2");
+        env::remove_var("SAH_INVALID_SYNTAX3");
+        env::remove_var("SAH_INVALID_SYNTAX4");
+        env::remove_var("SAH_INVALID_SYNTAX5");
+    };
+    
+    struct CleanupGuard<F: FnOnce()>(Option<F>);
+    impl<F: FnOnce()> Drop for CleanupGuard<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() {
+                f();
+            }
+        }
+    }
+    let _cleanup_guard = CleanupGuard(Some(cleanup));
 
     let result = TemplateContext::load_for_cli();
 
@@ -427,8 +417,8 @@ fn test_invalid_environment_variable_substitution() {
 
 #[test]
 fn test_configuration_with_extremely_large_values() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create config with very large values
     let large_string = "x".repeat(1_000_000); // 1MB string
@@ -472,8 +462,8 @@ large_number = 999999999999999999999999999999
 
 #[test]
 fn test_deeply_nested_configuration_errors() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create deeply nested configuration that might cause parsing issues
     let mut nested_config = String::from("app_name = \"TestApp\"\n");
@@ -515,8 +505,8 @@ fn test_deeply_nested_configuration_errors() {
 
 #[test]
 fn test_config_with_unicode_and_special_characters() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create config with various Unicode and special characters
     let config_content = r#"
@@ -574,8 +564,8 @@ value_测试 = "nested unicode"
 
 #[test]
 fn test_empty_and_whitespace_only_files() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Test empty files with correct config names that will be loaded
     let test_files = vec![
@@ -629,8 +619,8 @@ fn test_empty_and_whitespace_only_files() {
 
 #[test]
 fn test_helpful_error_messages_contain_context() {
-    let test = IsolatedErrorTest::new();
-    let config_dir = test.project_config_dir();
+    let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
+    let config_dir = create_project_config_dir();
 
     // Create a config file with a clear error
     let config_content = r#"

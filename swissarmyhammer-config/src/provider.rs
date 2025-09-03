@@ -2,6 +2,7 @@ use crate::error::{ConfigurationError, ConfigurationResult};
 use figment::providers::{Format, Json, Serialized, Toml, Yaml};
 use figment::{Figment, Metadata};
 use serde_json::Value;
+use std::fs;
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -35,10 +36,49 @@ impl ConfigurationProvider for FileProvider {
 
         debug!("Loading configuration from: {}", self.path.display());
 
+        // Read file to ensure it's readable (unused but validates file access)
+        let _content = fs::read_to_string(&self.path).map_err(|e| {
+            ConfigurationError::load(
+                self.path.clone(),
+                figment::Error::from(format!("Failed to read file: {}", e)),
+            )
+        })?;
+
+        // Validate parsing based on file extension before merging
         let figment = match self.path.extension().and_then(|ext| ext.to_str()) {
-            Some("toml") => figment.merge(Toml::file(&self.path)),
-            Some("yaml") | Some("yml") => figment.merge(Yaml::file(&self.path)),
-            Some("json") => figment.merge(Json::file(&self.path)),
+            Some("toml") => {
+                // Validate TOML parsing by attempting to merge and extract immediately
+                let test_figment = Figment::new().merge(Toml::file(&self.path));
+                let _: Value = test_figment.extract().map_err(|e| {
+                    ConfigurationError::load(
+                        self.path.clone(),
+                        e,
+                    )
+                })?;
+                figment.merge(Toml::file(&self.path))
+            }
+            Some("yaml") | Some("yml") => {
+                // Validate YAML parsing by attempting to merge and extract immediately
+                let test_figment = Figment::new().merge(Yaml::file(&self.path));
+                let _: Value = test_figment.extract().map_err(|e| {
+                    ConfigurationError::load(
+                        self.path.clone(),
+                        e,
+                    )
+                })?;
+                figment.merge(Yaml::file(&self.path))
+            }
+            Some("json") => {
+                // Validate JSON parsing by attempting to merge and extract immediately
+                let test_figment = Figment::new().merge(Json::file(&self.path));
+                let _: Value = test_figment.extract().map_err(|e| {
+                    ConfigurationError::load(
+                        self.path.clone(),
+                        e,
+                    )
+                })?;
+                figment.merge(Json::file(&self.path))
+            }
             _ => {
                 return Err(ConfigurationError::load(
                     self.path.clone(),
