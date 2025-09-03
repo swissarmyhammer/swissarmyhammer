@@ -438,6 +438,7 @@ pub mod test_config {
                     source: ModelSource::HuggingFace {
                         repo: self.llama_model_repo.clone(),
                         filename: Some(self.llama_model_filename.clone()),
+                        folder: None,
                     },
                     batch_size: 256, // Smaller batch size for testing
                     use_hf_params: true,

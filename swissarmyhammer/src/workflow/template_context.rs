@@ -131,6 +131,7 @@ impl WorkflowTemplateContext {
                 source: ModelSource::HuggingFace {
                     repo: model_repo,
                     filename: model_filename,
+                    folder: None,
                 },
                 ..Default::default()
             },
@@ -808,7 +809,7 @@ mod tests {
         let config = WorkflowTemplateContext::load_llama_config_from_env().unwrap();
 
         match config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
+            ModelSource::HuggingFace { repo, filename, .. } => {
                 assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
                 assert!(filename.is_none());
             }

@@ -113,6 +113,7 @@ impl TestConfig {
                 source: ModelSource::HuggingFace {
                     repo: self.llama_model_repo.clone(),
                     filename: Some(self.llama_model_filename.clone()),
+                    folder: None,
                 },
                 batch_size: 256, // Smaller batch size for testing
                 use_hf_params: true,
@@ -359,7 +360,7 @@ mod tests {
         let llama_config = config.create_llama_config();
 
         match llama_config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
+            ModelSource::HuggingFace { repo, filename, .. } => {
                 assert_eq!(repo, DEFAULT_TEST_LLM_MODEL_REPO);
                 assert_eq!(filename, Some(DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()));
             }

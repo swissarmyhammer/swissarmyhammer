@@ -920,6 +920,7 @@ version = "1.0.0"
                     source: ModelSource::HuggingFace {
                         repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
                         filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                        folder: None,
                     },
                     batch_size: 256,
                     use_hf_params: true,
@@ -945,7 +946,7 @@ version = "1.0.0"
         // Verify it's the correct config type and not the default
         match retrieved_config.executor {
             AgentExecutorConfig::LlamaAgent(llama_config) => match &llama_config.model.source {
-                ModelSource::HuggingFace { repo, filename } => {
+                ModelSource::HuggingFace { repo, filename, .. } => {
                     assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
                     assert_eq!(
                         filename.as_ref().unwrap(),

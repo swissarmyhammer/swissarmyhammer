@@ -768,10 +768,12 @@ impl LlamaAgentExecutor {
         );
         // Convert model source
         let model_source = match &self.config.model.source {
-            ModelSource::HuggingFace { repo, filename } => LlamaModelSource::HuggingFace {
+            ModelSource::HuggingFace { repo, filename, folder } => LlamaModelSource::HuggingFace {
                 repo: repo.clone(),
-                filename: filename.clone(),
-                folder: None,
+                // If folder is provided, use it and set filename to None
+                // If folder is not provided, use filename
+                filename: if folder.is_some() { None } else { filename.clone() },
+                folder: folder.clone(),
             },
             ModelSource::Local { filename, folder } => LlamaModelSource::Local {
                 folder: folder.clone().unwrap_or_else(|| {
@@ -988,11 +990,11 @@ impl LlamaAgentExecutor {
     /// - Local model: `"local:/path/to/model.gguf"`
     pub fn get_model_display_name(&self) -> String {
         match &self.config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
-                if let Some(filename) = filename {
-                    format!("{}/{}", repo, filename)
-                } else {
-                    repo.clone()
+            ModelSource::HuggingFace { repo, filename, folder } => {
+                match (folder, filename) {
+                    (Some(folder), _) => format!("{}/{}", repo, folder),
+                    (None, Some(filename)) => format!("{}/{}", repo, filename),
+                    (None, None) => repo.clone(),
                 }
             }
             ModelSource::Local { filename, .. } => {
@@ -1024,7 +1026,7 @@ impl LlamaAgentExecutor {
 
         // Validate model source configuration
         match &self.config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
+            ModelSource::HuggingFace { repo, filename, .. } => {
                 // Validate repository name
                 if repo.is_empty() {
                     return Err(ActionError::ExecutionError(
@@ -1429,6 +1431,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
                     filename: Some("Phi-4-mini-instruct-Q4_K_M.gguf".to_string()),
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -1450,6 +1453,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "unsloth/Phi-4-mini-instruct-GGUF".to_string(),
                     filename: None,
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -1515,6 +1519,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "".to_string(), // Invalid empty repo
                     filename: Some("test.gguf".to_string()),
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -1883,6 +1888,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
                     filename: Some("Phi-3-mini-4k-instruct-q4".to_string()), // Folder name containing chunks
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -1909,6 +1915,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
                     filename: Some("Phi-3-mini-4k-instruct-q4.gguf".to_string()), // Single .gguf file
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,

@@ -131,6 +131,8 @@ pub enum ModelSource {
     HuggingFace {
         repo: String,
         filename: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
     },
     Local {
         filename: PathBuf,
@@ -164,6 +166,7 @@ impl Default for ModelConfig {
             source: ModelSource::HuggingFace {
                 repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF".to_string(),
                 filename: Some("Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf".to_string()),
+                folder: None,
             },
             batch_size: default_batch_size(),
             use_hf_params: default_use_hf_params(),
@@ -226,6 +229,7 @@ impl LlamaAgentConfig {
                 source: ModelSource::HuggingFace {
                     repo: crate::DEFAULT_TEST_LLM_MODEL_REPO.to_string(),
                     filename: Some(crate::DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
+                    folder: None,
                 },
                 batch_size: 64, // Much smaller batch size for faster testing
                 use_hf_params: true,
@@ -252,6 +256,7 @@ impl LlamaAgentConfig {
                 source: ModelSource::HuggingFace {
                     repo: "unsloth/Qwen3-Coder-1.5B-Instruct-GGUF".to_string(),
                     filename: Some("Qwen3-Coder-1.5B-Instruct-Q4_K_M.gguf".to_string()),
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -297,7 +302,7 @@ mod tests {
     fn test_llama_agent_config_default() {
         let config = LlamaAgentConfig::default();
         match config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
+            ModelSource::HuggingFace { repo, filename, .. } => {
                 assert_eq!(repo, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF");
                 assert_eq!(
                     filename,
@@ -314,7 +319,7 @@ mod tests {
     fn test_llama_agent_config_for_testing() {
         let config = LlamaAgentConfig::for_testing();
         match config.model.source {
-            ModelSource::HuggingFace { repo, filename } => {
+            ModelSource::HuggingFace { repo, filename, .. } => {
                 assert_eq!(repo, crate::DEFAULT_TEST_LLM_MODEL_REPO);
                 assert_eq!(
                     filename,
@@ -396,6 +401,7 @@ mod tests {
         let huggingface_source = ModelSource::HuggingFace {
             repo: "test/repo".to_string(),
             filename: Some("model.gguf".to_string()),
+            folder: None,
         };
 
         let json = serde_json::to_string(&huggingface_source)
@@ -404,7 +410,7 @@ mod tests {
             serde_json::from_str(&json).expect("Failed to deserialize HuggingFace source");
 
         match deserialized {
-            ModelSource::HuggingFace { repo, filename } => {
+            ModelSource::HuggingFace { repo, filename, .. } => {
                 assert_eq!(repo, "test/repo");
                 assert_eq!(filename, Some("model.gguf".to_string()));
             }
@@ -462,5 +468,49 @@ mod tests {
 
         // The JSON should not contain "folder" field when None
         assert!(!json.contains("folder"));
+    }
+
+    #[test]
+    fn test_huggingface_folder_deserialization() {
+        // Test JSON deserialization with folder field
+        let json_with_folder = r#"{
+            "HuggingFace": {
+                "repo": "unsloth/test-repo",
+                "folder": "UD-Q4_K_XL"
+            }
+        }"#;
+
+        let source: ModelSource = serde_json::from_str(json_with_folder)
+            .expect("Failed to deserialize HuggingFace source with folder");
+
+        match source {
+            ModelSource::HuggingFace { repo, filename, folder } => {
+                assert_eq!(repo, "unsloth/test-repo");
+                assert_eq!(filename, None);
+                assert_eq!(folder, Some("UD-Q4_K_XL".to_string()));
+            }
+            _ => panic!("Expected HuggingFace source"),
+        }
+
+        // Test JSON deserialization with both filename and folder
+        let json_with_both = r#"{
+            "HuggingFace": {
+                "repo": "unsloth/test-repo",
+                "filename": "model.gguf",
+                "folder": "UD-Q4_K_XL"
+            }
+        }"#;
+
+        let source: ModelSource = serde_json::from_str(json_with_both)
+            .expect("Failed to deserialize HuggingFace source with both filename and folder");
+
+        match source {
+            ModelSource::HuggingFace { repo, filename, folder } => {
+                assert_eq!(repo, "unsloth/test-repo");
+                assert_eq!(filename, Some("model.gguf".to_string()));
+                assert_eq!(folder, Some("UD-Q4_K_XL".to_string()));
+            }
+            _ => panic!("Expected HuggingFace source"),
+        }
     }
 }

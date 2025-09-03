@@ -89,7 +89,7 @@ agent:
           source:
             HuggingFace:
               repo: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
-              filename: "Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf"
+              folder: "UD-Q6_K_XL"
         mcp_server:
           port: 0
           timeout_seconds: 30

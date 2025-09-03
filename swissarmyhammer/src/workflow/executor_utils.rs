@@ -81,6 +81,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "".to_string(), // Empty repo name should fail
                     filename: Some("model.gguf".to_string()),
+                    folder: None,
                 },
                 ..Default::default()
             },
@@ -108,6 +109,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "valid-repo".to_string(),
                     filename: Some("".to_string()), // Empty filename should fail
+                    folder: None,
                 },
                 ..Default::default()
             },
@@ -164,6 +166,7 @@ mod tests {
                 source: ModelSource::HuggingFace {
                     repo: "microsoft/Phi-3-mini-4k-instruct-gguf".to_string(),
                     filename: Some("Phi-3-mini-4k-instruct-q4".to_string()), // Folder name, not .gguf
+                    folder: None,
                 },
                 ..Default::default()
             },

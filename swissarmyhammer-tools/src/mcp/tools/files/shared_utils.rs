@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 ///
 /// This function performs essential security validation for all file operations:
 /// 1. Ensures the path is absolute (not relative)
-/// 2. Canonicalizes the path to resolve symlinks and relative components  
+/// 2. Canonicalizes the path to resolve symlinks and relative components
 /// 3. Validates that the path is within workspace boundaries (if configured)
 /// 4. Checks basic path format and validity
 ///
@@ -141,7 +141,7 @@ pub fn file_exists(path: &Path) -> Result<bool, McpError> {
 /// Retrieves file metadata with proper error handling and security checks.
 /// Used by tools that need file size, permissions, or modification time.
 ///
-/// # Arguments  
+/// # Arguments
 ///
 /// * `path` - The path to get metadata for
 ///
@@ -284,7 +284,6 @@ impl FilePathValidator {
 
         // Add common path traversal patterns
         blocked_patterns.insert("..".to_string());
-        blocked_patterns.insert("./".to_string());
         blocked_patterns.insert("../".to_string());
         blocked_patterns.insert("\\..\\".to_string());
         blocked_patterns.insert("..\\".to_string());
@@ -796,7 +795,7 @@ impl SecureFileAccess {
             }
             if matches.len() > 1 {
                 return Err(McpError::invalid_request(
-                    format!("String '{}' appears {} times in file. Use replace_all=true for multiple replacements", 
+                    format!("String '{}' appears {} times in file. Use replace_all=true for multiple replacements",
                            old_string, matches.len()),
                     None,
                 ));
