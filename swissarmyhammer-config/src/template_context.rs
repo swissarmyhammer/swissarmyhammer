@@ -194,17 +194,23 @@ impl TemplateContext {
     /// # Ok::<(), swissarmyhammer_config::ConfigurationError>(())
     /// ```
     pub fn load() -> ConfigurationResult<Self> {
-        Self::load_with_options(false, None)
+        let mut context = Self::load_with_options(false, None)?;
+        context.set_default_model_variable();
+        Ok(context)
     }
 
     /// Load configuration for CLI usage (no security validation)
     pub fn load_for_cli() -> ConfigurationResult<Self> {
-        Self::load_with_options(true, None)
+        let mut context = Self::load_with_options(true, None)?;
+        context.set_default_model_variable();
+        Ok(context)
     }
 
     /// Load configuration with CLI argument overrides
     pub fn load_with_cli_args(cli_args: Value) -> ConfigurationResult<Self> {
-        Self::load_with_options(false, Some(cli_args))
+        let mut context = Self::load_with_options(false, Some(cli_args))?;
+        context.set_default_model_variable();
+        Ok(context)
     }
 
     /// Create a TemplateContext with provided template variables
@@ -244,6 +250,9 @@ impl TemplateContext {
         for (key, value) in vars {
             context.set(key, value);
         }
+
+        // Set default model variable if not already provided
+        context.set_default_model_variable();
 
         Ok(context)
     }
@@ -648,6 +657,40 @@ impl TemplateContext {
         }
 
         configs
+    }
+
+    /// Set the default model variable if not already set
+    ///
+    /// This method determines the appropriate model name based on the configured agent
+    /// and sets the "model" variable in the template context. The model variable is used
+    /// in templates like .system.md to display model information.
+    ///
+    /// Model names are determined as follows:
+    /// - ClaudeCode: "Claude Code"
+    /// - LlamaAgent with HuggingFace model: the repository name
+    /// - LlamaAgent with Local model: the filename
+    /// - Unknown/Default: "Claude Code"
+    pub fn set_default_model_variable(&mut self) {
+        // Only set if not already provided by user
+        if self.get("model").is_none() {
+            let agent_config = self.get_agent_config(None);
+            let model_name = match &agent_config.executor {
+                crate::agent::AgentExecutorConfig::ClaudeCode(_) => "Claude Code".to_string(),
+                crate::agent::AgentExecutorConfig::LlamaAgent(llama_config) => {
+                    match &llama_config.model.source {
+                        crate::agent::ModelSource::HuggingFace { repo, .. } => repo.clone(),
+                        crate::agent::ModelSource::Local { filename, .. } => {
+                            filename.to_string_lossy().to_string()
+                        }
+                    }
+                }
+            };
+            
+            debug!("Setting default model variable to: {}", model_name);
+            self.set("model".to_string(), Value::String(model_name));
+        } else {
+            debug!("Model variable already set, not overriding: {:?}", self.get("model"));
+        }
     }
 }
 
@@ -1126,6 +1169,186 @@ Generated for {{app.name}} by liquid templating engine.
         // 3. Array iteration ({% for feature in features %})
         // 4. Filters (| capitalize)
         // 5. Complex nested object access (database.credentials.username)
+    }
+
+    #[test]
+    fn test_set_default_model_variable_claude_code() {
+        let mut context = TemplateContext::new();
+        
+        // Set Claude Code agent config
+        context.set(
+            "agent".to_string(),
+            serde_json::to_value(AgentConfig::claude_code()).unwrap(),
+        );
+        
+        // Set default model variable
+        context.set_default_model_variable();
+        
+        // Should set model to "Claude Code"
+        assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+    }
+
+    #[test]
+    fn test_set_default_model_variable_llama_agent_huggingface() {
+        use crate::agent::{AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource};
+        
+        let mut context = TemplateContext::new();
+        
+        // Set LlamaAgent config with HuggingFace model
+        let llama_config = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::HuggingFace {
+                    repo: "microsoft/CodeT5-base".to_string(),
+                    filename: Some("pytorch_model.bin".to_string()),
+                    folder: None,
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: false,
+            },
+            mcp_server: McpServerConfig {
+                port: 0,
+                timeout_seconds: 30,
+            },
+            repetition_detection: Default::default(),
+        };
+        
+        let agent_config = AgentConfig {
+            quiet: false,
+            executor: AgentExecutorConfig::LlamaAgent(llama_config),
+        };
+        
+        context.set(
+            "agent".to_string(),
+            serde_json::to_value(agent_config).unwrap(),
+        );
+        
+        // Set default model variable
+        context.set_default_model_variable();
+        
+        // Should set model to the HuggingFace repo name
+        assert_eq!(context.get("model"), Some(&json!("microsoft/CodeT5-base")));
+    }
+
+    #[test]
+    fn test_set_default_model_variable_llama_agent_local() {
+        use crate::agent::{AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource};
+        use std::path::PathBuf;
+        
+        let mut context = TemplateContext::new();
+        
+        // Set LlamaAgent config with Local model
+        let llama_config = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    filename: PathBuf::from("/path/to/model.gguf"),
+                    folder: None,
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: false,
+            },
+            mcp_server: McpServerConfig {
+                port: 0,
+                timeout_seconds: 30,
+            },
+            repetition_detection: Default::default(),
+        };
+        
+        let agent_config = AgentConfig {
+            quiet: false,
+            executor: AgentExecutorConfig::LlamaAgent(llama_config),
+        };
+        
+        context.set(
+            "agent".to_string(),
+            serde_json::to_value(agent_config).unwrap(),
+        );
+        
+        // Set default model variable
+        context.set_default_model_variable();
+        
+        // Should set model to the local filename
+        assert_eq!(context.get("model"), Some(&json!("/path/to/model.gguf")));
+    }
+
+    #[test]
+    fn test_set_default_model_variable_no_agent_config() {
+        let mut context = TemplateContext::new();
+        
+        // No agent config set - should default to Claude Code
+        context.set_default_model_variable();
+        
+        // Should set model to "Claude Code" (default)
+        assert_eq!(context.get("model"), Some(&json!("Claude Code")));
+    }
+
+    #[test]
+    fn test_set_default_model_variable_user_provided_model() {
+        let mut context = TemplateContext::new();
+        
+        // User has already set a model variable
+        context.set("model".to_string(), json!("Custom Model"));
+        
+        // Set default model variable should not override user's choice
+        context.set_default_model_variable();
+        
+        // Should keep user's model value
+        assert_eq!(context.get("model"), Some(&json!("Custom Model")));
+    }
+
+    #[test]
+    fn test_load_sets_default_model_variable() {
+        // This test may pass or fail depending on the environment, but should not crash
+        let context_result = TemplateContext::load_for_cli();
+        
+        if let Ok(context) = context_result {
+            // Should have a model variable set
+            assert!(context.get("model").is_some());
+            
+            // Model should be a string
+            assert!(context.get("model").unwrap().is_string());
+            
+            // Should default to "Claude Code" if no agent config found
+            let model_str = context.get("model").unwrap().as_str().unwrap();
+            assert!(!model_str.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_with_template_vars_sets_default_model_variable() {
+        let mut vars = HashMap::new();
+        vars.insert("test_var".to_string(), json!("test_value"));
+        
+        // This should set both the template vars and the default model variable
+        let context_result = TemplateContext::with_template_vars(vars);
+        
+        if let Ok(context) = context_result {
+            // Should have our test variable
+            assert_eq!(context.get("test_var"), Some(&json!("test_value")));
+            
+            // Should also have a model variable set
+            assert!(context.get("model").is_some());
+            assert!(context.get("model").unwrap().is_string());
+        }
+    }
+
+    #[test]
+    fn test_with_template_vars_user_model_override() {
+        let mut vars = HashMap::new();
+        vars.insert("test_var".to_string(), json!("test_value"));
+        vars.insert("model".to_string(), json!("User Custom Model"));
+        
+        // User provided model should not be overridden
+        let context_result = TemplateContext::with_template_vars(vars);
+        
+        if let Ok(context) = context_result {
+            // Should have our test variable
+            assert_eq!(context.get("test_var"), Some(&json!("test_value")));
+            
+            // Should keep user's model value
+            assert_eq!(context.get("model"), Some(&json!("User Custom Model")));
+        }
     }
 
     #[test]

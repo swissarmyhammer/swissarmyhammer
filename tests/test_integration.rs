@@ -525,3 +525,31 @@ Hello {{input}}!"#,
             .and(predicate::str::contains("README.md").not()),
     );
 }
+
+#[test]
+fn test_system_prompt_model_variable() {
+    // Test that the .system prompt correctly renders with the model variable set
+    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    cmd.arg("prompt")
+        .arg("test")
+        .arg(".system")
+        .arg("--raw");
+    
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("You are powered by the"));
+}
+
+#[test]
+fn test_system_prompt_model_variable_claude_code() {
+    // Test that the .system prompt shows "Claude Code" by default
+    let mut cmd = Command::cargo_bin("swissarmyhammer").unwrap();
+    cmd.arg("prompt")
+        .arg("test")
+        .arg(".system")
+        .arg("--raw");
+    
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("You are powered by the Claude Code model"));
+}
