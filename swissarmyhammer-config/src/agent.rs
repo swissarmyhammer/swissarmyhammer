@@ -134,6 +134,8 @@ pub enum ModelSource {
     },
     Local {
         filename: PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        folder: Option<PathBuf>,
     },
 }
 
@@ -411,6 +413,7 @@ mod tests {
 
         let local_source = ModelSource::Local {
             filename: PathBuf::from("/path/to/model.gguf"),
+            folder: None,
         };
 
         let json = serde_json::to_string(&local_source).expect("Failed to serialize Local source");
@@ -418,10 +421,46 @@ mod tests {
             serde_json::from_str(&json).expect("Failed to deserialize Local source");
 
         match deserialized {
-            ModelSource::Local { filename } => {
+            ModelSource::Local { filename, folder } => {
                 assert_eq!(filename, PathBuf::from("/path/to/model.gguf"));
+                assert_eq!(folder, None);
             }
             ModelSource::HuggingFace { .. } => panic!("Should be Local source"),
         }
+    }
+
+    #[test]
+    fn test_model_source_local_with_folder_serialization() {
+        // Test serialization of ModelSource::Local with explicit folder
+        let local_source_with_folder = ModelSource::Local {
+            filename: PathBuf::from("model.gguf"),
+            folder: Some(PathBuf::from("/custom/folder")),
+        };
+
+        let json = serde_json::to_string(&local_source_with_folder)
+            .expect("Failed to serialize Local source with folder");
+
+        let deserialized: ModelSource =
+            serde_json::from_str(&json).expect("Failed to deserialize Local source with folder");
+
+        match deserialized {
+            ModelSource::Local { filename, folder } => {
+                assert_eq!(filename, PathBuf::from("model.gguf"));
+                assert_eq!(folder, Some(PathBuf::from("/custom/folder")));
+            }
+            ModelSource::HuggingFace { .. } => panic!("Should be Local source"),
+        }
+
+        // Test that folder field is omitted when None (due to skip_serializing_if)
+        let local_source_no_folder = ModelSource::Local {
+            filename: PathBuf::from("model.gguf"),
+            folder: None,
+        };
+
+        let json = serde_json::to_string(&local_source_no_folder)
+            .expect("Failed to serialize Local source without folder");
+
+        // The JSON should not contain "folder" field when None
+        assert!(!json.contains("folder"));
     }
 }

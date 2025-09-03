@@ -466,7 +466,7 @@ impl WorkflowTemplateContext {
                 .get_llama_config()
                 .map(|config| match &config.model.source {
                     ModelSource::HuggingFace { repo, .. } => repo.clone(),
-                    ModelSource::Local { filename } => filename.to_string_lossy().to_string(),
+                    ModelSource::Local { filename, .. } => filename.to_string_lossy().to_string(),
                 })
                 .unwrap_or_else(|| "unknown".to_string()),
         }
@@ -793,6 +793,7 @@ mod tests {
         let mut llama_config = LlamaAgentConfig::for_testing();
         llama_config.model.source = ModelSource::Local {
             filename: std::path::PathBuf::from("/path/to/model.gguf"),
+            folder: None,
         };
         let config = AgentConfig::llama_agent(llama_config);
 
