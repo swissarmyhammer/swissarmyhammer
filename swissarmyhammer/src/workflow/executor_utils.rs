@@ -135,6 +135,7 @@ mod tests {
             model: ModelConfig {
                 source: ModelSource::Local {
                     filename: PathBuf::from("/tmp/model.bin"), // Wrong extension for local file
+                    folder: None,
                 },
                 ..Default::default()
             },
@@ -185,6 +186,7 @@ mod tests {
             model: ModelConfig {
                 source: ModelSource::Local {
                     filename: PathBuf::from("/nonexistent/path/model.gguf"),
+                    folder: None,
                 },
                 ..Default::default()
             },
@@ -208,6 +210,7 @@ mod tests {
             model: ModelConfig {
                 source: ModelSource::Local {
                     filename: temp_path,
+                    folder: None,
                 },
                 ..Default::default()
             },

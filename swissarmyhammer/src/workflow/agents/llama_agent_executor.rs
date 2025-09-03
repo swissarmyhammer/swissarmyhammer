@@ -771,12 +771,15 @@ impl LlamaAgentExecutor {
             ModelSource::HuggingFace { repo, filename } => LlamaModelSource::HuggingFace {
                 repo: repo.clone(),
                 filename: filename.clone(),
+                folder: None,
             },
-            ModelSource::Local { filename } => LlamaModelSource::Local {
-                folder: filename
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."))
-                    .to_path_buf(),
+            ModelSource::Local { filename, folder } => LlamaModelSource::Local {
+                folder: folder.clone().unwrap_or_else(|| {
+                    filename
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .to_path_buf()
+                }),
                 filename: filename
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string()),
@@ -992,7 +995,7 @@ impl LlamaAgentExecutor {
                     repo.clone()
                 }
             }
-            ModelSource::Local { filename } => {
+            ModelSource::Local { filename, .. } => {
                 format!("local:{}", filename.display())
             }
         }
@@ -1040,7 +1043,7 @@ impl LlamaAgentExecutor {
 
                 tracing::debug!("HuggingFace model configuration is valid: {}", repo);
             }
-            ModelSource::Local { filename } => {
+            ModelSource::Local { filename, .. } => {
                 // Validate local file extension
                 if !filename.extension().is_some_and(|ext| ext == "gguf") {
                     return Err(ActionError::ExecutionError(format!(
@@ -1467,6 +1470,7 @@ mod tests {
             model: ModelConfig {
                 source: ModelSource::Local {
                     filename: std::path::PathBuf::from("/path/to/model.gguf"),
+                    folder: None,
                 },
                 batch_size: 256,
                 use_hf_params: true,
@@ -1921,6 +1925,55 @@ mod tests {
             executor.get_model_display_name(),
             "microsoft/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-q4.gguf"
         );
+    }
+
+    #[test]
+    fn test_folder_property_conversion() {
+        use std::path::PathBuf;
+        
+        // Test ModelSource::Local with explicit folder
+        let config_with_folder = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    filename: PathBuf::from("model.gguf"),
+                    folder: Some(PathBuf::from("/custom/models")),
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: true,
+            },
+            mcp_server: McpServerConfig::default(),
+            repetition_detection: Default::default(),
+        };
+
+        let executor_with_folder = LlamaAgentExecutor::new(config_with_folder);
+
+        // Test ModelSource::Local without explicit folder (should derive from filename)
+        let config_without_folder = LlamaAgentConfig {
+            model: ModelConfig {
+                source: ModelSource::Local {
+                    filename: PathBuf::from("/path/to/model.gguf"),
+                    folder: None,
+                },
+                batch_size: 256,
+                use_hf_params: true,
+                debug: true,
+            },
+            mcp_server: McpServerConfig::default(),
+            repetition_detection: Default::default(),
+        };
+
+        let executor_without_folder = LlamaAgentExecutor::new(config_without_folder);
+
+        // Both executors should have valid display names (just testing they don't panic)
+        assert!(!executor_with_folder.get_model_display_name().is_empty());
+        assert!(!executor_without_folder.get_model_display_name().is_empty());
+        
+        // The executor without folder should show the full path
+        assert_eq!(executor_without_folder.get_model_display_name(), "local:/path/to/model.gguf");
+        
+        // The executor with folder should show the filename only since that's what the filename field contains
+        assert_eq!(executor_with_folder.get_model_display_name(), "local:model.gguf");
     }
 
     /// Helper function for creating test execution context
