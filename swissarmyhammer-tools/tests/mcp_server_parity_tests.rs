@@ -90,7 +90,6 @@ fn get_http_static_tools() -> Vec<String> {
         "memo_get",
         "memo_update",
         "memo_delete",
-        "memo_search",
         "memo_get_all_context",
         "search_index",
         "search_query",

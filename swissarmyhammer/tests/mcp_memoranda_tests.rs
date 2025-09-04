@@ -666,10 +666,10 @@ async fn test_mcp_memo_list() {
     assert!(text.contains("List Test Memo 3"));
 }
 
-/// Test memo search via MCP
+/// Test memo search functionality is disabled
 #[tokio::test]
 
-async fn test_mcp_memo_search() {
+async fn test_mcp_memo_search_disabled() {
     let mut server = start_mcp_server().unwrap();
     wait_for_server_ready().await;
 
@@ -680,69 +680,28 @@ async fn test_mcp_memo_search() {
     // Initialize MCP connection
     initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
 
-    // Clean up any existing memos to ensure clean test state
-    cleanup_all_memos(&mut stdin, &mut reader).unwrap();
-
-    // Create test memos with different content
-    let test_memos = [
-        ("Rust Programming", "Learning Rust language"),
-        ("Python Guide", "Python programming tutorial"),
-        ("JavaScript Basics", "Introduction to JavaScript"),
-        ("Rust Advanced", "Advanced Rust concepts"),
-    ];
-
-    for (i, (title, content)) in test_memos.iter().enumerate() {
-        let create_request = create_tool_request(
-            i as i64 + 1,
-            "memo_create",
-            json!({
-                "title": title,
-                "content": content
-            }),
-        );
-        send_request(&mut stdin, create_request).unwrap();
-        let _ = read_response(&mut reader).unwrap();
-    }
-
-    // Search for "Rust" - should find 2 memos
+    // Attempt to use the memo_search tool - should fail with "Unknown tool" error
     let search_request = create_tool_request(
-        10,
+        1,
         "memo_search",
         json!({
-            "query": "Rust"
+            "query": "test"
         }),
     );
     send_request(&mut stdin, search_request).unwrap();
     let search_response = read_response(&mut reader).unwrap();
 
-    assert!(search_response.get("error").is_none());
-    let result = &search_response["result"];
-    let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Found 2 memos matching 'Rust'"));
-    assert!(text.contains("Rust Programming"));
-    assert!(text.contains("Rust Advanced"));
-
-    // Search for non-existent content
-    let empty_search = create_tool_request(
-        11,
-        "memo_search",
-        json!({
-            "query": "nonexistent"
-        }),
-    );
-    send_request(&mut stdin, empty_search).unwrap();
-    let empty_response = read_response(&mut reader).unwrap();
-
-    let empty_text = empty_response["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(empty_text.contains("No memos found matching query"));
+    // Verify the search tool is not available
+    assert!(search_response.get("error").is_some());
+    let error = &search_response["error"];
+    let error_message = error["message"].as_str().unwrap();
+    assert!(error_message.contains("Unknown tool: memo_search"));
 }
 
-/// Test memo search case insensitivity
+/// Test memo search case insensitivity is disabled
 #[tokio::test]
 
-async fn test_mcp_memo_search_case_insensitive() {
+async fn test_mcp_memo_search_case_insensitive_disabled() {
     let mut server = start_mcp_server().unwrap();
     wait_for_server_ready().await;
 
@@ -753,39 +712,22 @@ async fn test_mcp_memo_search_case_insensitive() {
     // Initialize MCP connection
     initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
 
-    // Clean up any existing memos to ensure clean test state
-    cleanup_all_memos(&mut stdin, &mut reader).unwrap();
-
-    // Create a memo with mixed case
-    let create_request = create_tool_request(
+    // Attempt to use the memo_search tool - should fail with "Unknown tool" error
+    let search_request = create_tool_request(
         1,
-        "memo_create",
+        "memo_search",
         json!({
-            "title": "CamelCase Title",
-            "content": "Content with MixedCase words"
+            "query": "CamelCase"
         }),
     );
-    send_request(&mut stdin, create_request).unwrap();
-    let _ = read_response(&mut reader).unwrap();
+    send_request(&mut stdin, search_request).unwrap();
+    let response = read_response(&mut reader).unwrap();
 
-    // Search with different cases
-    let search_cases = ["camelcase", "MIXEDCASE", "MiXeDcAsE"];
-
-    for (i, query) in search_cases.iter().enumerate() {
-        let search_request = create_tool_request(
-            i as i64 + 2,
-            "memo_search",
-            json!({
-                "query": query
-            }),
-        );
-        send_request(&mut stdin, search_request).unwrap();
-        let response = read_response(&mut reader).unwrap();
-
-        assert!(response.get("error").is_none());
-        let text = response["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Found 1 memo matching"));
-    }
+    // Verify the search tool is not available
+    assert!(response.get("error").is_some());
+    let error = &response["error"];
+    let error_message = error["message"].as_str().unwrap();
+    assert!(error_message.contains("Unknown tool: memo_search"));
 }
 
 /// Test memo get all context via MCP
@@ -997,7 +939,6 @@ async fn test_mcp_memo_tool_list() {
         "memo_update",
         "memo_delete",
         "memo_list",
-        "memo_search",
         "memo_get_all_context",
     ];
 
@@ -1157,10 +1098,10 @@ mod stress_tests {
         assert!(text.contains("No memos found") || text.contains("Found 0 memos"));
     }
 
-    /// Performance test: Search performance with optimized memo count
+    /// Performance test: Search performance is disabled
 
     #[tokio::test]
-    async fn test_mcp_memo_search_performance() {
+    async fn test_mcp_memo_search_performance_disabled() {
         let mut server = start_mcp_server().unwrap();
         wait_for_server_ready().await;
 
@@ -1171,68 +1112,21 @@ mod stress_tests {
         // Initialize MCP connection
         initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
 
-        // Clean up any existing memos to ensure clean test state
-        cleanup_all_memos(&mut stdin, &mut reader).unwrap();
+        // Attempt to use the memo_search tool - should fail with "Unknown tool" error
+        let search_request = create_tool_request(
+            1,
+            "memo_search",
+            json!({
+                "query": "performance"
+            }),
+        );
+        send_request(&mut stdin, search_request).unwrap();
+        let response = read_response(&mut reader).unwrap();
 
-        // Create memos with different patterns for searching
-        // Reduced from 5 patterns × 20 memos = 100 total to 3 patterns × 4 memos = 12 total
-        let patterns = ["project", "meeting", "documentation"];
-        let num_per_pattern = 4;
-
-        for (pattern_idx, pattern) in patterns.iter().enumerate() {
-            for i in 1..=num_per_pattern {
-                let create_request = create_tool_request(
-                    pattern_idx as i64 * num_per_pattern + i,
-                    "memo_create",
-                    json!({
-                        "title": format!("{} Task {}", pattern, i),
-                        "content": format!("This memo is about {} work item number {} with context", pattern, i)
-                    }),
-                );
-
-                if let Err(e) = send_request(&mut stdin, create_request) {
-                    panic!("Failed to send search test create request: {e}");
-                }
-
-                if let Err(e) = read_response(&mut reader) {
-                    panic!("Failed to read search test create response: {e}");
-                }
-
-                // Small delay to prevent server overload
-                tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-            }
-        }
-
-        // Perform searches for each pattern
-        for (pattern_idx, pattern) in patterns.iter().enumerate() {
-            let search_request = create_tool_request(
-                1000 + pattern_idx as i64,
-                "memo_search",
-                json!({
-                    "query": pattern
-                }),
-            );
-
-            if let Err(e) = send_request(&mut stdin, search_request) {
-                panic!("Failed to send search request for pattern {pattern}: {e}");
-            }
-
-            let response = match read_response(&mut reader) {
-                Ok(resp) => resp,
-                Err(e) => panic!("Failed to read search response for pattern {pattern}: {e}"),
-            };
-
-            assert!(
-                response.get("error").is_none(),
-                "Search failed for pattern {pattern}: {:?}",
-                response.get("error")
-            );
-            let text = response["result"]["content"][0]["text"].as_str().unwrap();
-            assert!(
-                text.contains(&format!("Found {num_per_pattern} memo"))
-                    || text.contains(&format!("{num_per_pattern} memos matching")),
-                "Expected to find {num_per_pattern} memos for pattern '{pattern}', but got: {text}"
-            );
-        }
+        // Verify the search tool is not available
+        assert!(response.get("error").is_some());
+        let error = &response["error"];
+        let error_message = error["message"].as_str().unwrap();
+        assert!(error_message.contains("Unknown tool: memo_search"));
     }
 }

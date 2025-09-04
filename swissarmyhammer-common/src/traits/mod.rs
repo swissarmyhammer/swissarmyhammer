@@ -18,9 +18,8 @@
 //! - Traits should be designed for composition and extensibility
 //! - Default implementations should be provided where sensible
 //!
-//! ## Future Expansion
+//! ## Usage Notes
 //!
-//! This module will be populated with common traits extracted from the existing
-//! codebase during the dependency refactoring process. Traits that are used across
-//! multiple crates will be centralized here to avoid duplication and ensure
-//! consistent behavior patterns.
+//! Traits that are used across multiple crates should be centralized here to avoid
+//! duplication and ensure consistent behavior patterns. New traits should follow the
+//! design philosophy and documentation standards established above.

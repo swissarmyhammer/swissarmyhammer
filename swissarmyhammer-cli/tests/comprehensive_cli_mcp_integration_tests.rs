@@ -133,10 +133,13 @@ async fn test_all_memo_tools_execution() -> Result<()> {
         assert!(result.is_ok(), "memo_delete should succeed: {result:?}");
     }
 
-    // Test memo_search
+    // Test memo_search is disabled - should fail with "Tool not found"
     let search_args = context.create_arguments(vec![("query", json!("test"))]);
     let result = context.execute_tool("memo_search", search_args).await;
-    assert!(result.is_ok(), "memo_search should succeed: {result:?}");
+    assert!(
+        result.is_err(),
+        "memo_search should fail because it's disabled: {result:?}"
+    );
 
     // Test memo_get_all_context
     let context_args = context.create_arguments(vec![]);

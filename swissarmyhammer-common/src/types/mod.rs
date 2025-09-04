@@ -15,8 +15,8 @@
 //! - ID types use ULID for sortable, unique identifiers
 //! - Types follow the SwissArmyHammer naming conventions
 //!
-//! ## Future Expansion
+//! ## Usage Notes
 //!
-//! This module will be populated with common types extracted from the existing
-//! codebase during the dependency refactoring process. Types that are used across
-//! multiple crates will be moved here to establish a single source of truth.
+//! Types that are used across multiple crates should be moved here to establish a
+//! single source of truth. New types should follow the design principles and
+//! naming conventions outlined above.

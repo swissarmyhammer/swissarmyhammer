@@ -1,6 +1,5 @@
 # Create swissarmyhammer-memoranda Crate
 
-Refer to /Users/wballard/github/swissarmyhammer/ideas/dependencies.md
 
 ## Goal
 
@@ -23,7 +22,6 @@ swissarmyhammer-memoranda/
 │   ├── lib.rs
 │   ├── storage.rs         # Memo storage abstraction
 │   ├── markdown.rs        # Markdown-based storage implementation
-│   ├── search.rs          # Memo search functionality
 │   ├── validation.rs      # Memo validation logic
 │   ├── operations.rs      # Core CRUD operations
 │   ├── types.rs           # Memo-specific types
@@ -37,7 +35,18 @@ swissarmyhammer-memoranda/
 - `tokio` - Async runtime
 - `regex` - Text search patterns
 
+
+Note you may need to move code from swissarmyhammer to swissarmyhammer-common.
+
+Dependence on `swissarmyhammer` is NOT ALLOWED for `swissarmyhammer-common` or `swissarmyhammer-memoranda`.
+
 ### Key APIs to Extract
+
+Note that MemoId is -- a -- bad idea, we need to eliminate it and have MemoTitle and MemoContent.
+
+MemoTitle becomes the file name when stored. nice and simple.
+
+We don't need any of the search or highlight functionality.
 
 #### From `swissarmyhammer/src/memoranda/`
 ```rust
@@ -48,9 +57,9 @@ pub struct MarkdownMemoStorage {
 #[async_trait]
 impl MemoStorage for MarkdownMemoStorage {
     async fn create(&mut self, memo: CreateMemoRequest) -> Result<Memo, MemoError>;
-    async fn get(&self, id: &MemoId) -> Result<Option<Memo>, MemoError>;
-    async fn update(&mut self, id: &MemoId, content: String) -> Result<Memo, MemoError>;
-    async fn delete(&mut self, id: &MemoId) -> Result<bool, MemoError>;
+    async fn get(&self, id: &MemoTitle) -> Result<Option<Memo>, MemoError>;
+    async fn update(&mut self, id: &MemoTitle, content: MemoContent) -> Result<Memo, MemoError>;
+    async fn delete(&mut self, id: &MemoTitle) -> Result<bool, MemoError>;
     async fn list(&self) -> Result<Vec<Memo>, MemoError>;
     async fn search(&self, query: &str) -> Result<Vec<Memo>, MemoError>;
 }
@@ -63,16 +72,14 @@ pub struct MemoService {
 }
 
 impl MemoService {
-    pub async fn create(&mut self, title: String, content: String) -> Result<Memo, MemoError>;
-    pub async fn get_all_context(&self) -> Result<String, MemoError>;
-    pub async fn search(&self, query: &str) -> Result<Vec<MemoSearchResult>, MemoError>;
+    pub async fn create(&mut self, title: MemoTitle, content: MemoContent) -> Result<Memo, MemoError>;
+    pub async fn get_all_context(&self) -> Result<MemoContent, MemoError>;
 }
 ```
 
 ## Migration Sources
 - `swissarmyhammer/src/memoranda/` - All memo modules
 - `swissarmyhammer-tools/src/mcp/tools/memoranda/` - MCP tool implementations
-- Advanced search functionality
 
 ## Validation
 

@@ -19,9 +19,8 @@
 //! - Functions should handle edge cases gracefully with proper error types
 //! - Performance should be considered for frequently-used utilities
 //!
-//! ## Future Expansion
+//! ## Usage Notes
 //!
-//! This module will be populated with common utility functions extracted from
-//! the existing codebase during the dependency refactoring process. Functions
-//! that are duplicated across multiple crates will be centralized here to
-//! eliminate redundancy and ensure consistent behavior.
+//! Functions that are duplicated across multiple crates should be centralized here
+//! to eliminate redundancy and ensure consistent behavior. New utilities should
+//! follow the design principles and documentation standards outlined above.
