@@ -18,9 +18,8 @@
 //! - Constants should be grouped logically and consistently formatted
 //! - Values should be reasonable defaults that work across different environments
 //!
-//! ## Future Expansion
+//! ## Usage Notes
 //!
-//! This module will be populated with constants extracted from the existing
-//! codebase during the dependency refactoring process. Constants that are
-//! duplicated across multiple crates will be centralized here to ensure
-//! consistency and make updates easier to manage.
+//! Constants that are duplicated across multiple crates should be centralized here to ensure
+//! consistency and make updates easier to manage. New constants should follow the
+//! established categories and naming conventions.

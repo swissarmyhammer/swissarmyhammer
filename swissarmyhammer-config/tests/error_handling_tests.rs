@@ -16,13 +16,13 @@ fn create_project_config_dir() -> std::path::PathBuf {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let config_dir = temp_dir.path().join(".swissarmyhammer");
     fs::create_dir_all(&config_dir).expect("Failed to create project config dir");
-    
+
     // Change to the temp directory so config discovery works
     env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
-    
+
     // Keep temp dir alive by leaking it - IsolatedTestEnvironment will handle proper cleanup
     std::mem::forget(temp_dir);
-    
+
     config_dir
 }
 
@@ -306,7 +306,7 @@ fn test_directory_permission_errors() {
 fn test_circular_environment_variable_references() {
     let _guard = IsolatedTestEnvironment::new().expect("Failed to create test environment");
 
-    // Set up circular environment variable references  
+    // Set up circular environment variable references
     env::set_var("VAR1", "${VAR2}");
     env::set_var("VAR2", "${VAR3}");
     env::set_var("VAR3", "${VAR1}"); // Circular reference
@@ -320,7 +320,7 @@ fn test_circular_environment_variable_references() {
         env::remove_var("VAR3");
         env::remove_var("SAH_CIRCULAR_VALUE");
     };
-    
+
     struct CleanupGuard<F: FnOnce()>(Option<F>);
     impl<F: FnOnce()> Drop for CleanupGuard<F> {
         fn drop(&mut self) {
@@ -378,7 +378,7 @@ fn test_invalid_environment_variable_substitution() {
         env::remove_var("SAH_INVALID_SYNTAX4");
         env::remove_var("SAH_INVALID_SYNTAX5");
     };
-    
+
     struct CleanupGuard<F: FnOnce()>(Option<F>);
     impl<F: FnOnce()> Drop for CleanupGuard<F> {
         fn drop(&mut self) {

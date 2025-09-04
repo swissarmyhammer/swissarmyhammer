@@ -25,9 +25,8 @@
 //! - **update**: Modify existing memo content (title remains unchanged)
 //! - **delete**: Permanently remove memos (irreversible operation)
 //!
-//! ### Discovery & Search
+//! ### Discovery & Retrieval
 //! - **list**: Get all memos with metadata previews
-//! - **search**: Full-text search across titles and content
 //! - **get_all_context**: Retrieve all memo content for AI context consumption
 //!
 //! ## MCP Integration Patterns
@@ -50,7 +49,6 @@ pub mod delete;
 pub mod get;
 pub mod get_all_context;
 pub mod list;
-pub mod search;
 pub mod update;
 
 use crate::mcp::tool_registry::ToolRegistry;
@@ -63,5 +61,4 @@ pub fn register_memoranda_tools(registry: &mut ToolRegistry) {
     registry.register(get::GetMemoTool::new());
     registry.register(update::UpdateMemoTool::new());
     registry.register(delete::DeleteMemoTool::new());
-    registry.register(search::SearchMemoTool::new());
 }

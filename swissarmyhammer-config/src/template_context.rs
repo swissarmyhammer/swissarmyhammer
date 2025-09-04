@@ -685,11 +685,14 @@ impl TemplateContext {
                     }
                 }
             };
-            
+
             debug!("Setting default model variable to: {}", model_name);
             self.set("model".to_string(), Value::String(model_name));
         } else {
-            debug!("Model variable already set, not overriding: {:?}", self.get("model"));
+            debug!(
+                "Model variable already set, not overriding: {:?}",
+                self.get("model")
+            );
         }
     }
 }
@@ -1174,26 +1177,29 @@ Generated for {{app.name}} by liquid templating engine.
     #[test]
     fn test_set_default_model_variable_claude_code() {
         let mut context = TemplateContext::new();
-        
+
         // Set Claude Code agent config
         context.set(
             "agent".to_string(),
             serde_json::to_value(AgentConfig::claude_code()).unwrap(),
         );
-        
+
         // Set default model variable
         context.set_default_model_variable();
-        
+
         // Should set model to "Claude Code"
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
     }
 
     #[test]
     fn test_set_default_model_variable_llama_agent_huggingface() {
-        use crate::agent::{AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource};
-        
+        use crate::agent::{
+            AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+            ModelSource,
+        };
+
         let mut context = TemplateContext::new();
-        
+
         // Set LlamaAgent config with HuggingFace model
         let llama_config = LlamaAgentConfig {
             model: ModelConfig {
@@ -1212,31 +1218,34 @@ Generated for {{app.name}} by liquid templating engine.
             },
             repetition_detection: Default::default(),
         };
-        
+
         let agent_config = AgentConfig {
             quiet: false,
             executor: AgentExecutorConfig::LlamaAgent(llama_config),
         };
-        
+
         context.set(
             "agent".to_string(),
             serde_json::to_value(agent_config).unwrap(),
         );
-        
+
         // Set default model variable
         context.set_default_model_variable();
-        
+
         // Should set model to the HuggingFace repo name
         assert_eq!(context.get("model"), Some(&json!("microsoft/CodeT5-base")));
     }
 
     #[test]
     fn test_set_default_model_variable_llama_agent_local() {
-        use crate::agent::{AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig, ModelSource};
+        use crate::agent::{
+            AgentConfig, AgentExecutorConfig, LlamaAgentConfig, McpServerConfig, ModelConfig,
+            ModelSource,
+        };
         use std::path::PathBuf;
-        
+
         let mut context = TemplateContext::new();
-        
+
         // Set LlamaAgent config with Local model
         let llama_config = LlamaAgentConfig {
             model: ModelConfig {
@@ -1254,20 +1263,20 @@ Generated for {{app.name}} by liquid templating engine.
             },
             repetition_detection: Default::default(),
         };
-        
+
         let agent_config = AgentConfig {
             quiet: false,
             executor: AgentExecutorConfig::LlamaAgent(llama_config),
         };
-        
+
         context.set(
             "agent".to_string(),
             serde_json::to_value(agent_config).unwrap(),
         );
-        
+
         // Set default model variable
         context.set_default_model_variable();
-        
+
         // Should set model to the local filename
         assert_eq!(context.get("model"), Some(&json!("/path/to/model.gguf")));
     }
@@ -1275,10 +1284,10 @@ Generated for {{app.name}} by liquid templating engine.
     #[test]
     fn test_set_default_model_variable_no_agent_config() {
         let mut context = TemplateContext::new();
-        
+
         // No agent config set - should default to Claude Code
         context.set_default_model_variable();
-        
+
         // Should set model to "Claude Code" (default)
         assert_eq!(context.get("model"), Some(&json!("Claude Code")));
     }
@@ -1286,13 +1295,13 @@ Generated for {{app.name}} by liquid templating engine.
     #[test]
     fn test_set_default_model_variable_user_provided_model() {
         let mut context = TemplateContext::new();
-        
+
         // User has already set a model variable
         context.set("model".to_string(), json!("Custom Model"));
-        
+
         // Set default model variable should not override user's choice
         context.set_default_model_variable();
-        
+
         // Should keep user's model value
         assert_eq!(context.get("model"), Some(&json!("Custom Model")));
     }
@@ -1301,14 +1310,14 @@ Generated for {{app.name}} by liquid templating engine.
     fn test_load_sets_default_model_variable() {
         // This test may pass or fail depending on the environment, but should not crash
         let context_result = TemplateContext::load_for_cli();
-        
+
         if let Ok(context) = context_result {
             // Should have a model variable set
             assert!(context.get("model").is_some());
-            
+
             // Model should be a string
             assert!(context.get("model").unwrap().is_string());
-            
+
             // Should default to "Claude Code" if no agent config found
             let model_str = context.get("model").unwrap().as_str().unwrap();
             assert!(!model_str.is_empty());
@@ -1319,14 +1328,14 @@ Generated for {{app.name}} by liquid templating engine.
     fn test_with_template_vars_sets_default_model_variable() {
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
-        
+
         // This should set both the template vars and the default model variable
         let context_result = TemplateContext::with_template_vars(vars);
-        
+
         if let Ok(context) = context_result {
             // Should have our test variable
             assert_eq!(context.get("test_var"), Some(&json!("test_value")));
-            
+
             // Should also have a model variable set
             assert!(context.get("model").is_some());
             assert!(context.get("model").unwrap().is_string());
@@ -1338,14 +1347,14 @@ Generated for {{app.name}} by liquid templating engine.
         let mut vars = HashMap::new();
         vars.insert("test_var".to_string(), json!("test_value"));
         vars.insert("model".to_string(), json!("User Custom Model"));
-        
+
         // User provided model should not be overridden
         let context_result = TemplateContext::with_template_vars(vars);
-        
+
         if let Ok(context) = context_result {
             // Should have our test variable
             assert_eq!(context.get("test_var"), Some(&json!("test_value")));
-            
+
             // Should keep user's model value
             assert_eq!(context.get("model"), Some(&json!("User Custom Model")));
         }

@@ -12,9 +12,6 @@ use tokio::sync::RwLock;
 /// Preview length for memo list operations (characters)
 const MEMO_LIST_PREVIEW_LENGTH: usize = 100;
 
-/// Preview length for memo search operations (characters)
-const MEMO_SEARCH_PREVIEW_LENGTH: usize = 200;
-
 /// Tool handlers for MCP server operations
 #[derive(Clone)]
 pub struct ToolHandlers {
@@ -272,56 +269,6 @@ impl ToolHandlers {
                 }
             }
             Err(e) => Err(McpErrorHandler::handle_error(e, "list memos")),
-        }
-    }
-
-    /// Handle the memo_search tool operation.
-    ///
-    /// Searches memos by query string.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The search memo request containing the search query
-    ///
-    /// # Returns
-    ///
-    /// * `Result<CallToolResult, McpError>` - The tool call result
-    pub async fn handle_memo_search(
-        &self,
-        request: SearchMemosRequest,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::debug!("Searching memos with query: {}", request.query);
-
-        // Validate search query is not empty
-        McpValidation::validate_not_empty(&request.query, "search query")
-            .map_err(|e| McpErrorHandler::handle_error(e, "validate search query"))?;
-
-        let memo_storage = self.memo_storage.read().await;
-        match memo_storage.search_memos(&request.query).await {
-            Ok(memos) => {
-                tracing::info!("Search returned {} memos", memos.len());
-                if memos.is_empty() {
-                    Ok(create_success_response(format!(
-                        "No memos found matching query: '{}'",
-                        request.query
-                    )))
-                } else {
-                    let memo_list = memos
-                        .iter()
-                        .map(|memo| Self::format_memo_preview(memo, MEMO_SEARCH_PREVIEW_LENGTH))
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-
-                    Ok(create_success_response(format!(
-                        "Found {} memo{} matching '{}':\n\n{}",
-                        memos.len(),
-                        if memos.len() == 1 { "" } else { "s" },
-                        request.query,
-                        memo_list
-                    )))
-                }
-            }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "search memos")),
         }
     }
 

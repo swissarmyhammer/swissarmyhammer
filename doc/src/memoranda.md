@@ -1,12 +1,11 @@
 # Memoranda System
 
-The memoranda system in SwissArmyHammer provides a powerful note-taking and knowledge management solution designed for developers and teams. It stores notes as structured documents with full-text search capabilities and seamless integration with your development workflow.
+The memoranda system in SwissArmyHammer provides a powerful note-taking and knowledge management solution designed for developers and teams. It stores notes as structured documents with seamless integration with your development workflow.
 
 ## Overview
 
 The memoranda system enables you to:
 - Create and organize notes with unique identifiers
-- Full-text search across all memo content
 - Export and import memo collections
 - Integration with issues and workflows
 - Version-controlled knowledge base
@@ -27,7 +26,6 @@ Memoranda are stored with the following structure:
 
 Memos are stored in a structured format that supports:
 - Efficient querying and indexing
-- Full-text search capabilities
 - Metadata extraction and filtering
 - Import/export operations
 - Version tracking
@@ -99,33 +97,6 @@ sah memo get-all-context
 ```
 
 This returns all memos sorted by most recent first, formatted for AI consumption.
-
-### Searching Memos
-
-Search across memo titles and content:
-```bash
-sah memo search "architecture microservices"
-```
-
-Search results include:
-- Matching memo titles and IDs
-- Content excerpts with highlighted terms
-- Relevance ranking
-- Creation timestamps
-
-Example output:
-```
-Found 3 matching memos:
-
-ID: 01ARZ3NDEKTSV4RRFFQ69G5FAV
-Title: Project Architecture Notes
-Match: ...system follows a modular **architecture** with clear separation...
-       ...chose **microservices** for scalability and maintainability...
-
-ID: 01BSZ4OFDLTSV5SSGGQ70H6GBW
-Title: Service Design Patterns
-Match: ...**microservices** communication patterns include...
-```
 
 ## Advanced Features
 
@@ -220,45 +191,6 @@ Cross-reference with issues:
 Related to issue: FEATURE_001_user-authentication
 ```
 
-## Search Capabilities
-
-### Full-Text Search
-
-The search system provides:
-- **Term matching**: Find exact words and phrases
-- **Partial matching**: Match word stems and variations  
-- **Boolean logic**: Combine terms with AND/OR operations
-- **Phrase search**: Use quotes for exact phrase matching
-
-Search examples:
-```bash
-# Single term
-sah memo search "microservices"
-
-# Multiple terms (AND)
-sah memo search "architecture design patterns"
-
-# Phrase search
-sah memo search "\"API gateway pattern\""
-
-# Technical terms
-sah memo search "async await"
-```
-
-### Search Tips
-
-**Effective search strategies**:
-- Use specific technical terms
-- Combine related concepts
-- Search by project or component names
-- Use tag-like terms for categorization
-
-**Search optimization**:
-- Include synonyms and variations
-- Use both technical and common terms
-- Search by date patterns in titles
-- Combine title and content terms
-
 ## Integration with Development Workflow
 
 ### With Issues
@@ -298,7 +230,7 @@ Incorporate memo creation into workflows:
    - Implementation notes and gotchas
 
 4. Review phase:
-   - `sah memo search "{project} implementation"`
+   - `sah memo list`
    - Review and consolidate learnings
 ```
 
@@ -405,14 +337,14 @@ done
 
 **Search returns no results**:
 - Check spelling and terminology
-- Try broader or more specific terms
-- Search for partial words or phrases
+- Try alternative keywords or terms
+- Check memo titles and content patterns
 - Verify memos exist with expected content
 
 **Performance issues**:
-- Large memo collections may have slower search
+- Large memo collections may have slower operations
 - Consider archiving old memos
-- Use more specific search terms
+- Use efficient filtering approaches
 
 ### Error Messages
 
@@ -426,10 +358,9 @@ For programmatic access to the memoranda system, see the [Rust API documentation
 
 Key operations:
 - `memo_create()` - Create new memos
-- `memo_search()` - Search memo content
 - `memo_get()` - Retrieve specific memos
 - `memo_list()` - List all memos with metadata
 - `memo_update()` - Modify existing memo content
 - `memo_delete()` - Remove memos permanently
 
-The memoranda system provides a foundation for building institutional knowledge and supporting effective development workflows through organized, searchable documentation.
+The memoranda system provides a foundation for building institutional knowledge and supporting effective development workflows through organized documentation.

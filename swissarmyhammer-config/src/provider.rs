@@ -49,34 +49,25 @@ impl ConfigurationProvider for FileProvider {
             Some("toml") => {
                 // Validate TOML parsing by attempting to merge and extract immediately
                 let test_figment = Figment::new().merge(Toml::file(&self.path));
-                let _: Value = test_figment.extract().map_err(|e| {
-                    ConfigurationError::load(
-                        self.path.clone(),
-                        e,
-                    )
-                })?;
+                let _: Value = test_figment
+                    .extract()
+                    .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
                 figment.merge(Toml::file(&self.path))
             }
             Some("yaml") | Some("yml") => {
                 // Validate YAML parsing by attempting to merge and extract immediately
                 let test_figment = Figment::new().merge(Yaml::file(&self.path));
-                let _: Value = test_figment.extract().map_err(|e| {
-                    ConfigurationError::load(
-                        self.path.clone(),
-                        e,
-                    )
-                })?;
+                let _: Value = test_figment
+                    .extract()
+                    .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
                 figment.merge(Yaml::file(&self.path))
             }
             Some("json") => {
                 // Validate JSON parsing by attempting to merge and extract immediately
                 let test_figment = Figment::new().merge(Json::file(&self.path));
-                let _: Value = test_figment.extract().map_err(|e| {
-                    ConfigurationError::load(
-                        self.path.clone(),
-                        e,
-                    )
-                })?;
+                let _: Value = test_figment
+                    .extract()
+                    .map_err(|e| ConfigurationError::load(self.path.clone(), e))?;
                 figment.merge(Json::file(&self.path))
             }
             _ => {
