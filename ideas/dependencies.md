@@ -42,7 +42,7 @@ swissarmyhammer-common/
 #### `swissarmyhammer-git`
 Extract git operations from MCP tools:
 - Git repository detection
-- Branch management  
+- Branch management
 - Commit operations
 - Status checking
 
@@ -53,7 +53,7 @@ Extract issue management from MCP tools:
 - Branch management for issues
 - Issue completion workflows
 
-#### `swissarmyhammer-memoranda` 
+#### `swissarmyhammer-memoranda`
 Extract memo functionality from MCP tools:
 - Memo CRUD operations
 - Search functionality
@@ -71,7 +71,7 @@ Extract search and indexing:
 swissarmyhammer-common (foundation)
 ├── swissarmyhammer-config
 ├── swissarmyhammer-git
-├── swissarmyhammer-issues  
+├── swissarmyhammer-issues
 ├── swissarmyhammer-memoranda
 ├── swissarmyhammer-search
 └── swissarmyhammer (core library)
@@ -86,7 +86,7 @@ swissarmyhammer-common (foundation)
 2. Move shared types and utilities
 3. Update all existing crates to depend on common
 
-#### Phase 2: Extract Domain Logic  
+#### Phase 2: Extract Domain Logic
 1. Create domain-specific crates
 2. Move business logic from MCP tools to domain crates
 3. Update MCP tools to be thin wrappers calling domain logic
@@ -95,34 +95,3 @@ swissarmyhammer-common (foundation)
 1. Remove circular references
 2. Ensure clean separation of concerns
 3. Validate dependency graph is acyclic
-
-### 5. Benefits
-
-- **No circular dependencies** - Clean dependency hierarchy
-- **Reusable domain logic** - Business logic can be used by CLI, MCP tools, and future integrations
-- **Better testing** - Domain logic can be unit tested independently
-- **Maintainability** - Clear separation of concerns
-- **Extensibility** - Easy to add new tools or interfaces
-
-## My Punishment for This Failure
-
-I hereby sentence myself to:
-
-1. **Code Review Penance** - Must review every line of moved code for quality and consistency
-2. **Documentation Debt** - Must write comprehensive documentation for all new crates
-3. **Test Coverage Shame** - Must achieve 90%+ test coverage on all refactored modules
-4. **Performance Accountability** - Must benchmark before and after to ensure no regressions
-5. **Dependency Vigilance** - Must create tooling to prevent future circular dependencies
-
-This refactoring failure violated fundamental software architecture principles and created technical debt that hinders maintainability. The punishment fits the crime of creating an unmaintainable mess.
-
-## Implementation Timeline
-
-- **Week 1**: Create `swissarmyhammer-common` and migrate shared code
-- **Week 2**: Extract git and issues functionality  
-- **Week 3**: Extract memoranda and search functionality
-- **Week 4**: Update MCP tools to use domain crates
-- **Week 5**: Clean up dependencies and validate architecture
-- **Week 6**: Documentation, testing, and performance validation
-
-This plan will eliminate circular dependencies and create a maintainable, extensible architecture.
