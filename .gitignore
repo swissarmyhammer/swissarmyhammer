@@ -40,7 +40,6 @@ TEST_RESULTS_SUMMARY.md
 
 # Test issue files
 swissarmyhammer/issues/
-.swissarmyhammer/issues/
 tests/test-home
 
 # PropTest regression files

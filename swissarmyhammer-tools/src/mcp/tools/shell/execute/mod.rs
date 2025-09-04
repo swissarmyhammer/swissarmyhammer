@@ -69,7 +69,7 @@ const DEFAULT_MAX_TIMEOUT: u32 = 1800;
 /// Default timeout for shell commands when none specified (300 seconds = 5 minutes)
 ///
 /// Balanced default that works for most commands while preventing hangs.
-const DEFAULT_DEFAULT_TIMEOUT: u32 = 300;
+const DEFAULT_DEFAULT_TIMEOUT: u32 = 3600;
 
 /// Parse size strings with units (e.g., "10MB", "1GB", "512KB") into bytes
 ///
@@ -4031,7 +4031,10 @@ mod tests {
         assert_eq!(DefaultShellConfig::max_line_length(), 2000);
         assert_eq!(DefaultShellConfig::min_timeout(), 1);
         assert_eq!(DefaultShellConfig::max_timeout(), 1800);
-        assert_eq!(DefaultShellConfig::default_timeout(), 300);
+        assert_eq!(
+            DefaultShellConfig::default_timeout(),
+            DEFAULT_DEFAULT_TIMEOUT
+        );
     }
 
     #[test]
