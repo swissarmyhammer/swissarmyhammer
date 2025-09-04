@@ -8,6 +8,7 @@ members = [
     "swissarmyhammer-cli",
     "swissarmyhammer-tools",
     "swissarmyhammer-config",
+    "swissarmyhammer-common",
 ]
 resolver = "2"
 

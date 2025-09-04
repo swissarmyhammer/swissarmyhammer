@@ -1,0 +1,15 @@
+[package]
+name = "swissarmyhammer-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Common types, traits, and utilities for SwissArmyHammer"
+
+[dependencies]
+# Core serialization and error handling
+serde.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+ulid.workspace = true
