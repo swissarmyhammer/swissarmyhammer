@@ -24,3 +24,5 @@
 //! Functions that are duplicated across multiple crates should be centralized here
 //! to eliminate redundancy and ensure consistent behavior. New utilities should
 //! follow the design principles and documentation standards outlined above.
+
+pub mod paths;

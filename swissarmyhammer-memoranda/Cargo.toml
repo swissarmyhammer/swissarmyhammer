@@ -1,0 +1,22 @@
+[package]
+name = "swissarmyhammer-memoranda"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Memo management system for SwissArmyHammer"
+
+[dependencies]
+swissarmyhammer-common = { path = "../swissarmyhammer-common", version = "0.1.0" }
+serde = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = "0.4"
