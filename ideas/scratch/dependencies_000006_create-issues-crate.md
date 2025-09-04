@@ -1,7 +1,5 @@
 # Create swissarmyhammer-issues Crate
 
-Refer to /Users/wballard/github/swissarmyhammer/ideas/dependencies.md
-
 ## Goal
 
 Create a dedicated crate for issue management by extracting issue functionality from both the main library and MCP tools.
@@ -12,6 +10,7 @@ Create a dedicated crate for issue management by extracting issue functionality 
 2. Move issue domain logic from main library
 3. Extract issue operations from MCP tools
 4. Create clean issue management API
+5. Remove (move to swissarmyhammer-issues) all code from swissarmyhammer/src/issues/
 
 ## Implementation Details
 
@@ -38,7 +37,11 @@ swissarmyhammer-issues/
 - `async-trait` - Async traits
 - `tokio` - Async runtime
 
+do not depend on `swissarmyhammer`, move code as needed to swissarmyhammer-common
+
 ### Key APIs to Extract
+
+need an explicit IssueName and IssueContent. The IssueName is the filename key.
 
 #### From `swissarmyhammer/src/issues/`
 ```rust
@@ -48,9 +51,9 @@ pub struct FileSystemIssueStorage {
 
 #[async_trait]
 impl IssueStorage for FileSystemIssueStorage {
-    async fn create_issue(&self, name: String, content: String) -> Result<Issue, IssueError>;
-    async fn get_issue(&self, name: &str) -> Result<Issue, IssueError>;
-    async fn update_issue(&self, name: &str, content: String) -> Result<Issue, IssueError>;
+    async fn create_issue(&self, name: IssueName, content: IssueContent) -> Result<Issue, IssueError>;
+    async fn get_issue(&self, name: &IssueName) -> Result<Issue, IssueError>;
+    async fn update_issue(&self, name: &IssueName, content: IssueContent) -> Result<Issue, IssueError>;
     // ... other operations
 }
 ```
@@ -64,8 +67,8 @@ pub struct IssueService {
 
 impl IssueService {
     pub async fn create(&self, request: CreateIssueRequest) -> Result<Issue, IssueError>;
-    pub async fn work_on(&self, name: &str) -> Result<(), IssueError>;
-    pub async fn mark_complete(&self, name: &str) -> Result<Issue, IssueError>;
+    pub async fn work_on(&self, name: &IssueName) -> Result<(), IssueError>;
+    pub async fn mark_complete(&self, name: &IssueName) -> Result<Issue, IssueError>;
 }
 ```
 

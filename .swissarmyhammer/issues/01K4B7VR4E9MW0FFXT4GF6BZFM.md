@@ -1,0 +1,1 @@
+you did a half assed job removing git to its own crate, there is still clearly a swissarmyhammer/src/git folder that needs to not exist in swissarmyhammer

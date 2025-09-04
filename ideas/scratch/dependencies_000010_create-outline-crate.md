@@ -1,7 +1,5 @@
 # Create swissarmyhammer-outline Crate
 
-Refer to /Users/wballard/github/swissarmyhammer/ideas/dependencies.md
-
 ## Goal
 
 Create a dedicated crate for code outline generation by extracting Tree-sitter parsing functionality from both the main library and MCP tools.
@@ -12,6 +10,8 @@ Create a dedicated crate for code outline generation by extracting Tree-sitter p
 2. Move outline generation from main library
 3. Extract outline operations from MCP tools
 4. Create clean code analysis API
+5. Remove (move to swissarmyhammer-outline) all code from swissarmyhammer/src/outline/
+
 
 ## Implementation Details
 
@@ -44,6 +44,8 @@ swissarmyhammer-outline/
 
 ### Key APIs to Extract
 
+Need an explicit SourceCode
+
 #### From `swissarmyhammer/src/outline/`
 ```rust
 pub struct OutlineGenerator {
@@ -52,7 +54,7 @@ pub struct OutlineGenerator {
 
 impl OutlineGenerator {
     pub async fn generate_outline(&self, patterns: Vec<String>) -> Result<Outline, OutlineError>;
-    pub fn extract_symbols(&self, source: &str, language: Language) -> Result<Vec<Symbol>, OutlineError>;
+    pub fn extract_symbols(&self, source: &SourceCode, language: Language) -> Result<Vec<Symbol>, OutlineError>;
 }
 ```
 
@@ -78,7 +80,7 @@ pub enum SupportedLanguage {
 }
 
 pub trait SymbolExtractor {
-    fn extract_symbols(&self, node: tree_sitter::Node, source: &str) -> Vec<Symbol>;
+    fn extract_symbols(&self, node: tree_sitter::Node, source: &SourceCode) -> Vec<Symbol>;
 }
 ```
 

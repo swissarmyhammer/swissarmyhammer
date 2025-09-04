@@ -802,9 +802,6 @@ impl LlamaAgentExecutor {
             use_hf_params: self.config.model.use_hf_params,
             retry_config: Default::default(),
             debug: self.config.model.debug,
-            n_seq_max: 512,
-            n_threads: 1,
-            n_threads_batch: 1,
         };
 
         // Create MCP server configs for HTTP transport

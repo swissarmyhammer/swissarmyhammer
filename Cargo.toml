@@ -10,6 +10,7 @@ members = [
     "swissarmyhammer-config",
     "swissarmyhammer-common",
     "swissarmyhammer-memoranda",
+    "swissarmyhammer-git",
 ]
 resolver = "2"
 

@@ -1,6 +1,5 @@
 # Update MCP Tools to Use Domain Crates
 
-Refer to /Users/wballard/github/swissarmyhammer/ideas/dependencies.md
 
 ## Goal
 

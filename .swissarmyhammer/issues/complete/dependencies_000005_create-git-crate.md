@@ -36,7 +36,11 @@ swissarmyhammer-git/
 - `async-trait` - Async trait support
 - `tokio` - Async runtime
 
+do not depend on `swissarmyhammer`, move code to common as needed
+
 ### Key APIs to Extract
+
+We need an explicit BranchName.
 
 #### From `swissarmyhammer/src/git/operations.rs`
 ```rust
@@ -46,8 +50,8 @@ pub struct GitOperations {
 
 impl GitOperations {
     pub fn new() -> Result<Self, GitError>;
-    pub fn create_branch(&self, name: &str) -> Result<(), GitError>;
-    pub fn checkout_branch(&self, name: &str) -> Result<(), GitError>;
+    pub fn create_branch(&self, name: &BranchName) -> Result<(), GitError>;
+    pub fn checkout_branch(&self, name: &BranchName) -> Result<(), GitError>;
     // ... other operations
 }
 ```
@@ -83,3 +87,33 @@ graph TD
 ```
 
 This crate will provide a clean, reusable interface for all Git operations across the project.
+
+## Proposed Solution
+
+I will create the `swissarmyhammer-git` crate by extracting git functionality from the main library and creating a clean API. Here are the key steps:
+
+### Phase 1: Analysis and Planning
+1. **Analyze existing git module structure** - Examine current git operations, utilities, and dependencies
+2. **Identify extraction targets** - Map what code needs to move from the main library
+3. **Design clean API** - Create BranchName newtype and structured error types
+
+### Phase 2: Crate Creation
+1. **Create crate structure** with proper module organization
+2. **Extract git operations** from `swissarmyhammer/src/git/` 
+3. **Add proper error handling** with Git-specific error types
+4. **Create BranchName newtype** for type safety
+
+### Phase 3: Integration
+1. **Update workspace dependencies** to include new crate
+2. **Migrate existing code** to use new git crate APIs
+3. **Write comprehensive tests** for all git operations
+4. **Validate functionality** works correctly
+
+The new crate will provide:
+- **Type Safety**: BranchName newtype to prevent string confusion
+- **Clean API**: Structured operations for repository, branches, commits
+- **Better Errors**: Git-specific error types with proper context
+- **Performance**: Direct git2 operations where possible
+- **Testability**: Isolated git operations for easier testing
+
+This follows the established crate pattern in the workspace (common, config, memoranda, etc.) and will improve maintainability by centralizing git functionality.

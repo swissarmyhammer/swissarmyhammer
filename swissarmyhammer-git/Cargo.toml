@@ -1,0 +1,29 @@
+[package]
+name = "swissarmyhammer-git"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Core async and error handling
+tokio = { workspace = true, features = ["full"] }
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+
+# Git operations
+git2.workspace = true
+
+# Logging and utilities
+tracing.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+
+# Internal dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
