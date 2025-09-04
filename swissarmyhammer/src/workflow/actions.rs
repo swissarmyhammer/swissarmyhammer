@@ -1219,6 +1219,7 @@ impl Action for SetVariableAction {
 
         // Set the variable
         context.insert(self.variable_name.clone(), json_value.clone());
+        tracing::debug!("Set variable '{}' = '{:?}'", self.variable_name, json_value);
 
         // Mark action as successful
         context.insert(LAST_ACTION_RESULT_KEY.to_string(), Value::Bool(true));

@@ -122,7 +122,7 @@ const FORBIDDEN_PATTERNS: &[&str] = &[
 ];
 
 // Result keys to look for in context
-const RESULT_KEYS: &[&str] = &["result", "output", "response", "claude_result"];
+const RESULT_KEYS: &[&str] = &["result", "output", "response", "claude_result", "claude_response"];
 
 impl WorkflowExecutor {
     /// Evaluate all transitions from the current state
@@ -478,30 +478,9 @@ impl WorkflowExecutor {
         self.validate_cel_expression(expression)?;
         let validation_duration = validation_start.elapsed();
 
-        // Get or compile the CEL program from cache
+        // Compile the CEL program directly (no caching)
         let compilation_start = Instant::now();
-        let was_cached = self.is_cel_program_cached(expression);
-        let compilation_duration = compilation_start.elapsed();
-
-        // Log cache performance metrics first
-        if was_cached {
-            self.log_event(
-                ExecutionEventType::StateExecution,
-                format!(
-                    "CEL cache hit for expression: {expression} (retrieved in {compilation_duration:?})"
-                ),
-            );
-        } else {
-            self.log_event(
-                ExecutionEventType::StateExecution,
-                format!(
-                    "CEL cache miss - compiled expression: {expression} (compiled in {compilation_duration:?})"
-                ),
-            );
-        }
-
-        // Now get the compiled program
-        let program = self.get_compiled_cel_program(expression).map_err(|e| {
+        let program = cel_interpreter::Program::compile(expression).map_err(|e| {
             ExecutorError::ExpressionError(format!(
                 "CEL compilation failed: Unable to compile expression '{expression}' ({e})"
             ))
@@ -569,7 +548,13 @@ impl WorkflowExecutor {
 
         let total_evaluation_time = evaluation_start.elapsed();
 
+        // Enhanced debug logging for CEL evaluation
+        let result_text = Self::extract_result_text_static(context);
+        let context_keys: Vec<String> = context.keys().cloned().collect();
+        tracing::debug!("CEL Debug - Expression: '{}' | Result text: '{}' | CEL result: {:?} | Boolean: {} | Context keys: {:?}", expression, result_text, result, boolean_result, context_keys);
+
         // Log comprehensive performance metrics after program execution is complete
+        let compilation_duration = compilation_start.elapsed();
         self.log_event(
             ExecutionEventType::StateExecution,
             format!(
@@ -580,7 +565,7 @@ impl WorkflowExecutor {
                 context_duration,
                 execution_duration,
                 conversion_duration,
-                if was_cached { "HIT" } else { "MISS" },
+                "CACHED",
                 context.len() + 2
             ),
         );

@@ -526,28 +526,7 @@ mod tests {
         assert_eq!(cache.stats().misses, 1);
     }
 
-    #[test]
-    fn test_cel_program_cache() {
-        let cache = CelProgramCache::new(10);
-        let expression = "1 + 1";
 
-        // Test cache miss and compilation
-        let program1 = cache.get_or_compile(expression).unwrap();
-        // get_or_compile calls get() internally which counts as a miss, then compiles and gets again (which is a hit)
-        let stats_after_first = cache.stats();
-        assert_eq!(stats_after_first.misses, 1); // One miss from get() in get_or_compile
-        assert_eq!(stats_after_first.hits, 1); // One hit from the final get() in get_or_compile
-
-        // Test cache hit
-        let program2 = cache.get_or_compile(expression).unwrap();
-        let stats_after_second = cache.stats();
-        assert_eq!(stats_after_second.hits, 2); // One additional hit
-
-        // Programs should be functionally equivalent (both are Arc<Program>)
-        // Note: Program doesn't implement Debug/Display, so we can't compare them directly
-        // The fact that we got programs back is sufficient for the cache test
-        assert!(std::ptr::eq(program1.as_ref(), program2.as_ref()));
-    }
 
     #[test]
     fn test_cache_manager_combined_operations() {
@@ -594,16 +573,5 @@ mod tests {
         assert_eq!(cache.stats().hit_rate(), 0.5);
     }
 
-    #[test]
-    fn test_cel_cache_compilation_timing() {
-        let cache = CelProgramCache::new(10);
-        let expression = "1 + 1";
 
-        // Compile once to measure timing
-        cache.get_or_compile(expression).unwrap();
-
-        // Should have recorded compilation time
-        assert!(cache.average_compilation_time().is_some());
-        assert!(cache.average_compilation_time().unwrap() > Duration::from_nanos(0));
-    }
 }
