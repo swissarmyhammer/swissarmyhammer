@@ -253,11 +253,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
         for ext in &extensions {
             let name_with_ext = format!("{name}{ext}");
             if self.library.get(&name_with_ext).is_ok() {
-                tracing::debug!(
-                    "Found match for '{}' with extension: '{}'",
-                    name,
-                    name_with_ext
-                );
                 return true;
             }
         }
@@ -268,11 +263,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
             for ext in &extensions {
                 if let Some(name_without_ext) = name.strip_suffix(ext) {
                     if self.library.get(name_without_ext).is_ok() {
-                        tracing::debug!(
-                            "Found match for '{}' by stripping extension to: '{}'",
-                            name,
-                            name_without_ext
-                        );
                         return true;
                     }
                     // Also try with other extensions
@@ -280,11 +270,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
                         if ext != other_ext {
                             let name_with_other_ext = format!("{name_without_ext}{other_ext}");
                             if self.library.get(&name_with_other_ext).is_ok() {
-                                tracing::debug!(
-                                    "Found match for '{}' by swapping extension to: '{}'",
-                                    name,
-                                    name_with_other_ext
-                                );
                                 return true;
                             }
                         }
@@ -312,11 +297,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
         for ext in &extensions {
             let name_with_ext = format!("{name}{ext}");
             if let Ok(prompt) = self.library.get(&name_with_ext) {
-                tracing::debug!(
-                    "Found match for '{}' with extension: '{}'",
-                    name,
-                    name_with_ext
-                );
                 return Some(Cow::Owned(prompt.template));
             }
         }
@@ -327,11 +307,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
             for ext in &extensions {
                 if let Some(name_without_ext) = name.strip_suffix(ext) {
                     if let Ok(prompt) = self.library.get(name_without_ext) {
-                        tracing::debug!(
-                            "Found match for '{}' by stripping extension to: '{}'",
-                            name,
-                            name_without_ext
-                        );
                         return Some(Cow::Owned(prompt.template));
                     }
                     // Also try with other extensions
@@ -339,11 +314,6 @@ impl liquid::partials::PartialSource for PromptPartialSource {
                         if ext != other_ext {
                             let name_with_other_ext = format!("{name_without_ext}{other_ext}");
                             if let Ok(prompt) = self.library.get(&name_with_other_ext) {
-                                tracing::debug!(
-                                    "Found match for '{}' by swapping extension to: '{}'",
-                                    name,
-                                    name_with_other_ext
-                                );
                                 return Some(Cow::Owned(prompt.template));
                             }
                         }

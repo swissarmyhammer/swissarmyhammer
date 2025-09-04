@@ -6,18 +6,31 @@
 use serde_json::json;
 use std::env;
 use std::fs;
+use std::sync::Mutex;
 use swissarmyhammer_config::{ConfigurationDiscovery, TemplateContext};
 use tempfile::TempDir;
+
+/// Global mutex to serialize tests that modify global state (current directory, HOME environment variable)
+/// This prevents race conditions when multiple tests run in parallel
+static GLOBAL_STATE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Test helper for isolated file discovery testing
 struct IsolatedDiscoveryTest {
     temp_dir: TempDir,
     original_cwd: std::path::PathBuf,
     original_home: Option<String>,
+    _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
 
 impl IsolatedDiscoveryTest {
     fn new() -> Self {
+        // Acquire global lock to prevent race conditions with other tests
+        let lock_guard = GLOBAL_STATE_LOCK.lock().unwrap_or_else(|poisoned| {
+            // If the lock is poisoned (due to a panic in another test), recover it
+            eprintln!("Warning: Global state lock was poisoned, recovering");
+            poisoned.into_inner()
+        });
+
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let original_cwd = env::current_dir().expect("Failed to get current dir");
         let original_home = env::var("HOME").ok();
@@ -32,6 +45,7 @@ impl IsolatedDiscoveryTest {
             temp_dir,
             original_cwd,
             original_home,
+            _lock_guard: lock_guard,
         }
     }
 
