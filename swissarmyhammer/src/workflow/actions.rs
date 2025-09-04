@@ -138,8 +138,8 @@ impl Default for ActionTimeouts {
                 std::env::var("SWISSARMYHAMMER_SUB_WORKFLOW_TIMEOUT")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(60),
-            ), // 1 minute default (was 3600s/1 hour)
+                    .unwrap_or(3600),
+            ), // 20 minutes default (was 60s/1 minute)
         }
     }
 }
@@ -1251,6 +1251,7 @@ impl Action for AbortAction {
     async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
         // Substitute variables in message
         let message = self.substitute_string(&self.message, context);
+        tracing::error!("***Workflow Aborted***: {}", message);
 
         // Set a special context variable to signal abort request
         context.insert(
@@ -1389,9 +1390,6 @@ pub struct ShellAction {
 }
 
 impl ShellAction {
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
-    const MAX_TIMEOUT: Duration = Duration::from_secs(3600); // 1 hour
-
     /// Create a new shell action
     #[allow(dead_code)]
     pub fn new(command: String) -> Self {
@@ -1431,14 +1429,9 @@ impl ShellAction {
 
     /// Validate timeout duration according to security limits
     pub fn validate_timeout(&self) -> ActionResult<Duration> {
-        let timeout = self.timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
-
-        if timeout > Self::MAX_TIMEOUT {
-            return Err(ActionError::ExecutionError(format!(
-                "Timeout too large: maximum is {} seconds",
-                Self::MAX_TIMEOUT.as_secs()
-            )));
-        }
+        let timeout = self
+            .timeout
+            .unwrap_or(ActionTimeouts::default().prompt_timeout);
 
         if timeout.as_millis() == 0 {
             return Err(ActionError::ExecutionError(
@@ -2458,18 +2451,6 @@ mod tests {
             executor_utils::validate_executor_availability(AgentExecutorType::LlamaAgent)
                 .await
                 .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_recommended_timeouts() {
-        assert_eq!(
-            executor_utils::get_recommended_timeout(AgentExecutorType::ClaudeCode),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            executor_utils::get_recommended_timeout(AgentExecutorType::LlamaAgent),
-            Duration::from_secs(60)
         );
     }
 

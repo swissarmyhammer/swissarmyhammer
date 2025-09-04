@@ -5,7 +5,6 @@
 
 use crate::workflow::actions::{ActionError, ActionResult};
 use crate::workflow::agents::LlamaAgentExecutor;
-use std::time::Duration;
 use swissarmyhammer_config::agent::{AgentExecutorType, LlamaAgentConfig};
 
 /// Validate that a specific executor type is available
@@ -44,14 +43,6 @@ async fn validate_llama_agent_configuration() -> ActionResult<()> {
     executor.validate_config().map_err(|e| {
         ActionError::ExecutionError(format!("LlamaAgent configuration validation failed: {}", e))
     })
-}
-
-/// Get recommended timeout for an executor type
-pub fn get_recommended_timeout(executor_type: AgentExecutorType) -> Duration {
-    match executor_type {
-        AgentExecutorType::ClaudeCode => Duration::from_secs(30),
-        AgentExecutorType::LlamaAgent => Duration::from_secs(60),
-    }
 }
 
 #[cfg(test)]
