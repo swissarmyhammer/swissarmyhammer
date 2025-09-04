@@ -176,6 +176,8 @@ impl WorkflowExecutor {
         // Check if abort was requested via context variable (after state execution)
         if let Some(abort_reason_value) = run.context.get_workflow_var("__ABORT_REQUESTED__") {
             if let Some(abort_reason) = abort_reason_value.as_str() {
+                tracing::error!("***Workflow Aborted***: {}", abort_reason);
+
                 // Create abort file for external detection
                 if let Err(e) = std::fs::create_dir_all(".swissarmyhammer") {
                     tracing::warn!("Failed to create .swissarmyhammer directory: {}", e);
@@ -263,7 +265,7 @@ impl WorkflowExecutor {
             run.context
                 .get("_timeout_secs")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(300), // Default 5 minutes
+                .unwrap_or(3600), // Default
         );
 
         loop {

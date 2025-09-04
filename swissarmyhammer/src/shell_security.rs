@@ -3,13 +3,14 @@
 //! This module provides comprehensive security controls for shell command execution,
 //! including blocked command prevention, directory access controls, and audit logging.
 
+use crate::workflow::actions::ActionTimeouts;
 use crate::{Result, SwissArmyHammerError};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
@@ -18,12 +19,6 @@ const MAX_COMMAND_LENGTH: usize = 4096;
 
 /// Maximum allowed environment variable value length in characters
 const MAX_ENV_VALUE_LENGTH: usize = 1024;
-
-/// Default timeout in seconds for shell commands
-const DEFAULT_TIMEOUT_SECONDS: u64 = 300;
-
-/// Maximum timeout in seconds for shell commands
-const MAX_TIMEOUT_SECONDS: u64 = 3600;
 
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
@@ -105,10 +100,10 @@ pub struct ShellSecurityPolicy {
     pub enable_audit_logging: bool,
 
     /// Default timeout for commands in seconds
-    pub default_timeout_seconds: u64,
+    pub default_timeout_seconds: Duration,
 
     /// Maximum allowed timeout in seconds
-    pub max_timeout_seconds: u64,
+    pub max_timeout_seconds: Duration,
 
     /// Maximum allowed environment variable value length
     pub max_env_value_length: usize,
@@ -151,8 +146,8 @@ impl Default for ShellSecurityPolicy {
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,
-            default_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
-            max_timeout_seconds: MAX_TIMEOUT_SECONDS,
+            default_timeout_seconds: ActionTimeouts::default().prompt_timeout,
+            max_timeout_seconds: ActionTimeouts::default().prompt_timeout,
             max_env_value_length: MAX_ENV_VALUE_LENGTH,
         }
     }

@@ -13,7 +13,7 @@ fn test_sub_workflow_action_creation() {
     assert_eq!(action.workflow_name, "test-workflow");
     assert!(action.input_variables.is_empty());
     assert!(action.result_variable.is_none());
-    assert_eq!(action.timeout, Duration::from_secs(60)); // Updated from 3600s to 60s
+    assert_eq!(action.timeout, ActionTimeouts::default().prompt_timeout);
 }
 
 #[test]

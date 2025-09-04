@@ -123,7 +123,8 @@ impl McpTool for NotifyTool {
             ),
         }
 
-        tracing::debug!("Notification sent successfully: {}", request.message);
+        // trace all notifications so log watchers see them
+        tracing::info!("*Notification*: {}", request.message);
         Ok(BaseToolImpl::create_success_response(format!(
             "Notification sent: {}",
             request.message

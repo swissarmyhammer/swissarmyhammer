@@ -742,7 +742,7 @@ pub struct LlamaAgentExecutor {
     config: LlamaAgentConfig,
     /// Whether the executor has been initialized
     initialized: bool,
-    /// MCP server handle for SwissArmyHammer tools  
+    /// MCP server handle for SwissArmyHammer tools
     mcp_server: Option<McpServerHandle>,
     /// The actual LlamaAgent server when using real implementation
     agent_server: Option<Arc<AgentServer>>,
@@ -768,11 +768,19 @@ impl LlamaAgentExecutor {
         );
         // Convert model source
         let model_source = match &self.config.model.source {
-            ModelSource::HuggingFace { repo, filename, folder } => LlamaModelSource::HuggingFace {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => LlamaModelSource::HuggingFace {
                 repo: repo.clone(),
                 // If folder is provided, use it and set filename to None
                 // If folder is not provided, use filename
-                filename: if folder.is_some() { None } else { filename.clone() },
+                filename: if folder.is_some() {
+                    None
+                } else {
+                    filename.clone()
+                },
                 folder: folder.clone(),
             },
             ModelSource::Local { filename, folder } => LlamaModelSource::Local {
@@ -794,6 +802,9 @@ impl LlamaAgentExecutor {
             use_hf_params: self.config.model.use_hf_params,
             retry_config: Default::default(),
             debug: self.config.model.debug,
+            n_seq_max: 512,
+            n_threads: 1,
+            n_threads_batch: 1,
         };
 
         // Create MCP server configs for HTTP transport
@@ -990,13 +1001,15 @@ impl LlamaAgentExecutor {
     /// - Local model: `"local:/path/to/model.gguf"`
     pub fn get_model_display_name(&self) -> String {
         match &self.config.model.source {
-            ModelSource::HuggingFace { repo, filename, folder } => {
-                match (folder, filename) {
-                    (Some(folder), _) => format!("{}/{}", repo, folder),
-                    (None, Some(filename)) => format!("{}/{}", repo, filename),
-                    (None, None) => repo.clone(),
-                }
-            }
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => match (folder, filename) {
+                (Some(folder), _) => format!("{}/{}", repo, folder),
+                (None, Some(filename)) => format!("{}/{}", repo, filename),
+                (None, None) => repo.clone(),
+            },
             ModelSource::Local { filename, .. } => {
                 format!("local:{}", filename.display())
             }

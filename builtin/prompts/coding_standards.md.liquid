@@ -29,7 +29,8 @@ Always put mcp.log and semantic.db in the .gitignore.
   - NEVER comment out or stub because of a failing test -- actually FIX the problem
   - NEVER hard code when you need to get real data
   - NEVER mock
-- DO NOT make 'helper' functions that simple wrap and delegate.
+- If a file has more than 500 lines of code, consider refactoring it into smaller files.
+    - Specifically look for files that have multiple classes, functions, or types that are all separatedly public -- roughly speaking each public class, function, or type should be in its own file.
 
 ### Helper Methods
 
@@ -47,13 +48,14 @@ When you generate temporary or scratch files, make sure to put a comment in the 
 
 When you are engaged in a large refactoring, you need to work file by file.
 
-- Search and define a list of files you will be changing in this refactoring, create a todo list of these files
-- Plan out the change to each file, creating a new issue with the mcp issue tool for each file
-  - in each issue, clearly state the goal of the refactoring
-  - in each issue, clearly state the change you will be making
-  - in each issue, clearly state what tests need to be created
-  - mark it off your todo list once the issue is created
-  - notify the user that an issue was created using the notify_create tool
+- Search and define a list of files you will be changing in this refactoring, create a todo list of these files with todo_create
+- Plan out the change to each file, creating a new todo list item with todo_create
+  - in each todo, clearly state the goal of the refactoring
+  - in each todo, clearly state the change you will be making
+  - in each todo, clearly state what tests need to be created
+- Work the todo list
+- todo_mark_complete it off your todo list once the issue is created
+- notify_create the user that an issue was created using the notify_create tool
 
 Creating issues rather than just 'going for it' ensures working in small, testable chunks.
 
@@ -114,7 +116,8 @@ Focus on understanding the problem requirements and coding tests that prove the 
 
 ### Rust
 
-- Always compile and check your work with `cargo build` after an editass
+- Always compile and check your work with `cargo build` after an edit
+- There is no such thing as a 'cached compilation artifact'
 - Always format your files with `cargo fmt`
   - Format all files with `cargo fmt --all`
 - Test with https://nexte.st

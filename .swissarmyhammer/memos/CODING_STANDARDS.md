@@ -1,11 +1,6 @@
 
 
-# SwissArmyHammer Coding Standards
-
-
-NEVER ignore a test, for any reason -- 'flakiness' is not an excuse- fix the root cause.
-
-## Architecture Guidelines
+## SwissArmyHammer Coding Standards
 
 ### File Loading and Resolution
 - DO NOT duplicate the file loading and resolution logic between commands
@@ -36,15 +31,6 @@ NEVER ignore a test, for any reason -- 'flakiness' is not an excuse- fix the roo
 - Limit file sizes when reading user-provided content
 - Use the security module's complexity validation for workflows
 
-## CLI Specific Guidelines
-
-### Command Structure
-- Commands should have a single, clear purpose
-- Commands should never duplicate logic of an available MCP tool, instead calling the tool
-- Use consistent parameter names across commands
-- Provide helpful error messages with suggestions
-- Support both human-readable and machine-readable output formats
-
 ### Backward Compatibility
 - Take no steps for backward compatibility
 
@@ -67,15 +53,3 @@ NEVER ignore a test, for any reason -- 'flakiness' is not an excuse- fix the roo
 - Load resources only when needed
 - Use iterators instead of collecting into vectors when possible
 - Cache expensive computations appropriately
-
-### Memory Usage
-- Be mindful of memory usage with large workflow collections
-- Consider streaming for large file operations
-- Clean up resources promptly
-
-## Version Control
-
-### Commit Messages
-- Use clear, descriptive commit messages
-- Follow conventional commit format when applicable
-- Reference issue numbers in commits

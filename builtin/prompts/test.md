@@ -25,7 +25,8 @@ The goal is to have:
 
 ### Rust
 
-- Run tests with `cargo nextest run`
+- Run tests with `cargo nextest run --failure-output immediate --hide-progress-bar --status-level fail --final-status-level fail`
+- Be patient and let the test run finish before moving on
 
 ## Process
 
@@ -34,6 +35,7 @@ The goal is to have:
 - write all test failures, errors, slowness, and warnings to a markdown scratchpad file `.swissarmyhammer/tmp/TEST_FAILURES.md`, this is your todo list of things to fix
 - refer to `.swissarmyhammer/tmp/TEST_FAILURES.md` to refresh your memory
 - if there is an existing `.swissarmyhammer/tmp/TEST_FAILURES.md`, read it, think, and append to it -- more work to do!
+- fix broken tests one at a time, focus and don't get distracted
 - when you start to work on a specific test, use the notify_create tool to let the user know
 - when you fix a specific test, use the notify_create tool to let the user know
 - DO NOT commit to git

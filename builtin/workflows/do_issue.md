@@ -12,17 +12,23 @@ stateDiagram-v2
     [*] --> start
     start --> code
     code --> review
-    review --> complete
-    complete --> merge
+    review --> code_review
+    code_review --> test
+    test --> complete
+    complete --> commit
+    commit --> merge
     merge --> [*]
 ```
 
 ## Actions
 
 - start: log "Working an issue"
-- code: run workflow "code_issue"
-- review: run workflow "review_issue"
-- complete: run workflow "complete_issue"
+- code: execute prompt "issue/code"
+- review: execute prompt "issue/review"
+- code_review: execute prompt "issue/code_review"
+- test: run workflow "tdd"
+- complete: execute prompt "issue/complete"
+- commit: execute prompt "commit"
 - merge: execute prompt "issue/merge"
 
 ## Description

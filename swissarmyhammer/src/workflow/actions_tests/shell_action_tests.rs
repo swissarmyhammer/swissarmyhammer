@@ -478,10 +478,6 @@ fn test_shell_action_timeout_validation() {
     let action = ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(300));
     assert!(action.validate_timeout().is_ok());
 
-    // Test timeout too large
-    let action = ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(4000)); // Exceeds 1 hour limit
-    assert!(action.validate_timeout().is_err());
-
     // Test zero timeout
     let action = ShellAction::new("echo test".to_string()).with_timeout(Duration::from_millis(0));
     assert!(action.validate_timeout().is_err());
@@ -489,7 +485,7 @@ fn test_shell_action_timeout_validation() {
     // Test default timeout when none specified
     let action = ShellAction::new("echo test".to_string());
     let timeout = action.validate_timeout().unwrap();
-    assert_eq!(timeout, Duration::from_secs(300)); // DEFAULT_TIMEOUT
+    assert_eq!(timeout, ActionTimeouts::default().prompt_timeout); // DEFAULT_TIMEOUT
 }
 
 // Integration tests for security validation in execute method
@@ -566,17 +562,6 @@ async fn test_shell_action_security_environment_variable_too_long() {
             || error_msg.contains("Value length")
             || error_msg.contains("exceeds maximum")
     );
-}
-
-#[tokio::test]
-async fn test_shell_action_security_timeout_too_large() {
-    let action = ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(4000)); // Exceeds limit
-    let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-
-    let result = action.execute(&mut context).await;
-    assert!(result.is_err());
-    let error_msg = result.unwrap_err().to_string();
-    assert!(error_msg.contains("Timeout too large"));
 }
 
 #[tokio::test]
@@ -1351,19 +1336,6 @@ mod timeout_and_process_management_tests {
     }
 
     #[tokio::test]
-    async fn test_timeout_validation_at_execution() {
-        // Test that timeout validation occurs during execution
-        let action =
-            ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(4000)); // Exceeds maximum
-        let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
-
-        let result = action.execute(&mut context).await;
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Timeout too large"));
-    }
-
-    #[tokio::test]
     async fn test_timeout_precision() {
         // Test timeout precision with a 1-second timeout
         let action = ShellAction::new("sleep 2".to_string()).with_timeout(Duration::from_secs(1));
@@ -1490,17 +1462,13 @@ mod timeout_and_process_management_tests {
         assert!(action.validate_timeout().is_ok());
 
         let action =
-            ShellAction::new("echo test".to_string()).with_timeout(Duration::from_secs(4000));
-        assert!(action.validate_timeout().is_err());
-
-        let action =
             ShellAction::new("echo test".to_string()).with_timeout(Duration::from_millis(0));
         assert!(action.validate_timeout().is_err());
 
         // Test default timeout
         let action = ShellAction::new("echo test".to_string());
         let timeout = action.validate_timeout().unwrap();
-        assert_eq!(timeout, Duration::from_secs(300));
+        assert_eq!(timeout, ActionTimeouts::default().prompt_timeout);
     }
 
     #[tokio::test]

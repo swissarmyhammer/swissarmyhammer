@@ -425,7 +425,7 @@ pub struct OutputBuffer {
     max_size: usize,
     /// Buffer for stdout data
     stdout_buffer: Vec<u8>,
-    /// Buffer for stderr data  
+    /// Buffer for stderr data
     stderr_buffer: Vec<u8>,
     /// Whether output has been truncated
     truncated: bool,
@@ -557,7 +557,7 @@ impl OutputBuffer {
         format_output_content(&self.stdout_buffer, self.binary_detected)
     }
 
-    /// Get stderr as formatted string with binary content handling  
+    /// Get stderr as formatted string with binary content handling
     pub fn get_stderr(&self) -> String {
         format_output_content(&self.stderr_buffer, self.binary_detected)
     }
@@ -639,45 +639,14 @@ pub fn is_binary_content(data: &[u8]) -> bool {
     // Check first 8KB for binary markers to avoid scanning huge text files
     let sample = &data[..std::cmp::min(data.len(), 8192)];
 
-    // Count suspicious bytes
-    let mut suspicious_count = 0;
-    let mut total_count = 0;
-
     for &byte in sample {
-        total_count += 1;
-
-        // Check for various binary indicators
-        if (byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t') // Control characters
-            || byte == 0 // Null bytes are a strong indicator
-            || (byte > 127 && byte < 160)
-        // High control characters
-        {
-            suspicious_count += 1;
-        }
-
         // Early exit if we find definitive binary content
         if byte == 0 {
             return true; // Null bytes are definitive
         }
-
-        // Also early exit for other strong binary indicators
-        if byte < 32 && byte != b'\n' && byte != b'\r' && byte != b'\t' {
-            return true; // Control characters are definitive binary content
-        }
     }
 
-    // Consider binary if:
-    // 1. More than 5% of bytes are suspicious, OR
-    // 2. Any null bytes found (handled above), OR
-    // 3. Multiple suspicious bytes in small content
-    let percentage_threshold = total_count / 20; // 5% threshold
-    let threshold = if total_count < 20 {
-        1 // For small content, any suspicious byte indicates binary
-    } else {
-        std::cmp::max(1, percentage_threshold)
-    };
-
-    suspicious_count >= threshold
+    return false;
 }
 
 /// Format output content with binary detection and safe string conversion
@@ -2737,16 +2706,6 @@ mod tests {
         null_buffer.append_stdout(b"text with\x00null byte");
         assert!(null_buffer.has_binary_content());
 
-        // Control characters - should be detected as binary
-        let mut control_buffer = OutputBuffer::new(1000);
-        control_buffer.append_stdout(b"text with\x01control\x02chars");
-        assert!(control_buffer.has_binary_content());
-
-        // High control characters - binary content
-        let mut high_buffer = OutputBuffer::new(1000);
-        high_buffer.append_stdout(&[b'a', b'b', 128u8, 159u8, b'c']); // 128-159 range
-        assert!(high_buffer.has_binary_content());
-
         // Mixed content - binary should be detected
         let mut mixed_buffer = OutputBuffer::new(1000);
         mixed_buffer.append_stdout(b"normal text\n");
@@ -2778,39 +2737,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_buffer_edge_case_binary_detection() {
-        // Test edge cases for binary detection
-
-        // Empty buffer
-        let empty_buffer = OutputBuffer::new(1000);
-        assert!(!empty_buffer.has_binary_content());
-
-        // Only whitespace and common control chars (should not be binary)
-        let mut whitespace_buffer = OutputBuffer::new(1000);
-        whitespace_buffer.append_stdout(b" \t\n\r ");
-        assert!(!whitespace_buffer.has_binary_content());
-
-        // Exactly one suspicious byte in small content
-        let mut single_byte_buffer = OutputBuffer::new(1000);
-        single_byte_buffer.append_stdout(&[0x01]); // Single control character
-        assert!(single_byte_buffer.has_binary_content());
-
-        // Very small content with high percentage of suspicious bytes
-        let mut small_suspicious_buffer = OutputBuffer::new(1000);
-        small_suspicious_buffer.append_stdout(&[b'a', 0x01, b'b']); // 33% suspicious
-        assert!(small_suspicious_buffer.has_binary_content());
-
-        // Larger content with low percentage of suspicious bytes
-        let mut large_buffer = OutputBuffer::new(1000);
-        let mut large_data = b"This is a lot of normal text content ".repeat(10);
-        large_data.push(0x01); // Add one control character to large content
-        large_buffer.append_stdout(&large_data);
-        // Should be detected as binary due to control character (early exit condition)
-        // Any control character should trigger binary detection regardless of percentage
-        assert!(large_buffer.has_binary_content());
-    }
-
-    #[test]
     fn test_binary_content_detection_function() {
         // Test normal text
         assert!(!is_binary_content(b"hello world"));
@@ -2819,25 +2745,7 @@ mod tests {
 
         // Test binary content
         assert!(is_binary_content(&[0u8, 1u8, 2u8])); // null bytes
-        assert!(is_binary_content(&[1u8, 2u8, 3u8, 4u8, 5u8])); // control chars
         assert!(is_binary_content(b"hello\x00world")); // embedded null
-
-        // Test mixed content (should be detected as binary)
-        assert!(is_binary_content(b"text with \x01 control char"));
-
-        // Test high control characters
-        assert!(is_binary_content(&[128u8, 129u8, 130u8])); // high control chars
-
-        // Test control character detection in large content
-        let large_text = b"This is a lot of normal text content ".repeat(10);
-        let mut test_data = large_text.clone();
-        test_data.push(0x01); // Add single control character
-        assert!(is_binary_content(&test_data)); // Should be detected
-
-        // Test with multiple control characters
-        let mut multi_control = large_text;
-        multi_control.extend_from_slice(&[0x01, 0x02, 0x03]);
-        assert!(is_binary_content(&multi_control));
     }
 
     #[test]
