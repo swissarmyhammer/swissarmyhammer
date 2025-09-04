@@ -7,8 +7,8 @@ use super::{
 use crate::workflow::{
     metrics::{MemoryMetrics, WorkflowMetrics},
     parse_action_from_description_with_context, ActionError, CompensationKey, ErrorContext,
-    StateId, TransitionKey, TransitionPath, Workflow, WorkflowCacheManager, WorkflowRun,
-    WorkflowRunStatus,
+    ShellAction, StateId, TransitionKey, TransitionPath, Workflow, WorkflowCacheManager,
+    WorkflowRun, WorkflowRunStatus,
 };
 use cel_interpreter::Program;
 use serde_json::Value;
