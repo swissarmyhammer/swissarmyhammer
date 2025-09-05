@@ -126,7 +126,7 @@ impl Default for ActionTimeouts {
                 std::env::var("SWISSARMYHAMMER_PROMPT_TIMEOUT")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600),
+                    .unwrap_or(3600 * 8),
             ), // 5 minutes default
             user_input_timeout: Duration::from_secs(
                 std::env::var("SWISSARMYHAMMER_USER_INPUT_TIMEOUT")
@@ -138,8 +138,8 @@ impl Default for ActionTimeouts {
                 std::env::var("SWISSARMYHAMMER_SUB_WORKFLOW_TIMEOUT")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600),
-            ), // 20 minutes default (was 60s/1 minute)
+                    .unwrap_or(3600 * 24),
+            ),
         }
     }
 }
@@ -2710,7 +2710,7 @@ mod tests {
 
         // Verify basic properties (retry logic removed)
         assert_eq!(action.prompt_name, "test-prompt");
-        assert_eq!(action.timeout, Duration::from_secs(3600));
+        assert_eq!(action.timeout, ActionTimeouts::default().prompt_timeout);
         assert!(!action.quiet);
         assert!(action.arguments.is_empty());
         assert!(action.result_variable.is_none());
