@@ -7,11 +7,15 @@ use swissarmyhammer::issues::{Issue, IssueInfo};
 pub fn create_success_response(message: String) -> CallToolResult {
     CallToolResult {
         content: vec![Annotated::new(
-            RawContent::Text(RawTextContent { text: message }),
+            RawContent::Text(RawTextContent { 
+                text: message,
+                meta: None,
+            }),
             None,
         )],
         is_error: Some(false),
         structured_content: None,
+        meta: None,
     }
 }
 
@@ -19,11 +23,15 @@ pub fn create_success_response(message: String) -> CallToolResult {
 pub fn create_error_response(message: String) -> CallToolResult {
     CallToolResult {
         content: vec![Annotated::new(
-            RawContent::Text(RawTextContent { text: message }),
+            RawContent::Text(RawTextContent { 
+                text: message,
+                meta: None,
+            }),
             None,
         )],
         is_error: Some(true),
         structured_content: None,
+        meta: None,
     }
 }
 
@@ -54,11 +62,13 @@ pub fn create_issue_response(issue_info: &IssueInfo) -> CallToolResult {
         content: vec![Annotated::new(
             RawContent::Text(RawTextContent {
                 text: response["message"].as_str().unwrap().to_string(),
+                meta: None,
             }),
             None,
         )],
         is_error: Some(false),
         structured_content: None,
+        meta: None,
     }
 }
 
@@ -74,10 +84,12 @@ pub fn create_mark_complete_response(issue: &Issue) -> CallToolResult {
         content: vec![Annotated::new(
             RawContent::Text(RawTextContent {
                 text: response["message"].as_str().unwrap().to_string(),
+                meta: None,
             }),
             None,
         )],
         is_error: Some(false),
         structured_content: None,
+        meta: None,
     }
 }

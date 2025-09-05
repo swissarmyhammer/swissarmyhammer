@@ -198,10 +198,12 @@ impl WebFetchTool {
             content: vec![rmcp::model::Annotated::new(
                 rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
                     text: serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    meta: None,
                 }),
                 None,
             )],
             structured_content: None,
+            meta: None,
             is_error: Some(false),
         })
     }
@@ -247,9 +249,11 @@ impl WebFetchTool {
             content: vec![rmcp::model::Annotated::new(
                 rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
                     text: serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    meta: None,
                 }),
                 None,
             )],
+            meta: None,
             structured_content: None,
             is_error: Some(true),
         })

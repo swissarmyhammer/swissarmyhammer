@@ -1583,10 +1583,12 @@ impl McpTool for ShellExecuteTool {
                     content: vec![rmcp::model::Annotated::new(
                         rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
                             text: json_response,
+                            meta: None,
                         }),
                         None,
                     )],
                     structured_content: None,
+                    meta: None,
                     is_error: Some(is_error),
                 })
             }
@@ -1622,6 +1624,7 @@ impl McpTool for ShellExecuteTool {
                                 rmcp::model::Annotated::new(
                                     rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
                                         text: response_text,
+                                        meta: None,
                                     }),
                                     None,
                                 ),
@@ -1631,12 +1634,14 @@ impl McpTool for ShellExecuteTool {
                                             .unwrap_or_else(|_| {
                                                 "Failed to serialize timeout metadata".to_string()
                                             }),
+                                        meta: None,
                                     }),
                                     None,
                                 ),
                             ],
                             structured_content: None,
                             is_error: Some(true),
+                            meta: None,
                         })
                     }
                     _ => {
@@ -1648,10 +1653,12 @@ impl McpTool for ShellExecuteTool {
                             content: vec![rmcp::model::Annotated::new(
                                 rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
                                     text: error_message,
+                                    meta: None,
                                 }),
                                 None,
                             )],
                             structured_content: None,
+                            meta: None,
                             is_error: Some(true),
                         })
                     }

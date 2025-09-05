@@ -238,10 +238,12 @@ mod tests {
             content: vec![Annotated::new(
                 RawContent::Text(RawTextContent {
                     text: "Operation successful".to_string(),
+                    meta: None,
                 }),
                 None,
             )],
             structured_content: None,
+            meta: None,
             is_error: Some(false),
         };
 

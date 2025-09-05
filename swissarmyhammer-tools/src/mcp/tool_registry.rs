@@ -925,11 +925,13 @@ impl BaseToolImpl {
             content: vec![Annotated::new(
                 RawContent::Text(RawTextContent {
                     text: content.into(),
+                    meta: None,
                 }),
                 None,
             )],
             structured_content: None,
             is_error: Some(false),
+            meta: None,
         }
     }
 
@@ -954,11 +956,15 @@ impl BaseToolImpl {
 
         CallToolResult {
             content: vec![Annotated::new(
-                RawContent::Text(RawTextContent { text: error_text }),
+                RawContent::Text(RawTextContent { 
+                    text: error_text,
+                    meta: None,
+                }),
                 None,
             )],
             structured_content: None,
             is_error: Some(true),
+            meta: None,
         }
     }
 }
@@ -1328,11 +1334,13 @@ mod tests {
                 content: vec![Annotated::new(
                     RawContent::Text(RawTextContent {
                         text: format!("Mock tool {} executed", self.name),
+                        meta: None,
                     }),
                     None,
                 )],
                 structured_content: None,
                 is_error: Some(false),
+                meta: None,
             })
         }
     }

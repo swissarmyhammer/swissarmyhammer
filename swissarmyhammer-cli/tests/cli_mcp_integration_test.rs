@@ -295,11 +295,13 @@ fn test_response_formatting_utilities() {
         content: vec![Annotated::new(
             RawContent::Text(RawTextContent {
                 text: "Operation completed successfully".to_string(),
+                meta: None,
             }),
             None,
         )],
         structured_content: None,
         is_error: Some(false),
+        meta: None,
     };
 
     let formatted = response_formatting::format_success_response(&success_result);
@@ -310,11 +312,13 @@ fn test_response_formatting_utilities() {
         content: vec![Annotated::new(
             RawContent::Text(RawTextContent {
                 text: "Something went wrong".to_string(),
+                meta: None,
             }),
             None,
         )],
         structured_content: None,
         is_error: Some(true),
+        meta: None,
     };
 
     let formatted_error = response_formatting::format_error_response(&error_result);
