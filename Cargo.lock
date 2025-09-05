@@ -3811,7 +3811,7 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 [[package]]
 name = "llama-agent"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent.git?branch=main#2cc9e430c219e396defd5cbceb2c6ae357ab3fb6"
+source = "git+https://github.com/swissarmyhammer/llama-agent.git?branch=main#ffae7bdd71424c5559108570caf7c028dd804e99"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3840,7 +3840,7 @@ dependencies = [
 [[package]]
 name = "llama-common"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent.git?branch=main#2cc9e430c219e396defd5cbceb2c6ae357ab3fb6"
+source = "git+https://github.com/swissarmyhammer/llama-agent.git?branch=main#ffae7bdd71424c5559108570caf7c028dd804e99"
 dependencies = [
  "async-trait",
  "serde",
@@ -3852,9 +3852,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-2"
-version = "0.1.119"
+version = "0.1.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ffa7ce593d8de218df0c333820ad8b8eb171db8e2599b62f80e5df2178bfae"
+checksum = "fd4349398c631eef9824111bf523f0d2c500f8d786e109d7d5c6c673451b35a1"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-2",
@@ -3865,9 +3865,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.119"
+version = "0.1.121"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a157689b63f1cb8a5bd61ecc4607311e55b3fcbf246676cd73679f8ccfa79d1f"
+checksum = "29963419ccdedd54934ded0ddd9ba63c2056ad8d0b152f313f85d3cf481c1b49"
 dependencies = [
  "bindgen",
  "cc",
@@ -3880,7 +3880,7 @@ dependencies = [
 [[package]]
 name = "llama-loader"
 version = "0.1.0"
-source = "git+https://github.com/swissarmyhammer/llama-agent.git?branch=main#2cc9e430c219e396defd5cbceb2c6ae357ab3fb6"
+source = "git+https://github.com/swissarmyhammer/llama-agent.git?branch=main#ffae7bdd71424c5559108570caf7c028dd804e99"
 dependencies = [
  "dirs 6.0.0",
  "hf-hub 0.4.3",
@@ -8400,9 +8400,9 @@ checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen"
-version = "0.45.0"
+version = "0.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "052283831dbae3d879dc7f51f3d92703a316ca49f91540417d38591826127814"
+checksum = "5c573471f125075647d03df72e026074b7203790d41351cd6edc96f46bcccd36"
 
 [[package]]
 name = "writeable"
@@ -8632,9 +8632,9 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
-version = "0.4.20"
+version = "0.4.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc1f7e205ce79eb2da3cd71c5f55f3589785cb7c79f6a03d1c8d1491bda5d089"
+checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
 dependencies = [
  "zune-core",
 ]
