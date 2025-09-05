@@ -484,7 +484,11 @@ mod tests {
             .expect("Failed to deserialize HuggingFace source with folder");
 
         match source {
-            ModelSource::HuggingFace { repo, filename, folder } => {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
                 assert_eq!(repo, "unsloth/test-repo");
                 assert_eq!(filename, None);
                 assert_eq!(folder, Some("UD-Q4_K_XL".to_string()));
@@ -505,7 +509,11 @@ mod tests {
             .expect("Failed to deserialize HuggingFace source with both filename and folder");
 
         match source {
-            ModelSource::HuggingFace { repo, filename, folder } => {
+            ModelSource::HuggingFace {
+                repo,
+                filename,
+                folder,
+            } => {
                 assert_eq!(repo, "unsloth/test-repo");
                 assert_eq!(filename, Some("model.gguf".to_string()));
                 assert_eq!(folder, Some("UD-Q4_K_XL".to_string()));

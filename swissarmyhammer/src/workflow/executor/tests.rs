@@ -1038,9 +1038,6 @@ fn test_cel_expression_caching_behavior() {
 
     assert!(result1.is_ok());
     assert!(result2.is_ok());
-
-    // Verify the expression is cached
-    assert!(executor.get_compiled_cel_program("default").is_ok());
 }
 
 #[test]

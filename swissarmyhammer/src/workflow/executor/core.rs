@@ -7,10 +7,9 @@ use super::{
 use crate::workflow::{
     metrics::{MemoryMetrics, WorkflowMetrics},
     parse_action_from_description_with_context, ActionError, CompensationKey, ErrorContext,
-    StateId, TransitionKey, TransitionPath, Workflow, WorkflowCacheManager, WorkflowRun,
-    WorkflowRunStatus,
+    StateId, Workflow, WorkflowRun, WorkflowRunStatus,
 };
-use cel_interpreter::Program;
+
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,8 +22,7 @@ pub struct WorkflowExecutor {
     max_history_size: usize,
     /// Metrics collector for workflow execution
     metrics: WorkflowMetrics,
-    /// Cache manager for performance optimizations
-    cache_manager: WorkflowCacheManager,
+
     /// Optional workflow storage for test mode
     test_storage: Option<Arc<crate::workflow::storage::WorkflowStorage>>,
     /// Working directory for file operations (including abort file)
@@ -32,13 +30,16 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
+    /// Default workflow execution timeout in seconds
+    const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 3600;
+
     /// Create a new workflow executor
     pub fn new() -> Self {
         Self {
             execution_history: Vec::new(),
             max_history_size: DEFAULT_MAX_HISTORY_SIZE,
             metrics: WorkflowMetrics::new(),
-            cache_manager: WorkflowCacheManager::new(),
+
             test_storage: None,
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         }
@@ -50,7 +51,7 @@ impl WorkflowExecutor {
             execution_history: Vec::new(),
             max_history_size: DEFAULT_MAX_HISTORY_SIZE,
             metrics: WorkflowMetrics::new(),
-            cache_manager: WorkflowCacheManager::new(),
+
             test_storage: None,
             working_dir: working_dir.as_ref().to_path_buf(),
         }
@@ -62,7 +63,7 @@ impl WorkflowExecutor {
             execution_history: Vec::new(),
             max_history_size: DEFAULT_MAX_HISTORY_SIZE,
             metrics: WorkflowMetrics::new(),
-            cache_manager: WorkflowCacheManager::new(),
+
             test_storage: Some(storage),
             working_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         }
@@ -265,7 +266,7 @@ impl WorkflowExecutor {
             run.context
                 .get("_timeout_secs")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(3600), // Default
+                .unwrap_or(Self::DEFAULT_WORKFLOW_TIMEOUT_SECS),
         );
 
         loop {
@@ -515,15 +516,23 @@ impl WorkflowExecutor {
         run: &mut WorkflowRun,
         state_description: &str,
     ) -> ExecutorResult<bool> {
-        // Parse state description to extract action and store-as field
+        // First, render the state description with workflow variables (liquid templates)
+        let rendered_description = run.context.render_template(state_description);
+
+        // Parse rendered description to extract action and store-as field
         let context_hashmap = run.context.to_workflow_hashmap();
-        let (mut action_text, store_as_var) = self.parse_state_description(state_description);
+        let (mut action_text, store_as_var) = self.parse_state_description(&rendered_description);
 
         // Convert set_variable format to set format for compatibility with action parser
         if action_text.starts_with("set_variable ") {
             action_text = action_text.replace("set_variable ", "set ");
         }
 
+        tracing::debug!(
+            "Rendered state description: '{}' -> '{}'",
+            state_description,
+            rendered_description
+        );
         tracing::debug!(
             "Parsed state description - action: '{}', store_as: {:?}",
             action_text,
@@ -889,62 +898,6 @@ impl WorkflowExecutor {
         let mut memory_metrics = MemoryMetrics::new();
         memory_metrics.update(estimated_memory as u64, context_vars, history_size);
         self.metrics.update_memory_metrics(run_id, memory_metrics);
-    }
-
-    /// Get or compile a CEL program from cache
-    pub fn get_compiled_cel_program(
-        &mut self,
-        expression: &str,
-    ) -> Result<std::sync::Arc<Program>, Box<dyn std::error::Error>> {
-        self.cache_manager.cel_cache.get_or_compile(expression)
-    }
-
-    /// Check if a CEL program is cached
-    pub fn is_cel_program_cached(&self, expression: &str) -> bool {
-        self.cache_manager.cel_cache.get(expression).is_some()
-    }
-
-    /// Get CEL program cache statistics
-    pub fn get_cel_cache_stats(&self) -> (usize, usize) {
-        let stats = self.cache_manager.cel_cache.stats();
-        (stats.size, stats.capacity)
-    }
-
-    /// Get cache manager for advanced cache operations
-    pub fn get_cache_manager(&self) -> &WorkflowCacheManager {
-        &self.cache_manager
-    }
-
-    /// Get mutable cache manager for advanced cache operations
-    pub fn get_cache_manager_mut(&mut self) -> &mut WorkflowCacheManager {
-        &mut self.cache_manager
-    }
-
-    /// Cache a transition path for optimization
-    pub fn cache_transition_path(
-        &mut self,
-        from_state: StateId,
-        to_state: StateId,
-        conditions: Vec<String>,
-    ) {
-        let key = TransitionKey::new(from_state.clone(), to_state.clone());
-        let path = TransitionPath::new(from_state, to_state, conditions);
-        self.cache_manager.transition_cache.put(key, path);
-    }
-
-    /// Get cached transition path if available
-    pub fn get_cached_transition_path(
-        &self,
-        from_state: &StateId,
-        to_state: &StateId,
-    ) -> Option<TransitionPath> {
-        let key = TransitionKey::new(from_state.clone(), to_state.clone());
-        self.cache_manager.transition_cache.get(&key)
-    }
-
-    /// Clear all caches
-    pub fn clear_all_caches(&mut self) {
-        self.cache_manager.clear_all();
     }
 }
 

@@ -8,7 +8,7 @@ pub mod actions;
 #[cfg(test)]
 mod actions_tests;
 mod agents;
-mod cache;
+
 mod definition;
 mod error_utils;
 #[cfg(test)]
@@ -47,10 +47,7 @@ pub use actions::{
     WaitAction,
 };
 pub use agents::LlamaAgentExecutor;
-pub use cache::{
-    CacheStats, CelProgramCache, TransitionCache, TransitionPath, WorkflowCache,
-    WorkflowCacheManager,
-};
+
 pub use definition::{Workflow, WorkflowError, WorkflowName, WorkflowResult};
 pub use error_utils::{
     command_succeeded, extract_stderr, extract_stdout, handle_claude_command_error,

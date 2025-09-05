@@ -128,13 +128,14 @@ impl Default for WorkflowResolver {
 }
 
 /// Helper function to walk a directory and load JSON files
+#[allow(dead_code)] // Utility function that may be used in future storage implementations
 fn load_json_files_from_directory<T, F>(
     directory: &Path,
     filename_filter: Option<&str>,
     mut loader: F,
 ) -> Result<Vec<T>>
 where
-    T: for<'de> serde::Deserialize<'de>,
+    T: for<'de> serde::Deserialize<'de> + Clone,
     F: FnMut(T, &Path) -> bool,
 {
     let mut items = Vec::new();
@@ -159,11 +160,11 @@ where
             // Try to load and parse the JSON file
             if let Ok(content) = std::fs::read_to_string(path) {
                 if let Ok(item) = serde_json::from_str::<T>(&content) {
+                    // Clone the item before passing to loader since it takes ownership
+                    let item_clone = item.clone();
                     if loader(item, path) {
                         // Loader returned true, meaning we should keep this item
-                        if let Ok(item) = serde_json::from_str::<T>(&content) {
-                            items.push(item);
-                        }
+                        items.push(item_clone);
                     }
                 }
             }
@@ -361,41 +362,17 @@ impl WorkflowRunStorageBackend for MemoryWorkflowRunStorage {
 
 /// File system workflow storage implementation that uses WorkflowResolver for hierarchical loading
 pub struct FileSystemWorkflowStorage {
-    cache: dashmap::DashMap<WorkflowName, Workflow>,
     resolver: WorkflowResolver,
 }
 
 impl FileSystemWorkflowStorage {
     /// Create a new file system workflow storage
     pub fn new() -> Result<Self> {
-        let mut storage = Self {
-            cache: dashmap::DashMap::new(),
+        let storage = Self {
             resolver: WorkflowResolver::new(),
         };
 
-        // Load workflows from all hierarchical sources
-        storage.reload_cache()?;
-
         Ok(storage)
-    }
-
-    /// Reload the cache from disk using hierarchical loading
-    pub fn reload_cache(&mut self) -> Result<()> {
-        self.cache.clear();
-        self.resolver.workflow_sources.clear();
-
-        // Create a temporary memory storage to collect workflows
-        let mut temp_storage = MemoryWorkflowStorage::new();
-
-        // Use the resolver to load workflows with proper precedence
-        self.resolver.load_all_workflows(&mut temp_storage)?;
-
-        // Transfer workflows from temp storage to our cache
-        for workflow in temp_storage.list_workflows()? {
-            self.cache.insert(workflow.name.clone(), workflow);
-        }
-
-        Ok(())
     }
 
     /// Get the source of a workflow
@@ -444,9 +421,6 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
         let content = serde_json::to_string_pretty(&workflow)?;
         std::fs::write(&path, content)?;
 
-        // Update cache and source tracking
-        self.cache.insert(workflow.name.clone(), workflow.clone());
-
         // Determine source based on storage location
         let source = if path.starts_with(
             dirs::home_dir()
@@ -463,20 +437,21 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
     }
 
     fn get_workflow(&self, name: &WorkflowName) -> Result<Workflow> {
-        if let Some(workflow) = self.cache.get(name) {
-            return Ok(workflow.clone());
-        }
+        // Load workflows fresh each time (no caching)
+        let mut temp_storage = MemoryWorkflowStorage::new();
+        let mut resolver = WorkflowResolver::new();
+        resolver.load_all_workflows(&mut temp_storage)?;
 
-        // If not in cache, workflow doesn't exist in our hierarchical loading
-        Err(SwissArmyHammerError::WorkflowNotFound(name.to_string()))
+        temp_storage.get_workflow(name)
     }
 
     fn list_workflows(&self) -> Result<Vec<Workflow>> {
-        Ok(self
-            .cache
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect())
+        // Load workflows fresh each time (no caching)
+        let mut temp_storage = MemoryWorkflowStorage::new();
+        let mut resolver = WorkflowResolver::new();
+        resolver.load_all_workflows(&mut temp_storage)?;
+
+        temp_storage.list_workflows()
     }
 
     fn remove_workflow(&mut self, name: &WorkflowName) -> Result<()> {
@@ -486,25 +461,16 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
             std::fs::remove_file(path)?;
         }
 
-        // Remove from cache and source tracking
-        self.cache.remove(name);
+        // Remove from source tracking
         self.resolver.workflow_sources.remove(name);
         Ok(())
     }
 
     fn clone_box(&self) -> Box<dyn WorkflowStorageBackend> {
-        // For cloning, create a new instance and reload
+        // For cloning, create a new instance
         let mut new_storage = FileSystemWorkflowStorage {
-            cache: dashmap::DashMap::new(),
             resolver: WorkflowResolver::new(),
         };
-
-        // Copy current cache state
-        for entry in self.cache.iter() {
-            new_storage
-                .cache
-                .insert(entry.key().clone(), entry.value().clone());
-        }
 
         // Copy resolver state
         new_storage.resolver.workflow_sources = self.resolver.workflow_sources.clone();
@@ -516,7 +482,6 @@ impl WorkflowStorageBackend for FileSystemWorkflowStorage {
 /// File system workflow run storage implementation
 pub struct FileSystemWorkflowRunStorage {
     base_path: PathBuf,
-    cache: dashmap::DashMap<WorkflowRunId, WorkflowRun>,
 }
 
 impl FileSystemWorkflowRunStorage {
@@ -528,38 +493,9 @@ impl FileSystemWorkflowRunStorage {
             std::fs::create_dir_all(&base_path)?;
         }
 
-        let storage = Self {
-            base_path,
-            cache: dashmap::DashMap::new(),
-        };
-
-        // Load existing runs into cache
-        storage.reload_cache()?;
+        let storage = Self { base_path };
 
         Ok(storage)
-    }
-
-    /// Reload the cache from disk
-    pub fn reload_cache(&self) -> Result<()> {
-        self.cache.clear();
-
-        let runs_dir = self.base_path.join("runs");
-        if !runs_dir.exists() {
-            std::fs::create_dir_all(&runs_dir)?;
-        }
-
-        // Use the helper function to load workflow runs
-        let cache_ref = &self.cache;
-        load_json_files_from_directory::<WorkflowRun, _>(
-            &runs_dir,
-            Some("run.json"),
-            |run, _path| {
-                cache_ref.insert(run.id, run);
-                true
-            },
-        )?;
-
-        Ok(())
     }
 
     fn run_path(&self, id: &WorkflowRunId) -> PathBuf {
@@ -585,15 +521,10 @@ impl WorkflowRunStorageBackend for FileSystemWorkflowRunStorage {
         let content = serde_json::to_string_pretty(run)?;
         std::fs::write(&path, content)?;
 
-        self.cache.insert(run.id, run.clone());
         Ok(())
     }
 
     fn get_run(&self, id: &WorkflowRunId) -> Result<WorkflowRun> {
-        if let Some(run) = self.cache.get(id) {
-            return Ok(run.clone());
-        }
-
         let path = self.run_path(id);
         if !path.exists() {
             return Err(SwissArmyHammerError::WorkflowRunNotFound(format!("{id:?}")));
@@ -601,17 +532,30 @@ impl WorkflowRunStorageBackend for FileSystemWorkflowRunStorage {
 
         let content = std::fs::read_to_string(&path)?;
         let run: WorkflowRun = serde_json::from_str(&content)?;
-        self.cache.insert(*id, run.clone());
 
         Ok(run)
     }
 
     fn list_runs(&self) -> Result<Vec<WorkflowRun>> {
-        Ok(self
-            .cache
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect())
+        let runs_dir = self.base_path.join("runs");
+        if !runs_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut runs = Vec::new();
+        for entry in std::fs::read_dir(&runs_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                let run_file = entry.path().join("run.json");
+                if run_file.exists() {
+                    let content = std::fs::read_to_string(&run_file)?;
+                    if let Ok(run) = serde_json::from_str::<WorkflowRun>(&content) {
+                        runs.push(run);
+                    }
+                }
+            }
+        }
+        Ok(runs)
     }
 
     fn remove_run(&mut self, id: &WorkflowRunId) -> Result<()> {
@@ -621,26 +565,24 @@ impl WorkflowRunStorageBackend for FileSystemWorkflowRunStorage {
         }
 
         std::fs::remove_dir_all(run_dir)?;
-        self.cache.remove(id);
         Ok(())
     }
 
     fn list_runs_for_workflow(&self, workflow_name: &WorkflowName) -> Result<Vec<WorkflowRun>> {
-        Ok(self
-            .cache
-            .iter()
-            .filter(|entry| &entry.value().workflow.name == workflow_name)
-            .map(|entry| entry.value().clone())
+        let all_runs = self.list_runs()?;
+        Ok(all_runs
+            .into_iter()
+            .filter(|run| &run.workflow.name == workflow_name)
             .collect())
     }
 
     fn cleanup_old_runs(&mut self, days: u32) -> Result<u32> {
         let cutoff = chrono::Utc::now() - chrono::Duration::days(days as i64);
-        let old_runs: Vec<WorkflowRunId> = self
-            .cache
+        let all_runs = self.list_runs()?;
+        let old_runs: Vec<WorkflowRunId> = all_runs
             .iter()
-            .filter(|entry| entry.value().started_at < cutoff)
-            .map(|entry| *entry.key())
+            .filter(|run| run.started_at < cutoff)
+            .map(|run| run.id)
             .collect();
 
         let count = old_runs.len() as u32;
@@ -654,7 +596,6 @@ impl WorkflowRunStorageBackend for FileSystemWorkflowRunStorage {
     fn clone_box(&self) -> Box<dyn WorkflowRunStorageBackend> {
         Box::new(FileSystemWorkflowRunStorage {
             base_path: self.base_path.clone(),
-            cache: self.cache.clone(),
         })
     }
 }

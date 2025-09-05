@@ -80,6 +80,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use swissarmyhammer_config::TemplateContext;
 
+/// Template file extensions for partial support
+const TEMPLATE_EXTENSIONS: &[&str] = &[".md", ".markdown", ".liquid", ".md.liquid"];
+
+/// Maximum variable count for security limits
+#[allow(dead_code)] // Used in security validation, may not be referenced directly in current code
+const MAX_VARIABLE_COUNT_UNTRUSTED: usize = 1000;
+
 /// Custom partial tag that acts as a no-op marker for liquid partial files
 #[derive(Clone, Debug, Default)]
 pub struct PartialTag;
@@ -196,8 +203,7 @@ impl PromptPartialSource {
                 names.push(prompt.name.clone());
 
                 // Strip common prompt extensions to make them available as partials
-                let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
-                for ext in &extensions {
+                for ext in TEMPLATE_EXTENSIONS {
                     if let Some(name_without_ext) = prompt.name.strip_suffix(ext) {
                         names.push(name_without_ext.to_string());
                     }
@@ -215,8 +221,7 @@ impl PromptPartialSource {
                 names.push(prompt.name.clone());
 
                 // Strip common prompt extensions to make them available as partials
-                let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
-                for ext in &extensions {
+                for ext in TEMPLATE_EXTENSIONS {
                     if let Some(name_without_ext) = prompt.name.strip_suffix(ext) {
                         names.push(name_without_ext.to_string());
                     }
@@ -249,8 +254,7 @@ impl liquid::partials::PartialSource for PromptPartialSource {
         }
 
         // Try with various prompt file extensions
-        let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
-        for ext in &extensions {
+        for ext in TEMPLATE_EXTENSIONS {
             let name_with_ext = format!("{name}{ext}");
             if self.library.get(&name_with_ext).is_ok() {
                 return true;
@@ -260,13 +264,13 @@ impl liquid::partials::PartialSource for PromptPartialSource {
         // If the name already has an extension, try stripping it
         if name.contains('.') {
             // Try stripping each known extension
-            for ext in &extensions {
+            for ext in TEMPLATE_EXTENSIONS {
                 if let Some(name_without_ext) = name.strip_suffix(ext) {
                     if self.library.get(name_without_ext).is_ok() {
                         return true;
                     }
                     // Also try with other extensions
-                    for other_ext in &extensions {
+                    for other_ext in TEMPLATE_EXTENSIONS {
                         if ext != other_ext {
                             let name_with_other_ext = format!("{name_without_ext}{other_ext}");
                             if self.library.get(&name_with_other_ext).is_ok() {
@@ -293,8 +297,7 @@ impl liquid::partials::PartialSource for PromptPartialSource {
         }
 
         // Try with various prompt file extensions
-        let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
-        for ext in &extensions {
+        for ext in TEMPLATE_EXTENSIONS {
             let name_with_ext = format!("{name}{ext}");
             if let Ok(prompt) = self.library.get(&name_with_ext) {
                 return Some(Cow::Owned(prompt.template));
@@ -304,13 +307,13 @@ impl liquid::partials::PartialSource for PromptPartialSource {
         // If the name already has an extension, try stripping it
         if name.contains('.') {
             // Try stripping each known extension
-            for ext in &extensions {
+            for ext in TEMPLATE_EXTENSIONS {
                 if let Some(name_without_ext) = name.strip_suffix(ext) {
                     if let Ok(prompt) = self.library.get(name_without_ext) {
                         return Some(Cow::Owned(prompt.template));
                     }
                     // Also try with other extensions
-                    for other_ext in &extensions {
+                    for other_ext in TEMPLATE_EXTENSIONS {
                         if ext != other_ext {
                             let name_with_other_ext = format!("{name_without_ext}{other_ext}");
                             if let Ok(prompt) = self.library.get(&name_with_other_ext) {
@@ -422,7 +425,7 @@ fn determine_issues_directory() -> std::path::PathBuf {
 ///
 /// **Resource Limits:**
 /// - Template size limits (100KB for untrusted, 1MB for trusted)
-/// - Variable count limits (1000 variables max for untrusted templates)
+/// - Variable count limits (MAX_VARIABLE_COUNT_UNTRUSTED variables max for untrusted templates)
 /// - Nesting depth limits (10 levels max to prevent stack overflow)
 /// - Render timeout protection (5 seconds max)
 ///

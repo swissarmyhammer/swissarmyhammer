@@ -122,7 +122,13 @@ const FORBIDDEN_PATTERNS: &[&str] = &[
 ];
 
 // Result keys to look for in context
-const RESULT_KEYS: &[&str] = &["result", "output", "response", "claude_result", "claude_response"];
+const RESULT_KEYS: &[&str] = &[
+    "result",
+    "output",
+    "response",
+    "claude_result",
+    "claude_response",
+];
 
 impl WorkflowExecutor {
     /// Evaluate all transitions from the current state
