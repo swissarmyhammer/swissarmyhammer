@@ -4,7 +4,7 @@
 //! covering complete workflows, MCP tool integration, and edge cases.
 
 use std::sync::Arc;
-use swissarmyhammer::git::GitOperations;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
@@ -194,7 +194,8 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("feature/user-authentication").unwrap();
+        let feature_branch = swissarmyhammer_git::BranchName::new("feature/user-authentication").unwrap();
+        git.checkout_branch(&feature_branch).unwrap();
     }
 
     // Create issue from feature branch using issue storage
@@ -273,6 +274,20 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
         let git = git_ops.as_ref().unwrap();
         let current_branch = git.current_branch().unwrap();
         assert_eq!(current_branch, "feature/user-authentication");
+        
+        // Debug: list files that actually exist
+        eprintln!("Current branch: {}", current_branch);
+        eprintln!("Files in working directory:");
+        if let Ok(entries) = std::fs::read_dir(env.temp_dir.path()) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let name = entry.file_name();
+                    if !name.to_string_lossy().starts_with('.') {
+                        eprintln!("  {:?}", name);
+                    }
+                }
+            }
+        }
     }
 
     // Verify both files exist on feature branch
@@ -283,7 +298,8 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("main").unwrap();
+        let main_branch = swissarmyhammer_git::BranchName::new("main").unwrap();
+        git.checkout_branch(&main_branch).unwrap();
         assert!(!env.temp_dir.path().join("auth_tests.rs").exists());
     }
 }
@@ -297,7 +313,8 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("develop").unwrap();
+        let develop_branch = swissarmyhammer_git::BranchName::new("develop").unwrap();
+        git.checkout_branch(&develop_branch).unwrap();
     }
 
     // Create first issue
@@ -333,7 +350,8 @@ async fn test_multiple_issues_from_same_source_branch() {
         assert_eq!(branch1, "issue/feature-a");
 
         // Switch back to develop
-        git.checkout_branch("develop").unwrap();
+        let develop_branch = swissarmyhammer_git::BranchName::new("develop").unwrap();
+        git.checkout_branch(&develop_branch).unwrap();
 
         let branch2 = git.create_work_branch(&issue2_name).unwrap();
         assert_eq!(branch2, "issue/feature-b");
@@ -343,8 +361,10 @@ async fn test_multiple_issues_from_same_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        assert!(git.branch_exists("issue/feature-a").unwrap());
-        assert!(git.branch_exists("issue/feature-b").unwrap());
+        let branch_a = swissarmyhammer_git::BranchName::new("issue/feature-a").unwrap();
+        assert!(git.branch_exists(&branch_a).unwrap());
+        let branch_b = swissarmyhammer_git::BranchName::new("issue/feature-b").unwrap();
+        assert!(git.branch_exists(&branch_b).unwrap());
     }
 }
 
@@ -357,7 +377,8 @@ async fn test_release_branch_issue_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("release/v1.0").unwrap();
+        let release_branch = swissarmyhammer_git::BranchName::new("release/v1.0").unwrap();
+        git.checkout_branch(&release_branch).unwrap();
     }
 
     // Create hotfix issue from release branch
@@ -439,7 +460,8 @@ async fn test_release_branch_issue_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("main").unwrap();
+        let main_branch = swissarmyhammer_git::BranchName::new("main").unwrap();
+        git.checkout_branch(&main_branch).unwrap();
         assert!(!env.temp_dir.path().join("security_fix.patch").exists());
     }
 }
@@ -453,7 +475,8 @@ async fn test_backwards_compatibility_main_branch_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("main").unwrap();
+        let main_branch = swissarmyhammer_git::BranchName::new("main").unwrap();
+        git.checkout_branch(&main_branch).unwrap();
     }
 
     // Create issue using traditional approach
@@ -554,7 +577,8 @@ async fn test_error_handling_invalid_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("main").unwrap();
+        let main_branch = swissarmyhammer_git::BranchName::new("main").unwrap();
+        git.checkout_branch(&main_branch).unwrap();
         let branch_name = git.create_work_branch(&issue_name).unwrap();
         assert_eq!(branch_name, "issue/invalid-source-issue");
     }
@@ -569,7 +593,8 @@ async fn test_prevents_issue_branch_from_issue_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("main").unwrap();
+        let main_branch = swissarmyhammer_git::BranchName::new("main").unwrap();
+        git.checkout_branch(&main_branch).unwrap();
         git.create_work_branch_simple("first-issue").unwrap();
     }
 

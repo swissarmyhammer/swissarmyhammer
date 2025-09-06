@@ -380,6 +380,7 @@ impl GitOperations {
 
         if analysis.0.is_fast_forward() {
             // Fast-forward merge
+            debug!("Performing fast-forward merge for branch {}", source_branch);
             let mut head_ref = repo
                 .head()
                 .map_err(|e| convert_git2_error("get_head_ref", e))?;
@@ -388,20 +389,81 @@ impl GitOperations {
                 .set_target(source_commit.id(), "Fast-forward merge")
                 .map_err(|e| convert_git2_error("fast_forward", e))?;
             
-            repo.checkout_head(None)
+            let mut checkout_opts = git2::build::CheckoutBuilder::new();
+            checkout_opts.force();
+            repo.checkout_head(Some(&mut checkout_opts))
                 .map_err(|e| convert_git2_error("checkout_after_merge", e))?;
             
             info!("Fast-forward merged branch {}", source_branch);
         } else {
+            // Perform actual merge operation
+            debug!("Performing three-way merge for branch {}", source_branch);
+            let mut checkout_opts = git2::build::CheckoutBuilder::new();
+            checkout_opts.conflict_style_merge(true);
+            
+            let mut merge_opts = git2::MergeOptions::new();
+            merge_opts.file_favor(git2::FileFavor::Normal);
+            
+            // Perform the merge
+            repo.merge(&[&annotated_commit], Some(&mut merge_opts), Some(&mut checkout_opts))
+                .map_err(|e| convert_git2_error("perform_merge", e))?;
+            
+            debug!("Merge operation completed, checking for conflicts");
+            
+            // Check if there are conflicts
+            let mut index = repo.index()
+                .map_err(|e| convert_git2_error("get_index_after_merge", e))?;
+            
+            if index.has_conflicts() {
+                // Critical: Clean up merge state before returning error
+                // This ensures no partial merge state is left in the repository
+                
+                info!("CONFLICT DETECTED: Cleaning up merge state for branch {}", source_branch);
+                
+                // Step 1: Clean up merge state first
+                repo.cleanup_state()
+                    .map_err(|e| convert_git2_error("cleanup_after_conflict", e))?;
+                
+                // Step 2: Reset index to HEAD to clear any conflicted entries
+                let head_commit = repo.head()
+                    .map_err(|e| convert_git2_error("get_head_for_reset", e))?
+                    .peel_to_commit()
+                    .map_err(|e| convert_git2_error("peel_head_for_reset", e))?;
+                    
+                let tree = head_commit.tree()
+                    .map_err(|e| convert_git2_error("get_head_tree", e))?;
+                
+                // Get a fresh index handle and reset it
+                let mut fresh_index = repo.index()
+                    .map_err(|e| convert_git2_error("get_fresh_index", e))?;
+                fresh_index.read_tree(&tree)
+                    .map_err(|e| convert_git2_error("reset_index", e))?;
+                fresh_index.write()
+                    .map_err(|e| convert_git2_error("write_reset_index", e))?;
+                
+                // Step 3: Force checkout HEAD to reset working directory
+                let mut checkout_opts = git2::build::CheckoutBuilder::new();
+                checkout_opts.force();
+                checkout_opts.remove_untracked(true);
+                repo.checkout_head(Some(&mut checkout_opts))
+                    .map_err(|e| convert_git2_error("reset_after_conflict", e))?;
+                
+                debug!("Conflict cleanup completed");
+                    
+                return Err(GitError::from_string(format!(
+                    "Merge conflicts detected when merging branch '{}'. Please resolve conflicts manually.",
+                    source_branch
+                )));
+            }
+            
             // Create merge commit
             let signature = repo
                 .signature()
                 .map_err(|e| convert_git2_error("get_signature", e))?;
             
             let message = format!("Merge branch '{}'", source_branch);
-            let tree_id = repo
-                .index()
-                .and_then(|mut idx| idx.write_tree())
+            let tree_id = index
+                .write_tree()
                 .map_err(|e| convert_git2_error("write_merge_tree", e))?;
             
             let tree = repo
@@ -418,10 +480,248 @@ impl GitOperations {
             )
             .map_err(|e| convert_git2_error("create_merge_commit", e))?;
             
+            // Clean up merge state
+            repo.cleanup_state()
+                .map_err(|e| convert_git2_error("cleanup_merge_state", e))?;
+                
+            // Force checkout to update working directory with merged content
+            // After a merge commit, we need to checkout the new commit to update working directory
+            let head_commit = repo.head()
+                .map_err(|e| convert_git2_error("get_head_after_merge", e))?
+                .peel_to_commit()
+                .map_err(|e| convert_git2_error("peel_head_after_merge", e))?;
+            
+            let mut checkout_opts = git2::build::CheckoutBuilder::new();
+            checkout_opts.force();
+            checkout_opts.remove_untracked(false);
+            
+            repo.checkout_tree(head_commit.as_object(), Some(&mut checkout_opts))
+                .map_err(|e| convert_git2_error("checkout_tree_after_merge", e))?;
+            
             info!("Created merge commit for branch {}", source_branch);
         }
 
         Ok(())
+    }
+
+    /// Create a simple work branch for an issue (convenience method for tests)
+    pub fn create_work_branch_simple(&self, issue_name: &str) -> GitResult<String> {
+        // Check if we're already on an issue branch - if so, fail
+        if let Some(current_branch) = self.get_current_branch()? {
+            let current_branch_str = current_branch.as_str();
+            debug!("create_work_branch_simple: current branch is {}", current_branch_str);
+            if current_branch_str.starts_with("issue/") {
+                debug!("create_work_branch_simple: rejecting creation of {} because already on issue branch {}", issue_name, current_branch_str);
+                return Err(GitError::from_string(format!(
+                    "Cannot create issue branch '{}' while on another issue branch '{}'", 
+                    issue_name, current_branch_str
+                )));
+            }
+        } else {
+            debug!("create_work_branch_simple: no current branch found");
+        }
+        
+        let branch_name = format!("issue/{}", issue_name);
+        let branch = BranchName::new(&branch_name)?;
+        self.create_and_checkout_branch(&branch)?;
+        Ok(branch_name)
+    }
+
+    /// Get current branch name as a String (convenience method for tests)
+    pub fn current_branch(&self) -> GitResult<String> {
+        match self.get_current_branch()? {
+            Some(branch) => Ok(branch.into_string()),
+            None => Err(GitError::from_string("No current branch (detached HEAD or empty repository)".to_string())),
+        }
+    }
+
+    /// Create a work branch from a string (convenience method)
+    pub fn create_work_branch(&self, issue_name: &str) -> GitResult<String> {
+        let branch_name = format!("issue/{}", issue_name);
+        let branch = BranchName::new(&branch_name)?;
+        self.create_and_checkout_branch(&branch)?;
+        Ok(branch_name)
+    }
+
+    /// Merge an issue branch automatically (convenience method)
+    /// This attempts to merge back to the main branch (main or master)
+    pub fn merge_issue_branch_auto(&self, issue_name: &str) -> GitResult<()> {
+        // First, checkout the main branch
+        let main_branch_name = self.main_branch()?;
+        self.checkout_branch_str(&main_branch_name)?;
+        
+        // Then merge the issue branch into it
+        let issue_branch_name = format!("issue/{}", issue_name);
+        let issue_branch = BranchName::new(&issue_branch_name)?;
+        self.merge_branch(&issue_branch)
+    }
+
+    /// Merge issue branch from issue name and target branch
+    pub fn merge_issue_branch(&self, issue_name: &str, target_branch: &str) -> GitResult<()> {
+        info!("merge_issue_branch called: {} -> {}", issue_name, target_branch);
+        
+        // First checkout the target branch
+        let target = BranchName::new(target_branch)?;
+        self.checkout_branch(&target)?;
+        
+        // Then merge the issue branch into it
+        let issue_branch_name = format!("issue/{}", issue_name);
+        let issue_branch = BranchName::new(&issue_branch_name)?;
+        let result = self.merge_branch(&issue_branch);
+        
+        info!("merge_issue_branch result: {:?}", result);
+        result
+    }
+
+    /// Get the main branch name
+    pub fn main_branch(&self) -> GitResult<String> {
+        // Check if 'main' branch exists, otherwise use 'master'
+        let main_branch = BranchName::new("main")?;
+        if self.branch_exists(&main_branch)? {
+            Ok("main".to_string())
+        } else {
+            let master_branch = BranchName::new("master")?;
+            if self.branch_exists(&master_branch)? {
+                Ok("master".to_string())
+            } else {
+                Err(GitError::from_string("Neither 'main' nor 'master' branch exists".to_string()))
+            }
+        }
+    }
+
+    /// Find the best merge target for an issue branch using git merge-base
+    /// This determines which branch the issue branch should merge back to
+    pub fn find_merge_target_for_issue(&self, issue_branch: &BranchName) -> GitResult<String> {
+        debug!("Finding merge target for issue branch: {}", issue_branch);
+        
+        // Get the commit for the issue branch
+        let issue_commit = match self.repo.inner().find_branch(&issue_branch.as_str(), git2::BranchType::Local) {
+            Ok(branch) => {
+                let commit = branch.get().peel_to_commit()
+                    .map_err(|e| convert_git2_error("peel_to_commit", e))?;
+                commit.id()
+            }
+            Err(e) => return Err(convert_git2_error("find_branch", e)),
+        };
+        
+        // Get all local branches except the issue branch itself
+        let mut branches = Vec::new();
+        let branch_iter = self.repo.inner().branches(Some(git2::BranchType::Local))
+            .map_err(|e| convert_git2_error("branches", e))?;
+        
+        for branch_result in branch_iter {
+            let (branch, _) = branch_result
+                .map_err(|e| convert_git2_error("branch_iter", e))?;
+            
+            if let Some(branch_name) = branch.name()
+                .map_err(|e| convert_git2_error("branch_name", e))? {
+                // Skip the issue branch itself and other issue branches
+                if branch_name != issue_branch.as_str() && !branch_name.starts_with("issue/") {
+                    branches.push(branch_name.to_string());
+                }
+            }
+        }
+        
+        let mut best_target = None;
+        let mut best_distance = usize::MAX;
+        
+        // For each potential target branch, find the merge base and calculate distance
+        for branch_name in branches {
+            let target_commit = match self.repo.inner().find_branch(&branch_name, git2::BranchType::Local) {
+                Ok(branch) => {
+                    match branch.get().peel_to_commit() {
+                        Ok(commit) => commit.id(),
+                        Err(_) => continue, // Skip branches we can't read
+                    }
+                }
+                Err(_) => continue, // Skip branches that don't exist
+            };
+            
+            // Find merge base between issue branch and this potential target
+            let merge_base = match self.repo.inner().merge_base(issue_commit, target_commit) {
+                Ok(base) => base,
+                Err(_) => continue, // Skip if no merge base (unrelated histories)
+            };
+            
+            // Calculate the distance from merge base to target (how many commits ahead is target)
+            // The branch with the shortest distance is likely the source branch
+            let distance = self.count_commits_between(merge_base, target_commit).unwrap_or(usize::MAX);
+            
+            debug!("Branch {} has merge base distance: {}", branch_name, distance);
+            
+            if distance < best_distance {
+                best_distance = distance;
+                best_target = Some(branch_name);
+            }
+        }
+        
+        // Return the best target, or fall back to main branch
+        match best_target {
+            Some(target) => {
+                debug!("Selected merge target: {} (distance: {})", target, best_distance);
+                Ok(target)
+            }
+            None => {
+                debug!("No suitable merge target found, falling back to main branch");
+                self.main_branch()
+            }
+        }
+    }
+    
+    /// Count commits between two commit IDs
+    fn count_commits_between(&self, from: git2::Oid, to: git2::Oid) -> GitResult<usize> {
+        let mut revwalk = self.repo.inner().revwalk()
+            .map_err(|e| convert_git2_error("revwalk", e))?;
+        
+        revwalk.push(to)
+            .map_err(|e| convert_git2_error("push_to", e))?;
+        revwalk.hide(from)
+            .map_err(|e| convert_git2_error("hide_from", e))?;
+        
+        let count = revwalk.count();
+        Ok(count)
+    }
+
+    /// Validate branch creation
+    pub fn validate_branch_creation(&self, branch_name: &str, base_branch: Option<&str>) -> GitResult<()> {
+        // Check if base branch is an issue branch
+        let base_to_check = match base_branch {
+            Some(base) => base.to_string(),
+            None => self.current_branch()?,
+        };
+        
+        if base_to_check.starts_with("issue/") {
+            return Err(GitError::from_string(format!(
+                "Cannot create issue '{}' from issue branch '{}'. Issue branches should be created from feature/release branches.",
+                branch_name, base_to_check
+            )));
+        }
+        
+        Ok(())
+    }
+
+    /// Check if there are uncommitted changes (convenience method)
+    pub fn has_uncommitted_changes(&self) -> GitResult<bool> {
+        let is_clean = self.is_working_directory_clean()?;
+        Ok(!is_clean)
+    }
+
+    /// Checkout branch by string name (convenience method for backward compatibility)
+    pub fn checkout_branch_str(&self, branch_name: &str) -> GitResult<()> {
+        let branch = BranchName::new(branch_name)?;
+        self.checkout_branch(&branch)
+    }
+
+    /// Delete branch by string name (convenience method for backward compatibility) 
+    pub fn delete_branch_str(&self, branch_name: &str) -> GitResult<()> {
+        let branch = BranchName::new(branch_name)?;
+        self.delete_branch(&branch)
+    }
+
+    /// Check if branch exists by string name (convenience method for backward compatibility)
+    pub fn branch_exists_str(&self, branch_name: &str) -> GitResult<bool> {
+        let branch = BranchName::new(branch_name)?;
+        self.branch_exists(&branch)
     }
 }
 
@@ -430,6 +730,69 @@ mod tests {
     use super::*;
     use git2::Repository;
     use tempfile::TempDir;
+
+    #[test]
+    fn debug_branch_creation_issue() {
+        // Create a simple temporary repo without using setup_test_repo
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let repo_path = temp_dir.path();
+        
+        println!("Setting up test repo at: {:?}", repo_path);
+
+        // Initialize and configure repository
+        let repo = Repository::init(repo_path).expect("Failed to init repository");
+        let mut config = repo.config().expect("Failed to get config");
+        config.set_str("user.name", "Test User").expect("Failed to set user.name");
+        config.set_str("user.email", "test@example.com").expect("Failed to set user.email");
+        
+        // Create initial commit directly
+        std::fs::write(repo_path.join("README.md"), "# Test Repository\n").expect("Failed to write README");
+        
+        let mut index = repo.index().expect("Failed to get index");
+        index.add_path(std::path::Path::new("README.md")).expect("Failed to add file");
+        index.write().expect("Failed to write index");
+        
+        let signature = git2::Signature::now("Test User", "test@example.com").expect("Failed to create signature");
+        let tree_id = index.write_tree().expect("Failed to write tree");
+        let tree = repo.find_tree(tree_id).expect("Failed to find tree");
+        repo.commit(Some("HEAD"), &signature, &signature, "Initial commit", &tree, &[])
+            .expect("Failed to create initial commit");
+        
+        println!("Repository setup complete");
+        
+        // Now create GitOperations
+        let git_ops = GitOperations::with_work_dir(repo_path.to_path_buf())
+            .expect("Failed to create GitOperations");
+            
+        // Check current branch
+        let current = git_ops.get_current_branch().expect("Failed to get current branch");
+        println!("Current branch after setup: {:?}", current);
+        
+        // Create first issue branch
+        println!("Creating first issue branch...");
+        let result1 = git_ops.create_work_branch_simple("good-issue");
+        println!("Result of create_work_branch_simple('good-issue'): {:?}", result1);
+        assert!(result1.is_ok(), "First branch creation should succeed");
+        
+        let current_after_first = git_ops.get_current_branch().expect("Failed to get current branch");
+        println!("Current branch after first create: {:?}", current_after_first);
+        
+        // Try to create second issue branch (should fail)
+        println!("Creating second issue branch (should fail)...");
+        let result2 = git_ops.create_work_branch_simple("bad-issue");
+        println!("Result of create_work_branch_simple('bad-issue'): {:?}", result2);
+        
+        let current_after_second = git_ops.get_current_branch().expect("Failed to get current branch");
+        println!("Current branch after second attempt: {:?}", current_after_second);
+        
+        // Verify the assertion that the test expects
+        if result2.is_err() {
+            println!("✅ SUCCESS: Second branch creation failed as expected");
+        } else {
+            println!("❌ FAILURE: Second branch creation succeeded but should have failed");
+            panic!("Expected second branch creation to fail, but got: {:?}", result2);
+        }
+    }
 
     fn setup_test_repo() -> (TempDir, GitOperations) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");

@@ -111,19 +111,25 @@ impl McpTool for ShowIssueTool {
             // Get current issue name from git branch
             let git_ops = context.git_ops.lock().await;
             let issue_name = match git_ops.as_ref() {
-                Some(ops) => match ops.current_branch() {
-                    Ok(branch) => {
+                Some(ops) => match ops.get_current_branch() {
+                    Ok(Some(branch)) => {
+                        let branch_str = branch.to_string();
                         let config = Config::global();
-                        if let Some(issue_name) = branch.strip_prefix(&config.issue_branch_prefix) {
+                        if let Some(issue_name) = branch_str.strip_prefix(&config.issue_branch_prefix) {
                             issue_name.to_string()
                         } else {
                             return Ok(BaseToolImpl::create_success_response(format!(
-                                "Not on an issue branch. Current branch: {branch}"
+                                "Not on an issue branch. Current branch: {branch_str}"
                             )));
                         }
                     }
+                    Ok(None) => {
+                        return Ok(BaseToolImpl::create_success_response(
+                            "Not on any branch (detached HEAD)".to_string()
+                        ));
+                    }
                     Err(e) => {
-                        return Err(McpErrorHandler::handle_error(e, "get current branch"));
+                        return Err(McpErrorHandler::handle_error(e.into(), "get current branch"));
                     }
                 },
                 None => {

@@ -1462,6 +1462,13 @@ impl<E: std::error::Error> ErrorChainExt for E {
     }
 }
 
+/// Conversion from swissarmyhammer_git::GitError to SwissArmyHammerError
+impl From<swissarmyhammer_git::GitError> for SwissArmyHammerError {
+    fn from(err: swissarmyhammer_git::GitError) -> Self {
+        SwissArmyHammerError::Other(err.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1631,7 +1638,7 @@ mod tests {
     #[test]
     fn test_plan_command_error_display_critical_color() {
         let workflow_error = WorkflowError::ExecutionFailed {
-            reason: "Critical failure".to_string(),
+            reason: "State not found".to_string(),
         };
         let error = PlanCommandError::WorkflowExecutionFailed {
             plan_filename: "test.md".to_string(),

@@ -314,7 +314,8 @@ async fn test_issue_show_current_branch_parsing() {
         // Switch back to main for next test
         let git_ops = env.git_ops.lock().await;
         if let Some(git) = git_ops.as_ref() {
-            let main_branch = git.main_branch().unwrap();
+            let main_branch_str = git.main_branch().unwrap();
+            let main_branch = swissarmyhammer_git::BranchName::new(main_branch_str).unwrap();
             git.checkout_branch(&main_branch).unwrap();
         }
     }

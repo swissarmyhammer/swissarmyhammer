@@ -23,6 +23,7 @@
 //! ```
 
 pub mod error;
+pub mod git2_utils;
 pub mod operations;
 pub mod repository;
 pub mod types;

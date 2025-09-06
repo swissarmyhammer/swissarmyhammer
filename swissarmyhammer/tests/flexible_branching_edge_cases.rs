@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_git::BranchName;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -168,8 +169,10 @@ async fn test_source_branch_deleted_mid_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("main").unwrap();
-        git.delete_branch("feature/temporary", true).unwrap();
+        let main_branch = BranchName::new("main").unwrap();
+        git.checkout_branch(&main_branch).unwrap();
+        let temp_branch = BranchName::new("feature/temporary").unwrap();
+        git.delete_branch(&temp_branch).unwrap();
     }
 
     // Mark issue complete
@@ -243,7 +246,8 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch("feature/conflicting").unwrap();
+        let feature_branch = BranchName::new("feature/conflicting").unwrap();
+        git.checkout_branch(&feature_branch).unwrap();
     }
 
     std::fs::write(
@@ -266,7 +270,9 @@ async fn test_merge_conflicts_with_diverged_source_branch() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        git.checkout_branch(&format!("issue/{issue_name}")).unwrap();
+        let issue_branch_name = format!("issue/{issue_name}");
+        let issue_branch = BranchName::new(&issue_branch_name).unwrap();
+        git.checkout_branch(&issue_branch).unwrap();
     }
 
     // Mark issue complete
@@ -391,7 +397,8 @@ async fn test_recovery_from_failed_branch_operations() {
     let git = git_ops.as_ref().unwrap();
 
     // Start on main branch
-    git.checkout_branch("main").unwrap();
+    let main_branch = BranchName::new("main").unwrap();
+    git.checkout_branch(&main_branch).unwrap();
     let initial_branch = git.current_branch().unwrap();
 
     // Create first issue branch successfully
@@ -406,10 +413,12 @@ async fn test_recovery_from_failed_branch_operations() {
     assert_eq!(git.current_branch().unwrap(), "issue/good-issue");
 
     // Verify the failed branch doesn't exist
-    assert!(!git.branch_exists("issue/bad-issue").unwrap());
+    let bad_issue_branch = BranchName::new("issue/bad-issue").unwrap();
+    assert!(!git.branch_exists(&bad_issue_branch).unwrap());
 
     // Verify we can still switch back to main and create other branches
-    git.checkout_branch(&initial_branch).unwrap();
+    let initial_branch_name = BranchName::new(&initial_branch).unwrap();
+    git.checkout_branch(&initial_branch_name).unwrap();
     assert_eq!(git.current_branch().unwrap(), initial_branch);
 
     // Should be able to create new branches after the failure
@@ -541,9 +550,11 @@ async fn test_branch_name_validation() {
 
         // Verify no branch was created with invalid name
         if !invalid_name.is_empty() {
-            let branch_name = format!("issue/{invalid_name}");
+            let branch_name_str = format!("issue/{invalid_name}");
             // This might fail due to git's own validation, which is fine
-            let _ = git.branch_exists(&branch_name);
+            if let Ok(branch_name) = BranchName::new(&branch_name_str) {
+                let _ = git.branch_exists(&branch_name);
+            }
         }
     }
 
@@ -582,7 +593,8 @@ async fn test_performance_with_many_branches() {
         let issue_name = format!("perf-test-{i}");
         let source_branch = format!("feature/branch-{i}");
 
-        git.checkout_branch(&source_branch).unwrap();
+        let branch_name = BranchName::new(&source_branch).unwrap();
+        git.checkout_branch(&branch_name).unwrap();
 
         let start_time = std::time::Instant::now();
         let result = git.create_work_branch(&issue_name);
@@ -598,7 +610,8 @@ async fn test_performance_with_many_branches() {
     // Test branch existence checking performance
     let start_time = std::time::Instant::now();
     for i in 0..3 {
-        let branch_name = format!("feature/branch-{i}");
+        let branch_name_str = format!("feature/branch-{i}");
+        let branch_name = BranchName::new(&branch_name_str).unwrap();
         assert!(git.branch_exists(&branch_name).unwrap());
     }
     let duration = start_time.elapsed();

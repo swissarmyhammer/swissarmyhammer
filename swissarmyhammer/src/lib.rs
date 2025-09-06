@@ -78,8 +78,8 @@ pub mod memoranda;
 /// Todo list management system for ephemeral task tracking
 pub mod todo;
 
-/// Git operations for issue management
-pub mod git;
+// Git operations moved to external crate
+pub use swissarmyhammer_git as git;
 
 /// Security utilities for path validation and resource limits
 pub mod security;

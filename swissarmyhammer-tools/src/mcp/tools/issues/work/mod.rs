@@ -56,9 +56,10 @@ impl McpTool for WorkIssueTool {
         // Get current branch first for validation and source tracking
         let mut git_ops = context.git_ops.lock().await;
         let current_branch = match git_ops.as_ref() {
-            Some(ops) => match ops.current_branch() {
-                Ok(branch) => branch,
-                Err(e) => return Err(McpErrorHandler::handle_error(e, "get current branch")),
+            Some(ops) => match ops.get_current_branch() {
+                Ok(Some(branch)) => branch.to_string(),
+                Ok(None) => "HEAD".to_string(), // Handle detached HEAD
+                Err(e) => return Err(McpErrorHandler::handle_error(e.into(), "get current branch")),
             },
             None => {
                 return Err(McpError::internal_error(
@@ -96,11 +97,32 @@ impl McpTool for WorkIssueTool {
             let branch_name = issue.name.clone();
 
             match git_ops.as_mut() {
-                Some(ops) => match ops.create_work_branch(&branch_name) {
-                    Ok(branch_name) => Ok(create_success_response(format!(
-                        "Switched to work branch: {branch_name}"
-                    ))),
-                    Err(e) => Err(McpErrorHandler::handle_error(e, "create work branch")),
+                Some(ops) => {
+                    let full_branch_name = format!("issue/{}", branch_name);
+                    let branch_name_obj = swissarmyhammer::git::BranchName::new(&full_branch_name)
+                        .map_err(|e| McpError::internal_error(format!("Invalid branch name: {}", e), None))?;
+                    
+                    // Check if branch exists first
+                    let branch_exists = ops.branch_exists(&branch_name_obj)
+                        .map_err(|e| McpErrorHandler::handle_error(e.into(), "check branch exists"))?;
+                    
+                    if branch_exists {
+                        // Branch exists, just checkout
+                        match ops.checkout_branch(&branch_name_obj) {
+                            Ok(()) => Ok(create_success_response(format!(
+                                "Switched to work branch: {full_branch_name}"
+                            ))),
+                            Err(e) => Err(McpErrorHandler::handle_error(e.into(), "checkout work branch")),
+                        }
+                    } else {
+                        // Branch doesn't exist, create and checkout
+                        match ops.create_and_checkout_branch(&branch_name_obj) {
+                            Ok(()) => Ok(create_success_response(format!(
+                                "Created and switched to work branch: {full_branch_name}"
+                            ))),
+                            Err(e) => Err(McpErrorHandler::handle_error(e.into(), "create work branch")),
+                        }
+                    }
                 },
                 None => Err(McpError::internal_error(
                     "Git operations not available".to_string(),

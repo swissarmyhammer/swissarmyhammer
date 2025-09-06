@@ -66,20 +66,27 @@ impl McpTool for MarkCompleteIssueTool {
             // Get current issue name from git branch
             let git_ops = context.git_ops.lock().await;
             match git_ops.as_ref() {
-                Some(ops) => match ops.current_branch() {
-                    Ok(branch) => {
+                Some(ops) => match ops.get_current_branch() {
+                    Ok(Some(branch)) => {
+                        let branch_str = branch.to_string();
                         let config = Config::global();
-                        if let Some(issue_name) = branch.strip_prefix(&config.issue_branch_prefix) {
+                        if let Some(issue_name) = branch_str.strip_prefix(&config.issue_branch_prefix) {
                             issue_name.to_string()
                         } else {
                             return Err(McpError::invalid_params(
-                                format!("Not on an issue branch. Current branch: {branch}"),
+                                format!("Not on an issue branch. Current branch: {branch_str}"),
                                 None,
                             ));
                         }
                     }
+                    Ok(None) => {
+                        return Err(McpError::invalid_params(
+                            "Not on any branch (detached HEAD)".to_string(),
+                            None,
+                        ));
+                    }
                     Err(e) => {
-                        return Err(McpErrorHandler::handle_error(e, "get current branch"));
+                        return Err(McpErrorHandler::handle_error(e.into(), "get current branch"));
                     }
                 },
                 None => {

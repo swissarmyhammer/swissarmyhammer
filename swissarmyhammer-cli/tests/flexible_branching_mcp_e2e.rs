@@ -3,7 +3,7 @@
 //! This module tests the MCP tools (issue_work, issue_merge, etc.) with flexible branching.
 
 use git2::Repository;
-use swissarmyhammer::git::git2_utils;
+use swissarmyhammer_git::git2_utils;
 use tempfile::TempDir;
 
 /// Test environment for MCP tool testing
@@ -168,7 +168,11 @@ fn test_mcp_issue_work_from_feature_branch() {
     // Verify the source branch is tracked (by examining the issue)
     let output = env.run_cli_command(&["issue", "show", "--name", "user-tests"]);
 
-    assert!(output.status.success());
+    if !output.status.success() {
+        panic!("issue work command failed: stderr={}, stdout={}", 
+               String::from_utf8_lossy(&output.stderr), 
+               String::from_utf8_lossy(&output.stdout));
+    }
     let output_str = String::from_utf8_lossy(&output.stdout);
     // The output should contain information about the source branch
     // (exact format depends on implementation)

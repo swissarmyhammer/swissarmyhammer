@@ -149,6 +149,11 @@ impl GitError {
             message: message.into(),
         }
     }
+
+    /// Create a generic git error from string (convenience method)
+    pub fn from_string(message: String) -> Self {
+        Self::Generic { message }
+    }
 }
 
 /// Convert git2::Error to GitError with operation context

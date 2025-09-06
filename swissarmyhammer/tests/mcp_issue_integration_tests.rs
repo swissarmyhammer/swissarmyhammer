@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use swissarmyhammer::git::GitOperations;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
@@ -343,7 +343,8 @@ async fn test_git_integration_edge_cases() {
     let git_ops = env.git_ops.lock().await;
     if let Some(git) = git_ops.as_ref() {
         let main_branch = git.main_branch().unwrap();
-        git.checkout_branch(&main_branch).unwrap();
+        let main_branch_name = swissarmyhammer_git::BranchName::new(main_branch).unwrap();
+        git.checkout_branch(&main_branch_name).unwrap();
 
         // Now working on another issue should succeed
         let result = git.create_work_branch_simple(issue2.name.as_str());

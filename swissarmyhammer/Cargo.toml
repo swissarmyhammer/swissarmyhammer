@@ -90,6 +90,7 @@ which = "8.0.0"
 
 # Git operations
 git2 = { workspace = true }
+swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 
 # Configuration support
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
