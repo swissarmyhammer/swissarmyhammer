@@ -1,6 +1,6 @@
 //! Prompt command implementation
 //!
-//! Manages and tests prompts with support for listing, validating, testing, and searching
+//! Manages and tests prompts with support for listing, validating, and testing
 
 use crate::cli::PromptSubcommand;
 use crate::error::{CliError, CliResult};
@@ -41,8 +41,7 @@ async fn run_prompt_command(
             verbose,
             source,
             category,
-            search,
-        } => run_list_command(format, verbose, source, category, search)
+        } => run_list_command(format, verbose, source, category)
             .map_err(|e| CliError::new(e.to_string(), 1)),
         PromptSubcommand::Test {
             prompt_name,
@@ -66,10 +65,7 @@ async fn run_prompt_command(
         )
         .await
         .map_err(|e| CliError::new(e.to_string(), 1)),
-        PromptSubcommand::Search { .. } => Err(CliError::new(
-            "Search functionality has been removed as part of infrastructure cleanup".to_string(),
-            1,
-        )),
+
     }
 }
 
@@ -100,7 +96,6 @@ fn run_list_command(
     verbose: bool,
     source_filter: Option<crate::cli::PromptSourceArg>,
     category_filter: Option<String>,
-    search_term: Option<String>,
 ) -> Result<(), anyhow::Error> {
     // Load all prompts from all sources
     let mut library = PromptLibrary::new();
@@ -119,9 +114,7 @@ fn run_list_command(
         filter = filter.with_category(category);
     }
 
-    if let Some(ref term) = search_term {
-        filter = filter.with_search_term(term);
-    }
+
 
     // Apply filter and get prompts - pass empty file sources since we're using all sources
     let file_sources = HashMap::new();
@@ -445,7 +438,6 @@ mod tests {
             verbose: false,
             source: None,
             category: None,
-            search: None,
         };
 
         // Run the command - we expect it to succeed
@@ -454,29 +446,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_run_prompt_command_search() {
-        // Create a Search subcommand with a simple query
-        let subcommand = PromptSubcommand::Search {
-            query: "test".to_string(),
-            r#in: None,
-            regex: false,
-            fuzzy: false,
-            case_sensitive: false,
-            source: None,
-            has_arg: None,
-            no_args: false,
-            full: false,
-            format: crate::cli::OutputFormat::Table,
-            highlight: true,
-            limit: None,
-        };
 
-        // Run the command - should return an error since search was removed
-        let test_context = TemplateContext::new();
-        let result = run_prompt_command(subcommand, &test_context).await;
-        assert!(result.is_err());
-    }
 
     #[tokio::test]
     async fn test_run_prompt_command_test_with_invalid_prompt() {

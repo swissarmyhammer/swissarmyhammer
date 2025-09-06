@@ -24,7 +24,7 @@ Swiss Army Hammer is a flexible prompt management library and CLI tool for AI as
 - **Prompt Management**: Load, store, and organize prompts from various sources
 - **Template Engine**: Powerful Liquid-based template processing with custom filters
 - **Configuration**: Multi-format configuration (TOML, YAML, JSON) with environment variables
-- **Search**: Full-text and semantic search capabilities for finding prompts
+- **Semantic Search**: Vector-based semantic search for source code files
 - **MCP Support**: Model Context Protocol server integration
 - **Workflows**: State-based execution system for complex tasks
 - **Issue Management**: Built-in issue tracking and management
@@ -34,7 +34,7 @@ Swiss Army Hammer is a flexible prompt management library and CLI tool for AI as
 ### CLI Commands
 - `sah list` - List available prompts
 - `sah run <prompt>` - Run a specific prompt
-- `sah search <query>` - Search for prompts
+
 - `sah serve` - Start MCP server
 - `sah doctor` - Run diagnostics and show configuration
 - `sah validate` - Validate configuration files
@@ -57,7 +57,7 @@ Swiss Army Hammer provides additional filters for text processing when using the
 Workflows allow you to create state-based execution flows with transitions, conditions, and actions.
 {% elsif topic == "search" %}
 ## Search
-Use full-text search or semantic search to find relevant prompts in your library.
+Use semantic search to find relevant code sections and analyze source files.
 {% elsif topic == "configuration" %}
 ## Configuration
 Swiss Army Hammer supports flexible configuration through multiple sources:

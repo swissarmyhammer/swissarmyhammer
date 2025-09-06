@@ -190,10 +190,7 @@ mod tests {
             output_str.contains("list"),
             "Completion should include 'list' subcommand"
         );
-        assert!(
-            output_str.contains("search"),
-            "Completion should include 'search' subcommand"
-        );
+
         assert!(
             output_str.contains("validate"),
             "Completion should include 'validate' subcommand"

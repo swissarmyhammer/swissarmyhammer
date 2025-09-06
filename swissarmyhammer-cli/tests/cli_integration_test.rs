@@ -20,18 +20,7 @@ async fn test_prompt_subcommand_list() -> Result<()> {
     Ok(())
 }
 
-/// Test prompt search functionality
-#[tokio::test]
-async fn test_prompt_subcommand_search() -> Result<()> {
-    let result = run_sah_command_in_process(&["prompt", "search", "test"]).await?;
 
-    // Search might not find results but should not error
-    assert!(
-        result.exit_code == 0 || result.exit_code == 1,
-        "prompt search should complete"
-    );
-    Ok(())
-}
 
 /// Test prompt validate functionality
 #[tokio::test]
@@ -85,10 +74,7 @@ async fn test_prompt_help() -> Result<()> {
         result.stdout.contains("list"),
         "help should mention list subcommand"
     );
-    assert!(
-        result.stdout.contains("search"),
-        "help should mention search subcommand"
-    );
+
     assert!(
         result.stdout.contains("validate"),
         "help should mention validate subcommand"

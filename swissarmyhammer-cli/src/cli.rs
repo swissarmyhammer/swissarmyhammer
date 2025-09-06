@@ -233,7 +233,7 @@ Examples:
   swissarmyhammer prompt list --format json         # Output as JSON
   swissarmyhammer prompt list --verbose             # Show full details including arguments
   swissarmyhammer prompt list --source builtin      # Show only built-in prompts
-  swissarmyhammer prompt list --search debug        # Search for prompts containing 'debug'
+
 ")]
     List {
         /// Output format
@@ -252,9 +252,7 @@ Examples:
         #[arg(long)]
         category: Option<String>,
 
-        /// Search prompts by name or description
-        #[arg(long)]
-        search: Option<String>,
+
     },
     /// Test prompts interactively with sample arguments
     #[command(long_about = "
@@ -313,81 +311,7 @@ Examples:
         #[arg(long)]
         debug: bool,
     },
-    /// Search for prompts with advanced filtering and ranking
-    #[command(long_about = "
-Search for prompts using powerful full-text search with fuzzy matching.
-Searches prompt names, titles, descriptions, content, and arguments.
 
-Basic usage:
-  swissarmyhammer prompt search \"code review\"        # Basic search
-  swissarmyhammer prompt search \"debug.*error\" -r   # Regex search
-  swissarmyhammer prompt search help --fuzzy          # Fuzzy matching
-
-Search scope:
-  --in name,description,content               # Search specific fields
-  --source builtin                           # Search only builtin prompts
-  --has-arg language                         # Find prompts with 'language' argument
-
-Output options:
-  --full                                     # Show complete prompt details
-  --json                                     # JSON output for tooling
-  --limit 10                                 # Limit number of results
-  --highlight                                # Highlight matching terms
-
-Examples:
-  swissarmyhammer prompt search \"python code\"        # Find Python-related prompts
-  swissarmyhammer prompt search \"review\" --full       # Detailed results for review prompts
-  swissarmyhammer prompt search \".*test.*\" --regex     # Regex pattern matching
-  swissarmyhammer prompt search help --fuzzy --limit 5  # Fuzzy search, max 5 results
-")]
-    Search {
-        /// Search query
-        query: String,
-
-        /// Search in specific fields (name, title, description, content, arguments)
-        #[arg(long, value_delimiter = ',')]
-        r#in: Option<Vec<String>>,
-
-        /// Use regular expressions
-        #[arg(short, long)]
-        regex: bool,
-
-        /// Enable fuzzy matching for typo tolerance
-        #[arg(short, long)]
-        fuzzy: bool,
-
-        /// Case-sensitive search
-        #[arg(long)]
-        case_sensitive: bool,
-
-        /// Filter by source
-        #[arg(long, value_enum)]
-        source: Option<PromptSourceArg>,
-
-        /// Find prompts with specific argument name
-        #[arg(long)]
-        has_arg: Option<String>,
-
-        /// Find prompts without any arguments
-        #[arg(long)]
-        no_args: bool,
-
-        /// Show complete prompt details
-        #[arg(long)]
-        full: bool,
-
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-
-        /// Highlight matching terms in output
-        #[arg(long)]
-        highlight: bool,
-
-        /// Maximum number of results to show
-        #[arg(short, long)]
-        limit: Option<usize>,
-    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -872,140 +796,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_cli_search_subcommand_basic() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "prompt", "search", "code review"]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Search {
-                query,
-                r#in,
-                regex,
-                fuzzy,
-                case_sensitive,
-                source,
-                has_arg,
-                no_args,
-                full,
-                format,
-                highlight,
-                limit,
-            } = subcommand
-            {
-                assert_eq!(query, "code review");
-                assert_eq!(r#in, None);
-                assert!(!regex);
-                assert!(!fuzzy);
-                assert!(!case_sensitive);
-                assert_eq!(source, None);
-                assert_eq!(has_arg, None);
-                assert!(!no_args);
-                assert!(!full);
-                assert!(matches!(format, OutputFormat::Table));
-                assert!(!highlight);
-                assert_eq!(limit, None);
-            } else {
-                unreachable!("Expected Search subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
-
-    #[test]
-    fn test_cli_search_subcommand_with_flags() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "prompt",
-            "search",
-            "debug.*error",
-            "--regex",
-            "--fuzzy",
-            "--case-sensitive",
-            "--source",
-            "builtin",
-            "--has-arg",
-            "language",
-            "--full",
-            "--format",
-            "json",
-            "--highlight",
-            "--limit",
-            "5",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Search {
-                query,
-                r#in,
-                regex,
-                fuzzy,
-                case_sensitive,
-                source,
-                has_arg,
-                no_args,
-                full,
-                format,
-                highlight,
-                limit,
-            } = subcommand
-            {
-                assert_eq!(query, "debug.*error");
-                assert_eq!(r#in, None);
-                assert!(regex);
-                assert!(fuzzy);
-                assert!(case_sensitive);
-                assert!(matches!(source, Some(PromptSourceArg::Builtin)));
-                assert_eq!(has_arg, Some("language".to_string()));
-                assert!(!no_args);
-                assert!(full);
-                assert!(matches!(format, OutputFormat::Json));
-                assert!(highlight);
-                assert_eq!(limit, Some(5));
-            } else {
-                unreachable!("Expected Search subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
-
-    #[test]
-    fn test_cli_search_subcommand_with_fields() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "prompt",
-            "search",
-            "python",
-            "--in",
-            "name,description,content",
-        ]);
-        assert!(result.is_ok());
-
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Search { query, r#in, .. } = subcommand {
-                assert_eq!(query, "python");
-                assert_eq!(
-                    r#in,
-                    Some(vec![
-                        "name".to_string(),
-                        "description".to_string(),
-                        "content".to_string()
-                    ])
-                );
-            } else {
-                unreachable!("Expected Search subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
     #[test]
     fn test_cli_prompt_list_subcommand() {
@@ -1019,14 +810,12 @@ mod tests {
                 verbose,
                 source,
                 category,
-                search,
             } = subcommand
             {
                 assert!(matches!(format, OutputFormat::Table));
                 assert!(!verbose);
                 assert_eq!(source, None);
                 assert_eq!(category, None);
-                assert_eq!(search, None);
             } else {
                 unreachable!("Expected List subcommand");
             }

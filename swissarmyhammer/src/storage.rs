@@ -20,8 +20,7 @@ pub trait StorageBackend: Send + Sync {
     /// Remove a prompt
     fn remove(&mut self, name: &str) -> Result<()>;
 
-    /// Search prompts by query
-    fn search(&self, query: &str) -> Result<Vec<Prompt>>;
+
 
     /// Check if a prompt exists
     fn exists(&self, name: &str) -> Result<bool> {
@@ -38,6 +37,9 @@ pub trait StorageBackend: Send + Sync {
 
     /// Clone the storage backend in a box
     fn clone_box(&self) -> Box<dyn StorageBackend>;
+
+    /// Search prompts by query string
+    fn search(&self, query: &str) -> Result<Vec<Prompt>>;
 }
 
 /// In-memory storage implementation
@@ -84,36 +86,28 @@ impl StorageBackend for MemoryStorage {
         Ok(())
     }
 
-    fn search(&self, query: &str) -> Result<Vec<Prompt>> {
-        let query_lower = query.to_lowercase();
-        Ok(self
-            .prompts
-            .values()
-            .filter(|prompt| {
-                prompt.name.to_lowercase().contains(&query_lower)
-                    || prompt
-                        .description
-                        .as_ref()
-                        .map(|d| d.to_lowercase().contains(&query_lower))
-                        .unwrap_or(false)
-                    || prompt
-                        .tags
-                        .iter()
-                        .any(|tag| tag.to_lowercase().contains(&query_lower))
-                    || prompt
-                        .category
-                        .as_ref()
-                        .map(|c| c.to_lowercase().contains(&query_lower))
-                        .unwrap_or(false)
-            })
-            .cloned()
-            .collect())
-    }
+
 
     fn clone_box(&self) -> Box<dyn StorageBackend> {
         Box::new(MemoryStorage {
             prompts: self.prompts.clone(),
         })
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<Prompt>> {
+        let query = query.to_lowercase();
+        let results: Vec<Prompt> = self.prompts
+            .values()
+            .filter(|prompt| {
+                prompt.name.to_lowercase().contains(&query)
+                    || prompt.description.as_ref().is_some_and(|desc| desc.to_lowercase().contains(&query))
+                    || prompt.template.to_lowercase().contains(&query)
+                    || prompt.category.as_ref().is_some_and(|cat| cat.to_lowercase().contains(&query))
+                    || prompt.tags.iter().any(|tag| tag.to_lowercase().contains(&query))
+            })
+            .cloned()
+            .collect();
+        Ok(results)
     }
 }
 
@@ -239,32 +233,7 @@ impl StorageBackend for FileSystemStorage {
         Ok(())
     }
 
-    fn search(&self, query: &str) -> Result<Vec<Prompt>> {
-        let query_lower = query.to_lowercase();
-        Ok(self
-            .cache
-            .iter()
-            .filter(|entry| {
-                let prompt = entry.value();
-                prompt.name.to_lowercase().contains(&query_lower)
-                    || prompt
-                        .description
-                        .as_ref()
-                        .map(|d| d.to_lowercase().contains(&query_lower))
-                        .unwrap_or(false)
-                    || prompt
-                        .tags
-                        .iter()
-                        .any(|tag| tag.to_lowercase().contains(&query_lower))
-                    || prompt
-                        .category
-                        .as_ref()
-                        .map(|c| c.to_lowercase().contains(&query_lower))
-                        .unwrap_or(false)
-            })
-            .map(|entry| entry.value().clone())
-            .collect())
-    }
+
 
     fn clone_box(&self) -> Box<dyn StorageBackend> {
         Box::new(FileSystemStorage {
@@ -272,6 +241,22 @@ impl StorageBackend for FileSystemStorage {
             cache: self.cache.clone(),
             fs_utils: FileSystemUtils::new(),
         })
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<Prompt>> {
+        let all_prompts = self.list()?;
+        let query = query.to_lowercase();
+        let results: Vec<Prompt> = all_prompts
+            .into_iter()
+            .filter(|prompt| {
+                prompt.name.to_lowercase().contains(&query)
+                    || prompt.description.as_ref().is_some_and(|desc| desc.to_lowercase().contains(&query))
+                    || prompt.template.to_lowercase().contains(&query)
+                    || prompt.category.as_ref().is_some_and(|cat| cat.to_lowercase().contains(&query))
+                    || prompt.tags.iter().any(|tag| tag.to_lowercase().contains(&query))
+            })
+            .collect();
+        Ok(results)
     }
 }
 
@@ -328,7 +313,7 @@ impl PromptStorage {
             .remove(name)
     }
 
-    /// Search prompts
+    /// Search prompts by query string
     pub fn search(&self, query: &str) -> Result<Vec<Prompt>> {
         self.backend.search(query)
     }
@@ -471,9 +456,29 @@ mod tests {
     }
 
     #[test]
+    fn test_search_basic_functionality() {
+        let mut storage = MemoryStorage::new();
+        let prompt = Prompt::new("test", "Template with special word");
+        storage.store(prompt).unwrap();
+
+        // Test basic search by template content
+        let results = storage.search("special").unwrap();
+        assert_eq!(results.len(), 1, "Basic search should find prompt by template content");
+
+        // Test search by name
+        let results = storage.search("test").unwrap();
+        assert_eq!(results.len(), 1, "Search should find prompt by name");
+    }
+
+    #[test]
     fn test_search_by_category() {
         let mut storage = MemoryStorage::new();
         let prompt = Prompt::new("test", "Template").with_category("special-category");
+        
+        // Debug: Let's verify the prompt has the category
+        assert!(prompt.category.is_some());
+        assert_eq!(prompt.category.as_ref().unwrap(), "special-category");
+        
         storage.store(prompt).unwrap();
 
         let results = storage.search("special").unwrap();

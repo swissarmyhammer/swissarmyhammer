@@ -413,14 +413,12 @@ async fn handle_prompt_command(
                     _ => PromptSourceArg::Dynamic,
                 });
             let category = sub_matches.get_one::<String>("category").cloned();
-            let search = sub_matches.get_one::<String>("search").cloned();
 
             PromptSubcommand::List {
                 format,
                 verbose,
                 source,
                 category,
-                search,
             }
         }
         Some(("test", sub_matches)) => {
@@ -445,49 +443,7 @@ async fn handle_prompt_command(
                 debug,
             }
         }
-        Some(("search", sub_matches)) => {
-            let query = sub_matches.get_one::<String>("query").cloned().unwrap();
-            let r#in = sub_matches
-                .get_many::<String>("in")
-                .map(|vals| vals.cloned().collect());
-            let regex = sub_matches.get_flag("regex");
-            let fuzzy = sub_matches.get_flag("fuzzy");
-            let case_sensitive = sub_matches.get_flag("case-sensitive");
-            let source = sub_matches
-                .get_one::<String>("source")
-                .map(|s| match s.as_str() {
-                    "builtin" => PromptSourceArg::Builtin,
-                    "user" => PromptSourceArg::User,
-                    "local" => PromptSourceArg::Local,
-                    "dynamic" => PromptSourceArg::Dynamic,
-                    _ => PromptSourceArg::Dynamic,
-                });
-            let has_arg = sub_matches.get_one::<String>("has-arg").cloned();
-            let no_args = sub_matches.get_flag("no-args");
-            let full = sub_matches.get_flag("full");
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                _ => OutputFormat::Table,
-            };
-            let highlight = sub_matches.get_flag("highlight");
-            let limit = sub_matches.get_one::<usize>("limit").copied();
 
-            PromptSubcommand::Search {
-                query,
-                r#in,
-                regex,
-                fuzzy,
-                case_sensitive,
-                source,
-                has_arg,
-                no_args,
-                full,
-                format,
-                highlight,
-                limit,
-            }
-        }
         _ => {
             eprintln!("No prompt subcommand specified");
             return EXIT_ERROR;

@@ -763,11 +763,7 @@ Examples:
                             .long("category")
                             .help("Filter by category"),
                     )
-                    .arg(
-                        Arg::new("search")
-                            .long("search")
-                            .help("Search prompts by name or description"),
-                    ),
+                    ,
             )
             .subcommand(
                 Command::new("test")
@@ -816,85 +812,7 @@ Examples:
                             .action(ArgAction::SetTrue),
                     ),
             )
-            .subcommand(
-                Command::new("search")
-                    .about("Search for prompts with advanced filtering and ranking")
-                    .arg(
-                        Arg::new("query")
-                            .help("Search query")
-                            .value_name("QUERY")
-                            .required(true),
-                    )
-                    .arg(
-                        Arg::new("in")
-                            .long("in")
-                            .help("Search in specific fields")
-                            .value_delimiter(','),
-                    )
-                    .arg(
-                        Arg::new("regex")
-                            .short('r')
-                            .long("regex")
-                            .help("Use regular expressions")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("fuzzy")
-                            .short('f')
-                            .long("fuzzy")
-                            .help("Enable fuzzy matching for typo tolerance")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("case-sensitive")
-                            .long("case-sensitive")
-                            .help("Case-sensitive search")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("source")
-                            .long("source")
-                            .help("Filter by source")
-                            .value_parser(["builtin", "user", "local", "dynamic"]),
-                    )
-                    .arg(
-                        Arg::new("has-arg")
-                            .long("has-arg")
-                            .help("Find prompts with specific argument name"),
-                    )
-                    .arg(
-                        Arg::new("no-args")
-                            .long("no-args")
-                            .help("Find prompts without any arguments")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("full")
-                            .long("full")
-                            .help("Show complete prompt details")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["table", "json", "yaml"])
-                            .default_value("table"),
-                    )
-                    .arg(
-                        Arg::new("highlight")
-                            .long("highlight")
-                            .help("Highlight matching terms in output")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("limit")
-                            .short('l')
-                            .long("limit")
-                            .help("Maximum number of results to show")
-                            .value_parser(clap::value_parser!(usize)),
-                    ),
-            )
+
     }
 
     /// Build the flow command with all its subcommands

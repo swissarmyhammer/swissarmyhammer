@@ -6,7 +6,7 @@
 //!
 //! - **Prompt Management**: Load, store, and organize prompts from various sources
 //! - **Template Engine**: Powerful Liquid-based template processing
-//! - **Search**: Full-text search capabilities for finding prompts
+//! - **Semantic Search**: Vector-based semantic search for source code files
 //! - **MCP Support**: Model Context Protocol server integration
 //! - **Async/Sync APIs**: Choose between async and sync interfaces
 //!
@@ -54,14 +54,8 @@ pub mod template;
 /// Storage abstractions and implementations
 pub mod storage;
 
-/// Prompt search functionality
-pub mod prompt_search;
-
-/// Semantic search functionality using vector embeddings
+/// Semantic search functionality with vector embeddings
 pub mod search;
-
-/// Advanced search functionality
-pub mod search_advanced;
 
 /// Outline generation functionality for Tree-sitter based code analysis
 pub mod outline;
@@ -128,7 +122,7 @@ pub mod plan_utils;
 /// Plugin system types for extending functionality
 pub use plugins::{CustomLiquidFilter, PluginRegistry, SwissArmyHammerPlugin};
 
-/// Prompt filtering and search functionality
+/// Prompt filtering functionality
 pub use prompt_filter::PromptFilter;
 
 /// Advanced prompt loading and resolution
@@ -202,10 +196,7 @@ pub mod prelude {
         SwissArmyHammerPlugin, Template, TemplateEngine,
     };
 
-    pub use crate::prompt_search::{SearchEngine, SearchResult};
-    pub use crate::search_advanced::{
-        generate_excerpt, AdvancedSearchEngine, AdvancedSearchOptions, AdvancedSearchResult,
-    };
+
     pub use crate::workflow::{
         State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
         WorkflowRunStatus,

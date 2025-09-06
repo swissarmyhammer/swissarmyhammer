@@ -89,7 +89,7 @@ sah prompt list [OPTIONS]
 - `--source <SOURCE>` - Filter by source (builtin, user, local)
 - `--tag <TAG>` - Filter by tag
 - `--format <FORMAT>` - Output format (table, json, list)
-- `--search <TERM>` - Search prompt titles and descriptions
+
 
 **Examples:**
 ```bash
@@ -99,8 +99,8 @@ sah prompt list
 # List built-in prompts only
 sah prompt list --source builtin
 
-# Search for code-related prompts
-sah prompt list --search "code"
+# List prompts by category
+sah prompt list --category "development"
 
 # List prompts with specific tag
 sah prompt list --tag "review"
@@ -684,7 +684,7 @@ sah memo create --title "Review Notes" --editor
 
 # Search and discovery
 sah search query "authentication middleware"
-sah prompt list --search "test"
+sah prompt list --category "testing"
 sah memo search "architecture"
 ```
 

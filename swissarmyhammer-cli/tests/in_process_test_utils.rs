@@ -441,19 +441,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     let output = "Available prompts:\ncode-review - Code review assistant\nhelp - Help generator\ntest - Test prompt";
                     (output.to_string(), String::new(), EXIT_SUCCESS)
                 }
-                PromptSubcommand::Search { query, .. } => {
-                    if query.is_empty() {
-                        (
-                            String::new(),
-                            "Error: Empty search query".to_string(),
-                            EXIT_ERROR,
-                        )
-                    } else {
-                        let output =
-                            format!("Search results for '{}':\n1. test - Test prompt", query);
-                        (output, String::new(), EXIT_SUCCESS)
-                    }
-                }
+
                 PromptSubcommand::Test {
                     prompt_name, vars, ..
                 } => {
