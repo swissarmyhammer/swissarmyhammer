@@ -1,6 +1,7 @@
 use std::process;
 mod cli;
 mod commands;
+mod completions;
 mod dynamic_cli;
 mod error;
 mod exit_codes;
@@ -221,6 +222,7 @@ async fn handle_dynamic_matches(
             commands::serve::handle_command(sub_matches, &template_context).await
         }
         Some(("doctor", _)) => handle_doctor_command(&template_context).await,
+        Some(("completion", sub_matches)) => handle_completion_command(sub_matches).await,
         Some(("prompt", sub_matches)) => {
             handle_prompt_command(sub_matches, &template_context).await
         }
@@ -387,6 +389,32 @@ fn extract_clap_value(
 
 async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
     commands::doctor::handle_command(template_context).await
+}
+
+/// Handle the completion command to generate shell completions
+/// 
+/// # Arguments
+/// * `matches` - Command line arguments containing the shell type
+/// 
+/// # Returns
+/// Exit code: EXIT_SUCCESS on success, EXIT_ERROR on failure
+async fn handle_completion_command(matches: &clap::ArgMatches) -> i32 {
+    use crate::completions::print_completion;
+
+    let shell = match matches.get_one::<clap_complete::Shell>("shell") {
+        Some(shell) => *shell,
+        None => {
+            eprintln!("Error: Shell parameter is required for completion generation");
+            return EXIT_ERROR;
+        }
+    };
+
+    if let Err(e) = print_completion(shell) {
+        eprintln!("Failed to generate completion for {}: {}", shell, e);
+        EXIT_ERROR
+    } else {
+        EXIT_SUCCESS
+    }
 }
 
 async fn handle_prompt_command(
