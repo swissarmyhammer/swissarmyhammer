@@ -5,6 +5,7 @@ use super::{
     LAST_ACTION_RESULT_KEY, MAX_TRANSITIONS,
 };
 use crate::workflow::{
+    actions::ActionTimeouts,
     metrics::{MemoryMetrics, WorkflowMetrics},
     parse_action_from_description_with_context, ActionError, CompensationKey, ErrorContext,
     StateId, Workflow, WorkflowRun, WorkflowRunStatus,
@@ -30,9 +31,6 @@ pub struct WorkflowExecutor {
 }
 
 impl WorkflowExecutor {
-    /// Default workflow execution timeout in seconds
-    const DEFAULT_WORKFLOW_TIMEOUT_SECS: u64 = 3600;
-
     /// Create a new workflow executor
     pub fn new() -> Self {
         Self {
@@ -266,7 +264,7 @@ impl WorkflowExecutor {
             run.context
                 .get("_timeout_secs")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(Self::DEFAULT_WORKFLOW_TIMEOUT_SECS),
+                .unwrap_or(ActionTimeouts::default().sub_workflow_timeout.as_secs()),
         );
 
         loop {
