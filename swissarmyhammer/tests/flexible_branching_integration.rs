@@ -279,12 +279,10 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
         eprintln!("Current branch: {}", current_branch);
         eprintln!("Files in working directory:");
         if let Ok(entries) = std::fs::read_dir(env.temp_dir.path()) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let name = entry.file_name();
-                    if !name.to_string_lossy().starts_with('.') {
-                        eprintln!("  {:?}", name);
-                    }
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if !name.to_string_lossy().starts_with('.') {
+                    eprintln!("  {:?}", name);
                 }
             }
         }

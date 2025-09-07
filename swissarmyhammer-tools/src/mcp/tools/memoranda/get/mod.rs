@@ -68,15 +68,15 @@ impl McpTool for GetMemoTool {
                 tracing::info!("Retrieved memo {}", memo.title);
                 Ok(BaseToolImpl::create_success_response(format!(
                     "Memo found:\n\nID: {}\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.title.to_string(),
-                    memo.title.to_string(),
+                    memo.title,
+                    memo.title,
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
-                    memo.content.to_string()
+                    memo.content
                 )))
             }
             Ok(None) => {
-                Ok(BaseToolImpl::create_success_response(format!("Memo not found with ID: {}", memo_id.to_string())))
+                Ok(BaseToolImpl::create_success_response(format!("Memo not found with ID: {}", memo_id)))
             }
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
                 swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()), "get memo",

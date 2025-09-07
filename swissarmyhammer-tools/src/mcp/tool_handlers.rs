@@ -146,15 +146,15 @@ impl ToolHandlers {
                 tracing::info!("Retrieved memo {}", memo.title);
                 Ok(create_success_response(format!(
                     "Memo found:\n\nID: {}\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.title.to_string(),
-                    memo.title.to_string(),
+                    memo.title,
+                    memo.title,
                     McpFormatter::format_timestamp(memo.created_at),
                     McpFormatter::format_timestamp(memo.updated_at),
-                    memo.content.to_string()
+                    memo.content
                 )))
             }
             Ok(None) => {
-                Ok(create_success_response(format!("Memo not found with ID: {}", memo_id.to_string())))
+                Ok(create_success_response(format!("Memo not found with ID: {}", memo_id)))
             }
             Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "get memo")),
         }
