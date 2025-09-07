@@ -73,7 +73,7 @@ impl McpTool for GetAllContextMemoTool {
                             format!(
                                 "=== {} (ID: {}) ===\nCreated: {}\nUpdated: {}\n\n{}",
                                 memo.title,
-                                memo.title.to_string(),
+                                memo.title,
                                 crate::mcp::shared_utils::McpFormatter::format_timestamp(
                                     memo.created_at
                                 ),

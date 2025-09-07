@@ -595,7 +595,7 @@ impl GitOperations {
         debug!("Finding merge target for issue branch: {}", issue_branch);
         
         // Get the commit for the issue branch
-        let issue_commit = match self.repo.inner().find_branch(&issue_branch.as_str(), git2::BranchType::Local) {
+        let issue_commit = match self.repo.inner().find_branch(issue_branch.as_str(), git2::BranchType::Local) {
             Ok(branch) => {
                 let commit = branch.get().peel_to_commit()
                     .map_err(|e| convert_git2_error("peel_to_commit", e))?;
