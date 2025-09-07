@@ -25,3 +25,6 @@ pub mod constants;
 pub mod traits;
 pub mod types;
 pub mod utils;
+
+// Re-export commonly used constants for convenience
+pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;

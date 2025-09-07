@@ -23,3 +23,7 @@
 //! Constants that are duplicated across multiple crates should be centralized here to ensure
 //! consistency and make updates easier to manage. New constants should follow the
 //! established categories and naming conventions.
+
+/// Default embedding model used for testing across the SwissArmyHammer ecosystem.
+/// This model is chosen for its balance of performance and accuracy in test scenarios.
+pub const DEFAULT_TEST_EMBEDDING_MODEL: &str = "nomic-ai/nomic-embed-code";

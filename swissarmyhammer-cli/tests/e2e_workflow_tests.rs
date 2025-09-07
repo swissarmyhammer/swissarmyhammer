@@ -654,8 +654,8 @@ async fn test_error_recovery_workflow() -> Result<()> {
 
     let test_env = E2ETestEnvironment::new()?;
 
-    // Apply timeout for error recovery testing with small models
-    let timeout_duration = std::time::Duration::from_secs(120); // Handles small model downloads during error testing
+    // Apply timeout for error recovery testing with small models - reduced for faster testing
+    let timeout_duration = std::time::Duration::from_secs(15); // Further reduced timeout for test speed
 
     let result = tokio::time::timeout(timeout_duration, async {
         // Test error recovery scenarios

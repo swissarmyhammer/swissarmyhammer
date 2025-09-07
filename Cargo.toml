@@ -11,6 +11,7 @@ members = [
     "swissarmyhammer-common",
     "swissarmyhammer-memoranda",
     "swissarmyhammer-git",
+    "swissarmyhammer-search",
 ]
 resolver = "2"
 
@@ -56,6 +57,7 @@ tokenizers = "0.20"
 hf-hub = { version = "0.3", features = ["tokio"] }
 ndarray = "0.16"
 duckdb = { version = "1.3.2", features = ["bundled"] }
+fastembed = "5.0.0"
 tree-sitter = "0.25.8"
 tree-sitter-rust = "0.24.0"
 tree-sitter-python = "0.23.6"

@@ -124,6 +124,34 @@ impl WorkflowExecutor {
         result.map(|_| run)
     }
 
+    /// Start and execute a workflow with a custom transition limit (for testing)
+    #[cfg(test)]
+    pub async fn start_and_execute_workflow_with_limit(
+        &mut self,
+        workflow: Workflow,
+        transition_limit: usize,
+    ) -> ExecutorResult<WorkflowRun> {
+        let mut run = self.start_workflow(workflow)?;
+
+        // Execute the initial state with custom transition limit
+        let result = self
+            .execute_state_with_limit(&mut run, transition_limit)
+            .await;
+
+        // Complete metrics tracking
+        match &result {
+            Ok(_) => {
+                self.metrics.complete_run(&run.id, run.status, None);
+            }
+            Err(e) => {
+                self.metrics
+                    .complete_run(&run.id, WorkflowRunStatus::Failed, Some(e.to_string()));
+            }
+        }
+
+        result.map(|_| run)
+    }
+
     /// Resume a workflow from saved state
     pub async fn resume_workflow(&mut self, mut run: WorkflowRun) -> ExecutorResult<WorkflowRun> {
         if run.status == WorkflowRunStatus::Completed || run.status == WorkflowRunStatus::Failed {
@@ -246,17 +274,17 @@ impl WorkflowExecutor {
     pub async fn execute_state_with_limit(
         &mut self,
         run: &mut WorkflowRun,
-        remaining_transitions: usize,
+        transition_limit: usize,
     ) -> ExecutorResult<()> {
         // Abort file checking happens at the flow command level before execution begins
 
-        if remaining_transitions == 0 {
+        if transition_limit == 0 {
             return Err(ExecutorError::TransitionLimitExceeded {
-                limit: MAX_TRANSITIONS,
+                limit: transition_limit,
             });
         }
 
-        let mut current_remaining = remaining_transitions;
+        let mut current_remaining = transition_limit;
 
         // Add overall timeout protection for the entire workflow execution
         let execution_start = std::time::Instant::now();
@@ -305,7 +333,7 @@ impl WorkflowExecutor {
             current_remaining -= 1;
             if current_remaining == 0 {
                 return Err(ExecutorError::TransitionLimitExceeded {
-                    limit: MAX_TRANSITIONS,
+                    limit: transition_limit,
                 });
             }
         }

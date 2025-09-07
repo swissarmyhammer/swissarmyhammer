@@ -1,0 +1,54 @@
+[package]
+name = "swissarmyhammer-search"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Semantic search functionality for SwissArmyHammer using vector embeddings and TreeSitter parsing"
+
+[dependencies]
+# Core async and error handling
+tokio = { workspace = true, features = ["full"] }
+anyhow.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+
+# Search-specific dependencies
+duckdb = { workspace = true, features = ["bundled"] }
+fastembed = { workspace = true }
+md5 = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-dart = { workspace = true }
+ort = { workspace = true }
+
+# Utilities and serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+glob.workspace = true
+walkdir.workspace = true
+sha2.workspace = true
+regex.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+dashmap.workspace = true
+ignore.workspace = true
+
+# Logging
+tracing.workspace = true
+dirs.workspace = true
+indicatif.workspace = true
+ulid.workspace = true
+
+# Internal dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tokio-test = "0.4"
+swissarmyhammer = { path = "../swissarmyhammer" }
+futures-util.workspace = true

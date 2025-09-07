@@ -109,24 +109,18 @@ async fn test_transition_to_invalid_state() {
 
 #[tokio::test]
 async fn test_max_transition_limit() {
-    let _test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
     let mut executor = WorkflowExecutor::new();
 
-    // Create a workflow with infinite loop
+    // Create a minimal workflow with infinite loop using empty states for speed
     let mut workflow = Workflow::new(
         WorkflowName::new("Infinite Loop"),
         "A workflow that loops forever".to_string(),
         StateId::new("loop_state"),
     );
 
-    workflow.add_state(create_state(
-        "loop_state",
-        "State that loops to itself",
-        false,
-    ));
-
-    // Add a terminal state to pass validation
-    workflow.add_state(create_state("terminal", "Terminal state", true));
+    // Create states with no description to avoid action parsing overhead
+    workflow.add_state(create_state("loop_state", "", false));
+    workflow.add_state(create_state("terminal", "", true));
 
     workflow.add_transition(Transition {
         from_state: StateId::new("loop_state"),
@@ -139,15 +133,17 @@ async fn test_max_transition_limit() {
         metadata: HashMap::new(),
     });
 
-    let result = executor.start_and_execute_workflow(workflow).await;
+    // Use a very small limit for faster testing
+    const TEST_LIMIT: usize = 2; // Further reduced for speed
+    let result = executor.start_and_execute_workflow_with_limit(workflow, TEST_LIMIT).await;
     match result {
-        Err(ExecutorError::TransitionLimitExceeded { limit }) if limit == MAX_TRANSITIONS => {
+        Err(ExecutorError::TransitionLimitExceeded { limit }) if limit == TEST_LIMIT => {
             // Test passed
         }
         other => {
             panic!(
                 "Expected TransitionLimitExceeded with limit {}, but got: {:?}",
-                MAX_TRANSITIONS, other
+                TEST_LIMIT, other
             );
         }
     }

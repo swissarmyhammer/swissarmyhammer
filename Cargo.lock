@@ -6486,6 +6486,7 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-memoranda",
+ "swissarmyhammer-search",
  "syntect",
  "sysinfo",
  "tantivy",
@@ -6608,6 +6609,44 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tracing",
+]
+
+[[package]]
+name = "swissarmyhammer-search"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "dirs 5.0.1",
+ "duckdb",
+ "fastembed",
+ "futures-util",
+ "glob",
+ "ignore",
+ "indicatif",
+ "md5",
+ "ort",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "swissarmyhammer",
+ "swissarmyhammer-common",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-dart",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "ulid",
+ "walkdir",
 ]
 
 [[package]]

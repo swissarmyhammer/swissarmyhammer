@@ -101,6 +101,9 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 # Memoranda support
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 
+# Search support
+swissarmyhammer-search = { path = "../swissarmyhammer-search" }
+
 # Syntax highlighting
 syntect = { workspace = true }
 
