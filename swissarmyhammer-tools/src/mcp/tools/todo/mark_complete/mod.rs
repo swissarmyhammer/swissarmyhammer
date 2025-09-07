@@ -1,11 +1,11 @@
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use crate::mcp::types::MarkCompleteTodoRequest;
+use swissarmyhammer_todo::MarkCompleteTodoRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
-use swissarmyhammer::todo::{TodoId, TodoStorage};
+use swissarmyhammer_todo::TodoStorage;
 
 /// MCP tool for marking todo items as complete
 #[derive(Default)]
@@ -72,38 +72,36 @@ impl McpTool for MarkCompleteTodoTool {
         McpValidation::validate_not_empty(&request.todo_list, "todo list name")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo list name"))?;
 
-        McpValidation::validate_not_empty(&request.id, "todo item ID")
+        McpValidation::validate_not_empty(request.id.as_str(), "todo item ID")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate todo item ID"))?;
 
         // Create storage instance
         let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_error(e, "create todo storage"))?;
+            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
-        // Parse the todo ID
-        let todo_id = TodoId::from_string(request.id.clone())
-            .map_err(|e| McpErrorHandler::handle_error(e, "parse todo ID"))?;
+        // The request.id is already a TodoId from the swissarmyhammer-todo crate
 
         // Mark the item as complete
         match storage
-            .mark_todo_complete(&request.todo_list, &todo_id)
+            .mark_todo_complete(&request.todo_list, &request.id)
             .await
         {
             Ok(()) => {
                 tracing::info!(
                     "Marked todo item {} complete in list {}",
-                    todo_id,
+                    request.id,
                     request.todo_list
                 );
                 Ok(BaseToolImpl::create_success_response(
                     json!({
-                        "message": format!("Marked todo item '{}' as complete in list '{}'", todo_id, request.todo_list),
+                        "message": format!("Marked todo item '{}' as complete in list '{}'", request.id, request.todo_list),
                         "action": "marked_complete",
                         "todo_list": request.todo_list,
-                        "id": todo_id.as_str()
+                        "id": request.id.as_str()
                     }).to_string()
                 ))
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "mark todo item complete")),
+            Err(e) => Err(McpErrorHandler::handle_todo_error(e, "mark todo item complete")),
         }
     }
 }

@@ -22,9 +22,22 @@
 #![warn(missing_docs)]
 
 pub mod constants;
+pub mod error;
 pub mod traits;
 pub mod types;
 pub mod utils;
 
 // Re-export commonly used constants for convenience
 pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;
+
+// Re-export commonly used ULID functions for convenience
+pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};
+
+// Re-export commonly used directory functions for convenience  
+pub use utils::{
+    find_git_repository_root_from, get_or_create_swissarmyhammer_directory,
+    get_or_create_swissarmyhammer_directory_from,
+};
+
+// Re-export error types for convenience
+pub use error::{Result, SwissArmyHammerError};

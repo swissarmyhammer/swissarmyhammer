@@ -77,10 +77,6 @@ pub mod memoranda {
     pub use swissarmyhammer_memoranda::*;
 }
 
-/// Todo list management system for ephemeral task tracking
-pub mod todo;
-
-
 
 /// Security utilities for path validation and resource limits
 pub mod security;
@@ -153,11 +149,7 @@ pub use memoranda::{
     UpdateMemoRequest, MemoStorage, MarkdownMemoStorage, MemoService,
 };
 
-/// Todo list management types
-pub use todo::{
-    CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
-    TodoStorage,
-};
+
 
 /// Validation types and traits
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
@@ -209,11 +201,7 @@ pub mod prelude {
         UpdateMemoRequest, MemoStorage, MarkdownMemoStorage, MemoService,
     };
 
-    // Todo types for convenient access
-    pub use crate::todo::{
-        CreateTodoRequest, MarkCompleteTodoRequest, ShowTodoRequest, TodoId, TodoItem, TodoList,
-        TodoStorage,
-    };
+
 
     // Semantic search types for convenient access
     pub use crate::search::{

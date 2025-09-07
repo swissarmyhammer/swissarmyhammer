@@ -13,3 +13,6 @@ serde.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 ulid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

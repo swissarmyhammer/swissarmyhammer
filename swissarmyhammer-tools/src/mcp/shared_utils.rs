@@ -6,6 +6,8 @@
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use swissarmyhammer::{Result, SwissArmyHammerError};
+use swissarmyhammer_todo::TodoError;
+use swissarmyhammer_common;
 
 /// Standard response format for MCP operations
 #[derive(Debug)]
@@ -192,6 +194,64 @@ impl McpErrorHandler {
         operation: &str,
     ) -> std::result::Result<T, McpError> {
         result.map_err(|e| Self::handle_error(e, operation))
+    }
+
+    /// Convert TodoError to appropriate MCP error response
+    pub fn handle_todo_error(error: TodoError, operation: &str) -> McpError {
+        tracing::error!("MCP todo operation '{}' failed: {}", operation, error);
+
+        match error {
+            // User input validation errors
+            TodoError::InvalidTodoListName(name) => {
+                McpError::invalid_params(format!("Invalid todo list name: {name}"), None)
+            }
+            TodoError::InvalidTodoId(id) => {
+                McpError::invalid_params(format!("Invalid todo item ID: {id}"), None)
+            }
+            TodoError::TodoListNotFound(name) => {
+                McpError::invalid_params(format!("Todo list '{name}' not found"), None)
+            }
+            TodoError::TodoItemNotFound(id, list) => {
+                McpError::invalid_params(format!("Todo item '{id}' not found in list '{list}'"), None)
+            }
+            TodoError::EmptyTask => {
+                McpError::invalid_params("Task description cannot be empty".to_string(), None)
+            }
+            // System errors
+            TodoError::Io(err) => {
+                McpError::internal_error(format!("IO error: {err}"), None)
+            }
+            TodoError::Yaml(err) => {
+                McpError::internal_error(format!("YAML error: {err}"), None)
+            }
+            TodoError::Common(common_err) => {
+                // Convert common error to main SwissArmyHammerError and delegate
+                let main_err = match common_err {
+                    swissarmyhammer_common::SwissArmyHammerError::NotInGitRepository => {
+                        SwissArmyHammerError::Other("Not in a Git repository".to_string())
+                    }
+                    swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(io_err) => {
+                        SwissArmyHammerError::Io(io_err)
+                    }
+                    swissarmyhammer_common::SwissArmyHammerError::InvalidPath { path } => {
+                        SwissArmyHammerError::Other(format!("Invalid path: {}", path.display()))
+                    }
+                    swissarmyhammer_common::SwissArmyHammerError::PermissionDenied { path } => {
+                        SwissArmyHammerError::Other(format!("Permission denied accessing: {}", path.display()))
+                    }
+                    swissarmyhammer_common::SwissArmyHammerError::Io { message } => {
+                        SwissArmyHammerError::Other(format!("I/O error: {}", message))
+                    }
+                    swissarmyhammer_common::SwissArmyHammerError::Other { message } => {
+                        SwissArmyHammerError::Other(message)
+                    }
+                };
+                Self::handle_error(main_err, operation)
+            }
+            TodoError::Other(msg) => {
+                McpError::internal_error(format!("Todo operation failed: {msg}"), None)
+            }
+        }
     }
 }
 

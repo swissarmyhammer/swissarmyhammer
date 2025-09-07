@@ -3,9 +3,9 @@
 //! This module provides filesystem-based storage for todo lists using YAML format.
 //! Todo lists are stored as `.todo.yaml` files in the `.swissarmyhammer/todo/` directory.
 
-use super::{get_todo_directory, validate_todo_list_name};
-use super::{TodoId, TodoItem, TodoList};
-use crate::error::{Result, SwissArmyHammerError};
+use crate::error::{Result, TodoError};
+use crate::types::{TodoId, TodoItem, TodoList};
+use crate::utils::{get_todo_directory, validate_todo_list_name};
 use std::fs;
 use std::path::PathBuf;
 
@@ -37,9 +37,7 @@ impl TodoStorage {
         validate_todo_list_name(todo_list)?;
 
         if task.trim().is_empty() {
-            return Err(SwissArmyHammerError::Other(
-                "Task cannot be empty".to_string(),
-            ));
+            return Err(TodoError::EmptyTask);
         }
 
         let path = self.get_list_path(todo_list)?;
@@ -92,18 +90,14 @@ impl TodoStorage {
         let path = self.get_list_path(todo_list)?;
 
         if !path.exists() {
-            return Err(SwissArmyHammerError::Other(format!(
-                "Todo list '{todo_list}' not found"
-            )));
+            return Err(TodoError::TodoListNotFound(todo_list.to_string()));
         }
 
         let mut list = self.load_todo_list(&path).await?;
 
         // Find and mark the item complete
         let item = list.find_item_mut(id).ok_or_else(|| {
-            SwissArmyHammerError::Other(format!(
-                "Todo item with ID '{id}' not found in list '{todo_list}'"
-            ))
+            TodoError::TodoItemNotFound(id.to_string(), todo_list.to_string())
         })?;
 
         item.mark_complete();
@@ -112,7 +106,7 @@ impl TodoStorage {
         if list.all_complete() {
             // Delete the file if all tasks are complete
             fs::remove_file(&path).map_err(|e| {
-                SwissArmyHammerError::Other(format!(
+                TodoError::other(format!(
                     "Failed to delete completed todo list '{todo_list}': {e}"
                 ))
             })?;
@@ -145,14 +139,14 @@ impl TodoStorage {
         }
 
         let entries = fs::read_dir(&self.base_dir).map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to read todo directory: {e}"))
+            TodoError::other(format!("Failed to read todo directory: {e}"))
         })?;
 
         let mut lists = Vec::new();
 
         for entry in entries {
             let entry = entry.map_err(|e| {
-                SwissArmyHammerError::Other(format!("Failed to read todo directory entry: {e}"))
+                TodoError::other(format!("Failed to read todo directory entry: {e}"))
             })?;
 
             if let Some(file_name) = entry.file_name().to_str() {
@@ -176,7 +170,7 @@ impl TodoStorage {
     /// Load a todo list from a YAML file
     async fn load_todo_list(&self, path: &PathBuf) -> Result<TodoList> {
         let content = fs::read_to_string(path).map_err(|e| {
-            SwissArmyHammerError::Other(format!(
+            TodoError::other(format!(
                 "Failed to read todo list file '{}': {}",
                 path.display(),
                 e
@@ -184,7 +178,7 @@ impl TodoStorage {
         })?;
 
         let list: TodoList = serde_yaml::from_str(&content).map_err(|e| {
-            SwissArmyHammerError::Other(format!(
+            TodoError::other(format!(
                 "Failed to parse todo list file '{}': {}",
                 path.display(),
                 e
@@ -199,7 +193,7 @@ impl TodoStorage {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                SwissArmyHammerError::Other(format!(
+                TodoError::other(format!(
                     "Failed to create todo directory '{}': {}",
                     parent.display(),
                     e
@@ -208,11 +202,11 @@ impl TodoStorage {
         }
 
         let content = serde_yaml::to_string(list).map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to serialize todo list: {e}"))
+            TodoError::other(format!("Failed to serialize todo list: {e}"))
         })?;
 
         fs::write(path, content).map_err(|e| {
-            SwissArmyHammerError::Other(format!(
+            TodoError::other(format!(
                 "Failed to write todo list file '{}': {}",
                 path.display(),
                 e
@@ -226,12 +220,9 @@ impl TodoStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::IsolatedTestHome;
 
     #[tokio::test]
     async fn test_create_todo_item() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -255,8 +246,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_next_todo_item() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -288,8 +277,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_complete() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -315,8 +302,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_complete_partial() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -356,8 +341,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_specific_item() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -408,8 +391,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_errors() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");
@@ -435,8 +416,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonexistent_list() {
-        let _guard = IsolatedTestHome::new();
-
         // Create a temporary directory for todo storage instead of using default
         let temp_dir = tempfile::TempDir::new().unwrap();
         let todo_dir = temp_dir.path().join("todo");

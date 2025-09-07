@@ -1,0 +1,23 @@
+[package]
+name = "swissarmyhammer-todo"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Todo list management system for ephemeral task tracking"
+
+[dependencies]
+# Workspace dependencies
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+
+# Local workspace dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

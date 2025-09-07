@@ -6555,6 +6555,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "tempfile",
  "thiserror 1.0.69",
  "ulid",
 ]
@@ -6650,6 +6651,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-todo"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "swissarmyhammer-common",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "swissarmyhammer-tools"
 version = "0.1.0"
 dependencies = [
@@ -6683,9 +6698,11 @@ dependencies = [
  "serde",
  "serde_json",
  "swissarmyhammer",
+ "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-memoranda",
+ "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

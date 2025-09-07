@@ -25,4 +25,15 @@
 //! to eliminate redundancy and ensure consistent behavior. New utilities should
 //! follow the design principles and documentation standards outlined above.
 
+pub mod directory_utils;
 pub mod paths;
+pub mod ulid_generator;
+
+// Re-export commonly used ULID functions
+pub use ulid_generator::{generate_monotonic_ulid, generate_monotonic_ulid_string};
+
+// Re-export commonly used directory functions
+pub use directory_utils::{
+    find_git_repository_root_from, get_or_create_swissarmyhammer_directory,
+    get_or_create_swissarmyhammer_directory_from,
+};

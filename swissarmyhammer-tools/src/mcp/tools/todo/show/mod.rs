@@ -1,11 +1,11 @@
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use crate::mcp::types::ShowTodoRequest;
+use swissarmyhammer_todo::ShowTodoRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
-use swissarmyhammer::todo::TodoStorage;
+use swissarmyhammer_todo::TodoStorage;
 
 /// MCP tool for showing todo items
 #[derive(Default)]
@@ -77,7 +77,7 @@ impl McpTool for ShowTodoTool {
 
         // Create storage instance
         let storage = TodoStorage::new_default()
-            .map_err(|e| McpErrorHandler::handle_error(e, "create todo storage"))?;
+            .map_err(|e| McpErrorHandler::handle_todo_error(e, "create todo storage"))?;
 
         // Get the requested todo item
         match storage
@@ -126,7 +126,7 @@ impl McpTool for ShowTodoTool {
                     ))
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "get todo item")),
+            Err(e) => Err(McpErrorHandler::handle_todo_error(e, "get todo item")),
         }
     }
 }

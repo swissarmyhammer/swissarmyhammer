@@ -16,9 +16,11 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 # Core library dependency
 swissarmyhammer = { path = "../swissarmyhammer" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
+swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 
 # Async and JSON processing
 tokio = { workspace = true }
