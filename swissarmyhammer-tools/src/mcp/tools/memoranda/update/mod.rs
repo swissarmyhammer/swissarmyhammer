@@ -65,7 +65,7 @@ impl McpTool for UpdateMemoTool {
             crate::mcp::shared_utils::McpErrorHandler::handle_error(e, "validate memo content")
         })?;
 
-        let memo_id = match swissarmyhammer::memoranda::MemoId::from_string(request.id.clone()) {
+        let memo_id = match swissarmyhammer_memoranda::MemoTitle::new(request.id.clone()) {
             Ok(id) => id,
             Err(_) => {
                 return Err(McpError::invalid_params(
@@ -75,20 +75,20 @@ impl McpTool for UpdateMemoTool {
             }
         };
 
-        let memo_storage = context.memo_storage.write().await;
-        match memo_storage.update_memo(&memo_id, request.content).await {
+        let mut memo_storage = context.memo_storage.write().await;
+        match memo_storage.update(&memo_id, request.content.into()).await {
             Ok(memo) => {
-                tracing::info!("Updated memo {}", memo.id);
+                tracing::info!("Updated memo {}", memo.title);
                 Ok(BaseToolImpl::create_success_response(format!(
                     "Successfully updated memo:\n\nID: {}\nTitle: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.id,
+                    memo.title,
                     memo.title,
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
                     memo.content
                 )))
             }
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                e,
+                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
                 "update memo",
             )),
         }
@@ -124,9 +124,12 @@ mod tests {
         let context = create_test_context().await;
 
         // First create a memo to update
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         let memo = memo_storage
-            .create_memo("Test Memo".to_string(), "Original content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Test Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Original content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock
@@ -134,7 +137,7 @@ mod tests {
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "id".to_string(),
-            serde_json::Value::String(memo.id.to_string()),
+            serde_json::Value::String(memo.title.to_string()),
         );
         arguments.insert(
             "content".to_string(),
@@ -155,9 +158,12 @@ mod tests {
         let context = create_test_context().await;
 
         // First create a memo to update
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         let memo = memo_storage
-            .create_memo("Test Memo".to_string(), "Original content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Test Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Original content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock
@@ -165,7 +171,7 @@ mod tests {
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "id".to_string(),
-            serde_json::Value::String(memo.id.to_string()),
+            serde_json::Value::String(memo.title.to_string()),
         );
         arguments.insert(
             "content".to_string(),

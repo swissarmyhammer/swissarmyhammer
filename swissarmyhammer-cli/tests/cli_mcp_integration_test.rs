@@ -128,6 +128,7 @@ async fn test_issue_create_tool_integration() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_memo_create_tool_integration() {
     let temp_dir = setup_test_environment();
 
@@ -185,6 +186,7 @@ async fn test_nonexistent_tool_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_invalid_arguments_error() {
     let temp_dir = setup_test_environment();
 

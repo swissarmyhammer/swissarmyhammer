@@ -18,7 +18,7 @@ async fn test_mcp_server_creation() {
     let _guard = std::env::set_current_dir(test_env.path());
 
     let library = PromptLibrary::new();
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).await.unwrap();
 
     let info = server.get_info();
     // Just verify we can get server info - details depend on default implementation
@@ -33,7 +33,7 @@ async fn test_mcp_server_creation() {
 async fn test_mcp_server_exposes_shell_tools() {
     // Create a test library and server
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     // Test that server info includes shell tools capabilities
     let info = server.get_info();
@@ -59,7 +59,7 @@ async fn test_mcp_server_list_prompts() {
         .with_description("Test description".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).await.unwrap();
     let prompts = server.list_prompts().await.unwrap();
 
     assert_eq!(prompts.len(), 1);
@@ -76,7 +76,7 @@ async fn test_mcp_server_get_prompt() {
         Prompt::new("test", "Hello {{ name }}!").with_description("Greeting prompt".to_string());
     library.add(prompt).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).await.unwrap();
     let mut arguments = HashMap::new();
     arguments.insert("name".to_string(), "World".to_string());
 
@@ -91,7 +91,7 @@ async fn test_mcp_server_get_prompt() {
 #[tokio::test]
 async fn test_mcp_server_exposes_prompt_capabilities() {
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     let info = server.get_info();
 
@@ -145,7 +145,7 @@ async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
 async fn test_mcp_server_file_watching_integration() {
     // Create a test library and server
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     // Test that file watching requires a peer connection
     // In tests, we can't easily create a real peer, so we skip the file watching test
@@ -175,7 +175,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     // The server should use the same directories for file watching
     // This test ensures the fix for hardcoded paths is working
     let library = PromptLibrary::new();
-    let _server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
+    let _server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).await.unwrap();
 
     // File watching now requires a peer connection from the MCP client
     // The important thing is that both use get_prompt_directories() method
@@ -199,7 +199,7 @@ async fn test_mcp_server_graceful_error_for_missing_prompt() {
     library
         .add(Prompt::new("test", "Hello {{ name }}!").with_description("Test prompt"))
         .unwrap();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     // Test getting an existing prompt works
     let mut args = HashMap::new();
@@ -225,7 +225,7 @@ async fn test_mcp_server_graceful_error_for_missing_prompt() {
 async fn test_mcp_server_exposes_workflow_tools_capability() {
     // Create a test library and server
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     let info = server.get_info();
 
@@ -276,7 +276,7 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
     .with_description("Another partial template".to_string());
     library.add(partial_with_marker).unwrap();
 
-    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).unwrap();
+    let server = McpServer::new_with_work_dir(library, test_env.path().to_path_buf()).await.unwrap();
 
     // Test list_prompts - should only return regular prompts
     let prompts = server.list_prompts().await.unwrap();
@@ -305,7 +305,7 @@ async fn test_mcp_server_does_not_expose_partial_templates() {
 async fn test_mcp_server_exposes_issue_tools() {
     // Create a test library and server
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     // Test that server info includes issue tracking capabilities
     let info = server.get_info();
@@ -381,7 +381,7 @@ async fn test_mcp_server_tool_schemas_are_valid() {
 async fn test_mcp_server_initializes_with_issue_storage() {
     // Test that server can be created and includes issue storage
     let library = PromptLibrary::new();
-    let server = McpServer::new(library).unwrap();
+    let server = McpServer::new(library).await.unwrap();
 
     // Verify server info includes issue tracking in instructions
     let info = server.get_info();
@@ -493,7 +493,7 @@ mod mcp_integration_tests {
         // Test 1: Server with working directory that has no .swissarmyhammer should use legacy behavior
         {
             let library = PromptLibrary::new();
-            let server = McpServer::new_with_work_dir(library, temp_path.to_path_buf()).unwrap();
+            let server = McpServer::new_with_work_dir(library, temp_path.to_path_buf()).await.unwrap();
 
             // Server should be created successfully even without .swissarmyhammer directory
             let info = server.get_info();
@@ -511,7 +511,7 @@ mod mcp_integration_tests {
             std::fs::create_dir_all(&swissarmyhammer_dir).unwrap();
 
             let library = PromptLibrary::new();
-            let server = McpServer::new_with_work_dir(library, temp_path.to_path_buf()).unwrap();
+            let server = McpServer::new_with_work_dir(library, temp_path.to_path_buf()).await.unwrap();
 
             // Server should be created successfully with new storage defaults
             let info = server.get_info();
@@ -536,7 +536,7 @@ mod mcp_integration_tests {
             std::fs::create_dir_all(&swissarmyhammer_in_work_dir).unwrap();
 
             let library = PromptLibrary::new();
-            let server = McpServer::new_with_work_dir(library, different_work_dir).unwrap();
+            let server = McpServer::new_with_work_dir(library, different_work_dir).await.unwrap();
 
             // Server should be created successfully - this proves the working directory context worked
             let info = server.get_info();
@@ -574,7 +574,7 @@ mod mcp_integration_tests {
 
         // Create MCP server with work_dir that has legacy issues directory
         let library = PromptLibrary::new();
-        let server = McpServer::new_with_work_dir(library, temp_path.clone()).unwrap();
+        let server = McpServer::new_with_work_dir(library, temp_path.clone()).await.unwrap();
 
         // Server should be created successfully
         let info = server.get_info();

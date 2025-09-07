@@ -95,6 +95,9 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 # Configuration support
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 
+# Memoranda support
+swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
+
 # Syntax highlighting
 syntect = { workspace = true }
 
@@ -130,6 +133,7 @@ criterion = { workspace = true }
 tracing-subscriber = { workspace = true }
 sysinfo = { workspace = true }
 serial_test = "3.1"
+rand = { workspace = true }
 
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }

@@ -493,7 +493,7 @@ mod tests {
         use std::sync::Arc;
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
-        use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock context
@@ -505,7 +505,7 @@ mod tests {
         // Create temporary directory for memo storage
         let temp_dir = tempfile::tempdir().unwrap();
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            FileSystemMemoStorage::new(temp_dir.path().join("memos")),
+            MarkdownMemoStorage::new(temp_dir.path().join("memos")),
         )));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let context = ToolContext::new(
@@ -544,7 +544,7 @@ mod tests {
         use std::sync::Arc;
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
-        use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock context
@@ -556,7 +556,7 @@ mod tests {
         // Create temporary directory for memo storage
         let temp_dir2 = tempfile::tempdir().unwrap();
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            FileSystemMemoStorage::new(temp_dir2.path().join("memos")),
+            MarkdownMemoStorage::new(temp_dir2.path().join("memos")),
         )));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let context = ToolContext::new(

@@ -80,3 +80,6 @@ builtin/workflows/*-test.md
 output_*.txt
 
 test_validation
+
+# Memo backup directory (scratch files)
+.swissarmyhammer/memos_backup/

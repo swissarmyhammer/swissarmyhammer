@@ -89,7 +89,7 @@ pub async fn start_in_process_mcp_server(config: &McpServerConfig) -> Result<Mcp
 
     // Create the underlying MCP server
     let library = swissarmyhammer::PromptLibrary::new();
-    let mcp_server = McpServer::new(library)?;
+    let mcp_server = McpServer::new(library).await?;
     mcp_server.initialize().await?;
 
     // Start HTTP server with the MCP server
@@ -104,7 +104,7 @@ pub async fn start_http_server(bind_addr: &str) -> Result<McpServerHandle> {
 
     // Create the underlying MCP server
     let library = swissarmyhammer::PromptLibrary::new();
-    let mcp_server = McpServer::new(library)?;
+    let mcp_server = McpServer::new(library).await?;
     mcp_server.initialize().await?;
 
     start_http_server_with_mcp_server(&host, port, mcp_server).await

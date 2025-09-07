@@ -59,19 +59,24 @@ impl McpTool for CreateMemoTool {
 
         // Note: Both title and content can be empty - storage layer supports this
 
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
+        let title = match swissarmyhammer_memoranda::MemoTitle::new(request.title) {
+            Ok(title) => title,
+            Err(e) => return Ok(BaseToolImpl::create_error_response(format!("Invalid title: {}", e), None)),
+        };
+        
         match memo_storage
-            .create_memo(request.title, request.content)
+            .create(title, request.content.into())
             .await
         {
             Ok(memo) => {
-                tracing::info!("Created memo {}", memo.id);
+                tracing::info!("Created memo {}", memo.title);
                 Ok(BaseToolImpl::create_success_response(format!(
                     "Successfully created memo '{}' with ID: {}\n\nTitle: {}\nContent: {}",
-                    memo.title, memo.id, memo.title, memo.content
+                    memo.title, memo.title, memo.title, memo.content
                 )))
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "create memo")),
+            Err(e) => Err(McpErrorHandler::handle_error(swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()), "create memo")),
         }
     }
 }

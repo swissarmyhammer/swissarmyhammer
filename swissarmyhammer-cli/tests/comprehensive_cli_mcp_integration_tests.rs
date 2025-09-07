@@ -74,6 +74,7 @@ async fn test_all_issue_tools_execution() -> Result<()> {
 
 /// Test all memo-related MCP tools can be executed
 #[tokio::test]
+#[serial_test::serial]
 async fn test_all_memo_tools_execution() -> Result<()> {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let temp_path = _env.temp_dir();
@@ -232,11 +233,14 @@ async fn test_mcp_error_propagation() -> Result<()> {
         "Missing required arguments should cause error"
     );
 
-    // Test non-existent resource error
+    // Test non-existent resource handling
     let nonexistent_args =
-        context.create_arguments(vec![("id", json!("01ARZ3NDEKTSV4RRFFQ69G5FAV"))]);
+        context.create_arguments(vec![("id", json!("NonExistentMemo"))]);
     let result = context.execute_tool("memo_get", nonexistent_args).await;
-    assert!(result.is_err(), "Non-existent memo should cause error");
+    assert!(result.is_ok(), "Non-existent memo should return success with not found message");
+    let response = result.unwrap();
+    let text = response.content[0].as_text().unwrap().text.as_str();
+    assert!(text.contains("Memo not found"), "Should contain not found message");
 
     Ok(())
 }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
@@ -29,7 +29,7 @@ async fn create_property_test_context() -> ToolContext {
     let temp_dir = tempfile::tempdir().unwrap();
     let memo_temp_dir = temp_dir.path().join("memos");
     let memo_storage: Arc<tokio::sync::RwLock<Box<dyn MemoStorage>>> = Arc::new(
-        tokio::sync::RwLock::new(Box::new(FileSystemMemoStorage::new(memo_temp_dir))),
+        tokio::sync::RwLock::new(Box::new(MarkdownMemoStorage::new(memo_temp_dir))),
     );
 
     let rate_limiter = Arc::new(

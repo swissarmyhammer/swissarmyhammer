@@ -79,10 +79,10 @@ impl CliToolContext {
     /// Create memo storage backend
     fn create_memo_storage(
         current_dir: &std::path::Path,
-    ) -> Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>> {
+    ) -> Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>> {
         // First check if SWISSARMYHAMMER_MEMOS_DIR environment variable is set
         let storage = if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
-            swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new(
+            swissarmyhammer_memoranda::MarkdownMemoStorage::new(
                 std::path::PathBuf::from(custom_path),
             )
         } else {
@@ -96,7 +96,7 @@ impl CliToolContext {
                     e
                 );
             }
-            swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new(memos_dir)
+            swissarmyhammer_memoranda::MarkdownMemoStorage::new(memos_dir)
         };
         Arc::new(RwLock::new(Box::new(storage)))
     }
@@ -215,11 +215,11 @@ mod tests {
         // Context creation successful - this verifies the tool registry is working
     }
 
-    #[test]
-    fn test_create_arguments() {
+    #[tokio::test]
+    async fn test_create_arguments() {
         let _context = CliToolContext {
             tool_registry: Arc::new(ToolRegistry::new()),
-            tool_context: create_mock_tool_context(),
+            tool_context: create_mock_tool_context().await,
         };
 
         let mut args = Map::new();
@@ -306,7 +306,7 @@ mod tests {
     }
 
     // Helper function for tests
-    fn create_mock_tool_context() -> ToolContext {
+    async fn create_mock_tool_context() -> ToolContext {
         use std::path::PathBuf;
 
         let issue_storage: IssueStorageArc = Arc::new(RwLock::new(Box::new(
@@ -319,9 +319,9 @@ mod tests {
 
         let memo_storage: Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>> =
             Arc::new(RwLock::new(Box::new(
-                swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new_default()
+                swissarmyhammer::memoranda::MarkdownMemoStorage::new_default().await
                     .unwrap_or_else(|_| {
-                        swissarmyhammer::memoranda::storage::FileSystemMemoStorage::new(
+                        swissarmyhammer::memoranda::MarkdownMemoStorage::new(
                             PathBuf::from("./test_issues"),
                         )
                     }),

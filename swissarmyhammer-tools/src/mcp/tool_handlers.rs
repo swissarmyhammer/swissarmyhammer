@@ -6,7 +6,8 @@ use super::shared_utils::{McpErrorHandler, McpFormatter, McpValidation};
 use rmcp::model::*;
 use rmcp::ErrorData as McpError;
 use std::sync::Arc;
-use swissarmyhammer::memoranda::{MemoId, MemoStorage};
+use swissarmyhammer_memoranda::{MemoStorage, MemoTitle, MemoContent};
+use swissarmyhammer::error::SwissArmyHammerError;
 use tokio::sync::RwLock;
 
 /// Preview length for memo list operations (characters)
@@ -37,16 +38,16 @@ impl ToolHandlers {
     ///
     /// * `String` - Formatted memo preview
     fn format_memo_preview(
-        memo: &swissarmyhammer::memoranda::Memo,
+        memo: &swissarmyhammer_memoranda::Memo,
         preview_length: usize,
     ) -> String {
         format!(
             "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
             memo.title,
-            memo.id,
+            memo.title,
             McpFormatter::format_timestamp(memo.created_at),
             McpFormatter::format_timestamp(memo.updated_at),
-            McpFormatter::format_preview(&memo.content, preview_length)
+            McpFormatter::format_preview(memo.content.as_str(), preview_length)
         )
     }
 
@@ -88,19 +89,27 @@ impl ToolHandlers {
 
         // Note: Both title and content can be empty - storage layer supports this
 
-        let memo_storage = self.memo_storage.write().await;
+        let mut memo_storage = self.memo_storage.write().await;
         match memo_storage
-            .create_memo(request.title, request.content)
+            .create(
+                match MemoTitle::new(request.title.clone()) {
+                    Ok(title) => title,
+                    Err(_) => return Err(McpError::invalid_params(
+                        format!("Invalid title format: {}", request.title), None
+                    ))
+                },
+                MemoContent::new(request.content)
+            )
             .await
         {
             Ok(memo) => {
-                tracing::info!("Created memo {}", memo.id);
+                tracing::info!("Created memo {}", memo.title);
                 Ok(create_success_response(format!(
                     "Successfully created memo '{}' with ID: {}\n\nTitle: {}\nContent: {}",
-                    memo.title, memo.id, memo.title, memo.content
+                    memo.title, memo.title, memo.title, memo.content
                 )))
             }
-            Err(e) => Err(Self::handle_memo_error(e, "create memo")),
+            Err(e) => Err(Self::handle_memo_error(SwissArmyHammerError::Storage(e.to_string()), "create memo")),
         }
     }
 
@@ -121,7 +130,7 @@ impl ToolHandlers {
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::debug!("Getting memo with ID: {}", request.id);
 
-        let memo_id = match MemoId::from_string(request.id.clone()) {
+        let memo_id = match MemoTitle::new(request.id.clone()) {
             Ok(id) => id,
             Err(_) => {
                 return Err(McpError::invalid_params(
@@ -132,19 +141,22 @@ impl ToolHandlers {
         };
 
         let memo_storage = self.memo_storage.read().await;
-        match memo_storage.get_memo(&memo_id).await {
-            Ok(memo) => {
-                tracing::info!("Retrieved memo {}", memo.id);
+        match memo_storage.get(&memo_id).await {
+            Ok(Some(memo)) => {
+                tracing::info!("Retrieved memo {}", memo.title);
                 Ok(create_success_response(format!(
                     "Memo found:\n\nID: {}\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.id,
-                    memo.title,
+                    memo.title.to_string(),
+                    memo.title.to_string(),
                     McpFormatter::format_timestamp(memo.created_at),
                     McpFormatter::format_timestamp(memo.updated_at),
-                    memo.content
+                    memo.content.to_string()
                 )))
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "get memo")),
+            Ok(None) => {
+                Ok(create_success_response(format!("Memo not found with ID: {}", memo_id.to_string())))
+            }
+            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "get memo")),
         }
     }
 
@@ -169,7 +181,7 @@ impl ToolHandlers {
         McpValidation::validate_not_empty(&request.content, "memo content")
             .map_err(|e| McpErrorHandler::handle_error(e, "validate memo content"))?;
 
-        let memo_id = match MemoId::from_string(request.id.clone()) {
+        let memo_id = match MemoTitle::new(request.id.clone()) {
             Ok(id) => id,
             Err(_) => {
                 return Err(McpError::invalid_params(
@@ -179,19 +191,19 @@ impl ToolHandlers {
             }
         };
 
-        let memo_storage = self.memo_storage.write().await;
-        match memo_storage.update_memo(&memo_id, request.content).await {
+        let mut memo_storage = self.memo_storage.write().await;
+        match memo_storage.update(&memo_id, MemoContent::new(request.content)).await {
             Ok(memo) => {
-                tracing::info!("Updated memo {}", memo.id);
+                tracing::info!("Updated memo {}", memo.title);
                 Ok(create_success_response(format!(
                     "Successfully updated memo:\n\nID: {}\nTitle: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.id,
+                    memo.title,
                     memo.title,
                     McpFormatter::format_timestamp(memo.updated_at),
                     memo.content
                 )))
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "update memo")),
+            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "update memo")),
         }
     }
 
@@ -212,7 +224,7 @@ impl ToolHandlers {
     ) -> std::result::Result<CallToolResult, McpError> {
         tracing::debug!("Deleting memo with ID: {}", request.id);
 
-        let memo_id = match MemoId::from_string(request.id.clone()) {
+        let memo_id = match MemoTitle::new(request.id.clone()) {
             Ok(id) => id,
             Err(_) => {
                 return Err(McpError::invalid_params(
@@ -222,16 +234,23 @@ impl ToolHandlers {
             }
         };
 
-        let memo_storage = self.memo_storage.write().await;
-        match memo_storage.delete_memo(&memo_id).await {
-            Ok(()) => {
-                tracing::info!("Deleted memo {}", request.id);
-                Ok(create_success_response(format!(
-                    "Successfully deleted memo with ID: {}",
-                    request.id
-                )))
+        let mut memo_storage = self.memo_storage.write().await;
+        match memo_storage.delete(&memo_id).await {
+            Ok(deleted) => {
+                if deleted {
+                    tracing::info!("Deleted memo {}", request.id);
+                    Ok(create_success_response(format!(
+                        "Successfully deleted memo with ID: {}",
+                        request.id
+                    )))
+                } else {
+                    Ok(create_success_response(format!(
+                        "Memo with ID {} was not found",
+                        request.id
+                    )))
+                }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "delete memo")),
+            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "delete memo")),
         }
     }
 
@@ -249,7 +268,7 @@ impl ToolHandlers {
         tracing::debug!("Listing all memos");
 
         let memo_storage = self.memo_storage.read().await;
-        match memo_storage.list_memos().await {
+        match memo_storage.list().await {
             Ok(memos) => {
                 tracing::info!("Retrieved {} memos", memos.len());
                 if memos.is_empty() {
@@ -268,7 +287,7 @@ impl ToolHandlers {
                     )))
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "list memos")),
+            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "list memos")),
         }
     }
 
@@ -286,7 +305,7 @@ impl ToolHandlers {
         tracing::debug!("Getting all memo context");
 
         let memo_storage = self.memo_storage.read().await;
-        match memo_storage.list_memos().await {
+        match memo_storage.list().await {
             Ok(memos) => {
                 tracing::info!("Retrieved {} memos for context", memos.len());
                 if memos.is_empty() {
@@ -302,7 +321,7 @@ impl ToolHandlers {
                             format!(
                                 "=== {} (ID: {}) ===\nCreated: {}\nUpdated: {}\n\n{}",
                                 memo.title,
-                                memo.id,
+                                memo.title,
                                 McpFormatter::format_timestamp(memo.created_at),
                                 McpFormatter::format_timestamp(memo.updated_at),
                                 memo.content
@@ -318,7 +337,7 @@ impl ToolHandlers {
                     )))
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(e, "get memo context")),
+            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "get memo context")),
         }
     }
 }

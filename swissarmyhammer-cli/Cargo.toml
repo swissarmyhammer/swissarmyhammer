@@ -26,6 +26,7 @@ swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-tools = { path = "../swissarmyhammer-tools" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
+swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 
 # CLI dependencies
 clap = { workspace = true }
@@ -72,6 +73,7 @@ git2 = { workspace = true }
 swissarmyhammer = { path = "../swissarmyhammer" }
 predicates = { workspace = true }
 tempfile = { workspace = true }
+serial_test = "3.1"
 
 nix = { version = "0.27", features = ["signal"] }
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -60,7 +60,7 @@ impl IssueShowTestEnvironment {
 
         // Create memo storage
         let memo_storage =
-            Box::new(MarkdownMemoStorage::new_default().expect("Failed to create memo storage"));
+            Box::new(MarkdownMemoStorage::new_default().await.expect("Failed to create memo storage"));
         let memo_storage = Arc::new(RwLock::new(memo_storage as Box<dyn MemoStorage>));
 
         // Create tool handlers
@@ -723,7 +723,7 @@ async fn test_issue_show_concurrent_access() {
         let tool = ShowIssueTool::new();
         // Create memo storage for this context
         let memo_storage =
-            Box::new(MarkdownMemoStorage::new_default().expect("Failed to create memo storage"));
+            Box::new(MarkdownMemoStorage::new_default().await.expect("Failed to create memo storage"));
         let memo_storage = Arc::new(RwLock::new(memo_storage as Box<dyn MemoStorage>));
 
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));

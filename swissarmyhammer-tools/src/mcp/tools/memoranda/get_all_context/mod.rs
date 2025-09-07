@@ -52,13 +52,16 @@ impl McpTool for GetAllContextMemoTool {
         tracing::debug!("Getting all memo context");
 
         let memo_storage = context.memo_storage.read().await;
-        match memo_storage.list_memos().await {
+        match memo_storage.list().await {
             Ok(memos) => {
                 tracing::info!("Retrieved {} memos for context", memos.len());
                 if memos.is_empty() {
-                    Ok(BaseToolImpl::create_success_response(
-                        "No memos available".to_string(),
-                    ))
+                    let summary = crate::mcp::shared_utils::McpFormatter::format_list_summary(
+                        "memo",
+                        0,
+                        0,
+                    );
+                    Ok(BaseToolImpl::create_success_response(summary))
                 } else {
                     // Sort memos by updated_at descending (most recent first)
                     let mut sorted_memos = memos;
@@ -70,7 +73,7 @@ impl McpTool for GetAllContextMemoTool {
                             format!(
                                 "=== {} (ID: {}) ===\nCreated: {}\nUpdated: {}\n\n{}",
                                 memo.title,
-                                memo.id,
+                                memo.title.to_string(),
                                 crate::mcp::shared_utils::McpFormatter::format_timestamp(
                                     memo.created_at
                                 ),
@@ -91,7 +94,7 @@ impl McpTool for GetAllContextMemoTool {
                 }
             }
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                e,
+                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
                 "get memo context",
             )),
         }
@@ -141,13 +144,19 @@ mod tests {
         let context = create_test_context().await;
 
         // Create some test memos
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         memo_storage
-            .create_memo("First Memo".to_string(), "First content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("First content".to_string())
+            )
             .await
             .unwrap();
         memo_storage
-            .create_memo("Second Memo".to_string(), "Second content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Second Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock
@@ -168,9 +177,12 @@ mod tests {
         let context = create_test_context().await;
 
         // Create memos with some delay to ensure different timestamps
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         let _first_memo = memo_storage
-            .create_memo("First Memo".to_string(), "First content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("First content".to_string())
+            )
             .await
             .unwrap();
 
@@ -178,7 +190,10 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         let _second_memo = memo_storage
-            .create_memo("Second Memo".to_string(), "Second content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Second Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock
@@ -202,9 +217,12 @@ mod tests {
         let context = create_test_context().await;
 
         // Create exactly one memo
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         memo_storage
-            .create_memo("Single Memo".to_string(), "Single content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Single Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Single content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock

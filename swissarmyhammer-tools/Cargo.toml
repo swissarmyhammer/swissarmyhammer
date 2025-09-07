@@ -18,6 +18,7 @@ categories = ["command-line-utilities", "development-tools"]
 swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
+swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 
 # Async and JSON processing
 tokio = { workspace = true }

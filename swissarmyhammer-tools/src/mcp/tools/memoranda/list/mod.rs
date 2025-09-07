@@ -51,13 +51,16 @@ impl McpTool for ListMemoTool {
         tracing::debug!("Listing all memos");
 
         let memo_storage = context.memo_storage.read().await;
-        match memo_storage.list_memos().await {
+        match memo_storage.list().await {
             Ok(memos) => {
                 tracing::info!("Retrieved {} memos", memos.len());
                 if memos.is_empty() {
-                    Ok(BaseToolImpl::create_success_response(
-                        "No memos found".to_string(),
-                    ))
+                    let summary = crate::mcp::shared_utils::McpFormatter::format_list_summary(
+                        "memo",
+                        0,
+                        0,
+                    );
+                    Ok(BaseToolImpl::create_success_response(summary))
                 } else {
                     let memo_list = memos
                         .iter()
@@ -81,7 +84,7 @@ impl McpTool for ListMemoTool {
                 }
             }
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                e,
+                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
                 "list memos",
             )),
         }
@@ -112,16 +115,11 @@ mod tests {
 
     #[test]
     fn test_format_memo_preview() {
-        use chrono::Utc;
-        use swissarmyhammer::memoranda::{Memo, MemoId};
+        use swissarmyhammer_memoranda::{Memo, MemoTitle, MemoContent};
 
-        let memo = Memo {
-            id: MemoId::new(),
-            title: "Test Memo".to_string(),
-            content: "This is a long piece of content that should be truncated in the preview to show only the first part".to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
+        let title = MemoTitle::new("Test Memo".to_string()).unwrap();
+        let content = MemoContent::new("This is a long piece of content that should be truncated in the preview to show only the first part".to_string());
+        let memo = Memo::new(title, content);
 
         let preview = crate::mcp::shared_utils::McpFormatter::format_memo_preview(&memo, 50);
         assert!(preview.contains("Test Memo"));
@@ -151,13 +149,19 @@ mod tests {
         let context = create_test_context().await;
 
         // Create some test memos
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         memo_storage
-            .create_memo("First Memo".to_string(), "First content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("First content".to_string())
+            )
             .await
             .unwrap();
         memo_storage
-            .create_memo("Second Memo".to_string(), "Second content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Second Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock

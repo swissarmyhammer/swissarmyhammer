@@ -334,16 +334,16 @@ impl McpFormatter {
     /// This provides standardized formatting for memo displays across all tools,
     /// ensuring consistent presentation in list, search, and other operations.
     pub fn format_memo_preview(
-        memo: &swissarmyhammer::memoranda::Memo,
+        memo: &swissarmyhammer_memoranda::Memo,
         preview_length: usize,
     ) -> String {
         format!(
             "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
             memo.title,
-            memo.id,
+            memo.title.as_str(),
             Self::format_timestamp(memo.created_at),
             Self::format_timestamp(memo.updated_at),
-            Self::format_preview(&memo.content, preview_length)
+            Self::format_preview(memo.content.as_str(), preview_length)
         )
     }
 }
@@ -422,16 +422,11 @@ mod tests {
 
     #[test]
     fn test_formatter_memo_preview() {
-        use chrono::Utc;
-        use swissarmyhammer::memoranda::{Memo, MemoId};
+        use swissarmyhammer_memoranda::{Memo, MemoTitle, MemoContent};
 
-        let memo = Memo {
-            id: MemoId::new(),
-            title: "Test Memo".to_string(),
-            content: "This is a long piece of content that should be truncated in the preview to show only the first part".to_string(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
+        let title = MemoTitle::new("Test Memo".to_string()).unwrap();
+        let content = MemoContent::new("This is a long piece of content that should be truncated in the preview to show only the first part".to_string());
+        let memo = Memo::new(title, content);
 
         let preview = McpFormatter::format_memo_preview(&memo, 50);
         assert!(preview.contains("Test Memo"));

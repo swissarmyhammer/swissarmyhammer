@@ -226,7 +226,7 @@ use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::RateLimitChecker;
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::IssueStorage;
-use swissarmyhammer::memoranda::MemoStorage;
+use swissarmyhammer_memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
 
 /// Context shared by all tools during execution
@@ -347,7 +347,7 @@ impl ToolContext {
 ///
 /// ```rust,ignore
 /// match storage.create_memo(title, content).await {
-///     Ok(memo) => Ok(BaseToolImpl::create_success_response(format!("Created: {}", memo.id))),
+///     Ok(memo) => Ok(BaseToolImpl::create_success_response(format!("Created: {}", memo.id()))),
 ///     Err(e) => Err(McpErrorHandler::handle_error(e, "create memo")),
 /// }
 /// ```
@@ -1412,7 +1412,7 @@ mod tests {
     async fn test_tool_execution() {
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
-        use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create temporary directory for test
@@ -1427,7 +1427,7 @@ mod tests {
         // Create memo storage using temporary directory
         let memo_dir = _temp_dir.path().join("memos");
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> =
-            Arc::new(RwLock::new(Box::new(FileSystemMemoStorage::new(memo_dir))));
+            Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(memo_dir))));
 
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
         let context = ToolContext::new(
