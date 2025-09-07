@@ -646,7 +646,7 @@ pub fn is_binary_content(data: &[u8]) -> bool {
         }
     }
 
-    return false;
+    false
 }
 
 /// Format output content with binary detection and safe string conversion

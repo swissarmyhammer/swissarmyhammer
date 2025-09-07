@@ -6482,6 +6482,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "serial_test",
+ "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-memoranda",
