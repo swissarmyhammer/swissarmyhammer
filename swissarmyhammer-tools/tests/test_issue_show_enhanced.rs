@@ -8,7 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer::config::Config;
-use swissarmyhammer::git::GitOperations;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;

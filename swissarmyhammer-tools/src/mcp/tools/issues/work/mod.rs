@@ -99,7 +99,7 @@ impl McpTool for WorkIssueTool {
             match git_ops.as_mut() {
                 Some(ops) => {
                     let full_branch_name = format!("issue/{}", branch_name);
-                    let branch_name_obj = swissarmyhammer::git::BranchName::new(&full_branch_name)
+                    let branch_name_obj = swissarmyhammer_git::BranchName::new(&full_branch_name)
                         .map_err(|e| McpError::internal_error(format!("Invalid branch name: {}", e), None))?;
                     
                     // Check if branch exists first

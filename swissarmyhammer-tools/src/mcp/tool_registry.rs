@@ -224,7 +224,7 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::RateLimitChecker;
-use swissarmyhammer::git::GitOperations;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::IssueStorage;
 use swissarmyhammer_memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
@@ -1410,7 +1410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
-        use swissarmyhammer::git::GitOperations;
+        use swissarmyhammer_git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};

@@ -8,7 +8,7 @@ use proptest::test_runner::Config as ProptestConfig;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer::git::GitOperations;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;

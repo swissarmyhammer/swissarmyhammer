@@ -7,6 +7,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
     register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
     register_shell_tools, register_web_fetch_tools, register_web_search_tools,
@@ -70,9 +71,9 @@ impl CliToolContext {
     /// Create git operations handler
     fn create_git_operations(
         working_dir: &std::path::Path,
-    ) -> Arc<Mutex<Option<swissarmyhammer::git::GitOperations>>> {
+    ) -> Arc<Mutex<Option<GitOperations>>> {
         Arc::new(Mutex::new(
-            swissarmyhammer::git::GitOperations::with_work_dir(working_dir.to_path_buf()).ok(),
+            GitOperations::with_work_dir(working_dir.to_path_buf()).ok(),
         ))
     }
 
@@ -314,7 +315,7 @@ mod tests {
                 .unwrap(),
         )));
 
-        let git_ops: Arc<Mutex<Option<swissarmyhammer::git::GitOperations>>> =
+        let git_ops: Arc<Mutex<Option<GitOperations>>> =
             Arc::new(Mutex::new(None));
 
         let memo_storage: Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>> =

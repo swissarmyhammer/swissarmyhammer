@@ -4,7 +4,7 @@
 //! for the flexible branching functionality.
 
 use std::sync::Arc;
-use swissarmyhammer::git::GitOperations;
+use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::BranchName;
 use tempfile::TempDir;
@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 // Import git2 utilities
 use anyhow::Result;
 use git2::{BranchType, Repository, Signature};
-use swissarmyhammer::git::git2_utils;
+use swissarmyhammer_git::git2_utils;
 
 /// Test environment for edge case testing
 struct EdgeCaseTestEnvironment {

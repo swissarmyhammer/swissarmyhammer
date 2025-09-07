@@ -214,7 +214,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
-    use swissarmyhammer::git::GitOperations;
+    use swissarmyhammer_git::GitOperations;
     use swissarmyhammer::issues::FileSystemIssueStorage;
     use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;
