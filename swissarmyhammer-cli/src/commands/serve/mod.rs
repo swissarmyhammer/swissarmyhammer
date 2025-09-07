@@ -113,7 +113,7 @@ async fn handle_stdio_serve() -> i32 {
 
     // Create library and server
     let library = PromptLibrary::new();
-    let server = match McpServer::new(library) {
+    let server = match McpServer::new(library).await {
         Ok(server) => server,
         Err(e) => {
             tracing::error!("Failed to create MCP server: {}", e);

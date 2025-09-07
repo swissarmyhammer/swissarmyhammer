@@ -479,7 +479,7 @@ mod tests {
     use std::sync::Arc;
     use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
     use swissarmyhammer::git::GitOperations;
-    use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+    use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;
     use tokio::sync::{Mutex, RwLock};
 
@@ -494,7 +494,7 @@ mod tests {
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         // Create temporary directory for memo storage
         let temp_dir = tempfile::tempdir().unwrap();
-        let memo_storage = Arc::new(RwLock::new(Box::new(FileSystemMemoStorage::new(
+        let memo_storage = Arc::new(RwLock::new(Box::new(MarkdownMemoStorage::new(
             temp_dir.path().join("memos"),
         )) as Box<dyn MemoStorage>));
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));

@@ -72,8 +72,10 @@ pub mod frontmatter;
 /// Issue tracking and management
 pub mod issues;
 
-/// Memoranda management and storage system
-pub mod memoranda;
+/// Memoranda management and storage system (re-exported from swissarmyhammer-memoranda)
+pub mod memoranda {
+    pub use swissarmyhammer_memoranda::*;
+}
 
 /// Todo list management system for ephemeral task tracking
 pub mod todo;
@@ -148,8 +150,8 @@ pub use workflow::{
 
 /// Memoranda (memo/note) management types
 pub use memoranda::{
-    CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoId,
-    SearchMemosRequest, SearchMemosResponse, UpdateMemoRequest,
+    CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoTitle, MemoContent,
+    UpdateMemoRequest, MemoStorage, MarkdownMemoStorage, MemoService,
 };
 
 /// Todo list management types
@@ -204,8 +206,8 @@ pub mod prelude {
 
     // Memoranda types for convenient access
     pub use crate::memoranda::{
-        CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoId,
-        SearchMemosRequest, SearchMemosResponse, UpdateMemoRequest,
+        CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoTitle, MemoContent,
+        UpdateMemoRequest, MemoStorage, MarkdownMemoStorage, MemoService,
     };
 
     // Todo types for convenient access

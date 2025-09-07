@@ -1680,7 +1680,7 @@ mod tests {
         use crate::test_utils::TestIssueEnvironment;
         use swissarmyhammer::git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
-        use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+        use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         let test_env = TestIssueEnvironment::new();
@@ -1689,7 +1689,7 @@ mod tests {
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         // Create temporary directory for memo storage
         let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-            FileSystemMemoStorage::new(test_env.path().join("memos")),
+            MarkdownMemoStorage::new(test_env.path().join("memos")),
         )));
 
         let tool_handlers = Arc::new(crate::mcp::tool_handlers::ToolHandlers::new(

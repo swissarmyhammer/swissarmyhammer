@@ -52,7 +52,7 @@ impl McpTool for GetMemoTool {
 
         tracing::debug!("Getting memo with ID: {}", request.id);
 
-        let memo_id = match swissarmyhammer::memoranda::MemoId::from_string(request.id.clone()) {
+        let memo_id = match swissarmyhammer_memoranda::MemoTitle::new(request.id.clone()) {
             Ok(id) => id,
             Err(_) => {
                 return Err(McpError::invalid_params(
@@ -63,20 +63,23 @@ impl McpTool for GetMemoTool {
         };
 
         let memo_storage = context.memo_storage.read().await;
-        match memo_storage.get_memo(&memo_id).await {
-            Ok(memo) => {
-                tracing::info!("Retrieved memo {}", memo.id);
+        match memo_storage.get(&memo_id).await {
+            Ok(Some(memo)) => {
+                tracing::info!("Retrieved memo {}", memo.title);
                 Ok(BaseToolImpl::create_success_response(format!(
                     "Memo found:\n\nID: {}\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.id,
-                    memo.title,
+                    memo.title.to_string(),
+                    memo.title.to_string(),
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
-                    memo.content
+                    memo.content.to_string()
                 )))
             }
+            Ok(None) => {
+                Ok(BaseToolImpl::create_success_response(format!("Memo not found with ID: {}", memo_id.to_string())))
+            }
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                e, "get memo",
+                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()), "get memo",
             )),
         }
     }
@@ -110,9 +113,12 @@ mod tests {
         let context = create_test_context().await;
 
         // First create a memo to retrieve
-        let memo_storage = context.memo_storage.write().await;
+        let mut memo_storage = context.memo_storage.write().await;
         let memo = memo_storage
-            .create_memo("Test Memo".to_string(), "Test content".to_string())
+            .create(
+                swissarmyhammer_memoranda::MemoTitle::new("Test Memo".to_string()).unwrap(),
+                swissarmyhammer_memoranda::MemoContent::new("Test content".to_string())
+            )
             .await
             .unwrap();
         drop(memo_storage); // Release the lock
@@ -120,7 +126,7 @@ mod tests {
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "id".to_string(),
-            serde_json::Value::String(memo.id.to_string()),
+            serde_json::Value::String(memo.title.to_string()),
         );
 
         let result = tool.execute(arguments, &context).await;
@@ -137,9 +143,10 @@ mod tests {
         let context = create_test_context().await;
 
         let mut arguments = serde_json::Map::new();
+        // Use actually invalid title format with forbidden filesystem character
         arguments.insert(
             "id".to_string(),
-            serde_json::Value::String("invalid-id".to_string()),
+            serde_json::Value::String("invalid/id".to_string()),
         );
 
         let result = tool.execute(arguments, &context).await;
@@ -154,11 +161,15 @@ mod tests {
         let mut arguments = serde_json::Map::new();
         arguments.insert(
             "id".to_string(),
-            serde_json::Value::String("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()),
+            serde_json::Value::String("NonExistentMemo".to_string()),
         );
 
         let result = tool.execute(arguments, &context).await;
-        assert!(result.is_err()); // Should fail because memo doesn't exist
+        assert!(result.is_ok()); // Should succeed with "not found" message
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        let text = call_result.content[0].as_text().unwrap().text.as_str();
+        assert!(text.contains("Memo not found"));
     }
 
     #[tokio::test]

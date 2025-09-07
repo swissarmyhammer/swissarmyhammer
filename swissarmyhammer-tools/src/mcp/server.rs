@@ -11,7 +11,7 @@ use swissarmyhammer::common::rate_limiter::get_rate_limiter;
 use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
+use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::workflow::{
     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,
@@ -53,12 +53,12 @@ impl McpServer {
     /// # Errors
     ///
     /// Returns an error if workflow storage, issue storage, or git operations fail to initialize.
-    pub fn new(library: PromptLibrary) -> Result<Self> {
+    pub async fn new(library: PromptLibrary) -> Result<Self> {
         let work_dir = std::env::current_dir().unwrap_or_else(|_| {
             // Fallback to a temporary directory if current directory is not accessible
             std::env::temp_dir()
         });
-        Self::new_with_work_dir(library, work_dir)
+        Self::new_with_work_dir(library, work_dir).await
     }
 
     /// Create a new MCP server with the provided prompt library and working directory.
@@ -75,7 +75,7 @@ impl McpServer {
     /// # Errors
     ///
     /// Returns an error if workflow storage, issue storage, or git operations fail to initialize.
-    pub fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
+    pub async fn new_with_work_dir(library: PromptLibrary, work_dir: PathBuf) -> Result<Self> {
         // Initialize workflow storage with filesystem backend
         let workflow_backend = Arc::new(FileSystemWorkflowStorage::new().map_err(|e| {
             tracing::error!("Failed to create workflow storage: {}", e);
@@ -122,20 +122,32 @@ impl McpServer {
             Box::new(storage) as Box<dyn IssueStorage>
         };
 
-        // Initialize memo storage with default location, fallback to temp dir for tests
-        let memo_storage = match MarkdownMemoStorage::new_default() {
-            Ok(storage) => Box::new(storage) as Box<dyn MemoStorage>,
-            Err(e) => {
-                tracing::warn!("Cannot create memo storage in Git repository ({}), using temporary directory for testing", e);
-                // Fallback to temporary directory for tests
-                let temp_dir = std::env::temp_dir().join("swissarmyhammer-mcp-test");
-                std::fs::create_dir_all(&temp_dir).map_err(|err| {
-                    SwissArmyHammerError::Other(format!(
-                        "Failed to create temporary memo directory: {err}"
-                    ))
-                })?;
-                Box::new(MarkdownMemoStorage::new(temp_dir)) as Box<dyn MemoStorage>
+        // Initialize memo storage with environment variable support, then default location, fallback to temp dir for tests
+        let memo_storage = {
+            // First check if SWISSARMYHAMMER_MEMOS_DIR environment variable is set
+            if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
+                let custom_dir = std::path::PathBuf::from(custom_path);
+                // Try to create directory, but don't fail if it already exists or can't be created
+                if let Err(e) = std::fs::create_dir_all(&custom_dir) {
+                    tracing::warn!("Failed to create custom memos directory {}: {}", custom_dir.display(), e);
+                }
+                Box::new(MarkdownMemoStorage::new(custom_dir)) as Box<dyn MemoStorage>
+            } else {
+                match MarkdownMemoStorage::new_default().await {
+                Ok(storage) => Box::new(storage) as Box<dyn MemoStorage>,
+                Err(e) => {
+                    tracing::warn!("Cannot create memo storage in Git repository ({}), using temporary directory for testing", e);
+                    // Fallback to temporary directory for tests
+                    let temp_dir = std::env::temp_dir().join("swissarmyhammer-mcp-test");
+                    std::fs::create_dir_all(&temp_dir).map_err(|err| {
+                        SwissArmyHammerError::Other(format!(
+                            "Failed to create temporary memo directory: {err}"
+                        ))
+                    })?;
+                    Box::new(MarkdownMemoStorage::new(temp_dir)) as Box<dyn MemoStorage>
+                }
             }
+        }
         };
 
         // Initialize git operations with work_dir - make it optional for tests

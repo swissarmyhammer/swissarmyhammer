@@ -8,7 +8,7 @@ use std::time::Duration;
 use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer::git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer::memoranda::{FileSystemMemoStorage, MemoStorage};
+use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
@@ -47,7 +47,7 @@ pub async fn create_test_context() -> ToolContext {
         .join(format!("{}", std::process::id()));
 
     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
-        FileSystemMemoStorage::new(memo_temp_dir),
+        MarkdownMemoStorage::new(memo_temp_dir),
     )));
 
     let rate_limiter = create_test_rate_limiter();

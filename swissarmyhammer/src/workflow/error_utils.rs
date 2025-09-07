@@ -163,8 +163,13 @@ fn time_until_next_hour_from(now: chrono::DateTime<chrono::Utc>) -> Duration {
         .unwrap()
         + ChronoDuration::hours(1);
 
-    // Convert to std::time::Duration, defaulting to 1 second minimum
-    (next_hour - now).to_std().unwrap_or(Duration::from_secs(1))
+    // Convert to std::time::Duration, ensuring minimum of 1 second
+    let duration = (next_hour - now).to_std().unwrap_or(Duration::from_secs(1));
+    if duration < Duration::from_secs(1) {
+        Duration::from_secs(1)
+    } else {
+        duration
+    }
 }
 
 /// Handle Claude command execution results with appropriate error type
