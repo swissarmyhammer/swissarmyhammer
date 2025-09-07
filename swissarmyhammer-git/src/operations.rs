@@ -786,12 +786,8 @@ mod tests {
         println!("Current branch after second attempt: {:?}", current_after_second);
         
         // Verify the assertion that the test expects
-        if result2.is_err() {
-            println!("✅ SUCCESS: Second branch creation failed as expected");
-        } else {
-            println!("❌ FAILURE: Second branch creation succeeded but should have failed");
-            panic!("Expected second branch creation to fail, but got: {:?}", result2);
-        }
+        assert!(result2.is_err(), "Expected second branch creation to fail, but got: {:?}", result2);
+        println!("✅ SUCCESS: Second branch creation failed as expected");
     }
 
     fn setup_test_repo() -> (TempDir, GitOperations) {

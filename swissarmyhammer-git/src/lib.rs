@@ -14,12 +14,15 @@
 //!
 //! ## Example Usage
 //!
-//! ```rust
+//! ```rust,no_run
 //! use swissarmyhammer_git::{GitOperations, BranchName};
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let git = GitOperations::new()?;
 //! let branch = BranchName::new("feature/new-feature")?;
 //! git.create_and_checkout_branch(&branch)?;
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod error;

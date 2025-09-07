@@ -30,8 +30,11 @@ impl BranchName {
     /// ```
     /// use swissarmyhammer_git::BranchName;
     ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let branch = BranchName::new("feature/user-auth")?;
-    /// let branch = BranchName::new("main")?;
+    /// let main_branch = BranchName::new("main")?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn new<S: Into<String>>(name: S) -> GitResult<Self> {
         let name = name.into();
