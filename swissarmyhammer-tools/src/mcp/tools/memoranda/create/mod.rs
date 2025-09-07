@@ -62,13 +62,15 @@ impl McpTool for CreateMemoTool {
         let mut memo_storage = context.memo_storage.write().await;
         let title = match swissarmyhammer_memoranda::MemoTitle::new(request.title) {
             Ok(title) => title,
-            Err(e) => return Ok(BaseToolImpl::create_error_response(format!("Invalid title: {}", e), None)),
+            Err(e) => {
+                return Ok(BaseToolImpl::create_error_response(
+                    format!("Invalid title: {}", e),
+                    None,
+                ))
+            }
         };
-        
-        match memo_storage
-            .create(title, request.content.into())
-            .await
-        {
+
+        match memo_storage.create(title, request.content.into()).await {
             Ok(memo) => {
                 tracing::info!("Created memo {}", memo.title);
                 Ok(BaseToolImpl::create_success_response(format!(
@@ -76,7 +78,10 @@ impl McpTool for CreateMemoTool {
                     memo.title, memo.title, memo.title, memo.content
                 )))
             }
-            Err(e) => Err(McpErrorHandler::handle_error(swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()), "create memo")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
+                "create memo",
+            )),
         }
     }
 }

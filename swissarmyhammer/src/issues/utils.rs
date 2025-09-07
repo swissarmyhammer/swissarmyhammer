@@ -3,11 +3,11 @@
 //! This module provides common utilities that can be used by both CLI and MCP implementations
 //! to ensure consistent behavior and reduce code duplication.
 
-use swissarmyhammer_git::GitOperations;
 use crate::issues::{Issue, IssueInfo, IssueStorage};
 use crate::{Result, SwissArmyHammerError};
 use std::io::{self, Read};
 use std::path::PathBuf;
+use swissarmyhammer_git::GitOperations;
 
 /// Content source for issue operations
 #[derive(Debug, Clone, PartialEq)]
@@ -108,11 +108,15 @@ pub async fn work_on_issue<S: IssueStorage>(
 
     // Create work branch with format: issue/{issue_name}
     let branch_name = format!("issue/{}", issue.name);
-    let current_branch = git_ops.get_current_branch()?.map(|b| b.to_string()).unwrap_or_default();
+    let current_branch = git_ops
+        .get_current_branch()?
+        .map(|b| b.to_string())
+        .unwrap_or_default();
     let created_new_branch = current_branch != branch_name;
 
     // Create or switch to the work branch (branch from current HEAD)
-    let branch_name_obj = swissarmyhammer_git::BranchName::new(&branch_name).map_err(|e| SwissArmyHammerError::Other(format!("Invalid branch name: {}", e)))?;
+    let branch_name_obj = swissarmyhammer_git::BranchName::new(&branch_name)
+        .map_err(|e| SwissArmyHammerError::Other(format!("Invalid branch name: {}", e)))?;
     git_ops.create_and_checkout_branch(&branch_name_obj)?;
     let actual_branch_name = branch_name.clone();
 
@@ -128,7 +132,10 @@ pub async fn work_on_issue<S: IssueStorage>(
 /// This function determines the current issue by parsing the git branch name
 /// to extract the issue name from branches following the "issue/{name}" pattern.
 pub fn get_current_issue_from_branch(git_ops: &GitOperations) -> Result<Option<String>> {
-    let current_branch = git_ops.get_current_branch()?.map(|b| b.to_string()).unwrap_or_default();
+    let current_branch = git_ops
+        .get_current_branch()?
+        .map(|b| b.to_string())
+        .unwrap_or_default();
 
     // Parse issue name from branch name pattern: issue/{issue_name}
     if let Some(stripped) = current_branch.strip_prefix("issue/") {

@@ -3,7 +3,7 @@
 //! This example demonstrates how to programmatically interact with the memoranda system
 //! for structured note-taking and knowledge management.
 
-use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage, MemoTitle, MemoContent};
+use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoContent, MemoStorage, MemoTitle};
 use tempfile::TempDir;
 
 #[tokio::main]
@@ -13,8 +13,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize temporary storage for this example
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let mut storage: Box<dyn MemoStorage> = Box::new(MarkdownMemoStorage::new(temp_dir.path().join("memos")));
-    
+    let mut storage: Box<dyn MemoStorage> =
+        Box::new(MarkdownMemoStorage::new(temp_dir.path().join("memos")));
+
     // Helper function to create MemoTitle from string
     fn title_from_str(s: &str) -> MemoTitle {
         MemoTitle::new(s.to_string()).expect("Invalid title")
@@ -27,7 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let memo1 = storage
         .create(
             title_from_str("API Design Meeting"),
-            MemoContent::new(r#"# API Design Meeting - January 15, 2024
+            MemoContent::new(
+                r#"# API Design Meeting - January 15, 2024
 
 ## Attendees
 - Alice (Backend Engineer)
@@ -46,7 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Next Meeting
 - Date: January 22, 2024
-- Focus: Review implementation progress"#.to_string()),
+- Focus: Review implementation progress"#
+                    .to_string(),
+            ),
         )
         .await?;
 
@@ -57,7 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let memo2 = storage
         .create(
             title_from_str("Rust Learning Notes"),
-            MemoContent::new(r#"# Rust Learning Progress
+            MemoContent::new(
+                r#"# Rust Learning Progress
 
 ## Completed Topics
 - ✅ Ownership and borrowing
@@ -86,7 +91,9 @@ fn read_file() -> Result<String, Box<dyn Error>> {
 ## Next Steps
 - Learn about lifetimes in depth
 - Practice with smart pointers
-- Build a CLI tool project"#.to_string()),
+- Build a CLI tool project"#
+                    .to_string(),
+            ),
         )
         .await?;
 
@@ -123,10 +130,7 @@ fn read_file() -> Result<String, Box<dyn Error>> {
         println!("🆔 ID: {}", memo.title);
         println!("📅 Created: {}", memo.created_at);
         println!("🔄 Updated: {}", memo.updated_at);
-        println!(
-            "📖 Content length: {} characters\n",
-            memo.content.len()
-        );
+        println!("📖 Content length: {} characters\n", memo.content.len());
     } else {
         println!("❌ Memo not found\n");
     }
@@ -159,7 +163,7 @@ fn read_file() -> Result<String, Box<dyn Error>> {
     println!();
 
     // Search for action items
-    // Note: Search functionality to be implemented later  
+    // Note: Search functionality to be implemented later
     let action_results = storage.list().await?;
 
     println!(
@@ -178,7 +182,8 @@ fn read_file() -> Result<String, Box<dyn Error>> {
     let updated_memo = storage
         .update(
             &memo1.title,
-            MemoContent::new(r#"# API Design Meeting - January 15, 2024
+            MemoContent::new(
+                r#"# API Design Meeting - January 15, 2024
 
 ## Attendees
 - Alice (Backend Engineer)
@@ -202,7 +207,9 @@ fn read_file() -> Result<String, Box<dyn Error>> {
 
 ## Next Meeting
 - Date: January 22, 2024
-- Focus: Review Bob's implementation and plan next sprint"#.to_string()),
+- Focus: Review Bob's implementation and plan next sprint"#
+                    .to_string(),
+            ),
         )
         .await?;
 
@@ -346,7 +353,10 @@ mod tests {
         let content = MemoContent::new("Test content".to_string());
 
         // Test creating a memo
-        let memo = storage.create(title.clone(), content.clone()).await.unwrap();
+        let memo = storage
+            .create(title.clone(), content.clone())
+            .await
+            .unwrap();
 
         assert_eq!(memo.title, title);
         assert_eq!(memo.content, content);
@@ -360,7 +370,9 @@ mod tests {
         assert_eq!(memos.len(), 1);
 
         // Test searching
-        let results = <dyn MemoStorage>::search_memos(&storage, "Test").await.unwrap();
+        let results = <dyn MemoStorage>::search_memos(&storage, "Test")
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
 
         // Test deleting
@@ -412,7 +424,9 @@ mod tests {
     #[tokio::test]
     async fn test_memo_content_analysis() {
         let title = MemoTitle::new("Test Memo".to_string()).unwrap();
-        let content = MemoContent::new("# Header 1\n\nSome content\n\n## Header 2\n\n- [ ] Task 1\n- [x] Task 2".to_string());
+        let content = MemoContent::new(
+            "# Header 1\n\nSome content\n\n## Header 2\n\n- [ ] Task 1\n- [x] Task 2".to_string(),
+        );
         let memo = swissarmyhammer::memoranda::Memo::new(title, content);
 
         let stats = analyze_memo_content(&memo).await;

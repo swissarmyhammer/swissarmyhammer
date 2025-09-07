@@ -1,0 +1,15 @@
+[package]
+name = "swissarmyhammer-issues-config"
+version = "0.1.0"
+edition = "2021"
+description = "Issue management configuration for SwissArmyHammer"
+authors = ["SwissArmyHammer Contributors"]
+license = "MIT"
+repository = "https://github.com/wballard/sah"
+keywords = ["configuration", "issues", "management"]
+
+[dependencies]
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+[dev-dependencies]
+# Test utilities for isolated environment testing

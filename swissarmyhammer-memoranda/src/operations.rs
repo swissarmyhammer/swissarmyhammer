@@ -1,11 +1,11 @@
 //! High-level operations for memo management
 
-use crate::storage::{MemoStorage, MarkdownMemoStorage};
-use crate::types::{
-    Memo, MemoTitle, MemoContent, CreateMemoRequest, UpdateMemoRequest, 
-    GetMemoRequest, DeleteMemoRequest, ListMemosResponse
-};
 use crate::error::Result;
+use crate::storage::{MarkdownMemoStorage, MemoStorage};
+use crate::types::{
+    CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoContent,
+    MemoTitle, UpdateMemoRequest,
+};
 
 /// High-level service for memo operations
 pub struct MemoService {
@@ -30,7 +30,7 @@ impl MemoService {
     pub async fn create_memo(&mut self, request: CreateMemoRequest) -> Result<Memo> {
         let title = MemoTitle::new(request.title)?;
         let content = MemoContent::new(request.content);
-        
+
         self.storage.create(title, content).await
     }
 
@@ -44,7 +44,7 @@ impl MemoService {
     pub async fn update_memo(&mut self, request: UpdateMemoRequest) -> Result<Memo> {
         let title = MemoTitle::new(request.title)?;
         let content = MemoContent::new(request.content);
-        
+
         self.storage.update(&title, content).await
     }
 
@@ -66,18 +66,18 @@ impl MemoService {
     /// Get all memo content formatted for AI context consumption
     pub async fn get_all_context(&self) -> Result<MemoContent> {
         let memos = self.storage.list().await?;
-        
+
         if memos.is_empty() {
             return Ok(MemoContent::new(String::new()));
         }
 
         let mut context_parts = Vec::new();
-        
+
         for memo in memos {
             // Format: Title followed by content
             context_parts.push(format!("# {}\n\n{}", memo.title, memo.content));
         }
-        
+
         let combined_context = context_parts.join("\n\n---\n\n");
         Ok(MemoContent::new(combined_context))
     }
@@ -86,15 +86,15 @@ impl MemoService {
     pub async fn search_memos(&self, query: &str) -> Result<Vec<Memo>> {
         let all_memos = self.storage.list().await?;
         let query_lower = query.to_lowercase();
-        
+
         let matching_memos: Vec<Memo> = all_memos
             .into_iter()
             .filter(|memo| {
-                memo.title.as_str().to_lowercase().contains(&query_lower) ||
-                memo.content.as_str().to_lowercase().contains(&query_lower)
+                memo.title.as_str().to_lowercase().contains(&query_lower)
+                    || memo.content.as_str().to_lowercase().contains(&query_lower)
             })
             .collect();
-            
+
         Ok(matching_memos)
     }
 }
@@ -134,16 +134,19 @@ mod tests {
         let storage = MarkdownMemoStorage::new(temp_dir.path().to_path_buf());
         let mut service = MemoService::new(Box::new(storage));
 
-        let memo = service.create_memo_simple(
-            "Test Memo".to_string(),
-            "Test content".to_string(),
-        ).await.unwrap();
+        let memo = service
+            .create_memo_simple("Test Memo".to_string(), "Test content".to_string())
+            .await
+            .unwrap();
 
         assert_eq!(memo.title.as_str(), "Test Memo");
         assert_eq!(memo.content.as_str(), "Test content");
 
-        let retrieved = service.get_memo_simple("Test Memo".to_string())
-            .await.unwrap().unwrap();
+        let retrieved = service
+            .get_memo_simple("Test Memo".to_string())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(retrieved.title, memo.title);
         assert_eq!(retrieved.content, memo.content);
     }
@@ -154,8 +157,14 @@ mod tests {
         let storage = MarkdownMemoStorage::new(temp_dir.path().to_path_buf());
         let mut service = MemoService::new(Box::new(storage));
 
-        service.create_memo_simple("Memo 1".to_string(), "Content 1".to_string()).await.unwrap();
-        service.create_memo_simple("Memo 2".to_string(), "Content 2".to_string()).await.unwrap();
+        service
+            .create_memo_simple("Memo 1".to_string(), "Content 1".to_string())
+            .await
+            .unwrap();
+        service
+            .create_memo_simple("Memo 2".to_string(), "Content 2".to_string())
+            .await
+            .unwrap();
 
         let response = service.list_memos().await.unwrap();
         assert_eq!(response.total_count, 2);
@@ -168,13 +177,16 @@ mod tests {
         let storage = MarkdownMemoStorage::new(temp_dir.path().to_path_buf());
         let mut service = MemoService::new(Box::new(storage));
 
-        service.create_memo_simple("Test Memo".to_string(), "Original".to_string()).await.unwrap();
-        
-        let updated = service.update_memo_simple(
-            "Test Memo".to_string(),
-            "Updated content".to_string(),
-        ).await.unwrap();
-        
+        service
+            .create_memo_simple("Test Memo".to_string(), "Original".to_string())
+            .await
+            .unwrap();
+
+        let updated = service
+            .update_memo_simple("Test Memo".to_string(), "Updated content".to_string())
+            .await
+            .unwrap();
+
         assert_eq!(updated.content.as_str(), "Updated content");
     }
 
@@ -184,12 +196,21 @@ mod tests {
         let storage = MarkdownMemoStorage::new(temp_dir.path().to_path_buf());
         let mut service = MemoService::new(Box::new(storage));
 
-        service.create_memo_simple("Test Memo".to_string(), "Content".to_string()).await.unwrap();
-        
-        let deleted = service.delete_memo_simple("Test Memo".to_string()).await.unwrap();
+        service
+            .create_memo_simple("Test Memo".to_string(), "Content".to_string())
+            .await
+            .unwrap();
+
+        let deleted = service
+            .delete_memo_simple("Test Memo".to_string())
+            .await
+            .unwrap();
         assert!(deleted);
 
-        let retrieved = service.get_memo_simple("Test Memo".to_string()).await.unwrap();
+        let retrieved = service
+            .get_memo_simple("Test Memo".to_string())
+            .await
+            .unwrap();
         assert!(retrieved.is_none());
     }
 
@@ -199,12 +220,18 @@ mod tests {
         let storage = MarkdownMemoStorage::new(temp_dir.path().to_path_buf());
         let mut service = MemoService::new(Box::new(storage));
 
-        service.create_memo_simple("Memo 1".to_string(), "Content for memo 1".to_string()).await.unwrap();
-        service.create_memo_simple("Memo 2".to_string(), "Content for memo 2".to_string()).await.unwrap();
+        service
+            .create_memo_simple("Memo 1".to_string(), "Content for memo 1".to_string())
+            .await
+            .unwrap();
+        service
+            .create_memo_simple("Memo 2".to_string(), "Content for memo 2".to_string())
+            .await
+            .unwrap();
 
         let context = service.get_all_context().await.unwrap();
         let context_str = context.as_str();
-        
+
         assert!(context_str.contains("# Memo 1"));
         assert!(context_str.contains("Content for memo 1"));
         assert!(context_str.contains("# Memo 2"));
@@ -218,9 +245,27 @@ mod tests {
         let storage = MarkdownMemoStorage::new(temp_dir.path().to_path_buf());
         let mut service = MemoService::new(Box::new(storage));
 
-        service.create_memo_simple("Project Notes".to_string(), "Working on the new feature".to_string()).await.unwrap();
-        service.create_memo_simple("Meeting Minutes".to_string(), "Discussed project timeline".to_string()).await.unwrap();
-        service.create_memo_simple("Shopping List".to_string(), "Buy groceries and supplies".to_string()).await.unwrap();
+        service
+            .create_memo_simple(
+                "Project Notes".to_string(),
+                "Working on the new feature".to_string(),
+            )
+            .await
+            .unwrap();
+        service
+            .create_memo_simple(
+                "Meeting Minutes".to_string(),
+                "Discussed project timeline".to_string(),
+            )
+            .await
+            .unwrap();
+        service
+            .create_memo_simple(
+                "Shopping List".to_string(),
+                "Buy groceries and supplies".to_string(),
+            )
+            .await
+            .unwrap();
 
         let project_results = service.search_memos("project").await.unwrap();
         assert_eq!(project_results.len(), 2); // "Project Notes" and "Meeting Minutes"

@@ -1,10 +1,10 @@
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use swissarmyhammer_todo::MarkCompleteTodoRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
+use swissarmyhammer_todo::MarkCompleteTodoRequest;
 use swissarmyhammer_todo::TodoStorage;
 
 /// MCP tool for marking todo items as complete
@@ -101,7 +101,10 @@ impl McpTool for MarkCompleteTodoTool {
                     }).to_string()
                 ))
             }
-            Err(e) => Err(McpErrorHandler::handle_todo_error(e, "mark todo item complete")),
+            Err(e) => Err(McpErrorHandler::handle_todo_error(
+                e,
+                "mark todo item complete",
+            )),
         }
     }
 }

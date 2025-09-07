@@ -6,8 +6,8 @@
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use swissarmyhammer::{Result, SwissArmyHammerError};
-use swissarmyhammer_todo::TodoError;
 use swissarmyhammer_common;
+use swissarmyhammer_todo::TodoError;
 
 /// Standard response format for MCP operations
 #[derive(Debug)]
@@ -211,19 +211,16 @@ impl McpErrorHandler {
             TodoError::TodoListNotFound(name) => {
                 McpError::invalid_params(format!("Todo list '{name}' not found"), None)
             }
-            TodoError::TodoItemNotFound(id, list) => {
-                McpError::invalid_params(format!("Todo item '{id}' not found in list '{list}'"), None)
-            }
+            TodoError::TodoItemNotFound(id, list) => McpError::invalid_params(
+                format!("Todo item '{id}' not found in list '{list}'"),
+                None,
+            ),
             TodoError::EmptyTask => {
                 McpError::invalid_params("Task description cannot be empty".to_string(), None)
             }
             // System errors
-            TodoError::Io(err) => {
-                McpError::internal_error(format!("IO error: {err}"), None)
-            }
-            TodoError::Yaml(err) => {
-                McpError::internal_error(format!("YAML error: {err}"), None)
-            }
+            TodoError::Io(err) => McpError::internal_error(format!("IO error: {err}"), None),
+            TodoError::Yaml(err) => McpError::internal_error(format!("YAML error: {err}"), None),
             TodoError::Common(common_err) => {
                 // Convert common error to main SwissArmyHammerError and delegate
                 let main_err = match common_err {
@@ -237,7 +234,10 @@ impl McpErrorHandler {
                         SwissArmyHammerError::Other(format!("Invalid path: {}", path.display()))
                     }
                     swissarmyhammer_common::SwissArmyHammerError::PermissionDenied { path } => {
-                        SwissArmyHammerError::Other(format!("Permission denied accessing: {}", path.display()))
+                        SwissArmyHammerError::Other(format!(
+                            "Permission denied accessing: {}",
+                            path.display()
+                        ))
                     }
                     swissarmyhammer_common::SwissArmyHammerError::Io { message } => {
                         SwissArmyHammerError::Other(format!("I/O error: {}", message))
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_formatter_memo_preview() {
-        use swissarmyhammer_memoranda::{Memo, MemoTitle, MemoContent};
+        use swissarmyhammer_memoranda::{Memo, MemoContent, MemoTitle};
 
         let title = MemoTitle::new("Test Memo".to_string()).unwrap();
         let content = MemoContent::new("This is a long piece of content that should be truncated in the preview to show only the first part".to_string());

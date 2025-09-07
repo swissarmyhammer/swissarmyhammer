@@ -299,7 +299,8 @@ impl SemanticConfig {
         }
 
         // Try Git repository .swissarmyhammer directory first
-        if let Ok(swissarmyhammer_dir) = swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
+        if let Ok(swissarmyhammer_dir) =
+            swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
         {
             let semantic_db_path = swissarmyhammer_dir.join("semantic.db");
             tracing::debug!(

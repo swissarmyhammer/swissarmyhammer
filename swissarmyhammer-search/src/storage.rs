@@ -4,10 +4,10 @@
 //! and their embeddings. It supports efficient vector similarity search using cosine
 //! similarity and manages the database schema for semantic search operations.
 
-use crate::error::{SearchResult, SearchError};
+use crate::error::{SearchError, SearchResult};
 use crate::types::{
-    CodeChunk, ContentHash, Embedding, IndexStats, IndexedFile, Language, SemanticSearchResult,
-    SemanticConfig,
+    CodeChunk, ContentHash, Embedding, IndexStats, IndexedFile, Language, SemanticConfig,
+    SemanticSearchResult,
 };
 use crate::utils::SemanticUtils;
 use duckdb::{Connection, ToSql};
@@ -91,9 +91,8 @@ impl VectorStorage {
         }
 
         // Create DuckDB connection
-        let connection = Connection::open(&db_path).map_err(|e| {
-            SearchError::Storage(format!("Failed to open DuckDB connection: {e}"))
-        })?;
+        let connection = Connection::open(&db_path)
+            .map_err(|e| SearchError::Storage(format!("Failed to open DuckDB connection: {e}")))?;
 
         Ok(Self {
             db_path,
@@ -109,9 +108,10 @@ impl VectorStorage {
             self.db_path.display()
         );
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Create indexed_files table
         conn.execute(Self::CREATE_INDEXED_FILES_TABLE, [])
@@ -127,23 +127,17 @@ impl VectorStorage {
 
         // Create embeddings table
         conn.execute(Self::CREATE_EMBEDDINGS_TABLE, [])
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to create embeddings table: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to create embeddings table: {e}")))?;
 
         // Create indexes for better performance
         conn.execute(Self::CREATE_FILE_PATH_INDEX, [])
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to create file_path index: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to create file_path index: {e}")))?;
 
-        conn.execute(Self::CREATE_LANGUAGE_INDEX, []).map_err(|e| {
-            SearchError::Storage(format!("Failed to create language index: {e}"))
-        })?;
+        conn.execute(Self::CREATE_LANGUAGE_INDEX, [])
+            .map_err(|e| SearchError::Storage(format!("Failed to create language index: {e}")))?;
 
-        conn.execute(Self::CREATE_PATH_INDEX, []).map_err(|e| {
-            SearchError::Storage(format!("Failed to create path index: {e}"))
-        })?;
+        conn.execute(Self::CREATE_PATH_INDEX, [])
+            .map_err(|e| SearchError::Storage(format!("Failed to create path index: {e}")))?;
 
         tracing::info!("Database schema initialized successfully");
         Ok(())
@@ -153,9 +147,10 @@ impl VectorStorage {
     pub fn store_indexed_file(&self, file: &IndexedFile) -> SearchResult<()> {
         tracing::debug!("Storing indexed file: {}", file.path.display());
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         conn.execute(
             r#"
@@ -187,9 +182,10 @@ impl VectorStorage {
     pub fn store_chunk(&self, chunk: &CodeChunk) -> SearchResult<()> {
         tracing::debug!("Storing chunk: {}", chunk.id);
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         conn.execute(
             r#"
@@ -218,14 +214,14 @@ impl VectorStorage {
     pub fn store_embedding(&self, embedding: &Embedding) -> SearchResult<()> {
         tracing::debug!("Storing embedding for chunk: {}", embedding.chunk_id);
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Convert vector to JSON for storage
-        let vector_str = serde_json::to_string(&embedding.vector).map_err(|e| {
-            SearchError::Storage(format!("Failed to serialize vector: {e}"))
-        })?;
+        let vector_str = serde_json::to_string(&embedding.vector)
+            .map_err(|e| SearchError::Storage(format!("Failed to serialize vector: {e}")))?;
 
         conn.execute(
             "INSERT OR REPLACE INTO embeddings (chunk_id, vector) VALUES (?, ?)",
@@ -254,9 +250,10 @@ impl VectorStorage {
             threshold
         );
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Query to get all embeddings with their corresponding chunks
         let mut stmt = conn.prepare(
@@ -343,9 +340,8 @@ impl VectorStorage {
 
         // Calculate similarity for each embedding
         for row_result in rows {
-            let row_data = row_result.map_err(|e| {
-                SearchError::Storage(format!("Failed to process row: {e}"))
-            })?;
+            let row_data = row_result
+                .map_err(|e| SearchError::Storage(format!("Failed to process row: {e}")))?;
 
             // Skip corrupted records that returned None
             let (
@@ -411,16 +407,15 @@ impl VectorStorage {
             threshold
         );
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT chunk_id, vector FROM embeddings")
             .map_err(|e| {
-                SearchError::Storage(format!(
-                    "Failed to prepare detailed search query: {e}"
-                ))
+                SearchError::Storage(format!("Failed to prepare detailed search query: {e}"))
             })?;
 
         let rows = stmt
@@ -503,9 +498,10 @@ impl VectorStorage {
     pub fn get_chunk(&self, chunk_id: &str) -> SearchResult<Option<CodeChunk>> {
         tracing::debug!("Getting chunk: {}", chunk_id);
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let mut stmt = conn.prepare(
             "SELECT chunk_id, file_path, language, content, start_line, end_line, chunk_type, content_hash FROM code_chunks WHERE chunk_id = ?"
@@ -539,15 +535,11 @@ impl VectorStorage {
                     content_hash: ContentHash(content_hash),
                 })
             })
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to execute get_chunk query: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to execute get_chunk query: {e}")))?;
 
         match rows.next() {
             Some(Ok(chunk)) => Ok(Some(chunk)),
-            Some(Err(e)) => Err(SearchError::Storage(format!(
-                "Failed to parse chunk: {e}"
-            ))),
+            Some(Err(e)) => Err(SearchError::Storage(format!("Failed to parse chunk: {e}"))),
             None => Ok(None),
         }
     }
@@ -555,9 +547,10 @@ impl VectorStorage {
     /// Get all chunks for testing purposes
     #[cfg(test)]
     pub fn get_all_chunks(&self) -> SearchResult<std::collections::HashMap<String, CodeChunk>> {
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let mut stmt = conn.prepare(
             "SELECT chunk_id, file_path, language, content, start_line, end_line, chunk_type, content_hash FROM code_chunks"
@@ -595,16 +588,13 @@ impl VectorStorage {
                 ))
             })
             .map_err(|e| {
-                SearchError::Storage(format!(
-                    "Failed to execute get_all_chunks query: {e}"
-                ))
+                SearchError::Storage(format!("Failed to execute get_all_chunks query: {e}"))
             })?;
 
         let mut chunks = std::collections::HashMap::new();
         for row_result in rows {
-            let (chunk_id, chunk) = row_result.map_err(|e| {
-                SearchError::Storage(format!("Failed to parse chunk: {e}"))
-            })?;
+            let (chunk_id, chunk) = row_result
+                .map_err(|e| SearchError::Storage(format!("Failed to parse chunk: {e}")))?;
             chunks.insert(chunk_id, chunk);
         }
 
@@ -613,9 +603,10 @@ impl VectorStorage {
 
     /// Get all chunks for a file
     pub fn get_file_chunks(&self, file_path: &Path) -> SearchResult<Vec<CodeChunk>> {
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let mut stmt = conn.prepare(
             "SELECT chunk_id, file_path, language, content, start_line, end_line, chunk_type, content_hash FROM code_chunks WHERE file_path = ?"
@@ -651,16 +642,13 @@ impl VectorStorage {
                 })
             })
             .map_err(|e| {
-                SearchError::Storage(format!(
-                    "Failed to execute get_file_chunks query: {e}"
-                ))
+                SearchError::Storage(format!("Failed to execute get_file_chunks query: {e}"))
             })?;
 
         let mut file_chunks = Vec::new();
         for row_result in rows {
-            let chunk = row_result.map_err(|e| {
-                SearchError::Storage(format!("Failed to parse file chunk: {e}"))
-            })?;
+            let chunk = row_result
+                .map_err(|e| SearchError::Storage(format!("Failed to parse file chunk: {e}")))?;
             file_chunks.push(chunk);
         }
 
@@ -673,7 +661,11 @@ impl VectorStorage {
     }
 
     /// Check if file needs re-indexing based on content hash
-    pub fn needs_reindexing(&self, file_path: &Path, current_hash: &ContentHash) -> SearchResult<bool> {
+    pub fn needs_reindexing(
+        &self,
+        file_path: &Path,
+        current_hash: &ContentHash,
+    ) -> SearchResult<bool> {
         tracing::debug!("Checking if file needs reindexing: {}", file_path.display());
 
         // Get the stored hash for this file
@@ -700,25 +692,22 @@ impl VectorStorage {
     pub fn is_file_indexed(&self, file_path: &Path) -> SearchResult<bool> {
         tracing::debug!("Checking if file is indexed: {}", file_path.display());
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT 1 FROM indexed_files WHERE path = ? LIMIT 1")
             .map_err(|e| {
-                SearchError::Storage(format!(
-                    "Failed to prepare is_file_indexed query: {e}"
-                ))
+                SearchError::Storage(format!("Failed to prepare is_file_indexed query: {e}"))
             })?;
 
         let file_path_str = file_path.to_string_lossy();
         let mut rows = stmt
             .query_map([&file_path_str as &dyn ToSql], |_row| Ok(true))
             .map_err(|e| {
-                SearchError::Storage(format!(
-                    "Failed to execute is_file_indexed query: {e}"
-                ))
+                SearchError::Storage(format!("Failed to execute is_file_indexed query: {e}"))
             })?;
 
         Ok(rows.next().is_some())
@@ -728,9 +717,10 @@ impl VectorStorage {
     pub fn remove_file(&self, file_path: &Path) -> SearchResult<()> {
         tracing::debug!("Removing file: {}", file_path.display());
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let file_path_str = file_path.to_string_lossy();
 
@@ -748,9 +738,7 @@ impl VectorStorage {
                 "DELETE FROM code_chunks WHERE file_path = ?",
                 [&file_path_str as &dyn ToSql],
             )
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to remove chunks for file: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to remove chunks for file: {e}")))?;
 
         // Remove indexed file metadata
         conn.execute(
@@ -773,9 +761,10 @@ impl VectorStorage {
     pub fn get_stats(&self) -> SearchResult<StorageStats> {
         tracing::debug!("Getting storage statistics");
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Get total chunks count
         let total_chunks: usize = conn
@@ -783,9 +772,7 @@ impl VectorStorage {
                 let count: i64 = row.get(0)?;
                 Ok(count as usize)
             })
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to get chunk count: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to get chunk count: {e}")))?;
 
         // Get total files count
         let total_files: usize = conn
@@ -801,9 +788,7 @@ impl VectorStorage {
                 let count: i64 = row.get(0)?;
                 Ok(count as usize)
             })
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to get embedding count: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to get embedding count: {e}")))?;
 
         // Get database file size
         let database_size_bytes = std::fs::metadata(&self.db_path)
@@ -830,9 +815,10 @@ impl VectorStorage {
     pub fn get_chunks_by_language(&self, language: &Language) -> SearchResult<Vec<CodeChunk>> {
         tracing::debug!("Getting chunks by language: {:?}", language);
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let language_str = format!("{language:?}");
         let mut stmt = conn.prepare(
@@ -893,9 +879,10 @@ impl VectorStorage {
     pub fn maintenance(&self) -> SearchResult<()> {
         tracing::info!("Performing database maintenance");
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Perform VACUUM to reclaim space and optimize storage
         tracing::debug!("Running VACUUM operation");
@@ -928,9 +915,10 @@ impl VectorStorage {
 
     /// Get file hash from index
     pub fn get_file_hash(&self, file_path: &Path) -> SearchResult<Option<ContentHash>> {
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let mut stmt = conn
             .prepare("SELECT content_hash FROM indexed_files WHERE path = ?")
@@ -959,9 +947,10 @@ impl VectorStorage {
 
     /// Get statistics about indexed files
     pub fn get_index_stats(&self) -> SearchResult<IndexStats> {
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Get file count
         let file_count: usize = conn
@@ -977,9 +966,7 @@ impl VectorStorage {
                 let count: i64 = row.get(0)?;
                 Ok(count as usize)
             })
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to get chunk count: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to get chunk count: {e}")))?;
 
         // Get embedding count
         let embedding_count: usize = conn
@@ -987,9 +974,7 @@ impl VectorStorage {
                 let count: i64 = row.get(0)?;
                 Ok(count as usize)
             })
-            .map_err(|e| {
-                SearchError::Storage(format!("Failed to get embedding count: {e}"))
-            })?;
+            .map_err(|e| SearchError::Storage(format!("Failed to get embedding count: {e}")))?;
 
         Ok(IndexStats {
             file_count,
@@ -1016,14 +1001,14 @@ impl VectorStorage {
             embeddings.len()
         );
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         // Begin transaction
-        conn.execute("BEGIN TRANSACTION", []).map_err(|e| {
-            SearchError::Storage(format!("Failed to begin transaction: {e}"))
-        })?;
+        conn.execute("BEGIN TRANSACTION", [])
+            .map_err(|e| SearchError::Storage(format!("Failed to begin transaction: {e}")))?;
 
         // Store chunks
         for chunk in chunks {
@@ -1091,16 +1076,16 @@ impl VectorStorage {
     pub fn remove_file_transaction(&self, file_path: &Path) -> SearchResult<()> {
         tracing::debug!("Removing file in transaction: {}", file_path.display());
 
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire connection lock: {e}"))
-        })?;
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire connection lock: {e}")))?;
 
         let file_path_str = file_path.to_string_lossy();
 
         // Begin transaction
-        conn.execute("BEGIN TRANSACTION", []).map_err(|e| {
-            SearchError::Storage(format!("Failed to begin transaction: {e}"))
-        })?;
+        conn.execute("BEGIN TRANSACTION", [])
+            .map_err(|e| SearchError::Storage(format!("Failed to begin transaction: {e}")))?;
 
         // Remove embeddings for chunks in this file
         if let Err(e) = conn.execute(
@@ -1176,20 +1161,23 @@ impl VectorStorage {
     /// Clear all data from the search index
     pub async fn clear_all(&self) -> SearchResult<()> {
         tracing::info!("Clearing all data from search index");
-        
-        let conn = self.connection.lock().map_err(|e| {
-            SearchError::Storage(format!("Failed to acquire database lock: {}", e))
-        })?;
+
+        let conn = self
+            .connection
+            .lock()
+            .map_err(|e| SearchError::Storage(format!("Failed to acquire database lock: {}", e)))?;
 
         // Clear all tables in reverse dependency order
-        conn.execute("DELETE FROM embeddings", [])
-            .map_err(|e| SearchError::Database(format!("Failed to clear embeddings table: {}", e)))?;
-        
+        conn.execute("DELETE FROM embeddings", []).map_err(|e| {
+            SearchError::Database(format!("Failed to clear embeddings table: {}", e))
+        })?;
+
         conn.execute("DELETE FROM chunks", [])
             .map_err(|e| SearchError::Database(format!("Failed to clear chunks table: {}", e)))?;
-        
-        conn.execute("DELETE FROM indexed_files", [])
-            .map_err(|e| SearchError::Database(format!("Failed to clear indexed_files table: {}", e)))?;
+
+        conn.execute("DELETE FROM indexed_files", []).map_err(|e| {
+            SearchError::Database(format!("Failed to clear indexed_files table: {}", e))
+        })?;
 
         tracing::info!("Successfully cleared all search index data");
         Ok(())
@@ -1515,8 +1503,8 @@ mod tests {
     #[tokio::test]
     async fn test_reproduce_full_search_integration() {
         use crate::embedding::EmbeddingEngine;
-        use crate::types::SearchQuery;
         use crate::searcher::SemanticSearcher;
+        use crate::types::SearchQuery;
         use std::error::Error;
 
         // Use proper test config for unique temp directories and avoid trying to download real embedding models

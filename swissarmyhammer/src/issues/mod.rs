@@ -68,8 +68,8 @@
 //! # }
 //! ```
 
-use crate::config::Config;
 use serde::{Deserialize, Serialize};
+use swissarmyhammer_issues_config::Config;
 
 /// A wrapper type for issue names to prevent mixing up different string types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]

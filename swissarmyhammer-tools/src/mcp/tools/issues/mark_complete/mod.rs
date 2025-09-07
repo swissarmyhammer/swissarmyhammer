@@ -9,7 +9,7 @@ use crate::mcp::types::MarkCompleteRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use swissarmyhammer::config::Config;
+use swissarmyhammer_issues_config::Config;
 
 /// Tool for marking issues as complete
 #[derive(Default)]
@@ -70,7 +70,9 @@ impl McpTool for MarkCompleteIssueTool {
                     Ok(Some(branch)) => {
                         let branch_str = branch.to_string();
                         let config = Config::global();
-                        if let Some(issue_name) = branch_str.strip_prefix(&config.issue_branch_prefix) {
+                        if let Some(issue_name) =
+                            branch_str.strip_prefix(&config.issue_branch_prefix)
+                        {
                             issue_name.to_string()
                         } else {
                             return Err(McpError::invalid_params(
@@ -86,7 +88,10 @@ impl McpTool for MarkCompleteIssueTool {
                         ));
                     }
                     Err(e) => {
-                        return Err(McpErrorHandler::handle_error(e.into(), "get current branch"));
+                        return Err(McpErrorHandler::handle_error(
+                            e.into(),
+                            "get current branch",
+                        ));
                     }
                 },
                 None => {

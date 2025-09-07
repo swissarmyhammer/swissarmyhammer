@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::BranchName;
+use swissarmyhammer_git::GitOperations;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -448,16 +448,18 @@ async fn test_github_flow_compatibility() {
         // Create feature branch from main
         let main_branch = BranchName::new("main").unwrap();
         git.checkout_branch(&main_branch).unwrap();
-        
+
         let feature_branch_name = BranchName::new(*feature_branch).unwrap();
-        git.create_and_checkout_branch(&feature_branch_name).unwrap();
+        git.create_and_checkout_branch(&feature_branch_name)
+            .unwrap();
 
         // Add simple work
         let feature_file = format!("{}.rs", feature_branch.replace('/', "_"));
         std::fs::write(
             env.temp_dir.path().join(&feature_file),
             format!("// Implementation for {feature_branch}"),
-        ).unwrap();
+        )
+        .unwrap();
 
         git.add_all().unwrap();
         git.commit(&format!("Implement {feature_branch}")).unwrap();
@@ -471,11 +473,15 @@ async fn test_github_flow_compatibility() {
     let main_branch = BranchName::new("main").unwrap();
     git.checkout_branch(&main_branch).unwrap();
     assert_eq!(git.current_branch().unwrap(), "main");
-    
+
     // Verify all feature branches were created
     for feature_branch in &feature_branches {
         let feature_branch_name = BranchName::new(*feature_branch).unwrap();
-        assert!(git.branch_exists(&feature_branch_name).unwrap(), "Feature branch should exist: {}", feature_branch);
+        assert!(
+            git.branch_exists(&feature_branch_name).unwrap(),
+            "Feature branch should exist: {}",
+            feature_branch
+        );
     }
 }
 

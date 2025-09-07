@@ -77,7 +77,6 @@ pub mod memoranda {
     pub use swissarmyhammer_memoranda::*;
 }
 
-
 /// Security utilities for path validation and resource limits
 pub mod security;
 
@@ -145,11 +144,9 @@ pub use workflow::{
 
 /// Memoranda (memo/note) management types
 pub use memoranda::{
-    CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoTitle, MemoContent,
-    UpdateMemoRequest, MemoStorage, MarkdownMemoStorage, MemoService,
+    CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, MarkdownMemoStorage,
+    Memo, MemoContent, MemoService, MemoStorage, MemoTitle, UpdateMemoRequest,
 };
-
-
 
 /// Validation types and traits
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
@@ -170,15 +167,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Error types used throughout the library
 pub mod error;
 
-/// Configuration management
-pub mod config;
-
 // sah.toml configuration support removed (migrated to swissarmyhammer-config)
 
 /// Core TOML configuration data structures (new implementation)
 pub mod toml_core;
 
-pub use config::Config;
 pub use error::{ErrorChainExt, ErrorContext, Result, SwissArmyHammerError};
 
 /// Prelude module for convenient imports
@@ -189,7 +182,6 @@ pub mod prelude {
         SwissArmyHammerPlugin, Template, TemplateEngine,
     };
 
-
     pub use crate::workflow::{
         State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
         WorkflowRunStatus,
@@ -197,11 +189,10 @@ pub mod prelude {
 
     // Memoranda types for convenient access
     pub use crate::memoranda::{
-        CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, Memo, MemoTitle, MemoContent,
-        UpdateMemoRequest, MemoStorage, MarkdownMemoStorage, MemoService,
+        CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse,
+        MarkdownMemoStorage, Memo, MemoContent, MemoService, MemoStorage, MemoTitle,
+        UpdateMemoRequest,
     };
-
-
 
     // Semantic search types for convenient access
     pub use crate::search::{

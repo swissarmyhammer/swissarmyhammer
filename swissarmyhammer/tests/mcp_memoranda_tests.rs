@@ -53,7 +53,14 @@ mod test_utils {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let random = rand::random::<u64>();
-        let test_id = format!("{}_{}_{}", timestamp, format!("{:?}", thread_id).replace("ThreadId(", "").replace(")", ""), random);
+        let test_id = format!(
+            "{}_{}_{}",
+            timestamp,
+            format!("{:?}", thread_id)
+                .replace("ThreadId(", "")
+                .replace(")", ""),
+            random
+        );
         let memos_dir = temp_dir.path().join("memos").join(test_id);
 
         // Optimize binary path resolution - try multiple locations
@@ -104,7 +111,10 @@ mod test_utils {
             });
 
         eprintln!("Using binary path: {binary_path}");
-        println!("MCP_SERVER_START: Starting server with memos_dir: {}", memos_dir.display());
+        println!(
+            "MCP_SERVER_START: Starting server with memos_dir: {}",
+            memos_dir.display()
+        );
 
         // Set test mode environment to skip heavy dependencies if possible
         let child = Command::new(&binary_path)
@@ -171,18 +181,21 @@ mod test_utils {
     ) -> std::io::Result<()> {
         let mut total_deleted = 0;
         let max_attempts = 5; // Prevent infinite loops
-        
+
         for attempt in 1..=max_attempts {
             eprintln!("CLEANUP: Attempt {} to clean memos", attempt);
             println!("CLEANUP DEBUG: Attempt {} to clean memos", attempt);
-            
+
             // List all memos
             let list_request = create_tool_request(999 + attempt, "memo_list", json!({}));
             send_request(stdin, list_request)?;
             let list_response = read_response(reader)?;
 
             if list_response.get("error").is_some() {
-                eprintln!("CLEANUP: List request failed: {:?}", list_response.get("error"));
+                eprintln!(
+                    "CLEANUP: List request failed: {:?}",
+                    list_response.get("error")
+                );
                 return Ok(()); // If list fails, assume no memos to clean
             }
 
@@ -190,8 +203,14 @@ mod test_utils {
                 .as_str()
                 .unwrap_or("");
 
-            eprintln!("CLEANUP: Attempt {}: Listed memos: {}", attempt, response_text);
-            println!("CLEANUP DEBUG: Attempt {}: Listed memos: {}", attempt, response_text);
+            eprintln!(
+                "CLEANUP: Attempt {}: Listed memos: {}",
+                attempt, response_text
+            );
+            println!(
+                "CLEANUP DEBUG: Attempt {}: Listed memos: {}",
+                attempt, response_text
+            );
 
             if response_text.contains("Found 0 memos") || response_text.contains("No memos found") {
                 eprintln!("CLEANUP: No memos found on attempt {}", attempt);
@@ -203,7 +222,7 @@ mod test_utils {
             let mut request_id = 1000 + (attempt * 100);
             let mut deletion_count = 0;
             let mut memo_ids = Vec::new();
-            
+
             // First extract all memo titles (which serve as IDs)
             for line in response_text.lines() {
                 if line.trim().starts_with('•') {
@@ -220,15 +239,23 @@ mod test_utils {
                     }
                 }
             }
-            
-            eprintln!("CLEANUP: Found {} memo IDs to delete: {:?}", memo_ids.len(), memo_ids);
-            println!("CLEANUP DEBUG: Found {} memo IDs to delete: {:?}", memo_ids.len(), memo_ids);
-            
+
+            eprintln!(
+                "CLEANUP: Found {} memo IDs to delete: {:?}",
+                memo_ids.len(),
+                memo_ids
+            );
+            println!(
+                "CLEANUP DEBUG: Found {} memo IDs to delete: {:?}",
+                memo_ids.len(),
+                memo_ids
+            );
+
             // Delete each memo
             for memo_id in memo_ids {
                 eprintln!("CLEANUP: Attempting to delete memo ID: '{}'", memo_id);
                 println!("CLEANUP DEBUG: Attempting to delete memo ID: '{}'", memo_id);
-                
+
                 let delete_request = create_tool_request(
                     request_id,
                     "memo_delete",
@@ -238,31 +265,49 @@ mod test_utils {
                 );
                 send_request(stdin, delete_request)?;
                 let delete_response = read_response(reader)?;
-                
+
                 if delete_response.get("error").is_some() {
-                    eprintln!("CLEANUP: Delete failed for '{}': {:?}", memo_id, delete_response.get("error"));
+                    eprintln!(
+                        "CLEANUP: Delete failed for '{}': {:?}",
+                        memo_id,
+                        delete_response.get("error")
+                    );
                 } else {
-                    let success_text = delete_response["result"]["content"][0]["text"].as_str().unwrap_or("");
-                    eprintln!("CLEANUP: Delete successful for '{}': {}", memo_id, success_text);
+                    let success_text = delete_response["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap_or("");
+                    eprintln!(
+                        "CLEANUP: Delete successful for '{}': {}",
+                        memo_id, success_text
+                    );
                     deletion_count += 1;
                 }
                 request_id += 1;
-                
+
                 // Small delay to prevent overwhelming the server
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            
+
             total_deleted += deletion_count;
-            eprintln!("CLEANUP: Attempt {}: Successfully deleted {} memos", attempt, deletion_count);
-            
+            eprintln!(
+                "CLEANUP: Attempt {}: Successfully deleted {} memos",
+                attempt, deletion_count
+            );
+
             if deletion_count == 0 {
                 eprintln!("CLEANUP: No memos deleted on attempt {}, stopping", attempt);
                 break;
             }
         }
 
-        eprintln!("CLEANUP: Total deleted {} memos across all attempts", total_deleted);
-        println!("CLEANUP DEBUG: Total deleted {} memos across all attempts", total_deleted);
+        eprintln!(
+            "CLEANUP: Total deleted {} memos across all attempts",
+            total_deleted
+        );
+        println!(
+            "CLEANUP DEBUG: Total deleted {} memos across all attempts",
+            total_deleted
+        );
         Ok(())
     }
 
@@ -348,7 +393,13 @@ async fn test_mcp_memo_create() {
     // Clean up any existing memos to ensure clean test state
     cleanup_all_memos(&mut stdin, &mut reader).unwrap();
 
-    let unique_title = format!("Test Memo via MCP {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let unique_title = format!(
+        "Test Memo via MCP {}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let create_request = create_tool_request(
         1,
         "memo_create",
@@ -410,12 +461,17 @@ async fn test_mcp_memo_create_empty_content() {
 
     send_request(&mut stdin, create_request).unwrap();
     let response = read_response(&mut reader).unwrap();
-    
+
     // Should fail because empty title is not allowed
-    println!("EMPTY TITLE TEST - RESPONSE: {}", serde_json::to_string_pretty(&response).unwrap());
-    assert!(response.get("error").is_some() || 
-            (response.get("result").is_some() && 
-             response["result"]["isError"].as_bool().unwrap_or(false)));
+    println!(
+        "EMPTY TITLE TEST - RESPONSE: {}",
+        serde_json::to_string_pretty(&response).unwrap()
+    );
+    assert!(
+        response.get("error").is_some()
+            || (response.get("result").is_some()
+                && response["result"]["isError"].as_bool().unwrap_or(false))
+    );
 }
 
 /// Test memo creation with unicode content
@@ -435,7 +491,13 @@ async fn test_mcp_memo_create_unicode() {
     // Clean up any existing memos to ensure clean test state
     cleanup_all_memos(&mut stdin, &mut reader).unwrap();
 
-    let unique_title = format!("🚀 Unicode Test with 中文 {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let unique_title = format!(
+        "🚀 Unicode Test with 中文 {}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let create_request = create_tool_request(
         1,
         "memo_create",
@@ -500,14 +562,17 @@ async fn test_mcp_memo_get() {
 
     // Check for errors first
     if create_response.get("error").is_some() {
-        panic!("Create memo failed with error: {:?}", create_response.get("error"));
+        panic!(
+            "Create memo failed with error: {:?}",
+            create_response.get("error")
+        );
     }
 
     // Extract memo ID from creation response
     let create_text = create_response["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
-    
+
     let memo_id = extract_memo_id_from_response(create_text);
 
     // Now get the memo
@@ -606,7 +671,13 @@ async fn test_mcp_memo_get_nonexistent() {
     // Should return success response with "not found" message
     assert!(response.get("error").is_none());
     let result = &response["result"];
-    assert_eq!(result.get("is_error").or(result.get("isError")).unwrap_or(&serde_json::Value::Bool(false)), &serde_json::Value::Bool(false));
+    assert_eq!(
+        result
+            .get("is_error")
+            .or(result.get("isError"))
+            .unwrap_or(&serde_json::Value::Bool(false)),
+        &serde_json::Value::Bool(false)
+    );
     assert!(result["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -751,7 +822,13 @@ async fn test_mcp_memo_delete() {
     // Should return success response with "not found" message since memo is deleted
     assert!(get_response.get("error").is_none());
     let result = &get_response["result"];
-    assert_eq!(result.get("is_error").or(result.get("isError")).unwrap_or(&serde_json::Value::Bool(false)), &serde_json::Value::Bool(false));
+    assert_eq!(
+        result
+            .get("is_error")
+            .or(result.get("isError"))
+            .unwrap_or(&serde_json::Value::Bool(false)),
+        &serde_json::Value::Bool(false)
+    );
     assert!(result["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -790,10 +867,16 @@ async fn test_mcp_memo_list() {
         .expect("Expected empty_response[\"result\"][\"content\"][0][\"text\"] to be string");
 
     println!("DEBUG memo_list: actual_text = '{}'", actual_text);
-    println!("DEBUG memo_list: full response = {}", serde_json::to_string_pretty(&empty_response).unwrap());
-    
+    println!(
+        "DEBUG memo_list: full response = {}",
+        serde_json::to_string_pretty(&empty_response).unwrap()
+    );
+
     if !actual_text.contains("No memos found") && !actual_text.contains("Found 0 memos") {
-        panic!("Expected 'No memos found' or 'Found 0 memos', but got: '{}'", actual_text);
+        panic!(
+            "Expected 'No memos found' or 'Found 0 memos', but got: '{}'",
+            actual_text
+        );
     }
 
     println!("=== Empty list test passed, now creating 3 memos ===");
@@ -811,7 +894,13 @@ async fn test_mcp_memo_list() {
         );
         send_request(&mut stdin, create_request).unwrap();
         let response = read_response(&mut reader).unwrap();
-        println!("=== Created memo {}: {} ===", i, response["result"]["content"][0]["text"].as_str().unwrap_or(""));
+        println!(
+            "=== Created memo {}: {} ===",
+            i,
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or("")
+        );
     }
 
     println!("=== All 3 memos created, now listing ===");
@@ -924,10 +1013,16 @@ async fn test_mcp_memo_get_all_context() {
         .as_str()
         .unwrap();
     println!("DEBUG get_all_context: context_text = '{}'", context_text);
-    println!("DEBUG get_all_context: full response = {}", serde_json::to_string_pretty(&empty_response).unwrap());
-    
+    println!(
+        "DEBUG get_all_context: full response = {}",
+        serde_json::to_string_pretty(&empty_response).unwrap()
+    );
+
     if !context_text.contains("No memos available") && !context_text.contains("Found 0 memos") {
-        panic!("Expected 'No memos available' or 'Found 0 memos', but got: '{}'", context_text);
+        panic!(
+            "Expected 'No memos available' or 'Found 0 memos', but got: '{}'",
+            context_text
+        );
     }
 
     // Create some memos with delays to test ordering
@@ -956,7 +1051,6 @@ async fn test_mcp_memo_get_all_context() {
     let result = &context_response["result"];
     let text = result["content"][0]["text"].as_str().unwrap();
 
-
     assert!(text.contains("All memo context (3 memos)"));
     assert!(text.contains("Context Memo 1"));
     assert!(text.contains("Context Memo 2"));
@@ -983,7 +1077,13 @@ async fn test_mcp_memo_large_content() {
 
     // Create a large memo (100KB content)
     let large_content = "x".repeat(100_000);
-    let unique_title = format!("Large Content Memo {}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let unique_title = format!(
+        "Large Content Memo {}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let create_request = create_tool_request(
         1,
         "memo_create",
@@ -1284,9 +1384,15 @@ mod stress_tests {
             .as_str()
             .unwrap();
         println!("DEBUG performance test: text = '{}'", text);
-        println!("DEBUG performance test: full response = {}", serde_json::to_string_pretty(&list_response).unwrap());
-        assert!(text.contains("No memos found") || text.contains("Found 0 memos"), 
-                "Expected empty memo list, but got: '{}'", text);
+        println!(
+            "DEBUG performance test: full response = {}",
+            serde_json::to_string_pretty(&list_response).unwrap()
+        );
+        assert!(
+            text.contains("No memos found") || text.contains("Found 0 memos"),
+            "Expected empty memo list, but got: '{}'",
+            text
+        );
     }
 
     /// Performance test: Search performance is disabled

@@ -4,8 +4,8 @@
 //! covering complete workflows, MCP tool integration, and edge cases.
 
 use std::sync::Arc;
-use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_git::GitOperations;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
@@ -194,7 +194,8 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
     {
         let git_ops = env.git_ops.lock().await;
         let git = git_ops.as_ref().unwrap();
-        let feature_branch = swissarmyhammer_git::BranchName::new("feature/user-authentication").unwrap();
+        let feature_branch =
+            swissarmyhammer_git::BranchName::new("feature/user-authentication").unwrap();
         git.checkout_branch(&feature_branch).unwrap();
     }
 
@@ -274,7 +275,7 @@ async fn test_feature_branch_to_issue_to_merge_workflow() {
         let git = git_ops.as_ref().unwrap();
         let current_branch = git.current_branch().unwrap();
         assert_eq!(current_branch, "feature/user-authentication");
-        
+
         // Debug: list files that actually exist
         eprintln!("Current branch: {}", current_branch);
         eprintln!("Files in working directory:");

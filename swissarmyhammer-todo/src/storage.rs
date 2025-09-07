@@ -96,9 +96,9 @@ impl TodoStorage {
         let mut list = self.load_todo_list(&path).await?;
 
         // Find and mark the item complete
-        let item = list.find_item_mut(id).ok_or_else(|| {
-            TodoError::TodoItemNotFound(id.to_string(), todo_list.to_string())
-        })?;
+        let item = list
+            .find_item_mut(id)
+            .ok_or_else(|| TodoError::TodoItemNotFound(id.to_string(), todo_list.to_string()))?;
 
         item.mark_complete();
 
@@ -138,9 +138,8 @@ impl TodoStorage {
             return Ok(Vec::new());
         }
 
-        let entries = fs::read_dir(&self.base_dir).map_err(|e| {
-            TodoError::other(format!("Failed to read todo directory: {e}"))
-        })?;
+        let entries = fs::read_dir(&self.base_dir)
+            .map_err(|e| TodoError::other(format!("Failed to read todo directory: {e}")))?;
 
         let mut lists = Vec::new();
 
@@ -201,9 +200,8 @@ impl TodoStorage {
             })?;
         }
 
-        let content = serde_yaml::to_string(list).map_err(|e| {
-            TodoError::other(format!("Failed to serialize todo list: {e}"))
-        })?;
+        let content = serde_yaml::to_string(list)
+            .map_err(|e| TodoError::other(format!("Failed to serialize todo list: {e}")))?;
 
         fs::write(path, content).map_err(|e| {
             TodoError::other(format!(

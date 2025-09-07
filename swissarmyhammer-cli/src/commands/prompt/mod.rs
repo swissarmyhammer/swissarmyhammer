@@ -65,7 +65,6 @@ async fn run_prompt_command(
         )
         .await
         .map_err(|e| CliError::new(e.to_string(), 1)),
-
     }
 }
 
@@ -113,8 +112,6 @@ fn run_list_command(
     if let Some(ref category) = category_filter {
         filter = filter.with_category(category);
     }
-
-
 
     // Apply filter and get prompts - pass empty file sources since we're using all sources
     let file_sources = HashMap::new();
@@ -445,8 +442,6 @@ mod tests {
         let result = run_prompt_command(subcommand, &test_context).await;
         assert!(result.is_ok());
     }
-
-
 
     #[tokio::test]
     async fn test_run_prompt_command_test_with_invalid_prompt() {

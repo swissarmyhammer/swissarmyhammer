@@ -19,7 +19,7 @@ use tracing::debug;
 /// * `Err(GitError)` - Add operation failed
 pub fn add_files(repo: &Repository, paths: &[&str]) -> GitResult<()> {
     debug!("Adding files to index: {:?}", paths);
-    
+
     let mut index = repo
         .index()
         .map_err(|e| convert_git2_error("get_index", e))?;
@@ -55,11 +55,10 @@ pub fn create_commit(
     author_email: Option<&str>,
 ) -> GitResult<String> {
     debug!("Creating commit with message: {}", message);
-    
+
     // Get signature (author and committer)
     let signature = if let (Some(name), Some(email)) = (author_name, author_email) {
-        git2::Signature::now(name, email)
-            .map_err(|e| convert_git2_error("create_signature", e))?
+        git2::Signature::now(name, email).map_err(|e| convert_git2_error("create_signature", e))?
     } else {
         // Use repository config
         repo.signature()

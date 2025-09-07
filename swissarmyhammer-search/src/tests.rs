@@ -2,9 +2,9 @@
 
 #[cfg(test)]
 mod integration_tests {
-    use crate::*;
-    use crate::storage::VectorStorage;
     use crate::indexer::IndexingOptions;
+    use crate::storage::VectorStorage;
+    use crate::*;
     use tempfile::TempDir;
 
     /// Test isolation guard for semantic tests

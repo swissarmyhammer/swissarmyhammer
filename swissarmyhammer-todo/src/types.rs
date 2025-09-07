@@ -20,7 +20,9 @@ impl TodoId {
     /// Create a todo ID from a string
     pub fn from_string(id: String) -> Result<Self> {
         if id.trim().is_empty() {
-            return Err(TodoError::InvalidTodoId("Todo ID cannot be empty".to_string()));
+            return Err(TodoError::InvalidTodoId(
+                "Todo ID cannot be empty".to_string(),
+            ));
         }
         Ok(Self(id))
     }

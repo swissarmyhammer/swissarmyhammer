@@ -1,8 +1,8 @@
 //! TreeSitter integration for parsing source code
 
+use crate::error::{SearchError, SearchResult};
 use crate::types::{ChunkType, CodeChunk, ContentHash, Language};
 use crate::utils::FileHasher;
-use crate::error::{SearchResult, SearchError};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::path::Path;

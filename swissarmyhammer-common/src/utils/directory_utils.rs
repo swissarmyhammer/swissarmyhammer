@@ -83,8 +83,8 @@ pub fn get_or_create_swissarmyhammer_directory() -> Result<PathBuf> {
 ///
 /// * `Result<PathBuf>` - Path to the .swissarmyhammer directory on success
 pub fn get_or_create_swissarmyhammer_directory_from(start_dir: &Path) -> Result<PathBuf> {
-    let git_root = find_git_repository_root_from(start_dir)
-        .ok_or(SwissArmyHammerError::NotInGitRepository)?;
+    let git_root =
+        find_git_repository_root_from(start_dir).ok_or(SwissArmyHammerError::NotInGitRepository)?;
 
     let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
 
@@ -196,7 +196,7 @@ mod tests {
 
         let result = get_or_create_swissarmyhammer_directory_from(base);
         assert!(result.is_err());
-        
+
         if let Err(SwissArmyHammerError::NotInGitRepository) = result {
             // Expected error
         } else {

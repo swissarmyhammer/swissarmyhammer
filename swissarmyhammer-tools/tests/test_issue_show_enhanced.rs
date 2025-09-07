@@ -7,10 +7,10 @@ use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
-use swissarmyhammer::config::Config;
-use swissarmyhammer_git::GitOperations;
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
+use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_issues_config::Config;
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::issues::show::ShowIssueTool;
@@ -59,8 +59,11 @@ impl IssueShowTestEnvironment {
         )));
 
         // Create memo storage
-        let memo_storage =
-            Box::new(MarkdownMemoStorage::new_default().await.expect("Failed to create memo storage"));
+        let memo_storage = Box::new(
+            MarkdownMemoStorage::new_default()
+                .await
+                .expect("Failed to create memo storage"),
+        );
         let memo_storage = Arc::new(RwLock::new(memo_storage as Box<dyn MemoStorage>));
 
         // Create tool handlers
@@ -722,8 +725,11 @@ async fn test_issue_show_concurrent_access() {
     for _ in 0..5 {
         let tool = ShowIssueTool::new();
         // Create memo storage for this context
-        let memo_storage =
-            Box::new(MarkdownMemoStorage::new_default().await.expect("Failed to create memo storage"));
+        let memo_storage = Box::new(
+            MarkdownMemoStorage::new_default()
+                .await
+                .expect("Failed to create memo storage"),
+        );
         let memo_storage = Arc::new(RwLock::new(memo_storage as Box<dyn MemoStorage>));
 
         let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));

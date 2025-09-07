@@ -20,8 +20,6 @@ pub trait StorageBackend: Send + Sync {
     /// Remove a prompt
     fn remove(&mut self, name: &str) -> Result<()>;
 
-
-
     /// Check if a prompt exists
     fn exists(&self, name: &str) -> Result<bool> {
         self.get(name).map(|_| true).or_else(|e| match e {
@@ -86,8 +84,6 @@ impl StorageBackend for MemoryStorage {
         Ok(())
     }
 
-
-
     fn clone_box(&self) -> Box<dyn StorageBackend> {
         Box::new(MemoryStorage {
             prompts: self.prompts.clone(),
@@ -96,14 +92,24 @@ impl StorageBackend for MemoryStorage {
 
     fn search(&self, query: &str) -> Result<Vec<Prompt>> {
         let query = query.to_lowercase();
-        let results: Vec<Prompt> = self.prompts
+        let results: Vec<Prompt> = self
+            .prompts
             .values()
             .filter(|prompt| {
                 prompt.name.to_lowercase().contains(&query)
-                    || prompt.description.as_ref().is_some_and(|desc| desc.to_lowercase().contains(&query))
+                    || prompt
+                        .description
+                        .as_ref()
+                        .is_some_and(|desc| desc.to_lowercase().contains(&query))
                     || prompt.template.to_lowercase().contains(&query)
-                    || prompt.category.as_ref().is_some_and(|cat| cat.to_lowercase().contains(&query))
-                    || prompt.tags.iter().any(|tag| tag.to_lowercase().contains(&query))
+                    || prompt
+                        .category
+                        .as_ref()
+                        .is_some_and(|cat| cat.to_lowercase().contains(&query))
+                    || prompt
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query))
             })
             .cloned()
             .collect();
@@ -233,8 +239,6 @@ impl StorageBackend for FileSystemStorage {
         Ok(())
     }
 
-
-
     fn clone_box(&self) -> Box<dyn StorageBackend> {
         Box::new(FileSystemStorage {
             base_path: self.base_path.clone(),
@@ -250,10 +254,19 @@ impl StorageBackend for FileSystemStorage {
             .into_iter()
             .filter(|prompt| {
                 prompt.name.to_lowercase().contains(&query)
-                    || prompt.description.as_ref().is_some_and(|desc| desc.to_lowercase().contains(&query))
+                    || prompt
+                        .description
+                        .as_ref()
+                        .is_some_and(|desc| desc.to_lowercase().contains(&query))
                     || prompt.template.to_lowercase().contains(&query)
-                    || prompt.category.as_ref().is_some_and(|cat| cat.to_lowercase().contains(&query))
-                    || prompt.tags.iter().any(|tag| tag.to_lowercase().contains(&query))
+                    || prompt
+                        .category
+                        .as_ref()
+                        .is_some_and(|cat| cat.to_lowercase().contains(&query))
+                    || prompt
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query))
             })
             .collect();
         Ok(results)
@@ -463,7 +476,11 @@ mod tests {
 
         // Test basic search by template content
         let results = storage.search("special").unwrap();
-        assert_eq!(results.len(), 1, "Basic search should find prompt by template content");
+        assert_eq!(
+            results.len(),
+            1,
+            "Basic search should find prompt by template content"
+        );
 
         // Test search by name
         let results = storage.search("test").unwrap();
@@ -474,11 +491,11 @@ mod tests {
     fn test_search_by_category() {
         let mut storage = MemoryStorage::new();
         let prompt = Prompt::new("test", "Template").with_category("special-category");
-        
+
         // Debug: Let's verify the prompt has the category
         assert!(prompt.category.is_some());
         assert_eq!(prompt.category.as_ref().unwrap(), "special-category");
-        
+
         storage.store(prompt).unwrap();
 
         let results = storage.search("special").unwrap();

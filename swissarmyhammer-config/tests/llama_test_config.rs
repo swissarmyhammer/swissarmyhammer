@@ -4,6 +4,7 @@
 //! environments (CI vs local development) and enables or disables specific executor
 //! types based on availability of dependencies like Claude CLI or model files.
 
+use serial_test::serial;
 use std::env;
 use std::sync::OnceLock;
 use swissarmyhammer_config::{
@@ -31,53 +32,56 @@ pub struct TestConfig {
 }
 
 impl TestConfig {
-    /// Load test configuration from environment variables
+    /// Load test configuration from environment variables (cached)
     pub fn from_environment() -> &'static Self {
         static CONFIG: OnceLock<TestConfig> = OnceLock::new();
-        CONFIG.get_or_init(|| {
-            let is_ci = env::var("CI")
-                .map(|v| v.to_lowercase() == "true")
-                .unwrap_or(false)
-                || env::var("GITHUB_ACTIONS")
-                    .map(|v| v.to_lowercase() == "true")
-                    .unwrap_or(false);
+        CONFIG.get_or_init(|| Self::from_environment_uncached())
+    }
 
-            Self {
-                enable_llama_tests: env::var("SAH_TEST_LLAMA")
-                    .map(|v| v.to_lowercase() == "true" || v == "1")
-                    .unwrap_or(false),
-                enable_claude_tests: env::var("SAH_TEST_CLAUDE")
-                    .map(|v| v.to_lowercase() == "true" || v == "1")
-                    .unwrap_or(true),
-                test_timeout_seconds: if is_ci {
-                    env::var("SAH_TEST_TIMEOUT")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(60) // Shorter timeout in CI
-                } else {
-                    env::var("SAH_TEST_TIMEOUT")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(120) // Longer timeout for local development
-                },
-                llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
-                    .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
-                llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
-                    .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
-                max_concurrent_tests: if is_ci {
-                    env::var("SAH_TEST_MAX_CONCURRENT")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(3) // Lower concurrency in CI
-                } else {
-                    env::var("SAH_TEST_MAX_CONCURRENT")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(5) // Higher concurrency for local development
-                },
-                is_ci,
-            }
-        })
+    /// Load test configuration from environment variables (uncached, for testing)
+    fn from_environment_uncached() -> Self {
+        let is_ci = env::var("CI")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false)
+            || env::var("GITHUB_ACTIONS")
+                .map(|v| v.to_lowercase() == "true")
+                .unwrap_or(false);
+
+        Self {
+            enable_llama_tests: env::var("SAH_TEST_LLAMA")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(false),
+            enable_claude_tests: env::var("SAH_TEST_CLAUDE")
+                .map(|v| v.to_lowercase() == "true" || v == "1")
+                .unwrap_or(true),
+            test_timeout_seconds: if is_ci {
+                env::var("SAH_TEST_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60) // Shorter timeout in CI
+            } else {
+                env::var("SAH_TEST_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(120) // Longer timeout for local development
+            },
+            llama_model_repo: env::var("SAH_TEST_MODEL_REPO")
+                .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_REPO.to_string()),
+            llama_model_filename: env::var("SAH_TEST_MODEL_FILENAME")
+                .unwrap_or_else(|_| DEFAULT_TEST_LLM_MODEL_FILENAME.to_string()),
+            max_concurrent_tests: if is_ci {
+                env::var("SAH_TEST_MAX_CONCURRENT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(3) // Lower concurrency in CI
+            } else {
+                env::var("SAH_TEST_MAX_CONCURRENT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5) // Higher concurrency for local development
+            },
+            is_ci,
+        }
     }
 
     /// Get optimized configuration for development environment
@@ -315,6 +319,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[serial]
     fn test_config_from_environment_defaults() {
         // Clear environment variables
         env::remove_var("SAH_TEST_LLAMA");
@@ -323,7 +328,7 @@ mod tests {
         env::remove_var("CI");
         env::remove_var("GITHUB_ACTIONS");
 
-        let config = TestConfig::from_environment();
+        let config = TestConfig::from_environment_uncached();
 
         // Defaults should be Claude enabled, LlamaAgent disabled
         assert!(!config.enable_llama_tests);
@@ -333,6 +338,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_development_preset() {
         let config = TestConfig::development();
 
@@ -344,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_ci_preset() {
         let config = TestConfig::ci();
 
@@ -355,6 +362,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_llama_config_creation() {
         let config = TestConfig::development();
         let llama_config = config.create_llama_config();
@@ -372,6 +380,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_claude_config_creation() {
         let config = TestConfig::development();
         let agent_config = config.create_claude_config();
@@ -384,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_llama_agent_config_creation() {
         let config = TestConfig::development();
         let agent_config = config.create_llama_agent_config();
@@ -396,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_test_environment_new() {
         let env = TestEnvironment::new();
         // Should not panic and should load configuration
@@ -403,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_test_environment_with_config() {
         let config = TestConfig::ci();
         let env = TestEnvironment::with_config(config.clone());
@@ -417,16 +429,17 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_ci_detection() {
         // Test GitHub Actions detection
         env::set_var("GITHUB_ACTIONS", "true");
-        let config = TestConfig::from_environment();
+        let config = TestConfig::from_environment_uncached();
         assert!(config.is_ci);
         env::remove_var("GITHUB_ACTIONS");
 
         // Test generic CI detection
         env::set_var("CI", "true");
-        let config = TestConfig::from_environment();
+        let config = TestConfig::from_environment_uncached();
         assert!(config.is_ci);
         env::remove_var("CI");
     }

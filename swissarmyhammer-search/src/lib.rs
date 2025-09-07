@@ -1,7 +1,7 @@
 //! SwissArmyHammer Search
 //!
 //! This crate provides semantic search functionality using vector embeddings and TreeSitter parsing
-//! for source code files. It extracts search functionality from the main library into a dedicated 
+//! for source code files. It extracts search functionality from the main library into a dedicated
 //! crate for better maintainability and reuse.
 //!
 //! ## Features
@@ -22,15 +22,15 @@
 //! let results = search.query("error handling patterns").await?;
 //! ```
 
-pub mod error;
-pub mod types;
-pub mod operations;
-pub mod storage;
 pub mod embedding;
-pub mod parser;
-pub mod utils;
+pub mod error;
 pub mod indexer;
+pub mod operations;
+pub mod parser;
 pub mod searcher;
+pub mod storage;
+pub mod types;
+pub mod utils;
 
 // Test utilities
 #[cfg(test)]
@@ -41,12 +41,12 @@ pub mod test_utils;
 pub mod tests;
 
 // Re-export main types
-pub use error::{SearchError, SearchResult};
-pub use types::*;
-pub use operations::SearchOperations;
-pub use storage::VectorStorage as SearchStorage;
 pub use embedding::*;
+pub use error::{SearchError, SearchResult};
+pub use operations::SearchOperations;
 pub use parser::*;
+pub use storage::VectorStorage as SearchStorage;
+pub use types::*;
 pub use utils::*;
 
 /// Version of this crate

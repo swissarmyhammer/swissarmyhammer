@@ -113,8 +113,6 @@ async fn run_sah_command_in_process_inner_with_dir(
             Some(Commands::Prompt { .. }) |      // Add Prompt command support
             None
         );
-        
-
 
         if can_run_in_process {
             // Execute in-process with stdout/stderr capture
@@ -351,9 +349,18 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             match subcommand {
                 FlowSubcommand::Test { workflow, .. } => {
                     // For flow test, check for builtin and test workflows
-                    let builtin_workflows = ["example-actions", "greeting", "hello-world", "plan", "document", "tdd", "implement"];
+                    let builtin_workflows = [
+                        "example-actions",
+                        "greeting",
+                        "hello-world",
+                        "plan",
+                        "document",
+                        "tdd",
+                        "implement",
+                    ];
                     let test_workflows = ["test-workflow"]; // Allow test-workflow for in-process utilities tests
-                    let workflow_exists = builtin_workflows.contains(&workflow.as_str()) || test_workflows.contains(&workflow.as_str());
+                    let workflow_exists = builtin_workflows.contains(&workflow.as_str())
+                        || test_workflows.contains(&workflow.as_str());
 
                     if workflow_exists {
                         if workflow == "plan" {
@@ -391,14 +398,28 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
 
                     // In test environment, check for test-created workflows and builtin workflows
                     let test_created_workflows = [
-                        "test-template", "equals-test", "special-chars-test", "template-workflow",
-                        "missing-vars", "complex-templates", "malformed-templates", "injection-test",
-                        "empty-value-test", "conflict-test", "some-workflow"
+                        "test-template",
+                        "equals-test",
+                        "special-chars-test",
+                        "template-workflow",
+                        "missing-vars",
+                        "complex-templates",
+                        "malformed-templates",
+                        "injection-test",
+                        "empty-value-test",
+                        "conflict-test",
+                        "some-workflow",
                     ];
                     let builtin_workflows = [
-                        "example-actions", "greeting", "hello-world", "plan", "document", "tdd", "implement"
+                        "example-actions",
+                        "greeting",
+                        "hello-world",
+                        "plan",
+                        "document",
+                        "tdd",
+                        "implement",
                     ];
-                    let workflow_exists = test_created_workflows.contains(&workflow.as_str()) 
+                    let workflow_exists = test_created_workflows.contains(&workflow.as_str())
                         || builtin_workflows.contains(&workflow.as_str());
 
                     if workflow_exists {

@@ -4,6 +4,7 @@
 //! Verifies that TemplateContext always loads fresh config as specified in the requirements.
 
 use serde_json::json;
+use serial_test::serial;
 use std::env;
 use std::fs;
 use std::thread;
@@ -82,6 +83,7 @@ impl Drop for IsolatedFreshLoadTest {
 }
 
 #[test]
+#[serial]
 fn test_config_file_changes_picked_up_immediately() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -115,6 +117,7 @@ new_setting = "added"
 }
 
 #[test]
+#[serial]
 fn test_multiple_successive_loads_always_fresh() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -148,6 +151,7 @@ counter = {}
 }
 
 #[test]
+#[serial]
 fn test_environment_variable_changes_picked_up() {
     let mut test = IsolatedFreshLoadTest::new();
 
@@ -172,6 +176,7 @@ fn test_environment_variable_changes_picked_up() {
 }
 
 #[test]
+#[serial]
 fn test_config_file_deletion_and_recreation() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -214,6 +219,7 @@ new_after_recreation = "new_value"
 }
 
 #[test]
+#[serial]
 fn test_multiple_config_files_fresh_loading() {
     let test = IsolatedFreshLoadTest::new();
     let project_config_dir = test.project_config_dir();
@@ -287,6 +293,7 @@ new_project = "new_project_value"
 }
 
 #[test]
+#[serial]
 fn test_concurrent_fresh_loading() {
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -371,6 +378,7 @@ thread_id = {}
 }
 
 #[test]
+#[serial]
 fn test_config_format_changes_fresh_loading() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -424,6 +432,7 @@ new_in_yaml: yaml_specific
 }
 
 #[test]
+#[serial]
 fn test_no_caching_with_rapid_changes() {
     let test = IsolatedFreshLoadTest::new();
     let config_dir = test.project_config_dir();
@@ -466,6 +475,7 @@ iteration_mod_5 = {}
 }
 
 #[test]
+#[serial]
 fn test_fresh_loading_with_file_permissions_changes() {
     use std::os::unix::fs::PermissionsExt;
 

@@ -6485,6 +6485,7 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
+ "swissarmyhammer-issues-config",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-search",
  "syntect",
@@ -6597,6 +6598,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-issues-config"
+version = "0.1.0"
+dependencies = [
+ "swissarmyhammer-common",
+]
+
+[[package]]
 name = "swissarmyhammer-memoranda"
 version = "0.1.0"
 dependencies = [
@@ -6701,6 +6709,7 @@ dependencies = [
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
+ "swissarmyhammer-issues-config",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-todo",
  "tempfile",

@@ -69,9 +69,7 @@ impl CliToolContext {
     }
 
     /// Create git operations handler
-    fn create_git_operations(
-        working_dir: &std::path::Path,
-    ) -> Arc<Mutex<Option<GitOperations>>> {
+    fn create_git_operations(working_dir: &std::path::Path) -> Arc<Mutex<Option<GitOperations>>> {
         Arc::new(Mutex::new(
             GitOperations::with_work_dir(working_dir.to_path_buf()).ok(),
         ))
@@ -83,9 +81,9 @@ impl CliToolContext {
     ) -> Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>> {
         // First check if SWISSARMYHAMMER_MEMOS_DIR environment variable is set
         let storage = if let Ok(custom_path) = std::env::var("SWISSARMYHAMMER_MEMOS_DIR") {
-            swissarmyhammer_memoranda::MarkdownMemoStorage::new(
-                std::path::PathBuf::from(custom_path),
-            )
+            swissarmyhammer_memoranda::MarkdownMemoStorage::new(std::path::PathBuf::from(
+                custom_path,
+            ))
         } else {
             // For tests and custom working directories, create .swissarmyhammer/memos in the working dir
             let memos_dir = current_dir.join(".swissarmyhammer").join("memos");
@@ -315,16 +313,16 @@ mod tests {
                 .unwrap(),
         )));
 
-        let git_ops: Arc<Mutex<Option<GitOperations>>> =
-            Arc::new(Mutex::new(None));
+        let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
 
         let memo_storage: Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>> =
             Arc::new(RwLock::new(Box::new(
-                swissarmyhammer::memoranda::MarkdownMemoStorage::new_default().await
+                swissarmyhammer::memoranda::MarkdownMemoStorage::new_default()
+                    .await
                     .unwrap_or_else(|_| {
-                        swissarmyhammer::memoranda::MarkdownMemoStorage::new(
-                            PathBuf::from("./test_issues"),
-                        )
+                        swissarmyhammer::memoranda::MarkdownMemoStorage::new(PathBuf::from(
+                            "./test_issues",
+                        ))
                     }),
             )));
 

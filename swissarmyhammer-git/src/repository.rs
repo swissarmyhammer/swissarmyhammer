@@ -66,7 +66,8 @@ impl GitRepository {
             GitError::repository_not_found(path, error_msg)
         })?;
 
-        let repo_path = repo.workdir()
+        let repo_path = repo
+            .workdir()
             .or_else(|| repo.path().parent())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| path.to_path_buf());
@@ -84,10 +85,10 @@ impl GitRepository {
         let path = path.as_ref();
         debug!("Initializing git repository at: {}", path.display());
 
-        let repo = Repository::init(path)
-            .map_err(|e| convert_git2_error("init_repository", e))?;
+        let repo = Repository::init(path).map_err(|e| convert_git2_error("init_repository", e))?;
 
-        let repo_path = repo.workdir()
+        let repo_path = repo
+            .workdir()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| path.to_path_buf());
 
@@ -201,8 +202,7 @@ mod tests {
 
     fn setup_test_repo() -> (TempDir, GitRepository) {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let repo = GitRepository::init(temp_dir.path())
-            .expect("Failed to initialize repository");
+        let repo = GitRepository::init(temp_dir.path()).expect("Failed to initialize repository");
         (temp_dir, repo)
     }
 
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn test_repository_discovery() {
         let (_temp_dir, repo) = setup_test_repo();
-        
+
         // Create a subdirectory
         let subdir = repo.path().join("subdir");
         std::fs::create_dir_all(&subdir).unwrap();
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_path_containment() {
         let (_temp_dir, repo) = setup_test_repo();
-        
+
         let internal_path = repo.path().join("some_file.txt");
         let external_path = PathBuf::from("/tmp/external_file.txt");
 
@@ -262,7 +262,10 @@ mod tests {
 
         // Test utility functions
         assert!(utils::is_git_repository(repo.path()));
-        assert_eq!(utils::get_repository_root(repo.path()).unwrap(), repo.path());
+        assert_eq!(
+            utils::get_repository_root(repo.path()).unwrap(),
+            repo.path()
+        );
 
         let found_repo = utils::find_repository(repo.path()).unwrap();
         assert_eq!(found_repo.path(), repo.path());

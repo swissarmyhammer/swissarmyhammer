@@ -1,8 +1,8 @@
 //! Local embedding generation using fastembed-rs neural embeddings
 
 use crate::{
+    error::{SearchError, SearchResult},
     types::{CodeChunk, Embedding},
-    error::{SearchResult, SearchError},
 };
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::sync::Arc;
@@ -96,9 +96,7 @@ impl EmbeddingEngine {
     /// Create engine with custom configuration
     pub async fn with_config(mut config: EmbeddingConfig) -> SearchResult<Self> {
         if config.model_id.is_empty() {
-            return Err(SearchError::Config(
-                "Model ID cannot be empty".to_string(),
-            ));
+            return Err(SearchError::Config("Model ID cannot be empty".to_string()));
         }
 
         if config.batch_size == 0 {
@@ -140,9 +138,9 @@ impl EmbeddingEngine {
         })?;
 
         // Get actual model dimensions by generating a test embedding
-        let test_embedding = model.embed(vec!["test".to_string()], None).map_err(|e| {
-            SearchError::Embedding(format!("Failed to get model dimensions: {e}"))
-        })?;
+        let test_embedding = model
+            .embed(vec!["test".to_string()], None)
+            .map_err(|e| SearchError::Embedding(format!("Failed to get model dimensions: {e}")))?;
 
         let dimensions = test_embedding
             .first()
@@ -277,9 +275,7 @@ impl EmbeddingEngine {
         if let Some(embedding) = embeddings.into_iter().next() {
             Ok(embedding)
         } else {
-            Err(SearchError::Embedding(
-                "No embedding generated".to_string(),
-            ))
+            Err(SearchError::Embedding("No embedding generated".to_string()))
         }
     }
 
@@ -427,8 +423,8 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ChunkType, ContentHash, Language};
     use crate::test_utils::IsolatedTestHome;
+    use crate::types::{ChunkType, ContentHash, Language};
     use std::path::PathBuf;
 
     #[tokio::test]
@@ -567,10 +563,7 @@ mod tests {
         let engine = EmbeddingEngine::new_for_testing().await.unwrap();
 
         let info = engine.model_info();
-        assert_eq!(
-            info.model_id,
-            "nomic-ai/nomic-embed-code"
-        );
+        assert_eq!(info.model_id, "nomic-ai/nomic-embed-code");
         assert_eq!(info.dimensions, 384); // BGE-small-en-v1.5 has 384 dimensions
         assert_eq!(info.max_sequence_length, 256);
         assert_eq!(info.quantization, "FP32");

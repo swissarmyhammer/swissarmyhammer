@@ -14,14 +14,17 @@ impl MemoTitle {
     /// Create a new memo title with validation
     pub fn new(title: String) -> Result<Self> {
         let title = title.trim().to_string();
-        
+
         if title.is_empty() {
-            return Err(MemorandaError::InvalidTitle("Title cannot be empty".to_string()));
+            return Err(MemorandaError::InvalidTitle(
+                "Title cannot be empty".to_string(),
+            ));
         }
 
         if title.len() > 255 {
             return Err(MemorandaError::InvalidTitle(format!(
-                "Title too long: {} characters (max 255)", title.len()
+                "Title too long: {} characters (max 255)",
+                title.len()
             )));
         }
 
@@ -30,7 +33,8 @@ impl MemoTitle {
         for ch in invalid_chars {
             if title.contains(ch) {
                 return Err(MemorandaError::InvalidTitle(format!(
-                    "Title contains invalid character '{}': {}", ch, title
+                    "Title contains invalid character '{}': {}",
+                    ch, title
                 )));
             }
         }
@@ -200,7 +204,7 @@ mod tests {
         let title = MemoTitle::new("Meeting Notes Today".to_string()).unwrap();
         let filename = title.to_filename();
         assert_eq!(filename, "Meeting_Notes_Today");
-        
+
         let restored = MemoTitle::from_filename(&filename).unwrap();
         assert_eq!(restored.as_str(), "Meeting Notes Today");
     }
@@ -230,13 +234,13 @@ mod tests {
         let title = MemoTitle::new("Test Memo".to_string()).unwrap();
         let content = MemoContent::new("Original content".to_string());
         let mut memo = Memo::new(title, content);
-        
+
         let original_created = memo.created_at;
         std::thread::sleep(std::time::Duration::from_millis(1));
-        
+
         let new_content = MemoContent::new("Updated content".to_string());
         memo.update_content(new_content.clone());
-        
+
         assert_eq!(memo.content, new_content);
         assert_eq!(memo.created_at, original_created);
         assert!(memo.updated_at > original_created);

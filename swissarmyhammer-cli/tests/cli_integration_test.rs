@@ -20,8 +20,6 @@ async fn test_prompt_subcommand_list() -> Result<()> {
     Ok(())
 }
 
-
-
 /// Test prompt validate functionality
 #[tokio::test]
 async fn test_prompt_subcommand_validate() -> Result<()> {

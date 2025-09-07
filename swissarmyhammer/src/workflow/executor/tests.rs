@@ -135,7 +135,9 @@ async fn test_max_transition_limit() {
 
     // Use a very small limit for faster testing
     const TEST_LIMIT: usize = 2; // Further reduced for speed
-    let result = executor.start_and_execute_workflow_with_limit(workflow, TEST_LIMIT).await;
+    let result = executor
+        .start_and_execute_workflow_with_limit(workflow, TEST_LIMIT)
+        .await;
     match result {
         Err(ExecutorError::TransitionLimitExceeded { limit }) if limit == TEST_LIMIT => {
             // Test passed

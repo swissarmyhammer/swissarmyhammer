@@ -234,13 +234,18 @@ async fn test_mcp_error_propagation() -> Result<()> {
     );
 
     // Test non-existent resource handling
-    let nonexistent_args =
-        context.create_arguments(vec![("id", json!("NonExistentMemo"))]);
+    let nonexistent_args = context.create_arguments(vec![("id", json!("NonExistentMemo"))]);
     let result = context.execute_tool("memo_get", nonexistent_args).await;
-    assert!(result.is_ok(), "Non-existent memo should return success with not found message");
+    assert!(
+        result.is_ok(),
+        "Non-existent memo should return success with not found message"
+    );
     let response = result.unwrap();
     let text = response.content[0].as_text().unwrap().text.as_str();
-    assert!(text.contains("Memo not found"), "Should contain not found message");
+    assert!(
+        text.contains("Memo not found"),
+        "Should contain not found message"
+    );
 
     Ok(())
 }

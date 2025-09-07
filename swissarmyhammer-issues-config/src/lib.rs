@@ -1,11 +1,26 @@
-//! Configuration management for SwissArmyHammer
+//! Issue management configuration for SwissArmyHammer
 //!
-//! This module provides centralized configuration management with environment variable support
-//! and sensible defaults for all configurable constants throughout the application.
+//! This crate provides centralized configuration management for issue tracking
+//! functionality with environment variable support and sensible defaults.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use swissarmyhammer_issues_config::Config;
+//!
+//! // Get global configuration instance
+//! let config = Config::global();
+//! println!("Issue branch prefix: {}", config.issue_branch_prefix);
+//! println!("Max pending issues in summary: {}", config.max_pending_issues_in_summary);
+//!
+//! // Create new configuration instance (reads from environment)
+//! let config = Config::new();
+//! assert_eq!(config.issue_branch_prefix, "issue/");
+//! ```
 
-use crate::common::env_loader::EnvLoader;
+use swissarmyhammer_common::EnvLoader;
 
-/// Configuration settings for the SwissArmyHammer application
+/// Configuration settings for SwissArmyHammer issue management
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Prefix for issue branches (default: "issue/")
@@ -148,7 +163,10 @@ mod tests {
 
     #[test]
     fn test_config_new() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        // Acquire the global environment variable test lock to prevent race conditions
+        let _lock_guard = ENV_VAR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Clean up any environment variables that could affect this test
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
@@ -185,13 +203,9 @@ mod tests {
     #[test]
     fn test_config_with_env_vars() {
         // Acquire the global environment variable test lock to prevent race conditions
-        let _lock_guard = ENV_VAR_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("Environment variable test lock was poisoned, recovering");
-            poisoned.into_inner()
-        });
-
-        // DO NOT use IsolatedTestEnvironment here as it can trigger Config::global() initialization
-        // during HOME env var manipulation, which would contaminate the global config
+        let _lock_guard = ENV_VAR_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Clean up any environment variables first
         std::env::remove_var("SWISSARMYHAMMER_ISSUE_BRANCH_PREFIX");
@@ -216,8 +230,6 @@ mod tests {
             "# Test Issue\n\nTest content here.",
         );
 
-        // CRITICAL: Use Config::new() instead of Config::global() to avoid contaminating
-        // the global singleton. This test specifically verifies environment variable loading.
         let config = Config::new();
         assert_eq!(config.issue_branch_prefix, "feature/");
         assert_eq!(config.issue_number_width, 8);

@@ -86,7 +86,10 @@ impl McpTool for MergeIssueTool {
                     Ok(None) => {
                         let abort_reason = "Cannot determine current branch for merge validation. Repository may be in detached HEAD state.".to_string();
 
-                        tracing::warn!("Unknown current branch for merge operation: {}", abort_reason);
+                        tracing::warn!(
+                            "Unknown current branch for merge operation: {}",
+                            abort_reason
+                        );
 
                         // Create abort file to signal workflow termination
                         create_abort_file_current_dir(&abort_reason);
@@ -175,19 +178,33 @@ impl McpTool for MergeIssueTool {
                 // First, determine where the issue branch should be merged back to using git merge-base
                 let issue_branch_name = format!("issue/{}", issue_name);
                 let issue_branch_obj = swissarmyhammer_git::BranchName::new(&issue_branch_name)
-                    .map_err(|e| McpError::internal_error(format!("Invalid issue branch name: {}", e), None))?;
-                let target_branch = ops.find_merge_target_for_issue(&issue_branch_obj)
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Invalid issue branch name: {}", e), None)
+                    })?;
+                let target_branch = ops
+                    .find_merge_target_for_issue(&issue_branch_obj)
                     .unwrap_or_else(|_| ops.main_branch().unwrap_or_else(|_| "main".to_string()));
-                
+
                 // Switch to the target branch first
                 let target_branch_obj = swissarmyhammer_git::BranchName::new(&target_branch)
-                    .map_err(|e| McpError::internal_error(format!("Invalid target branch name: {}", e), None))?;
-                ops.checkout_branch(&target_branch_obj)
-                    .map_err(|e| McpError::internal_error(format!("Failed to checkout target branch '{}': {}", target_branch, e), None))?;
-                
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Invalid target branch name: {}", e), None)
+                    })?;
+                ops.checkout_branch(&target_branch_obj).map_err(|e| {
+                    McpError::internal_error(
+                        format!(
+                            "Failed to checkout target branch '{}': {}",
+                            target_branch, e
+                        ),
+                        None,
+                    )
+                })?;
+
                 // Now merge the issue branch into the current (target) branch
                 let issue_branch = swissarmyhammer_git::BranchName::new(&issue_branch_name)
-                    .map_err(|e| McpError::internal_error(format!("Invalid branch name: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Invalid branch name: {}", e), None)
+                    })?;
                 match ops.merge_branch(&issue_branch) {
                     Ok(()) => {
                         let source_branch = Self::format_issue_branch_name(&issue_name);
@@ -229,8 +246,15 @@ impl McpTool for MergeIssueTool {
                         // If delete_branch is true, delete the branch after successful merge
                         if request.delete_branch {
                             let branch_name = Self::format_issue_branch_name(&issue_name);
-                            let branch_name_obj = swissarmyhammer_git::BranchName::new(&branch_name)
-                                .map_err(|e| McpError::internal_error(format!("Invalid branch name: {}", e), None))?;
+                            let branch_name_obj = swissarmyhammer_git::BranchName::new(
+                                &branch_name,
+                            )
+                            .map_err(|e| {
+                                McpError::internal_error(
+                                    format!("Invalid branch name: {}", e),
+                                    None,
+                                )
+                            })?;
                             match ops.delete_branch(&branch_name_obj) {
                                 Ok(()) => {
                                     success_message

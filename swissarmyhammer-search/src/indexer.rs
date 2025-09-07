@@ -1,12 +1,12 @@
 //! File indexing logic for semantic search
 
 use crate::{
-    types::{CodeChunk, FileId, IndexedFile},
-    parser::{CodeParser, ParserConfig},
     embedding::EmbeddingEngine,
+    error::{SearchError, SearchResult},
+    parser::{CodeParser, ParserConfig},
     storage::VectorStorage,
+    types::{CodeChunk, FileId, IndexedFile},
     utils::{FileChangeTracker, FileHasher},
-    error::{SearchResult, SearchError},
 };
 use chrono::Utc;
 use ignore::WalkBuilder;
@@ -284,7 +284,10 @@ impl FileIndexer {
                 }
                 Err(e) => {
                     tracing::error!("Failed to index {}: {}", file_path.display(), e);
-                    report.add_error(file_path, crate::error::SearchError::Semantic(e.to_string()));
+                    report.add_error(
+                        file_path,
+                        crate::error::SearchError::Semantic(e.to_string()),
+                    );
                 }
             }
 
@@ -453,7 +456,11 @@ impl FileIndexer {
     }
 
     /// Create file metadata for storage
-    fn create_file_metadata(&self, file_path: &Path, chunks: &[CodeChunk]) -> SearchResult<IndexedFile> {
+    fn create_file_metadata(
+        &self,
+        file_path: &Path,
+        chunks: &[CodeChunk],
+    ) -> SearchResult<IndexedFile> {
         let language = self.parser.detect_language(file_path);
         let content_hash = FileHasher::hash_file(file_path).map_err(|e| {
             SearchError::FileSystem(std::io::Error::new(
@@ -523,24 +530,28 @@ impl FileIndexer {
     }
 
     /// Index files matching multiple patterns with options
-    pub async fn index_patterns(&mut self, patterns: Vec<String>, options: IndexingOptions) -> SearchResult<crate::types::IndexStats> {
+    pub async fn index_patterns(
+        &mut self,
+        patterns: Vec<String>,
+        options: IndexingOptions,
+    ) -> SearchResult<crate::types::IndexStats> {
         let mut total_files = 0;
         let mut total_chunks = 0;
-        
+
         for pattern in patterns {
             let report = if options.force {
                 self.full_reindex(&pattern).await?
             } else {
                 self.incremental_index(&pattern).await?
             };
-            
+
             total_files += report.files_processed;
             total_chunks += report.total_chunks;
         }
 
         // Get current stats from storage for embedding count
         let storage_stats = self.storage.get_stats()?;
-        
+
         Ok(crate::types::IndexStats {
             file_count: total_files,
             chunk_count: total_chunks,
@@ -681,8 +692,8 @@ impl SingleFileReport {
 mod tests {
     use super::*;
     use crate::parser::ParserConfig;
-    use crate::types::SemanticConfig;
     use crate::storage::VectorStorage;
+    use crate::types::SemanticConfig;
     use std::fs;
     use tempfile::TempDir;
 
@@ -714,8 +725,7 @@ mod tests {
             "Failed to create embedding engine for testing - tests require embedding functionality",
         );
 
-        let storage =
-            VectorStorage::new(config).map_err(|e| SearchError::Index(e.to_string()))?;
+        let storage = VectorStorage::new(config).map_err(|e| SearchError::Index(e.to_string()))?;
         storage
             .initialize()
             .map_err(|e| SearchError::Index(e.to_string()))?;

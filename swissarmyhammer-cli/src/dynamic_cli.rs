@@ -762,8 +762,7 @@ Examples:
                         Arg::new("category")
                             .long("category")
                             .help("Filter by category"),
-                    )
-                    ,
+                    ),
             )
             .subcommand(
                 Command::new("test")
@@ -812,7 +811,6 @@ Examples:
                             .action(ArgAction::SetTrue),
                     ),
             )
-
     }
 
     /// Build the flow command with all its subcommands

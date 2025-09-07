@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
-use swissarmyhammer::config::Config;
 use swissarmyhammer::issues::IssueInfo;
+use swissarmyhammer_issues_config::Config;
 
 /// Request structure for showing an issue
 #[derive(Debug, Deserialize, Serialize)]
@@ -115,7 +115,9 @@ impl McpTool for ShowIssueTool {
                     Ok(Some(branch)) => {
                         let branch_str = branch.to_string();
                         let config = Config::global();
-                        if let Some(issue_name) = branch_str.strip_prefix(&config.issue_branch_prefix) {
+                        if let Some(issue_name) =
+                            branch_str.strip_prefix(&config.issue_branch_prefix)
+                        {
                             issue_name.to_string()
                         } else {
                             return Ok(BaseToolImpl::create_success_response(format!(
@@ -125,11 +127,14 @@ impl McpTool for ShowIssueTool {
                     }
                     Ok(None) => {
                         return Ok(BaseToolImpl::create_success_response(
-                            "Not on any branch (detached HEAD)".to_string()
+                            "Not on any branch (detached HEAD)".to_string(),
                         ));
                     }
                     Err(e) => {
-                        return Err(McpErrorHandler::handle_error(e.into(), "get current branch"));
+                        return Err(McpErrorHandler::handle_error(
+                            e.into(),
+                            "get current branch",
+                        ));
                     }
                 },
                 None => {

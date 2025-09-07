@@ -5,6 +5,7 @@
 
 use liquid::ParserBuilder;
 use serde_json::json;
+use serial_test::serial;
 use std::env;
 use std::fs;
 use swissarmyhammer_config::TemplateContext;
@@ -97,6 +98,7 @@ impl Drop for IntegrationTestEnvironment {
 }
 
 #[test]
+#[serial]
 fn test_complete_development_workflow_scenario() {
     let mut test = IntegrationTestEnvironment::new();
     let project_config_dir = test.project_config_dir();
@@ -278,6 +280,7 @@ log_level = "debug"  # More verbose logging for development
 }
 
 #[test]
+#[serial]
 fn test_production_deployment_scenario() {
     let mut test = IntegrationTestEnvironment::new();
     let project_config_dir = test.project_config_dir();
@@ -475,6 +478,7 @@ audit = true
 }
 
 #[test]
+#[serial]
 fn test_multi_environment_project_with_dynamic_switching() {
     let mut test = IntegrationTestEnvironment::new();
     let project_config_dir = test.project_config_dir();
@@ -671,6 +675,7 @@ rate_limiting = true
 }
 
 #[test]
+#[serial]
 fn test_complex_nested_project_structure_with_inheritance() {
     let mut test = IntegrationTestEnvironment::new();
     let nested_subdir = test.create_nested_project_structure();
@@ -819,6 +824,7 @@ serialization = ["serde"]
 }
 
 #[test]
+#[serial]
 fn test_real_time_configuration_updates_workflow() {
     let test = IntegrationTestEnvironment::new();
     let config_dir = test.project_config_dir();

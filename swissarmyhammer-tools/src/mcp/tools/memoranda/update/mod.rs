@@ -128,7 +128,7 @@ mod tests {
         let memo = memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Test Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Original content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Original content".to_string()),
             )
             .await
             .unwrap();
@@ -162,7 +162,7 @@ mod tests {
         let memo = memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Test Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Original content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Original content".to_string()),
             )
             .await
             .unwrap();

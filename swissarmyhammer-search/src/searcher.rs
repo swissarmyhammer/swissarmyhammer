@@ -47,10 +47,10 @@
 //! ```
 
 use crate::{
-    types::{CodeChunk, Language, ResultExplanation, SearchExplanation},
     embedding::EmbeddingEngine,
     error::SearchResult,
     storage::VectorStorage,
+    types::{CodeChunk, Language, ResultExplanation, SearchExplanation},
     SearchQuery, SearchStats, SemanticConfig, SemanticSearchResult,
 };
 use std::collections::HashMap;
@@ -818,10 +818,13 @@ impl SemanticSearcher {
     }
 
     /// Search with explanation for debugging and transparency
-    pub async fn search_with_explanation(&self, query: &SearchQuery) -> SearchResult<Vec<crate::operations::SearchResultWithExplanation>> {
+    pub async fn search_with_explanation(
+        &self,
+        query: &SearchQuery,
+    ) -> SearchResult<Vec<crate::operations::SearchResultWithExplanation>> {
         let results = self.search(query).await?;
         let explanation = self.explain_search(query).await?;
-        
+
         // Create SearchResultWithExplanation for each result
         let mut results_with_explanation = Vec::new();
         for result in results {
@@ -830,12 +833,15 @@ impl SemanticSearcher {
                 explanation: explanation.clone(),
             });
         }
-        
+
         Ok(results_with_explanation)
     }
 
     /// Create a SemanticSearcher for testing with mock embedding engine (no network required)
-    pub async fn new_for_testing(storage: VectorStorage, config: SemanticConfig) -> SearchResult<Self> {
+    pub async fn new_for_testing(
+        storage: VectorStorage,
+        config: SemanticConfig,
+    ) -> SearchResult<Self> {
         let embedding_engine = EmbeddingEngine::new_for_testing().await?;
         Self::with_embedding_engine(storage, embedding_engine, config).await
     }

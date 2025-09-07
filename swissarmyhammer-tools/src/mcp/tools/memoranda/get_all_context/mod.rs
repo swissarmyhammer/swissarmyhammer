@@ -56,11 +56,8 @@ impl McpTool for GetAllContextMemoTool {
             Ok(memos) => {
                 tracing::info!("Retrieved {} memos for context", memos.len());
                 if memos.is_empty() {
-                    let summary = crate::mcp::shared_utils::McpFormatter::format_list_summary(
-                        "memo",
-                        0,
-                        0,
-                    );
+                    let summary =
+                        crate::mcp::shared_utils::McpFormatter::format_list_summary("memo", 0, 0);
                     Ok(BaseToolImpl::create_success_response(summary))
                 } else {
                     // Sort memos by updated_at descending (most recent first)
@@ -148,14 +145,14 @@ mod tests {
         memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("First content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("First content".to_string()),
             )
             .await
             .unwrap();
         memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Second Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string()),
             )
             .await
             .unwrap();
@@ -181,7 +178,7 @@ mod tests {
         let _first_memo = memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("First content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("First content".to_string()),
             )
             .await
             .unwrap();
@@ -192,7 +189,7 @@ mod tests {
         let _second_memo = memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Second Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string()),
             )
             .await
             .unwrap();
@@ -221,7 +218,7 @@ mod tests {
         memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Single Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Single content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Single content".to_string()),
             )
             .await
             .unwrap();

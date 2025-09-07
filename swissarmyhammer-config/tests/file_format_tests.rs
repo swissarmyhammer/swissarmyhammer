@@ -4,6 +4,7 @@
 //! with various content structures and edge cases.
 
 use serde_json::json;
+use serial_test::serial;
 use std::env;
 use std::fs;
 use swissarmyhammer_config::TemplateContext;
@@ -55,6 +56,7 @@ impl Drop for IsolatedConfigTest {
 }
 
 #[test]
+#[serial]
 fn test_toml_config_file_loading() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -148,6 +150,7 @@ retention_days = 7
 }
 
 #[test]
+#[serial]
 fn test_yaml_config_file_loading() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -255,6 +258,7 @@ metadata: { created_by: test, version: 1.0 }
 }
 
 #[test]
+#[serial]
 fn test_yml_extension_handling() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -284,6 +288,7 @@ database:
 }
 
 #[test]
+#[serial]
 fn test_json_config_file_loading() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -384,6 +389,7 @@ fn test_json_config_file_loading() {
 }
 
 #[test]
+#[serial]
 fn test_malformed_config_files() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -444,6 +450,7 @@ database:
 }
 
 #[test]
+#[serial]
 fn test_empty_config_files() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -485,6 +492,7 @@ fn test_empty_config_files() {
 }
 
 #[test]
+#[serial]
 fn test_file_format_precedence() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();
@@ -550,6 +558,7 @@ format: yaml
 }
 
 #[test]
+#[serial]
 fn test_complex_nested_structures() {
     let test = IsolatedConfigTest::new();
     let config_dir = test.project_config_dir();

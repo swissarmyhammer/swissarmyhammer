@@ -491,8 +491,8 @@ mod tests {
         use crate::mcp::tool_handlers::ToolHandlers;
         use std::path::PathBuf;
         use std::sync::Arc;
-        use swissarmyhammer_git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
@@ -542,8 +542,8 @@ mod tests {
         use crate::mcp::tool_handlers::ToolHandlers;
         use std::path::PathBuf;
         use std::sync::Arc;
-        use swissarmyhammer_git::GitOperations;
         use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 

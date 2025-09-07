@@ -6,8 +6,8 @@ use super::shared_utils::{McpErrorHandler, McpFormatter, McpValidation};
 use rmcp::model::*;
 use rmcp::ErrorData as McpError;
 use std::sync::Arc;
-use swissarmyhammer_memoranda::{MemoStorage, MemoTitle, MemoContent};
 use swissarmyhammer::error::SwissArmyHammerError;
+use swissarmyhammer_memoranda::{MemoContent, MemoStorage, MemoTitle};
 use tokio::sync::RwLock;
 
 /// Preview length for memo list operations (characters)
@@ -94,11 +94,14 @@ impl ToolHandlers {
             .create(
                 match MemoTitle::new(request.title.clone()) {
                     Ok(title) => title,
-                    Err(_) => return Err(McpError::invalid_params(
-                        format!("Invalid title format: {}", request.title), None
-                    ))
+                    Err(_) => {
+                        return Err(McpError::invalid_params(
+                            format!("Invalid title format: {}", request.title),
+                            None,
+                        ))
+                    }
                 },
-                MemoContent::new(request.content)
+                MemoContent::new(request.content),
             )
             .await
         {
@@ -109,7 +112,10 @@ impl ToolHandlers {
                     memo.title, memo.title, memo.title, memo.content
                 )))
             }
-            Err(e) => Err(Self::handle_memo_error(SwissArmyHammerError::Storage(e.to_string()), "create memo")),
+            Err(e) => Err(Self::handle_memo_error(
+                SwissArmyHammerError::Storage(e.to_string()),
+                "create memo",
+            )),
         }
     }
 
@@ -153,10 +159,14 @@ impl ToolHandlers {
                     memo.content
                 )))
             }
-            Ok(None) => {
-                Ok(create_success_response(format!("Memo not found with ID: {}", memo_id)))
-            }
-            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "get memo")),
+            Ok(None) => Ok(create_success_response(format!(
+                "Memo not found with ID: {}",
+                memo_id
+            ))),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                SwissArmyHammerError::Storage(e.to_string()),
+                "get memo",
+            )),
         }
     }
 
@@ -192,7 +202,10 @@ impl ToolHandlers {
         };
 
         let mut memo_storage = self.memo_storage.write().await;
-        match memo_storage.update(&memo_id, MemoContent::new(request.content)).await {
+        match memo_storage
+            .update(&memo_id, MemoContent::new(request.content))
+            .await
+        {
             Ok(memo) => {
                 tracing::info!("Updated memo {}", memo.title);
                 Ok(create_success_response(format!(
@@ -203,7 +216,10 @@ impl ToolHandlers {
                     memo.content
                 )))
             }
-            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "update memo")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                SwissArmyHammerError::Storage(e.to_string()),
+                "update memo",
+            )),
         }
     }
 
@@ -250,7 +266,10 @@ impl ToolHandlers {
                     )))
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "delete memo")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                SwissArmyHammerError::Storage(e.to_string()),
+                "delete memo",
+            )),
         }
     }
 
@@ -287,7 +306,10 @@ impl ToolHandlers {
                     )))
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "list memos")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                SwissArmyHammerError::Storage(e.to_string()),
+                "list memos",
+            )),
         }
     }
 
@@ -337,7 +359,10 @@ impl ToolHandlers {
                     )))
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(SwissArmyHammerError::Storage(e.to_string()), "get memo context")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                SwissArmyHammerError::Storage(e.to_string()),
+                "get memo context",
+            )),
         }
     }
 }

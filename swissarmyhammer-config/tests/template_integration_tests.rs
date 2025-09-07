@@ -5,6 +5,7 @@
 
 use liquid::ParserBuilder;
 use serde_json::json;
+use serial_test::serial;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -75,6 +76,7 @@ impl Drop for IsolatedTemplateTest {
 }
 
 #[test]
+#[serial]
 fn test_template_context_to_liquid_context_conversion() {
     let test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -190,6 +192,7 @@ Generated on {{now | date: "%Y-%m-%d"}}
 }
 
 #[test]
+#[serial]
 fn test_template_context_with_env_var_overrides() {
     let mut test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -235,6 +238,7 @@ Database: {{database.host}}:{{database_port}}
 }
 
 #[test]
+#[serial]
 fn test_template_context_merge_into_workflow_context() {
     let test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -311,6 +315,7 @@ optimization = true
 }
 
 #[test]
+#[serial]
 fn test_template_context_with_template_vars() {
     let test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -364,6 +369,7 @@ Dynamic: {% if dynamic_setting %}enabled{% else %}disabled{% endif %}
 }
 
 #[test]
+#[serial]
 fn test_complex_template_rendering_with_config() {
     let mut test = IsolatedTemplateTest::new();
     let config_dir = test.project_config_dir();
@@ -487,6 +493,7 @@ key_path = "/etc/ssl/private/server.key"
 }
 
 #[test]
+#[serial]
 fn test_template_context_with_liquid_filters_and_functions() {
     let mut context = TemplateContext::new();
     context.set("raw_text".to_string(), json!("hello world"));
@@ -575,6 +582,7 @@ Array Iteration with Filters:
 }
 
 #[test]
+#[serial]
 fn test_template_context_error_handling() {
     let mut context = TemplateContext::new();
     context.set("valid_var".to_string(), json!("valid_value"));
@@ -613,6 +621,7 @@ Valid var is present: {{valid_var}}
 }
 
 #[test]
+#[serial]
 fn test_template_context_nested_object_access() {
     let mut context = TemplateContext::new();
     context.set(

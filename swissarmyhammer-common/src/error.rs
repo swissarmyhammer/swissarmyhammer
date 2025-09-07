@@ -13,7 +13,9 @@ pub type Result<T> = std::result::Result<T, SwissArmyHammerError>;
 #[derive(Error, Debug)]
 pub enum SwissArmyHammerError {
     /// Not currently in a Git repository
-    #[error("Not in a Git repository. SwissArmyHammer requires being run from within a Git repository.")]
+    #[error(
+        "Not in a Git repository. SwissArmyHammer requires being run from within a Git repository."
+    )]
     NotInGitRepository,
 
     /// Failed to create directory
@@ -24,28 +26,28 @@ pub enum SwissArmyHammerError {
     #[error("Invalid path: {path}")]
     InvalidPath {
         /// The invalid path that caused the error
-        path: PathBuf
+        path: PathBuf,
     },
 
     /// Permission denied error
     #[error("Permission denied accessing: {path}")]
     PermissionDenied {
         /// The path that could not be accessed due to permission restrictions
-        path: PathBuf
+        path: PathBuf,
     },
 
     /// General I/O error with context
     #[error("I/O error: {message}")]
     Io {
         /// Descriptive message about the I/O error
-        message: String
+        message: String,
     },
 
     /// Other error with custom message
     #[error("{message}")]
     Other {
         /// Custom error message
-        message: String
+        message: String,
     },
 }
 

@@ -5,6 +5,7 @@
 //! (later sources override earlier ones)
 
 use serde_json::json;
+use serial_test::serial;
 use std::env;
 use std::fs;
 use swissarmyhammer_config::TemplateContext;
@@ -81,6 +82,7 @@ impl Drop for IsolatedPrecedenceTest {
 }
 
 #[test]
+#[serial]
 fn test_global_overrides_defaults() {
     let test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -105,6 +107,7 @@ global_only = "global_value"
 }
 
 #[test]
+#[serial]
 fn test_project_overrides_global() {
     let test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -147,6 +150,7 @@ shared_setting = "from_project"
 }
 
 #[test]
+#[serial]
 fn test_env_vars_override_config_files() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -195,6 +199,7 @@ project_setting = "project_value"
 }
 
 #[test]
+#[serial]
 fn test_swissarmyhammer_prefix_env_vars() {
     let mut test = IsolatedPrecedenceTest::new();
     let project_config_dir = test.project_config_dir();
@@ -233,6 +238,7 @@ shared_value = "from_project"
 }
 
 #[test]
+#[serial]
 fn test_both_env_prefixes_simultaneously() {
     let mut test = IsolatedPrecedenceTest::new();
     let project_config_dir = test.project_config_dir();
@@ -270,6 +276,7 @@ swissarmyhammer_specific = "from_project"
 }
 
 #[test]
+#[serial]
 fn test_cli_args_highest_precedence() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -319,6 +326,7 @@ shared_value = "from_project"
 }
 
 #[test]
+#[serial]
 fn test_complete_precedence_chain() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -404,6 +412,7 @@ database_timeout = 60
 }
 
 #[test]
+#[serial]
 fn test_nested_value_precedence() {
     let mut test = IsolatedPrecedenceTest::new();
     let home_config_dir = test.home_config_dir();
@@ -487,6 +496,7 @@ level = "debug"
 }
 
 #[test]
+#[serial]
 fn test_precedence_with_missing_layers() {
     let mut test = IsolatedPrecedenceTest::new();
 
@@ -511,6 +521,7 @@ fn test_precedence_with_missing_layers() {
 }
 
 #[test]
+#[serial]
 fn test_precedence_with_empty_sources() {
     let mut test = IsolatedPrecedenceTest::new();
     let project_config_dir = test.project_config_dir();

@@ -95,8 +95,6 @@ pub struct MergeIssueRequest {
 // Re-export IssueName for convenience
 pub use swissarmyhammer::issues::IssueName;
 
-
-
 /// Request to fetch web content
 ///
 /// # Examples

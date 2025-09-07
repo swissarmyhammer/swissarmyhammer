@@ -1,10 +1,10 @@
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
-use swissarmyhammer_todo::ShowTodoRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
+use swissarmyhammer_todo::ShowTodoRequest;
 use swissarmyhammer_todo::TodoStorage;
 
 /// MCP tool for showing todo items

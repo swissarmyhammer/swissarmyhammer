@@ -7,7 +7,7 @@ use swissarmyhammer::issues::{Issue, IssueInfo};
 pub fn create_success_response(message: String) -> CallToolResult {
     CallToolResult {
         content: vec![Annotated::new(
-            RawContent::Text(RawTextContent { 
+            RawContent::Text(RawTextContent {
                 text: message,
                 meta: None,
             }),
@@ -23,7 +23,7 @@ pub fn create_success_response(message: String) -> CallToolResult {
 pub fn create_error_response(message: String) -> CallToolResult {
     CallToolResult {
         content: vec![Annotated::new(
-            RawContent::Text(RawTextContent { 
+            RawContent::Text(RawTextContent {
                 text: message,
                 meta: None,
             }),

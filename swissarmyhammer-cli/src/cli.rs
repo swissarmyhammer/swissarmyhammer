@@ -251,8 +251,6 @@ Examples:
         /// Filter by category
         #[arg(long)]
         category: Option<String>,
-
-
     },
     /// Test prompts interactively with sample arguments
     #[command(long_about = "
@@ -311,7 +309,6 @@ Examples:
         #[arg(long)]
         debug: bool,
     },
-
 }
 
 #[derive(Subcommand, Debug)]
@@ -795,8 +792,6 @@ mod tests {
             unreachable!("Expected Prompt command");
         }
     }
-
-
 
     #[test]
     fn test_cli_prompt_list_subcommand() {

@@ -169,9 +169,11 @@ fn test_mcp_issue_work_from_feature_branch() {
     let output = env.run_cli_command(&["issue", "show", "--name", "user-tests"]);
 
     if !output.status.success() {
-        panic!("issue work command failed: stderr={}, stdout={}", 
-               String::from_utf8_lossy(&output.stderr), 
-               String::from_utf8_lossy(&output.stdout));
+        panic!(
+            "issue work command failed: stderr={}, stdout={}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
     let output_str = String::from_utf8_lossy(&output.stdout);
     // The output should contain information about the source branch

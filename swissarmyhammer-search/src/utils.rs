@@ -96,9 +96,7 @@ impl SemanticUtils {
     /// Get the semantic search database directory
     pub fn get_database_dir() -> SearchResult<PathBuf> {
         let home_dir = dirs::home_dir().ok_or_else(|| {
-            crate::error::SearchError::Config(
-                "Could not determine home directory".to_string(),
-            )
+            crate::error::SearchError::Config("Could not determine home directory".to_string())
         })?;
 
         Ok(home_dir.join(".swissarmyhammer"))
@@ -243,7 +241,11 @@ impl BatchProcessor {
     }
 
     /// Process files in batches to avoid memory issues
-    pub fn process_files_in_batches<F, T>(&self, files: Vec<T>, mut processor: F) -> SearchResult<()>
+    pub fn process_files_in_batches<F, T>(
+        &self,
+        files: Vec<T>,
+        mut processor: F,
+    ) -> SearchResult<()>
     where
         F: FnMut(&[T]) -> SearchResult<()>,
         T: Clone,
@@ -400,9 +402,7 @@ mod tests {
 
         let result = processor.process_files_in_batches(files, |chunk| {
             if chunk.contains(&3) {
-                Err(crate::error::SearchError::Config(
-                    "Test error".to_string(),
-                ))
+                Err(crate::error::SearchError::Config("Test error".to_string()))
             } else {
                 Ok(())
             }

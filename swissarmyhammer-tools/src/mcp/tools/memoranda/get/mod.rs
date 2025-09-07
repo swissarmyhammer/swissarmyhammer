@@ -75,11 +75,13 @@ impl McpTool for GetMemoTool {
                     memo.content
                 )))
             }
-            Ok(None) => {
-                Ok(BaseToolImpl::create_success_response(format!("Memo not found with ID: {}", memo_id)))
-            }
+            Ok(None) => Ok(BaseToolImpl::create_success_response(format!(
+                "Memo not found with ID: {}",
+                memo_id
+            ))),
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()), "get memo",
+                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
+                "get memo",
             )),
         }
     }
@@ -117,7 +119,7 @@ mod tests {
         let memo = memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Test Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Test content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Test content".to_string()),
             )
             .await
             .unwrap();

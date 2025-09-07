@@ -97,6 +97,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
 # Configuration support
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 
 # Memoranda support
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }

@@ -21,9 +21,8 @@ pub fn get_todo_directory() -> Result<PathBuf> {
     let todo_dir = swissarmyhammer_dir.join("todo");
 
     // Ensure todo subdirectory exists
-    fs::create_dir_all(&todo_dir).map_err(|e| {
-        TodoError::other(format!("Failed to create todo directory: {e}"))
-    })?;
+    fs::create_dir_all(&todo_dir)
+        .map_err(|e| TodoError::other(format!("Failed to create todo directory: {e}")))?;
 
     Ok(todo_dir)
 }

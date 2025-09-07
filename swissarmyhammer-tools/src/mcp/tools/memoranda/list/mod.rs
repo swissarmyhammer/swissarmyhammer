@@ -55,11 +55,8 @@ impl McpTool for ListMemoTool {
             Ok(memos) => {
                 tracing::info!("Retrieved {} memos", memos.len());
                 if memos.is_empty() {
-                    let summary = crate::mcp::shared_utils::McpFormatter::format_list_summary(
-                        "memo",
-                        0,
-                        0,
-                    );
+                    let summary =
+                        crate::mcp::shared_utils::McpFormatter::format_list_summary("memo", 0, 0);
                     Ok(BaseToolImpl::create_success_response(summary))
                 } else {
                     let memo_list = memos
@@ -115,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_format_memo_preview() {
-        use swissarmyhammer_memoranda::{Memo, MemoTitle, MemoContent};
+        use swissarmyhammer_memoranda::{Memo, MemoContent, MemoTitle};
 
         let title = MemoTitle::new("Test Memo".to_string()).unwrap();
         let content = MemoContent::new("This is a long piece of content that should be truncated in the preview to show only the first part".to_string());
@@ -153,14 +150,14 @@ mod tests {
         memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("First Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("First content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("First content".to_string()),
             )
             .await
             .unwrap();
         memo_storage
             .create(
                 swissarmyhammer_memoranda::MemoTitle::new("Second Memo".to_string()).unwrap(),
-                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string())
+                swissarmyhammer_memoranda::MemoContent::new("Second content".to_string()),
             )
             .await
             .unwrap();
