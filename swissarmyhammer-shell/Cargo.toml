@@ -1,0 +1,32 @@
+[package]
+name = "swissarmyhammer-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Shell command execution security, hardening, and performance monitoring for SwissArmyHammer"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/wballard/sah"
+keywords = ["shell", "security", "command", "execution", "monitoring"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Core error handling and shared types
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+# Configuration loading (may be needed for security policies)
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
+# Core dependencies
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+
+# Async support if needed
+tokio = { version = "1.0", features = ["time", "process"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[features]
+default = ["tokio"]

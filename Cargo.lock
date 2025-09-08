@@ -6489,6 +6489,7 @@ dependencies = [
  "swissarmyhammer-issues-config",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-search",
+ "swissarmyhammer-shell",
  "syntect",
  "sysinfo",
  "tantivy",
@@ -6719,6 +6720,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-shell"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "swissarmyhammer-todo"
 version = "0.1.0"
 dependencies = [
@@ -6774,6 +6790,7 @@ dependencies = [
  "swissarmyhammer-memoranda",
  "swissarmyhammer-outline",
  "swissarmyhammer-search",
+ "swissarmyhammer-shell",
  "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",

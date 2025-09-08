@@ -149,3 +149,42 @@ This extraction will enable:
 - Significant reduction in main crate coupling
 
 Template processing is a well-defined domain that can be cleanly separated while providing the foundation for larger domain extractions.
+## COMPLETION CRITERIA - How to Know This Issue is REALLY Done
+
+**This issue is complete when the following imports NO LONGER EXIST in swissarmyhammer-tools:**
+
+```rust
+// These 4+ imports should be ELIMINATED:
+use swissarmyhammer::{PromptLibrary, PromptResolver};
+use swissarmyhammer::prompts::Prompt;
+
+// Found in these specific locations:
+- src/mcp/error_handling.rs:4 (PromptLibrary, PromptResolver)
+- src/mcp/tests.rs:12 (prompts::Prompt)
+- src/mcp/tests.rs:13 (PromptLibrary)  
+- src/mcp/server.rs:15 (PromptLibrary, PromptResolver)
+- src/lib.rs:26 (comment reference)
+```
+
+**And replaced with:**
+```rust
+use swissarmyhammer_templating::{TemplateEngine, TemplateContext};
+use swissarmyhammer_prompts::{PromptLibrary, PromptResolver, Prompt};
+```
+
+**Verification Command:**
+```bash
+# Should return ZERO results when done:
+rg "use swissarmyhammer::(.*)?PromptLibrary|PromptResolver" swissarmyhammer-tools/
+rg "use swissarmyhammer::prompts" swissarmyhammer-tools/
+
+# Should find new imports:
+rg "use swissarmyhammer_templating" swissarmyhammer-tools/
+rg "use swissarmyhammer_prompts" swissarmyhammer-tools/
+```
+
+**Expected Impact:**
+- **Current**: 23 imports from main crate
+- **After completion**: ~19 imports from main crate (4+ prompt imports eliminated)
+
+**Note**: This depends on both swissarmyhammer-templating and swissarmyhammer-prompts domain crates being created first.

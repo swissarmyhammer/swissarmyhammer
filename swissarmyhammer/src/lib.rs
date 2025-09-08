@@ -74,14 +74,7 @@ pub mod frontmatter;
 /// Security utilities for path validation and resource limits
 pub mod security;
 
-/// Shell command security validation and control system
-pub mod shell_security;
 
-/// Advanced security hardening for shell command execution
-pub mod shell_security_hardening;
-
-/// Shell command performance monitoring and profiling
-pub mod shell_performance;
 
 /// File watching functionality for prompt directories
 pub mod file_watcher;

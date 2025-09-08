@@ -3,7 +3,7 @@
 //! This module provides additional security measures beyond basic validation,
 //! including advanced threat detection, security policy enforcement, and comprehensive auditing.
 
-use crate::shell_security::{
+use crate::security::{
     ShellAuditEvent, ShellSecurityError, ShellSecurityPolicy, ShellSecurityValidator,
 };
 use serde::{Deserialize, Serialize};
@@ -602,7 +602,7 @@ impl HardenedSecurityValidator {
     /// Create a new hardened security validator
     pub fn new(_policy: ShellSecurityPolicy, hardening_config: SecurityHardeningConfig) -> Self {
         Self {
-            base_validator: crate::shell_security::get_validator(),
+            base_validator: crate::security::get_validator(),
             threat_detector: ThreatDetector::new(),
             hardening_config,
         }

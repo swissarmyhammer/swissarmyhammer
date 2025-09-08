@@ -1398,6 +1398,7 @@ impl From<swissarmyhammer_git::GitError> for SwissArmyHammerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     #[test]
     fn test_error_context() {

@@ -102,3 +102,32 @@ After analyzing the current outline code structure, I propose the following impl
 7. Test and verify functionality
 
 This approach follows the established pattern of other domain crates and creates clear separation of concerns.
+## COMPLETION CRITERIA - How to Know This Issue is REALLY Done
+
+**This issue is complete when the following import NO LONGER EXISTS in swissarmyhammer-tools:**
+
+```rust
+// This import should be ELIMINATED:
+use swissarmyhammer::outline::types::OutlineNodeType;
+
+// Found in this specific location:
+- src/mcp/tools/outline/generate/mod.rs:333
+```
+
+**And replaced with:**
+```rust
+use swissarmyhammer_outline::OutlineNodeType;
+```
+
+**Verification Command:**
+```bash
+# Should return ZERO results when done:
+rg "use swissarmyhammer::outline" swissarmyhammer-tools/
+
+# Should find new imports:
+rg "use swissarmyhammer_outline" swissarmyhammer-tools/
+```
+
+**Expected Impact:**
+- **Current**: 23 imports from main crate
+- **After completion**: 22 imports from main crate (1 outline import eliminated)

@@ -123,3 +123,35 @@ Move test utilities to `swissarmyhammer-common` where they can be shared by all 
 Test utilities are cross-cutting concerns similar to error types, making `swissarmyhammer-common` the logical place for them. This will enable domain crates and tools to have comprehensive test coverage without depending on the main crate.
 
 This is part of the broader effort to reduce coupling and enable true domain separation. Test infrastructure should be as independent as production infrastructure.
+## COMPLETION CRITERIA - How to Know This Issue is REALLY Done
+
+**This issue is complete when the following imports NO LONGER EXIST in swissarmyhammer-tools:**
+
+```rust
+// These 4+ imports should be ELIMINATED:
+use swissarmyhammer::test_utils::IsolatedTestHome;
+
+// Found in these specific locations:
+- src/mcp/tools/issues/work/mod.rs:163
+- src/mcp/tools/abort/create/mod.rs:97
+- tests/file_tools_performance_tests.rs:14
+- tests/file_tools_property_tests.rs:14
+```
+
+**And replaced with:**
+```rust
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
+```
+
+**Verification Command:**
+```bash
+# Should return ZERO results when done:
+rg "use swissarmyhammer::test_utils" swissarmyhammer-tools/
+
+# Should find new imports:
+rg "use swissarmyhammer_common::test_utils" swissarmyhammer-tools/
+```
+
+**Expected Impact:**
+- **Current**: 23 imports from main crate
+- **After completion**: ~19 imports from main crate (4 test utility imports eliminated)

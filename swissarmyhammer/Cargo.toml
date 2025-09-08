@@ -30,6 +30,7 @@ async-trait = { workspace = true }
 
 # SwissArmyHammer common functionality
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 
 # Template engine
 liquid = { workspace = true }

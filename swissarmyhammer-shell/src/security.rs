@@ -3,14 +3,13 @@
 //! This module provides comprehensive security controls for shell command execution,
 //! including blocked command prevention, directory access controls, and audit logging.
 
-use crate::workflow::actions::ActionTimeouts;
-use crate::{Result, SwissArmyHammerError};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use thiserror::Error;
 use tracing::{error, info, warn};
 
@@ -19,6 +18,9 @@ const MAX_COMMAND_LENGTH: usize = 4096;
 
 /// Maximum allowed environment variable value length in characters
 const MAX_ENV_VALUE_LENGTH: usize = 1024;
+
+/// Default timeout duration for shell commands
+const DEFAULT_TIMEOUT_SECONDS: Duration = Duration::from_secs(300);
 
 /// Security validation errors that can occur during shell command processing
 #[derive(Debug, Error)]
@@ -146,8 +148,8 @@ impl Default for ShellSecurityPolicy {
             allowed_directories: None, // No directory restrictions by default
             max_command_length: MAX_COMMAND_LENGTH,
             enable_audit_logging: true,
-            default_timeout_seconds: ActionTimeouts::default().prompt_timeout,
-            max_timeout_seconds: ActionTimeouts::default().prompt_timeout,
+            default_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+            max_timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
             max_env_value_length: MAX_ENV_VALUE_LENGTH,
         }
     }
@@ -196,6 +198,14 @@ impl ShellSecurityValidator {
         &self,
         directory: &Path,
     ) -> std::result::Result<(), ShellSecurityError> {
+        // Check for path traversal attempts
+        let path_str = directory.to_string_lossy();
+        if path_str.contains("../") || path_str.contains("..\\") {
+            return Err(ShellSecurityError::DirectoryAccessDenied {
+                directory: directory.to_path_buf(),
+            });
+        }
+
         if let Some(allowed_dirs) = &self.policy.allowed_directories {
             let canonical_dir =
                 directory
@@ -301,9 +311,9 @@ impl ShellSecurityValidator {
         let mut compiled = Vec::new();
         for pattern in patterns {
             compiled.push(Regex::new(pattern).map_err(|e| {
-                SwissArmyHammerError::Other(format!(
-                    "Failed to compile blocked pattern '{pattern}': {e}"
-                ))
+                SwissArmyHammerError::Other { 
+                    message: format!("Failed to compile blocked pattern '{pattern}': {e}")
+                }
             })?);
         }
         Ok(compiled)
@@ -458,7 +468,7 @@ fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
                         Err(e) => {
                             let error_msg = format!("Invalid shell security policy configuration: {e}. Security configuration must be valid to prevent security vulnerabilities.");
                             error!(target: "shell_security", "Failed to deserialize shell security policy: {}", e);
-                            Err(SwissArmyHammerError::Other(error_msg))
+                            Err(SwissArmyHammerError::Other { message: error_msg })
                         }
                     }
                 }
@@ -469,7 +479,7 @@ fn load_security_policy() -> Result<Option<ShellSecurityPolicy>> {
             // Config loading failed - this could indicate corruption or permission issues
             let error_msg = format!("Failed to load configuration: {}. This could indicate a corrupted config file or permission issues.", e);
             error!(target: "shell_security", "Failed to load configuration: {}", e);
-            Err(SwissArmyHammerError::Other(error_msg))
+            Err(SwissArmyHammerError::Other { message: error_msg })
         }
     }
 }
@@ -524,6 +534,28 @@ pub fn log_shell_completion(command: &str, exit_code: i32, execution_time_ms: u6
             "Shell command failed with unusual exit code"
         );
     }
+}
+
+// Workflow validation functions that were previously in swissarmyhammer::workflow
+// These are shell-specific and are now part of the shell domain crate
+
+/// Validate a command for security issues
+pub fn validate_command(command: &str) -> std::result::Result<(), ShellSecurityError> {
+    get_validator().validate_command(command)
+}
+
+/// Validate working directory access security
+pub fn validate_working_directory_security(
+    directory: &Path,
+) -> std::result::Result<(), ShellSecurityError> {
+    get_validator().validate_directory_access(directory)
+}
+
+/// Validate environment variables security
+pub fn validate_environment_variables_security(
+    env_vars: &HashMap<String, String>,
+) -> std::result::Result<(), ShellSecurityError> {
+    get_validator().validate_environment_variables(env_vars)
 }
 
 #[cfg(test)]
@@ -705,5 +737,36 @@ mod tests {
 
         // Even dangerous commands should pass when validation is disabled
         assert!(validator.validate_command("echo hello; rm -rf /").is_ok());
+    }
+
+    #[test]
+    fn test_workflow_validation_functions() {
+        // Test the workflow validation functions that are now part of this crate
+        assert!(validate_command("echo hello").is_ok());
+        
+        let temp_dir = TempDir::new().unwrap();
+        assert!(validate_working_directory_security(temp_dir.path()).is_ok());
+        
+        let env_vars = HashMap::new();
+        assert!(validate_environment_variables_security(&env_vars).is_ok());
+    }
+
+    #[test]
+    #[test]
+    fn test_path_traversal_detection() {
+        // Test that path traversal attempts are blocked
+        use std::path::Path;
+        
+        let dangerous_paths = ["../parent", "path/../parent", "/absolute/../parent"];
+        
+        for path in &dangerous_paths {
+            let result = validate_working_directory_security(Path::new(path));
+            assert!(result.is_err(), "Path traversal attempt '{}' should be blocked", path);
+            
+            // Also test through the validator directly
+            let validator = get_validator();
+            let result2 = validator.validate_directory_access(Path::new(path));
+            assert!(result2.is_err(), "Direct validator call for '{}' should also be blocked", path);
+        }
     }
 }

@@ -3,7 +3,7 @@
 //! This module provides the action execution infrastructure for workflows,
 //! including Claude integration, variable operations, and control flow actions.
 
-use crate::shell_security::{
+use swissarmyhammer_shell::{
     get_validator, log_shell_completion, log_shell_execution, ShellSecurityError,
 };
 

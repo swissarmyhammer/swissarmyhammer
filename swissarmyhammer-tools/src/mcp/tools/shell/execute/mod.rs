@@ -1457,7 +1457,7 @@ impl McpTool for ShellExecuteTool {
             .map_err(|e| McpErrorHandler::handle_error(e, "validate shell command"))?;
 
         // Apply comprehensive command security validation from workflow system
-        swissarmyhammer::workflow::validate_command(&request.command).map_err(|e| {
+        swissarmyhammer_shell::validate_command(&request.command).map_err(|e| {
             tracing::warn!("Command security validation failed: {}", e);
             McpError::invalid_params(format!("Command security check failed: {e}"), None)
         })?;
@@ -1478,7 +1478,7 @@ impl McpTool for ShellExecuteTool {
                 .map_err(|e| McpErrorHandler::handle_error(e, "validate working directory"))?;
 
             // Apply security validation from workflow system
-            swissarmyhammer::workflow::validate_working_directory_security(working_dir).map_err(
+            swissarmyhammer_shell::validate_working_directory_security(std::path::Path::new(working_dir)).map_err(
                 |e| {
                     tracing::warn!("Working directory security validation failed: {}", e);
                     McpError::invalid_params(
@@ -1503,7 +1503,7 @@ impl McpTool for ShellExecuteTool {
                     })?;
 
                 // Validate environment variables with security checks
-                swissarmyhammer::workflow::validate_environment_variables_security(&env_vars)
+                swissarmyhammer_shell::validate_environment_variables_security(&env_vars)
                     .map_err(|e| {
                         tracing::warn!("Environment variables security validation failed: {}", e);
                         McpError::invalid_params(
@@ -3196,7 +3196,7 @@ mod tests {
     #[tokio::test]
     async fn test_comprehensive_command_injection_prevention() {
         // Test comprehensive command injection patterns that should be blocked
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
         let policy = ShellSecurityPolicy::default();
         let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
@@ -3242,7 +3242,7 @@ mod tests {
 
             // Verify the error type is correct
             match result.unwrap_err() {
-                swissarmyhammer::shell_security::ShellSecurityError::BlockedCommandPattern {
+                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern {
                     ..
                 } => (),
                 other_error => {
@@ -3255,7 +3255,7 @@ mod tests {
     #[tokio::test]
     async fn test_safe_commands_pass_validation() {
         // Test that legitimate commands pass security validation
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
         let policy = ShellSecurityPolicy::default();
         let validator = ShellSecurityValidator::new(policy).expect("Failed to create validator");
@@ -3309,7 +3309,7 @@ mod tests {
     #[tokio::test]
     async fn test_blocked_command_patterns() {
         // Test configurable blocked command patterns
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
         let policy = ShellSecurityPolicy {
             blocked_commands: vec![
@@ -3348,7 +3348,7 @@ mod tests {
 
             // Verify the error type is correct
             match result.unwrap_err() {
-                swissarmyhammer::shell_security::ShellSecurityError::BlockedCommandPattern {
+                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern {
                     ..
                 } => (),
                 other_error => {
@@ -3361,7 +3361,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_length_limits() {
         // Test command length validation
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
         let policy = ShellSecurityPolicy {
             max_command_length: 100,
@@ -3384,7 +3384,7 @@ mod tests {
         assert!(result.is_err());
 
         match result.unwrap_err() {
-            swissarmyhammer::shell_security::ShellSecurityError::CommandTooLong {
+            swissarmyhammer_shell::ShellSecurityError::CommandTooLong {
                 length,
                 limit,
             } => {
@@ -3398,7 +3398,7 @@ mod tests {
     #[tokio::test]
     async fn test_directory_access_validation() {
         // Test directory access control validation
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -3427,7 +3427,7 @@ mod tests {
         assert!(result.is_err(), "Access to forbidden directory should fail");
 
         match result.unwrap_err() {
-            swissarmyhammer::shell_security::ShellSecurityError::DirectoryAccessDenied {
+            swissarmyhammer_shell::ShellSecurityError::DirectoryAccessDenied {
                 directory,
             } => {
                 assert_eq!(directory, forbidden_path);
@@ -3440,7 +3440,7 @@ mod tests {
     async fn test_environment_variable_validation() {
         // Test environment variable validation
         use std::collections::HashMap;
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
         let policy = ShellSecurityPolicy {
             max_env_value_length: 100,
@@ -3480,7 +3480,7 @@ mod tests {
             );
 
             match result.unwrap_err() {
-                swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariable { .. } => (),
+                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariable { .. } => (),
                 other_error => panic!("Expected invalid env var error for '{name}', got: {other_error:?}"),
             }
         }
@@ -3496,7 +3496,7 @@ mod tests {
         );
 
         match result.unwrap_err() {
-            swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
+            swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
                 assert_eq!(name, "LONG_VAR");
                 assert!(reason.contains("exceeds maximum"));
             }
@@ -3521,7 +3521,7 @@ mod tests {
             );
 
             match result.unwrap_err() {
-                swissarmyhammer::shell_security::ShellSecurityError::InvalidEnvironmentVariableValue { .. } => (),
+                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue { .. } => (),
                 other_error => panic!("Expected invalid value error for '{name}', got: {other_error:?}"),
             }
         }
@@ -3530,7 +3530,7 @@ mod tests {
     #[tokio::test]
     async fn test_disabled_security_validation() {
         // Test that validation can be disabled
-        use swissarmyhammer::shell_security::{ShellSecurityPolicy, ShellSecurityValidator};
+        use swissarmyhammer_shell::{ShellSecurityPolicy, ShellSecurityValidator};
 
         let policy = ShellSecurityPolicy {
             enable_validation: false,

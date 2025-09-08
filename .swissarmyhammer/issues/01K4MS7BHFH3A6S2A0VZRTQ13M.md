@@ -103,3 +103,34 @@ This follows the principle of **using standard ecosystem crates directly** rathe
 File watching is not a core domain concern for SwissArmyHammer - it's infrastructure that should use standard tools. Direct usage of `notify` makes the code more transparent and reduces maintenance overhead.
 
 This eliminates another coupling point between `swissarmyhammer-tools` and the main crate, bringing us closer to full domain separation.
+## COMPLETION CRITERIA - How to Know This Issue is REALLY Done
+
+**This issue is complete when the following imports NO LONGER EXIST in swissarmyhammer-tools:**
+
+```rust
+// These 2+ imports should be ELIMINATED:
+use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
+
+// Found in these specific locations:
+- src/mcp/file_watcher.rs:5
+- src/mcp/server.rs:10
+```
+
+**And replaced with direct notify usage:**
+```rust
+use notify::{RecommendedWatcher, Watcher, RecursiveMode, Event};
+use tokio::sync::mpsc;
+```
+
+**Verification Command:**
+```bash
+# Should return ZERO results when done:
+rg "use swissarmyhammer::file_watcher" swissarmyhammer-tools/
+
+# Should find direct notify usage:
+rg "use notify::" swissarmyhammer-tools/
+```
+
+**Expected Impact:**
+- **Current**: 23 imports from main crate
+- **After completion**: 21 imports from main crate (2 file watcher imports eliminated)

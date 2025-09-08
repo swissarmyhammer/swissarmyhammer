@@ -359,7 +359,7 @@ fn test_command_validation_long_command() {
 
 #[test]
 fn test_dangerous_pattern_detection() {
-    use crate::shell_security::get_validator;
+    use swissarmyhammer_shell::get_validator;
 
     let validator = get_validator();
 
@@ -373,7 +373,7 @@ fn test_dangerous_pattern_detection() {
 
 #[test]
 fn test_command_structure_validation_now_allows_shell_constructs() {
-    use crate::shell_security::get_validator;
+    use swissarmyhammer_shell::get_validator;
 
     let validator = get_validator();
 
@@ -390,7 +390,7 @@ fn test_command_structure_validation_now_allows_shell_constructs() {
 
 #[test]
 fn test_command_structure_validation_safe_pipes() {
-    use crate::shell_security::get_validator;
+    use swissarmyhammer_shell::get_validator;
 
     let validator = get_validator();
 
@@ -405,7 +405,7 @@ fn test_command_structure_validation_safe_pipes() {
 
 #[test]
 fn test_safe_usage_validation() {
-    use crate::shell_security::get_validator;
+    use swissarmyhammer_shell::get_validator;
 
     let validator = get_validator();
 
@@ -597,7 +597,7 @@ async fn test_shell_action_security_dangerous_pattern_warning() {
 
         // Test security validation directly without executing the command
         // With the new security framework, dangerous commands should be blocked
-        use crate::shell_security::get_validator;
+        use swissarmyhammer_shell::get_validator;
         let validator = get_validator();
         let validation_result = validator.validate_command(cmd);
 
@@ -1811,7 +1811,7 @@ mod additional_security_tests {
 
     #[test]
     fn test_dangerous_command_patterns_comprehensive() {
-        use crate::shell_security::get_validator;
+        use swissarmyhammer_shell::get_validator;
 
         let validator = get_validator();
 
@@ -1842,7 +1842,7 @@ mod additional_security_tests {
 
     #[test]
     fn test_shell_constructs_now_allowed() {
-        use crate::shell_security::get_validator;
+        use swissarmyhammer_shell::get_validator;
 
         let validator = get_validator();
 
@@ -1867,7 +1867,7 @@ mod additional_security_tests {
 
     #[test]
     fn test_safe_pipe_usage_validation() {
-        use crate::shell_security::get_validator;
+        use swissarmyhammer_shell::get_validator;
 
         let validator = get_validator();
 
