@@ -21,20 +21,20 @@ pub struct CreateMemoRequest {
     pub content: String,
 }
 
-/// Request to get a memo by ID
+/// Request to get a memo by title
 ///
 /// # Examples
 ///
-/// Get a memo by its ULID:
+/// Get a memo by its title:
 /// ```ignore
 /// GetMemoRequest {
-///     id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+///     title: "Meeting Notes".to_string(),
 /// }
 /// ```
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct GetMemoRequest {
-    /// ULID identifier of the memo to retrieve
-    pub id: String,
+    /// Title of the memo to retrieve
+    pub title: String,
 }
 
 /// Request to update a memo's content
@@ -55,8 +55,6 @@ pub struct UpdateMemoRequest {
     /// New markdown content for the memo
     pub content: String,
 }
-
-
 
 /// Request to search memos
 ///
@@ -125,13 +123,13 @@ mod tests {
     #[test]
     fn test_get_memo_request_serialization() {
         let request = GetMemoRequest {
-            id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            title: "Meeting Notes".to_string(),
         };
 
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: GetMemoRequest = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(request.id, deserialized.id);
+        assert_eq!(request.title, deserialized.title);
     }
 
     #[test]
@@ -147,8 +145,6 @@ mod tests {
         assert_eq!(request.id, deserialized.id);
         assert_eq!(request.content, deserialized.content);
     }
-
-
 
     #[test]
     fn test_search_memos_request_serialization() {

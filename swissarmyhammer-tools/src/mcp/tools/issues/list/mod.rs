@@ -179,10 +179,12 @@ impl McpTool for ListIssuesTool {
         );
 
         let issue_storage = context.issue_storage.read().await;
-        let all_issue_infos = issue_storage
-            .list_issues_info()
-            .await
-            .map_err(|e| McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "list issues"))?;
+        let all_issue_infos = issue_storage.list_issues_info().await.map_err(|e| {
+            McpErrorHandler::handle_error(
+                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                "list issues",
+            )
+        })?;
 
         let show_completed = request.show_completed.unwrap_or(false);
         let show_active = request.show_active.unwrap_or(true);

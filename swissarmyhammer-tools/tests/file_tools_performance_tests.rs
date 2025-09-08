@@ -10,11 +10,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
-use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::files;
@@ -243,14 +243,12 @@ async fn create_test_context() -> ToolContext {
         tokio::sync::RwLock::new(Box::new(MarkdownMemoStorage::new(memo_temp_dir))),
     );
 
-    let rate_limiter = Arc::new(
-        RateLimiter::with_config(RateLimiterConfig {
-            global_limit: 10000,
-            per_client_limit: 1000,
-            expensive_operation_limit: 500,
-            window_duration: std::time::Duration::from_secs(1),
-        }),
-    );
+    let rate_limiter = Arc::new(RateLimiter::with_config(RateLimiterConfig {
+        global_limit: 10000,
+        per_client_limit: 1000,
+        expensive_operation_limit: 500,
+        window_duration: std::time::Duration::from_secs(1),
+    }));
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 
     ToolContext::new(

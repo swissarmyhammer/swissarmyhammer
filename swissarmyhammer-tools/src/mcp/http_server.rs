@@ -135,20 +135,16 @@ async fn start_http_server_with_mcp_server(
     let bind_addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .map_err(|e| {
-            swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!(
-                    "Failed to bind to {}: {}",
-                    bind_addr, e
-                ),
-            }
+        .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to bind to {}: {}", bind_addr, e),
         })?;
 
-    let actual_addr = listener.local_addr().map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!("Failed to get local address: {}", e),
-        }
-    })?;
+    let actual_addr =
+        listener
+            .local_addr()
+            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to get local address: {}", e),
+            })?;
 
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -353,14 +349,12 @@ async fn handle_mcp_request(
 
 /// Parse bind address string into host and port
 fn parse_bind_address(bind_addr: &str) -> Result<(String, u16)> {
-    let addr: SocketAddr = bind_addr.parse().map_err(|e| {
-        swissarmyhammer_common::SwissArmyHammerError::Other {
-            message: format!(
-                "Invalid bind address '{}': {}",
-                bind_addr, e
-            ),
-        }
-    })?;
+    let addr: SocketAddr =
+        bind_addr
+            .parse()
+            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Invalid bind address '{}': {}", bind_addr, e),
+            })?;
 
     Ok((addr.ip().to_string(), addr.port()))
 }

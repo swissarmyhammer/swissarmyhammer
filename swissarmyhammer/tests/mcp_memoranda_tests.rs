@@ -426,12 +426,12 @@ async fn test_mcp_memo_get() {
 
     let memo_id = extract_memo_id_from_response(create_text);
 
-    // Now get the memo
+    // Now get the memo by title
     let get_request = create_tool_request(
         2,
         "memo_get",
         json!({
-            "id": memo_id
+            "title": "Test Get Memo"
         }),
     );
 
@@ -466,21 +466,21 @@ async fn test_mcp_memo_get_invalid_id() {
         1,
         "memo_get",
         json!({
-            "id": "invalid/memo*id"
+            "title": "invalid/memo*title"
         }),
     );
 
     send_request(&mut stdin, get_request).unwrap();
     let response = read_response(&mut reader).unwrap();
 
-    // Should return error for invalid ID format
+    // Should return error for invalid title format
     assert!(response.get("error").is_some());
     let error = &response["error"];
     assert_eq!(error["code"], -32602); // Invalid params
     assert!(error["message"]
         .as_str()
         .unwrap()
-        .contains("Invalid memo ID format"));
+        .contains("Invalid memo title format"));
 }
 
 /// Test memo get with non-existent valid ID
@@ -501,7 +501,7 @@ async fn test_mcp_memo_get_nonexistent() {
         1,
         "memo_get",
         json!({
-            "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV" // Valid ULID format but doesn't exist
+            "title": "NonExistentMemo" // Valid title format but doesn't exist
         }),
     );
 
@@ -554,7 +554,9 @@ async fn test_mcp_memo_replacement() {
     send_request(&mut stdin, create_request).unwrap();
     let create_response = read_response(&mut reader).unwrap();
     assert!(create_response.get("error").is_none());
-    let create_text = create_response["result"]["content"][0]["text"].as_str().unwrap();
+    let create_text = create_response["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
     assert!(create_text.contains("Successfully created memo"));
     assert!(create_text.contains("Action: created"));
 
@@ -581,8 +583,6 @@ async fn test_mcp_memo_replacement() {
 
     // Memo cleanup removed - memos are now permanent
 }
-
-
 
 /// Test memo list via MCP
 #[tokio::test]
@@ -862,7 +862,7 @@ async fn test_mcp_memo_large_content() {
         2,
         "memo_get",
         json!({
-            "id": memo_id
+            "title": "Large Content Memo"
         }),
     );
 
@@ -1080,7 +1080,11 @@ mod stress_tests {
 
             // Verify it was a replacement, not creation
             let text = response["result"]["content"][0]["text"].as_str().unwrap();
-            assert!(text.contains("Successfully replaced memo"), "Expected replacement but got: {}", text);
+            assert!(
+                text.contains("Successfully replaced memo"),
+                "Expected replacement but got: {}",
+                text
+            );
 
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;

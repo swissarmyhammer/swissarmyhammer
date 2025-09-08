@@ -43,22 +43,20 @@ impl Error {
 impl From<Error> for swissarmyhammer_common::SwissArmyHammerError {
     fn from(error: Error) -> Self {
         match error {
-            Error::IssueNotFound(name) => {
-                swissarmyhammer_common::SwissArmyHammerError::Other { 
-                    message: format!("Issue not found: {}", name) 
-                }
-            }
-            Error::IssueAlreadyExists(id) => {
-                swissarmyhammer_common::SwissArmyHammerError::Other { 
-                    message: format!("Issue already exists: {}", id) 
-                }
-            }
+            Error::IssueNotFound(name) => swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Issue not found: {}", name),
+            },
+            Error::IssueAlreadyExists(id) => swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Issue already exists: {}", id),
+            },
             Error::Io(e) => swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(e),
-            Error::Git(e) => swissarmyhammer_common::SwissArmyHammerError::Other { 
-                message: format!("Git error: {}", e) 
+            Error::Git(e) => swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Git error: {}", e),
             },
             Error::Common(e) => e, // Already the right type
-            Error::Other(msg) => swissarmyhammer_common::SwissArmyHammerError::Other { message: msg },
+            Error::Other(msg) => {
+                swissarmyhammer_common::SwissArmyHammerError::Other { message: msg }
+            }
         }
     }
 }

@@ -54,7 +54,8 @@ static GLOBAL_MCP_SERVER: OnceCell<Arc<McpServerHandle>> = OnceCell::const_new()
 /// This function implements a singleton pattern to ensure the MCP server
 /// is started only once per process. Subsequent calls will return the
 /// same server handle.
-pub async fn get_or_init_global_mcp_server() -> swissarmyhammer_common::Result<Arc<McpServerHandle>> {
+pub async fn get_or_init_global_mcp_server() -> swissarmyhammer_common::Result<Arc<McpServerHandle>>
+{
     GLOBAL_MCP_SERVER
         .get_or_try_init(|| async {
             tracing::info!("Initializing global MCP server");

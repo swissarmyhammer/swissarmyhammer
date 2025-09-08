@@ -331,8 +331,7 @@ mod tests {
             swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
         );
 
-        let rate_limiter: Arc<dyn RateLimitChecker> =
-            Arc::new(RateLimiter::new());
+        let rate_limiter: Arc<dyn RateLimitChecker> = Arc::new(RateLimiter::new());
 
         ToolContext::new(
             tool_handlers,

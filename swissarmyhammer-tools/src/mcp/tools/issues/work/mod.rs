@@ -96,7 +96,12 @@ impl McpTool for WorkIssueTool {
             // Issue exists - get it and use its stored source branch
             let issue = match issue_storage.get_issue(request.name.as_str()).await {
                 Ok(issue) => issue,
-                Err(e) => return Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "get issue")),
+                Err(e) => {
+                    return Err(McpErrorHandler::handle_error(
+                        swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                        "get issue",
+                    ))
+                }
             };
 
             let branch_name = issue.name.clone();
@@ -155,8 +160,8 @@ impl McpTool for WorkIssueTool {
 
 #[cfg(test)]
 mod tests {
-    use swissarmyhammer_common::create_abort_file;
     use swissarmyhammer::test_utils::IsolatedTestHome;
+    use swissarmyhammer_common::create_abort_file;
     use tempfile::TempDir;
 
     #[test]

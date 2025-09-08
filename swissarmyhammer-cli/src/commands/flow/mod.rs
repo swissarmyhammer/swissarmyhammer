@@ -14,13 +14,13 @@ use std::future;
 use std::io::{self, Write};
 use std::time::Duration;
 use swissarmyhammer::common::mcp_errors::ToSwissArmyHammerError;
-use swissarmyhammer_common::{read_abort_file, remove_abort_file};
 use swissarmyhammer::workflow::{
     ExecutionVisualizer, ExecutorError, MemoryWorkflowStorage, Workflow, WorkflowExecutor,
     WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer::{Result, SwissArmyHammerError};
+use swissarmyhammer_common::{read_abort_file, remove_abort_file};
 use tokio::signal;
 use tokio::time::timeout;
 
@@ -222,7 +222,9 @@ pub async fn run_workflow_command(
     tracing::info!("🚀 Starting workflow: {}", workflow.name);
 
     // Check for abort file before starting workflow
-    if let Some(abort_reason) = read_abort_file(".").map_err(|e| SwissArmyHammerError::Other(e.to_string()))? {
+    if let Some(abort_reason) =
+        read_abort_file(".").map_err(|e| SwissArmyHammerError::Other(e.to_string()))?
+    {
         // Clean up the abort file after detection
         let _ = remove_abort_file(".").map_err(|e| SwissArmyHammerError::Other(e.to_string()));
         return Err(SwissArmyHammerError::ExecutorError(

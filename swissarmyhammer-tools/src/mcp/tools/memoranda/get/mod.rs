@@ -1,6 +1,6 @@
 //! Memo retrieval tool for MCP operations
 //!
-//! This module provides the GetMemoTool for retrieving a memo by its unique ID through the MCP protocol.
+//! This module provides the GetMemoTool for retrieving a memo by its title through the MCP protocol.
 
 use crate::mcp::memo_types::GetMemoRequest;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 
-/// Tool for retrieving a memo by its unique ID
+/// Tool for retrieving a memo by its title
 #[derive(Default)]
 pub struct GetMemoTool;
 
@@ -34,12 +34,12 @@ impl McpTool for GetMemoTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "id": {
+                "title": {
                     "type": "string",
-                    "description": "ULID identifier of the memo to retrieve"
+                    "description": "Title of the memo to retrieve"
                 }
             },
-            "required": ["id"]
+            "required": ["title"]
         })
     }
 
@@ -50,25 +50,24 @@ impl McpTool for GetMemoTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: GetMemoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!("Getting memo with ID: {}", request.id);
+        tracing::debug!("Getting memo with title: {}", request.title);
 
-        let memo_id = match swissarmyhammer_memoranda::MemoTitle::new(request.id.clone()) {
-            Ok(id) => id,
+        let memo_title = match swissarmyhammer_memoranda::MemoTitle::new(request.title.clone()) {
+            Ok(title) => title,
             Err(_) => {
                 return Err(McpError::invalid_params(
-                    format!("Invalid memo ID format: {}", request.id),
+                    format!("Invalid memo title format: {}", request.title),
                     None,
                 ))
             }
         };
 
         let memo_storage = context.memo_storage.read().await;
-        match memo_storage.get(&memo_id).await {
+        match memo_storage.get(&memo_title).await {
             Ok(Some(memo)) => {
                 tracing::info!("Retrieved memo {}", memo.title);
                 Ok(BaseToolImpl::create_success_response(format!(
-                    "Memo found:\n\nID: {}\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
-                    memo.title,
+                    "Memo found:\n\nTitle: {}\nCreated: {}\nUpdated: {}\n\nContent:\n{}",
                     memo.title,
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
                     crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
@@ -76,8 +75,8 @@ impl McpTool for GetMemoTool {
                 )))
             }
             Ok(None) => Ok(BaseToolImpl::create_success_response(format!(
-                "Memo not found with ID: {}",
-                memo_id
+                "Memo not found with title: {}",
+                memo_title
             ))),
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
                 swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
@@ -105,8 +104,8 @@ mod tests {
         let schema = tool.schema();
 
         assert_eq!(schema["type"], "object");
-        assert!(schema["properties"]["id"].is_object());
-        assert_eq!(schema["required"], serde_json::json!(["id"]));
+        assert!(schema["properties"]["title"].is_object());
+        assert_eq!(schema["required"], serde_json::json!(["title"]));
     }
 
     #[tokio::test]
@@ -127,7 +126,7 @@ mod tests {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
-            "id".to_string(),
+            "title".to_string(),
             serde_json::Value::String(memo.title.to_string()),
         );
 
@@ -147,8 +146,8 @@ mod tests {
         let mut arguments = serde_json::Map::new();
         // Use actually invalid title format with forbidden filesystem character
         arguments.insert(
-            "id".to_string(),
-            serde_json::Value::String("invalid/id".to_string()),
+            "title".to_string(),
+            serde_json::Value::String("invalid/title".to_string()),
         );
 
         let result = tool.execute(arguments, &context).await;
@@ -162,7 +161,7 @@ mod tests {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
-            "id".to_string(),
+            "title".to_string(),
             serde_json::Value::String("NonExistentMemo".to_string()),
         );
 
@@ -179,7 +178,7 @@ mod tests {
         let tool = GetMemoTool::new();
         let context = create_test_context().await;
 
-        let arguments = serde_json::Map::new(); // Missing id field
+        let arguments = serde_json::Map::new(); // Missing title field
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_err());
@@ -192,7 +191,7 @@ mod tests {
 
         let mut arguments = serde_json::Map::new();
         arguments.insert(
-            "id".to_string(),
+            "title".to_string(),
             serde_json::Value::Number(serde_json::Number::from(123)),
         );
 

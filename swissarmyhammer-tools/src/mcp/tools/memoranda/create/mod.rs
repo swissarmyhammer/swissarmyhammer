@@ -111,11 +111,15 @@ impl McpTool for CreateMemoTool {
             }
         };
 
-        let action_verb = if action == "created" { "created" } else { "replaced" };
+        let action_verb = if action == "created" {
+            "created"
+        } else {
+            "replaced"
+        };
         Ok(BaseToolImpl::create_success_response(format!(
             "Successfully {} memo '{}' with ID: {}\n\nMemo Details:\n- ID: {}\n- Title: {}\n- Created: {}\n- Updated: {}\n- Action: {}\n- Content: {}",
             action_verb,
-            memo.title, 
+            memo.title,
             memo.title,
             memo.title,
             memo.title,
@@ -171,7 +175,7 @@ mod tests {
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
         assert!(!call_result.content.is_empty());
-        
+
         // Verify the response contains the memo ID
         let response_text = call_result.content[0].as_text().unwrap().text.as_str();
         assert!(response_text.contains("with ID: Test Memo"));

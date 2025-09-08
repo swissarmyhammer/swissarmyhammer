@@ -21,14 +21,14 @@
 
 #![warn(missing_docs)]
 
+pub mod abort_utils;
 pub mod constants;
 pub mod env_loader;
 pub mod error;
+pub mod rate_limiter;
 pub mod traits;
 pub mod types;
 pub mod utils;
-pub mod rate_limiter;
-pub mod abort_utils;
 
 // Re-export commonly used constants for convenience
 pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;

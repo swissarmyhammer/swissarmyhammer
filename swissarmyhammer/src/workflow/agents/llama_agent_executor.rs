@@ -452,7 +452,6 @@ fn get_complete_sah_tools() -> Vec<serde_json::Value> {
                 "required": ["id", "content"]
             }
         }),
-
         json!({
             "name": "memo_search",
             "description": "Search memos by query string",

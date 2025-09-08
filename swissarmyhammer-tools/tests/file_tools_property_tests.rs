@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_common::rate_limiter::RateLimiterConfig;
 
-use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::files;
@@ -35,14 +35,12 @@ async fn create_property_test_context() -> ToolContext {
     );
 
     let rate_limiter = Arc::new(
-        swissarmyhammer_common::rate_limiter::RateLimiter::with_config(
-            RateLimiterConfig {
-                global_limit: 10000,
-                per_client_limit: 1000,
-                expensive_operation_limit: 500,
-                window_duration: std::time::Duration::from_secs(1),
-            },
-        ),
+        swissarmyhammer_common::rate_limiter::RateLimiter::with_config(RateLimiterConfig {
+            global_limit: 10000,
+            per_client_limit: 1000,
+            expensive_operation_limit: 500,
+            window_duration: std::time::Duration::from_secs(1),
+        }),
     );
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 

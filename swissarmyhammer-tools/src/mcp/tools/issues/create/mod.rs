@@ -95,10 +95,16 @@ impl McpTool for CreateIssueTool {
                         );
                         Ok(create_issue_response(&issue_info))
                     }
-                    Err(e) => Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "get created issue info")),
+                    Err(e) => Err(McpErrorHandler::handle_error(
+                        swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                        "get created issue info",
+                    )),
                 }
             }
-            Err(e) => Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "create issue")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                "create issue",
+            )),
         }
     }
 }

@@ -69,8 +69,6 @@ pub mod workflow;
 /// Shared frontmatter parsing functionality
 pub mod frontmatter;
 
-
-
 /// Memoranda management and storage system (re-exported from swissarmyhammer-memoranda)
 pub mod memoranda {
     pub use swissarmyhammer_memoranda::*;

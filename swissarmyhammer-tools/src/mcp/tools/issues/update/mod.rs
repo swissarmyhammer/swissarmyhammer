@@ -94,7 +94,10 @@ impl McpTool for UpdateIssueTool {
                     "replace mode"
                 }
             ))),
-            Err(e) => Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "update issue")),
+            Err(e) => Err(McpErrorHandler::handle_error(
+                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                "update issue",
+            )),
         }
     }
 }

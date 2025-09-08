@@ -35,9 +35,7 @@ impl ContentSource {
                 }
             }
             (None, Some(path)) => Ok(ContentSource::File(path)),
-            (Some(_), Some(_)) => Err(Error::other(
-                "Cannot specify both content and file options",
-            )),
+            (Some(_), Some(_)) => Err(Error::other("Cannot specify both content and file options")),
             (None, None) => Ok(ContentSource::Empty),
         }
     }
@@ -47,16 +45,15 @@ impl ContentSource {
         match self {
             ContentSource::Direct(content) => Ok(content.clone()),
             ContentSource::File(path) => {
-                let content = std::fs::read_to_string(path).map_err(|e| {
-                    Error::other(format!("Failed to read file {path:?}: {e}"))
-                })?;
+                let content = std::fs::read_to_string(path)
+                    .map_err(|e| Error::other(format!("Failed to read file {path:?}: {e}")))?;
                 Ok(content.trim().to_string())
             }
             ContentSource::Stdin => {
                 let mut buffer = String::new();
-                io::stdin().read_to_string(&mut buffer).map_err(|e| {
-                    Error::other(format!("Failed to read from stdin: {e}"))
-                })?;
+                io::stdin()
+                    .read_to_string(&mut buffer)
+                    .map_err(|e| Error::other(format!("Failed to read from stdin: {e}")))?;
                 Ok(buffer.trim().to_string())
             }
             ContentSource::Empty => Ok(String::new()),

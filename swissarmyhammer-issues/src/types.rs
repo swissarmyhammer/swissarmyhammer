@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn test_issue_name_conversions() {
         let name = IssueName::new("test_name".to_string()).unwrap();
-        
+
         // Test various conversion methods
         assert_eq!(name.as_str(), "test_name");
         assert_eq!(name.get(), "test_name");
@@ -307,14 +307,17 @@ mod tests {
         };
 
         let base_dir = PathBuf::from("/test/issues");
-        
+
         // Active issue path
         let active_path = issue.get_file_path(&base_dir, false);
         assert_eq!(active_path, PathBuf::from("/test/issues/test_issue.md"));
 
         // Completed issue path
         let completed_path = issue.get_file_path(&base_dir, true);
-        assert_eq!(completed_path, PathBuf::from("/test/issues/complete/test_issue.md"));
+        assert_eq!(
+            completed_path,
+            PathBuf::from("/test/issues/complete/test_issue.md")
+        );
     }
 
     #[test]
@@ -325,7 +328,7 @@ mod tests {
         };
 
         let completed_dir = PathBuf::from("/test/issues/complete");
-        
+
         // Active issue file
         let active_path = PathBuf::from("/test/issues/test_issue.md");
         assert!(!issue.is_completed(&active_path, &completed_dir));

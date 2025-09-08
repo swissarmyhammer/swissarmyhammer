@@ -1473,8 +1473,6 @@ impl From<swissarmyhammer_git::GitError> for SwissArmyHammerError {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

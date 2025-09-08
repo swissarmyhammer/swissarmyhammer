@@ -134,20 +134,20 @@ impl ToolHandlers {
         &self,
         request: GetMemoRequest,
     ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::debug!("Getting memo with ID: {}", request.id);
+        tracing::debug!("Getting memo with title: {}", request.title);
 
-        let memo_id = match MemoTitle::new(request.id.clone()) {
-            Ok(id) => id,
+        let memo_title = match MemoTitle::new(request.title.clone()) {
+            Ok(title) => title,
             Err(_) => {
                 return Err(McpError::invalid_params(
-                    format!("Invalid memo ID format: {}", request.id),
+                    format!("Invalid memo title format: {}", request.title),
                     None,
                 ))
             }
         };
 
         let memo_storage = self.memo_storage.read().await;
-        match memo_storage.get(&memo_id).await {
+        match memo_storage.get(&memo_title).await {
             Ok(Some(memo)) => {
                 tracing::info!("Retrieved memo {}", memo.title);
                 Ok(create_success_response(format!(
@@ -160,8 +160,8 @@ impl ToolHandlers {
                 )))
             }
             Ok(None) => Ok(create_success_response(format!(
-                "Memo not found with ID: {}",
-                memo_id
+                "Memo not found with title: {}",
+                memo_title
             ))),
             Err(e) => Err(McpErrorHandler::handle_error(
                 SwissArmyHammerError::Storage(e.to_string()),
@@ -222,8 +222,6 @@ impl ToolHandlers {
             )),
         }
     }
-
-
 
     /// Handle the memo_list tool operation.
     ///

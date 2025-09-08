@@ -224,8 +224,8 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use swissarmyhammer_common::RateLimitChecker;
-use swissarmyhammer_issues::IssueStorage;
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_issues::IssueStorage;
 use swissarmyhammer_memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
 
@@ -1410,8 +1410,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
-        use swissarmyhammer_issues::IssueStorage;
         use swissarmyhammer_git::GitOperations;
+        use swissarmyhammer_issues::IssueStorage;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
@@ -1435,16 +1435,14 @@ mod tests {
             issue_storage,
             git_ops,
             memo_storage,
-            Arc::new(
-                swissarmyhammer_common::RateLimiter::with_config(
-                    swissarmyhammer_common::RateLimiterConfig {
-                        global_limit: 10000,
-                        per_client_limit: 1000,
-                        expensive_operation_limit: 500,
-                        window_duration: std::time::Duration::from_secs(1),
-                    },
-                ),
-            ),
+            Arc::new(swissarmyhammer_common::RateLimiter::with_config(
+                swissarmyhammer_common::RateLimiterConfig {
+                    global_limit: 10000,
+                    per_client_limit: 1000,
+                    expensive_operation_limit: 500,
+                    window_duration: std::time::Duration::from_secs(1),
+                },
+            )),
         );
 
         let tool = MockTool {

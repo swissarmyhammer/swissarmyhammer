@@ -164,7 +164,10 @@ impl McpTool for ShowIssueTool {
                     match issue_storage.get_issue_info(&next_issue.name).await {
                         Ok(issue_info) => issue_info,
                         Err(e) => {
-                            return Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "get next issue info"));
+                            return Err(McpErrorHandler::handle_error(
+                                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                                "get next issue info",
+                            ));
                         }
                     }
                 }
@@ -174,7 +177,10 @@ impl McpTool for ShowIssueTool {
                     ));
                 }
                 Err(e) => {
-                    return Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "get next issue"));
+                    return Err(McpErrorHandler::handle_error(
+                        swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                        "get next issue",
+                    ));
                 }
             }
         } else {

@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 
