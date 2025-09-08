@@ -91,3 +91,68 @@ The tool should return a simple OK response:
 This is about following explicit instructions for response format simplicity. The tool should do what it was told to do - return "OK" for successful memo creation, not complex objects with potentially fabricated data.
 
 The principle is: **do what was requested, nothing more, nothing less.**
+
+## Proposed Solution
+
+After examining the code, I found the root cause of the complex response in `/Users/wballard/github/sah/swissarmyhammer-tools/src/mcp/tools/memoranda/create/mod.rs` at line 87-97.
+
+### Current Problem Code:
+```rust
+Ok(BaseToolImpl::create_success_response(format!(
+    "Successfully {} memo '{}' with ID: {}\n\nMemo Details:\n- ID: {}\n- Title: {}\n- Created: {}\n- Updated: {}\n- Action: {}\n- Content: {}",
+    action_verb,
+    memo.title,
+    memo.title,
+    memo.title,
+    memo.title,
+    crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
+    crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
+    action,
+    memo.content
+)))
+```
+
+### Proposed Fix:
+Replace the verbose response with:
+```rust
+Ok(BaseToolImpl::create_success_response("OK".to_string()))
+```
+
+### Implementation Steps:
+1. Replace the complex response formatting with a simple "OK" response
+2. Ensure memo creation/update still works correctly but doesn't return internal details
+3. Update tests to expect the simple "OK" response
+4. Verify error handling still returns meaningful error messages
+
+### Benefits:
+- Follows explicit instructions to return simple responses
+- Eliminates fabricated/complex data from responses  
+- Maintains core functionality while simplifying output
+- Consistent with the principle: "do what was requested, nothing more, nothing less"
+
+The memo creation logic remains unchanged - only the response format is simplified.
+## Implementation Complete ✅
+
+Successfully implemented the fix to return simple "OK" responses from memo_create tool.
+
+### Changes Made:
+1. **Modified response logic** in `/Users/wballard/github/sah/swissarmyhammer-tools/src/mcp/tools/memoranda/create/mod.rs:87`
+   - Replaced verbose response formatting with: `Ok(BaseToolImpl::create_success_response("OK".to_string()))`
+   - Removed fabricated data including timestamps, IDs, and memo content from response
+   - Fixed unused variable warnings by prefixing with underscore
+
+2. **Updated all test expectations** to expect "OK" response:
+   - `test_create_memo_tool_execute_success`
+   - `test_create_memo_tool_execute_replacement` 
+   - `test_create_memo_tool_execute_replacement_preserves_creation_time`
+
+### Verification:
+- ✅ All 8 memo_create tool tests pass
+- ✅ swissarmyhammer-tools package compiles successfully
+- ✅ Core memo creation/update functionality preserved
+- ✅ Error handling remains unchanged and still returns meaningful error messages
+
+### Result:
+The memo_create tool now returns exactly `{"message": "OK"}` on successful memo creation or update, following the explicit instruction for simple responses without fabricated or complex data. The underlying functionality remains intact - only the response format was simplified.
+
+**Principle followed:** "Do what was requested, nothing more, nothing less."

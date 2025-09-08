@@ -290,10 +290,9 @@ async fn test_mcp_memo_create() {
     }
     assert!(response.get("error").is_none());
     let result = &response["result"];
-    assert!(result["content"][0]["text"]
+    assert_eq!(result["content"][0]["text"]
         .as_str()
-        .unwrap()
-        .contains("Successfully created memo"));
+        .unwrap(), "OK");
 
     // Memo cleanup removed - memos are now permanent
 }
@@ -375,8 +374,7 @@ async fn test_mcp_memo_create_unicode() {
     assert!(response.get("error").is_none());
     let result = &response["result"];
     let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("🚀 Unicode Test with 中文"));
-    assert!(text.contains("émojis 🎉"));
+    assert_eq!(text, "OK");
 
     // Memo cleanup removed - memos are now permanent
 }
@@ -419,12 +417,13 @@ async fn test_mcp_memo_get() {
         );
     }
 
-    // Extract memo ID from creation response
+    // Verify creation response
     let create_text = create_response["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
+    assert_eq!(create_text, "OK");
 
-    let memo_id = extract_memo_id_from_response(create_text);
+    let memo_title = "Test Get Memo"; // Use the known title as ID
 
     // Now get the memo by title
     let get_request = create_tool_request(
@@ -443,7 +442,7 @@ async fn test_mcp_memo_get() {
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("Test Get Memo"));
     assert!(text.contains("Content for get test"));
-    assert!(text.contains(&memo_id));
+    assert!(text.contains(memo_title));
 
     // Memo cleanup removed - memos are now permanent
 }
@@ -557,8 +556,7 @@ async fn test_mcp_memo_replacement() {
     let create_text = create_response["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
-    assert!(create_text.contains("Successfully created memo"));
-    assert!(create_text.contains("Action: created"));
+    assert_eq!(create_text, "OK");
 
     // Replace the memo using memo_create with the same title
     let replace_request = create_tool_request(
@@ -576,10 +574,7 @@ async fn test_mcp_memo_replacement() {
     assert!(replace_response.get("error").is_none());
     let result = &replace_response["result"];
     let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Successfully replaced memo"));
-    assert!(text.contains("Action: replaced"));
-    assert!(text.contains("Replaced content via MCP"));
-    assert!(text.contains("Replacement Test Memo")); // Title should remain same
+    assert_eq!(text, "OK");
 
     // Memo cleanup removed - memos are now permanent
 }
@@ -846,17 +841,9 @@ async fn test_mcp_memo_large_content() {
     let create_response = read_response(&mut reader).unwrap();
 
     assert!(create_response.get("error").is_none());
-    assert!(create_response["result"]["content"][0]["text"]
+    assert_eq!(create_response["result"]["content"][0]["text"]
         .as_str()
-        .unwrap()
-        .contains("Successfully created memo"));
-
-    // Extract ID and verify we can retrieve it
-    let _memo_id = extract_memo_id_from_response(
-        create_response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap(),
-    );
+        .unwrap(), "OK");
 
     let get_request = create_tool_request(
         2,
@@ -974,22 +961,7 @@ async fn test_mcp_memo_tool_list() {
 }
 
 /// Helper function to extract memo ID from MCP response text
-fn extract_memo_id_from_response(response_text: &str) -> String {
-    // Look for pattern "with ID: <ID>" (now uses title as ID)
-    if let Some(start) = response_text.find("with ID: ") {
-        let id_start = start + "with ID: ".len();
-        if let Some(end) = response_text[id_start..].find('\n') {
-            return response_text[id_start..id_start + end].trim().to_string();
-        }
-        // If no newline found, take until whitespace or end
-        if let Some(end) = response_text[id_start..].find(char::is_whitespace) {
-            return response_text[id_start..id_start + end].trim().to_string();
-        }
-        // Take rest of string if no whitespace
-        return response_text[id_start..].trim().to_string();
-    }
-    panic!("Could not extract memo ID from response: {response_text}");
-}
+
 
 #[cfg(test)]
 mod stress_tests {
@@ -1015,7 +987,7 @@ mod stress_tests {
 
         // Reduced from 50 to 12 memos to ensure test completes in under 10 seconds
         let num_memos = 12;
-        let mut _memo_ids = Vec::new();
+
 
         // Create memos with small delays to prevent overwhelming the server
         for i in 1..=num_memos {
@@ -1043,10 +1015,8 @@ mod stress_tests {
                 response.get("error")
             );
 
-            let memo_id = extract_memo_id_from_response(
-                response["result"]["content"][0]["text"].as_str().unwrap(),
-            );
-            _memo_ids.push(memo_id);
+            // Verify create response is OK
+            assert_eq!(response["result"]["content"][0]["text"].as_str().unwrap(), "OK");
 
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
@@ -1078,13 +1048,9 @@ mod stress_tests {
                 response.get("error")
             );
 
-            // Verify it was a replacement, not creation
+            // Verify response is OK
             let text = response["result"]["content"][0]["text"].as_str().unwrap();
-            assert!(
-                text.contains("Successfully replaced memo"),
-                "Expected replacement but got: {}",
-                text
-            );
+            assert_eq!(text, "OK");
 
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;

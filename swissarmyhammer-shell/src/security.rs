@@ -752,7 +752,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_path_traversal_detection() {
         // Test that path traversal attempts are blocked
         use std::path::Path;

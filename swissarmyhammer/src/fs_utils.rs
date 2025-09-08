@@ -5,7 +5,7 @@
 //! `std::fs` usage.
 
 use crate::common::error_context::IoResultExt;
-use crate::error::{Result, SwissArmyHammerError};
+use crate::error::{CommonError, Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

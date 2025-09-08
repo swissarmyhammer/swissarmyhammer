@@ -81,7 +81,7 @@ impl McpTool for CreateMemoTool {
             }
         };
 
-        let (memo, action) = if existing_memo.is_some() {
+        let (_memo, _action) = if existing_memo.is_some() {
             // Memo exists, replace it
             match memo_storage.update(&title, request.content.into()).await {
                 Ok(memo) => {
@@ -111,23 +111,7 @@ impl McpTool for CreateMemoTool {
             }
         };
 
-        let action_verb = if action == "created" {
-            "created"
-        } else {
-            "replaced"
-        };
-        Ok(BaseToolImpl::create_success_response(format!(
-            "Successfully {} memo '{}' with ID: {}\n\nMemo Details:\n- ID: {}\n- Title: {}\n- Created: {}\n- Updated: {}\n- Action: {}\n- Content: {}",
-            action_verb,
-            memo.title,
-            memo.title,
-            memo.title,
-            memo.title,
-            crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
-            crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
-            action,
-            memo.content
-        )))
+        Ok(BaseToolImpl::create_success_response("OK".to_string()))
     }
 }
 
@@ -176,11 +160,9 @@ mod tests {
         assert_eq!(call_result.is_error, Some(false));
         assert!(!call_result.content.is_empty());
 
-        // Verify the response contains the memo ID
+        // Verify the response is simply "OK"
         let response_text = call_result.content[0].as_text().unwrap().text.as_str();
-        assert!(response_text.contains("with ID: Test Memo"));
-        assert!(response_text.contains("- ID: Test Memo"));
-        assert!(response_text.contains("Successfully created memo 'Test Memo'"));
+        assert_eq!(response_text, "OK");
     }
 
     #[tokio::test]
@@ -259,8 +241,7 @@ mod tests {
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
         let response_text = call_result.content[0].as_text().unwrap().text.as_str();
-        assert!(response_text.contains("Successfully created memo"));
-        assert!(response_text.contains("Action: created"));
+        assert_eq!(response_text, "OK");
 
         // Now, replace the same memo with new content
         let mut arguments = serde_json::Map::new();
@@ -279,9 +260,7 @@ mod tests {
         let call_result = result.unwrap();
         assert_eq!(call_result.is_error, Some(false));
         let response_text = call_result.content[0].as_text().unwrap().text.as_str();
-        assert!(response_text.contains("Successfully replaced memo"));
-        assert!(response_text.contains("Action: replaced"));
-        assert!(response_text.contains("Replaced content"));
+        assert_eq!(response_text, "OK");
     }
 
     #[tokio::test]
@@ -320,10 +299,9 @@ mod tests {
         let result2 = tool.execute(arguments, &context).await;
         assert!(result2.is_ok());
 
-        // Verify that the memo was replaced (not created anew)
+        // Verify that the memo was replaced (response is still just "OK")
         let call_result = result2.unwrap();
         let response_text = call_result.content[0].as_text().unwrap().text.as_str();
-        assert!(response_text.contains("Successfully replaced memo"));
-        assert!(response_text.contains("Action: replaced"));
+        assert_eq!(response_text, "OK");
     }
 }
