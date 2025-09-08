@@ -852,7 +852,7 @@ async fn test_mcp_memo_large_content() {
         .contains("Successfully created memo"));
 
     // Extract ID and verify we can retrieve it
-    let memo_id = extract_memo_id_from_response(
+    let _memo_id = extract_memo_id_from_response(
         create_response["result"]["content"][0]["text"]
             .as_str()
             .unwrap(),
@@ -1015,7 +1015,7 @@ mod stress_tests {
 
         // Reduced from 50 to 12 memos to ensure test completes in under 10 seconds
         let num_memos = 12;
-        let mut memo_ids = Vec::new();
+        let mut _memo_ids = Vec::new();
 
         // Create memos with small delays to prevent overwhelming the server
         for i in 1..=num_memos {
@@ -1046,7 +1046,7 @@ mod stress_tests {
             let memo_id = extract_memo_id_from_response(
                 response["result"]["content"][0]["text"].as_str().unwrap(),
             );
-            memo_ids.push(memo_id);
+            _memo_ids.push(memo_id);
 
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;

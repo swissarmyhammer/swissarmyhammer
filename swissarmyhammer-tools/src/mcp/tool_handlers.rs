@@ -25,31 +25,7 @@ impl ToolHandlers {
         Self { memo_storage }
     }
 
-    /// Format a memo preview with consistent formatting
-    ///
-    /// Creates a standardized preview format showing title, ID, timestamps, and content preview.
-    ///
-    /// # Arguments
-    ///
-    /// * `memo` - The memo to format
-    /// * `preview_length` - Number of characters to include in content preview
-    ///
-    /// # Returns
-    ///
-    /// * `String` - Formatted memo preview
-    fn format_memo_preview(
-        memo: &swissarmyhammer_memoranda::Memo,
-        preview_length: usize,
-    ) -> String {
-        format!(
-            "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
-            memo.title,
-            memo.title,
-            McpFormatter::format_timestamp(memo.created_at),
-            McpFormatter::format_timestamp(memo.updated_at),
-            McpFormatter::format_preview(memo.content.as_str(), preview_length)
-        )
-    }
+
 
     /// Handle memo operation errors consistently based on error type
     ///
@@ -245,7 +221,7 @@ impl ToolHandlers {
                 } else {
                     let memo_list = memos
                         .iter()
-                        .map(|memo| Self::format_memo_preview(memo, MEMO_LIST_PREVIEW_LENGTH))
+                        .map(|memo| McpFormatter::format_memo_preview(memo, MEMO_LIST_PREVIEW_LENGTH))
                         .collect::<Vec<_>>()
                         .join("\n\n");
 

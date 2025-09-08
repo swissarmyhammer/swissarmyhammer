@@ -401,9 +401,8 @@ impl McpFormatter {
         preview_length: usize,
     ) -> String {
         format!(
-            "• {} ({})\n  Created: {}\n  Updated: {}\n  Preview: {}",
+            "• {}\n  Created: {}\n  Updated: {}\n  Preview: {}",
             memo.title,
-            memo.title.as_str(),
             Self::format_timestamp(memo.created_at),
             Self::format_timestamp(memo.updated_at),
             Self::format_preview(memo.content.as_str(), preview_length)
