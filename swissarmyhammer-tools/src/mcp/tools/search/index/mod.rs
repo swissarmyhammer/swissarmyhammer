@@ -3,13 +3,12 @@
 //! This module provides the SearchIndexTool for indexing files for semantic search through the MCP protocol.
 
 use crate::mcp::search_types::{SearchIndexRequest, SearchIndexResponse};
-use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::time::Instant;
-use swissarmyhammer::search::{FileIndexer, SemanticConfig, VectorStorage};
+use swissarmyhammer_search::{SemanticConfig, indexer::FileIndexer, storage::VectorStorage};
 
 /// Tool for indexing files for semantic search
 #[derive(Default)]
@@ -109,29 +108,23 @@ impl McpTool for SearchIndexTool {
             }
         };
         let storage = VectorStorage::new(config.clone())
-            .map_err(|e| McpErrorHandler::handle_error(e, "initialize vector storage"))?;
+            .map_err(|e| McpError::internal_error(format!("Failed to initialize vector storage: {}", e), None))?;
 
         storage
             .initialize()
-            .map_err(|e| McpErrorHandler::handle_error(e, "initialize storage database"))?;
+            .map_err(|e| McpError::internal_error(format!("Failed to initialize storage database: {}", e), None))?;
 
         let mut indexer = {
             #[cfg(test)]
             {
                 FileIndexer::new_for_testing(storage).await.map_err(|e| {
-                    McpErrorHandler::handle_error(
-                        swissarmyhammer::SwissArmyHammerError::Semantic(e),
-                        "create file indexer for testing",
-                    )
+                    McpError::internal_error(format!("Failed to create file indexer for testing: {}", e), None)
                 })?
             }
             #[cfg(not(test))]
             {
                 FileIndexer::new(storage).await.map_err(|e| {
-                    McpErrorHandler::handle_error(
-                        swissarmyhammer::SwissArmyHammerError::Semantic(e),
-                        "create file indexer",
-                    )
+                    McpError::internal_error(format!("Failed to create file indexer: {}", e), None)
                 })?
             }
         };
@@ -145,10 +138,7 @@ impl McpTool for SearchIndexTool {
                 .index_glob(pattern, request.force)
                 .await
                 .map_err(|e| {
-                    McpErrorHandler::handle_error(
-                        swissarmyhammer::SwissArmyHammerError::Semantic(e),
-                        &format!("index pattern '{pattern}'"),
-                    )
+                    McpError::internal_error(format!("Failed to index pattern '{}': {}", pattern, e), None)
                 })?;
 
             match combined_report {

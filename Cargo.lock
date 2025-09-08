@@ -6769,6 +6769,7 @@ dependencies = [
  "swissarmyhammer-issues",
  "swissarmyhammer-issues-config",
  "swissarmyhammer-memoranda",
+ "swissarmyhammer-search",
  "swissarmyhammer-todo",
  "tempfile",
  "thiserror 1.0.69",

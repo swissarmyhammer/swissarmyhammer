@@ -43,9 +43,11 @@ pub mod tests;
 // Re-export main types
 pub use embedding::*;
 pub use error::{SearchError, SearchResult};
+pub use indexer::FileIndexer;
 pub use operations::SearchOperations;
 pub use parser::*;
-pub use storage::VectorStorage as SearchStorage;
+pub use searcher::SemanticSearcher;
+pub use storage::VectorStorage;
 pub use types::*;
 pub use utils::*;
 

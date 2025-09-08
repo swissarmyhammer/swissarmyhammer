@@ -3,13 +3,12 @@
 //! This module provides the SearchQueryTool for performing semantic search queries through the MCP protocol.
 
 use crate::mcp::search_types::{SearchQueryRequest, SearchQueryResponse, SearchResult};
-use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::time::Instant;
-use swissarmyhammer::search::{SearchQuery, SemanticConfig, SemanticSearcher, VectorStorage};
+use swissarmyhammer_search::{SearchQuery, SemanticConfig, searcher::SemanticSearcher, storage::VectorStorage};
 
 /// Tool for performing semantic search queries
 #[derive(Default)]
@@ -112,11 +111,11 @@ impl McpTool for SearchQueryTool {
             }
         };
         let storage = VectorStorage::new(config.clone())
-            .map_err(|e| McpErrorHandler::handle_error(e, "initialize vector storage"))?;
+            .map_err(|e| McpError::internal_error(format!("Failed to initialize vector storage: {}", e), None))?;
 
         storage
             .initialize()
-            .map_err(|e| McpErrorHandler::handle_error(e, "initialize storage database"))?;
+            .map_err(|e| McpError::internal_error(format!("Failed to initialize storage database: {}", e), None))?;
 
         let searcher = {
             #[cfg(test)]
@@ -124,19 +123,13 @@ impl McpTool for SearchQueryTool {
                 SemanticSearcher::new_for_testing(storage, config)
                     .await
                     .map_err(|e| {
-                        McpErrorHandler::handle_error(
-                            swissarmyhammer::SwissArmyHammerError::Semantic(e),
-                            "create semantic searcher for testing",
-                        )
+                        McpError::internal_error(format!("Failed to create semantic searcher for testing: {}", e), None)
                     })?
             }
             #[cfg(not(test))]
             {
                 SemanticSearcher::new(storage, config).await.map_err(|e| {
-                    McpErrorHandler::handle_error(
-                        swissarmyhammer::SwissArmyHammerError::Semantic(e),
-                        "create semantic searcher",
-                    )
+                    McpError::internal_error(format!("Failed to create semantic searcher: {}", e), None)
                 })?
             }
         };
@@ -150,10 +143,7 @@ impl McpTool for SearchQueryTool {
         };
 
         let search_results = searcher.search(&search_query).await.map_err(|e| {
-            McpErrorHandler::handle_error(
-                swissarmyhammer::SwissArmyHammerError::Semantic(e),
-                &format!("search for '{}'", request.query),
-            )
+            McpError::internal_error(format!("Failed to search for '{}': {}", request.query, e), None)
         })?;
 
         let duration = start_time.elapsed();

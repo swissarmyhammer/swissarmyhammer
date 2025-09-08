@@ -48,7 +48,7 @@ pub struct OutlineParser {
 impl OutlineParser {
     /// Create a new outline parser
     pub fn new(config: OutlineParserConfig) -> Result<Self> {
-        let mut parser = Parser::new();
+        let parser = Parser::new();
         let mut languages = HashMap::new();
 
         // Register Tree-sitter languages

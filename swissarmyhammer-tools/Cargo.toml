@@ -23,6 +23,7 @@ swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
+swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 
 # Async and JSON processing
 tokio = { workspace = true }

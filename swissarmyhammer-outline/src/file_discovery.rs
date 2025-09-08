@@ -265,6 +265,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    #[allow(dead_code)]
     fn create_test_files(temp_dir: &TempDir) -> Result<()> {
         // Create various test files
         fs::write(temp_dir.path().join("main.rs"), "fn main() {}").map_err(OutlineError::FileSystem)?;

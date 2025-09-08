@@ -89,3 +89,25 @@ use swissarmyhammer_search::{SearchQuery, SemanticConfig, SemanticSearcher, Vect
 
 ## Notes
 This completes a partially-done migration and removes another major dependency area from swissarmyhammer-tools → swissarmyhammer, supporting the broader goal of domain separation.
+
+## Proposed Solution
+
+Based on analysis of the current codebase, I will implement a systematic migration approach:
+
+### Analysis Results
+- ✅ `swissarmyhammer-search` domain crate exists with complete API
+- ✅ Main crate still has `/src/search/` directory with 9 files 
+- ✅ `swissarmyhammer-tools` imports from `swissarmyhammer::search` in 2 files:
+  - `src/mcp/tools/search/query/mod.rs:12` - imports `SearchQuery, SemanticConfig, SemanticSearcher, VectorStorage`
+  - `src/mcp/tools/search/index/mod.rs:12` - imports `FileIndexer, SemanticConfig, VectorStorage`
+- ✅ Domain crate exports all needed types through clean public API
+
+### Implementation Steps
+1. **Update swissarmyhammer-tools Cargo.toml** - Add `swissarmyhammer-search` dependency
+2. **Update imports** - Change from `swissarmyhammer::search::*` to `swissarmyhammer_search::*` 
+3. **Build verification** - Ensure swissarmyhammer-tools compiles and tests pass
+4. **Remove old search module** - Delete `/swissarmyhammer/src/search/` directory
+5. **Update main crate lib.rs** - Remove search module exports
+6. **Final verification** - Full workspace build and test validation
+
+The migration is straightforward since the domain crate already provides all required functionality with a compatible API.

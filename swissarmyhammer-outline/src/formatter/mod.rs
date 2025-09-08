@@ -5,6 +5,7 @@
 
 /// YAML formatter for outline structures
 pub struct YamlFormatter {
+    #[allow(dead_code)]
     config: FormatterConfig,
 }
 
