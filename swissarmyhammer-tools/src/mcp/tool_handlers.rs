@@ -223,55 +223,7 @@ impl ToolHandlers {
         }
     }
 
-    /// Handle the memo_delete tool operation.
-    ///
-    /// Deletes a memo by its ID.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The delete memo request containing the memo ID
-    ///
-    /// # Returns
-    ///
-    /// * `Result<CallToolResult, McpError>` - The tool call result
-    pub async fn handle_memo_delete(
-        &self,
-        request: DeleteMemoRequest,
-    ) -> std::result::Result<CallToolResult, McpError> {
-        tracing::debug!("Deleting memo with ID: {}", request.id);
 
-        let memo_id = match MemoTitle::new(request.id.clone()) {
-            Ok(id) => id,
-            Err(_) => {
-                return Err(McpError::invalid_params(
-                    format!("Invalid memo ID format: {}", request.id),
-                    None,
-                ))
-            }
-        };
-
-        let mut memo_storage = self.memo_storage.write().await;
-        match memo_storage.delete(&memo_id).await {
-            Ok(deleted) => {
-                if deleted {
-                    tracing::info!("Deleted memo {}", request.id);
-                    Ok(create_success_response(format!(
-                        "Successfully deleted memo with ID: {}",
-                        request.id
-                    )))
-                } else {
-                    Ok(create_success_response(format!(
-                        "Memo with ID {} was not found",
-                        request.id
-                    )))
-                }
-            }
-            Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Storage(e.to_string()),
-                "delete memo",
-            )),
-        }
-    }
 
     /// Handle the memo_list tool operation.
     ///

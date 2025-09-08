@@ -56,21 +56,7 @@ pub struct UpdateMemoRequest {
     pub content: String,
 }
 
-/// Request to delete a memo
-///
-/// # Examples
-///
-/// Delete a memo by its ULID:
-/// ```ignore
-/// DeleteMemoRequest {
-///     id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-/// }
-/// ```
-#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
-pub struct DeleteMemoRequest {
-    /// ULID identifier of the memo to delete
-    pub id: String,
-}
+
 
 /// Request to search memos
 ///
@@ -162,17 +148,7 @@ mod tests {
         assert_eq!(request.content, deserialized.content);
     }
 
-    #[test]
-    fn test_delete_memo_request_serialization() {
-        let request = DeleteMemoRequest {
-            id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-        };
 
-        let json = serde_json::to_string(&request).unwrap();
-        let deserialized: DeleteMemoRequest = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(request.id, deserialized.id);
-    }
 
     #[test]
     fn test_search_memos_request_serialization() {

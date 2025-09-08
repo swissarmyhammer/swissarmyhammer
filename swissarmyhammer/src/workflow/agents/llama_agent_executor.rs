@@ -452,17 +452,7 @@ fn get_complete_sah_tools() -> Vec<serde_json::Value> {
                 "required": ["id", "content"]
             }
         }),
-        json!({
-            "name": "memo_delete",
-            "description": "Delete a memo by its unique ID",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string", "description": "ULID identifier of the memo to delete"}
-                },
-                "required": ["id"]
-            }
-        }),
+
         json!({
             "name": "memo_search",
             "description": "Search memos by query string",
@@ -1819,7 +1809,6 @@ mod tests {
                                     "memo_list",
                                     "memo_get",
                                     "memo_update",
-                                    "memo_delete",
                                     "notify_create",
                                     "outline_generate",
                                     "search_index",

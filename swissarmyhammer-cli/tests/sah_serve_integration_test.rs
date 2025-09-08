@@ -29,7 +29,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "memo_list",
     "memo_get",
     "memo_update",
-    "memo_delete",
     "notify_create",
     "outline_generate",
     "search_index",

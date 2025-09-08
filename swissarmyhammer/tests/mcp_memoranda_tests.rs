@@ -174,140 +174,13 @@ mod test_utils {
         Ok(())
     }
 
-    /// Clean up all existing memos to ensure clean test state
+    /// Cleanup function - no-op since memos are now permanent
     pub fn cleanup_all_memos(
-        stdin: &mut std::process::ChildStdin,
-        reader: &mut BufReader<std::process::ChildStdout>,
+        _stdin: &mut std::process::ChildStdin,
+        _reader: &mut BufReader<std::process::ChildStdout>,
     ) -> std::io::Result<()> {
-        let mut total_deleted = 0;
-        let max_attempts = 5; // Prevent infinite loops
-
-        for attempt in 1..=max_attempts {
-            eprintln!("CLEANUP: Attempt {} to clean memos", attempt);
-            println!("CLEANUP DEBUG: Attempt {} to clean memos", attempt);
-
-            // List all memos
-            let list_request = create_tool_request(999 + attempt, "memo_list", json!({}));
-            send_request(stdin, list_request)?;
-            let list_response = read_response(reader)?;
-
-            if list_response.get("error").is_some() {
-                eprintln!(
-                    "CLEANUP: List request failed: {:?}",
-                    list_response.get("error")
-                );
-                return Ok(()); // If list fails, assume no memos to clean
-            }
-
-            let response_text = list_response["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap_or("");
-
-            eprintln!(
-                "CLEANUP: Attempt {}: Listed memos: {}",
-                attempt, response_text
-            );
-            println!(
-                "CLEANUP DEBUG: Attempt {}: Listed memos: {}",
-                attempt, response_text
-            );
-
-            if response_text.contains("Found 0 memos") || response_text.contains("No memos found") {
-                eprintln!("CLEANUP: No memos found on attempt {}", attempt);
-                break;
-            }
-
-            // Extract memo titles from the response text and delete them
-            // Format is: • Title (Title) - use title as ID since that's how the system works
-            let mut request_id = 1000 + (attempt * 100);
-            let mut deletion_count = 0;
-            let mut memo_ids = Vec::new();
-
-            // First extract all memo titles (which serve as IDs)
-            for line in response_text.lines() {
-                if line.trim().starts_with('•') {
-                    // Extract title between • and ( - handle Unicode properly
-                    // Use strip_prefix to safely remove the bullet point and any whitespace
-                    let after_bullet = line.strip_prefix('•').unwrap_or(line).trim();
-                    if let Some(title_end) = after_bullet.find('(') {
-                        let title = &after_bullet[..title_end];
-                        let title = title.trim();
-                        if !title.is_empty() {
-                            memo_ids.push(title.to_string());
-                            eprintln!("CLEANUP: Extracted title/ID: '{}'", title);
-                        }
-                    }
-                }
-            }
-
-            eprintln!(
-                "CLEANUP: Found {} memo IDs to delete: {:?}",
-                memo_ids.len(),
-                memo_ids
-            );
-            println!(
-                "CLEANUP DEBUG: Found {} memo IDs to delete: {:?}",
-                memo_ids.len(),
-                memo_ids
-            );
-
-            // Delete each memo
-            for memo_id in memo_ids {
-                eprintln!("CLEANUP: Attempting to delete memo ID: '{}'", memo_id);
-                println!("CLEANUP DEBUG: Attempting to delete memo ID: '{}'", memo_id);
-
-                let delete_request = create_tool_request(
-                    request_id,
-                    "memo_delete",
-                    json!({
-                        "id": memo_id
-                    }),
-                );
-                send_request(stdin, delete_request)?;
-                let delete_response = read_response(reader)?;
-
-                if delete_response.get("error").is_some() {
-                    eprintln!(
-                        "CLEANUP: Delete failed for '{}': {:?}",
-                        memo_id,
-                        delete_response.get("error")
-                    );
-                } else {
-                    let success_text = delete_response["result"]["content"][0]["text"]
-                        .as_str()
-                        .unwrap_or("");
-                    eprintln!(
-                        "CLEANUP: Delete successful for '{}': {}",
-                        memo_id, success_text
-                    );
-                    deletion_count += 1;
-                }
-                request_id += 1;
-
-                // Small delay to prevent overwhelming the server
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-
-            total_deleted += deletion_count;
-            eprintln!(
-                "CLEANUP: Attempt {}: Successfully deleted {} memos",
-                attempt, deletion_count
-            );
-
-            if deletion_count == 0 {
-                eprintln!("CLEANUP: No memos deleted on attempt {}, stopping", attempt);
-                break;
-            }
-        }
-
-        eprintln!(
-            "CLEANUP: Total deleted {} memos across all attempts",
-            total_deleted
-        );
-        println!(
-            "CLEANUP DEBUG: Total deleted {} memos across all attempts",
-            total_deleted
-        );
+        eprintln!("CLEANUP: Memos are permanent - no cleanup performed");
+        println!("CLEANUP DEBUG: Memos are permanent - no cleanup performed");
         Ok(())
     }
 
@@ -422,18 +295,7 @@ async fn test_mcp_memo_create() {
         .unwrap()
         .contains("Successfully created memo"));
 
-    // Clean up the memo we created (use title as ID)
-    let delete_request = create_tool_request(
-        2,
-        "memo_delete",
-        json!({
-            "id": unique_title
-        }),
-    );
-
-    send_request(&mut stdin, delete_request).unwrap();
-    let delete_response = read_response(&mut reader).unwrap();
-    assert!(delete_response.get("error").is_none());
+    // Memo cleanup removed - memos are now permanent
 }
 
 /// Test memo creation with empty title and content
@@ -516,18 +378,7 @@ async fn test_mcp_memo_create_unicode() {
     assert!(text.contains("🚀 Unicode Test with 中文"));
     assert!(text.contains("émojis 🎉"));
 
-    // Clean up the memo we created (use title as ID)
-    let delete_request = create_tool_request(
-        2,
-        "memo_delete",
-        json!({
-            "id": unique_title
-        }),
-    );
-
-    send_request(&mut stdin, delete_request).unwrap();
-    let delete_response = read_response(&mut reader).unwrap();
-    assert!(delete_response.get("error").is_none());
+    // Memo cleanup removed - memos are now permanent
 }
 
 /// Test memo retrieval via MCP
@@ -594,18 +445,7 @@ async fn test_mcp_memo_get() {
     assert!(text.contains("Content for get test"));
     assert!(text.contains(&memo_id));
 
-    // Clean up the memo we created (use title as ID)
-    let delete_request = create_tool_request(
-        3,
-        "memo_delete",
-        json!({
-            "id": "Test Get Memo"
-        }),
-    );
-
-    send_request(&mut stdin, delete_request).unwrap();
-    let delete_response = read_response(&mut reader).unwrap();
-    assert!(delete_response.get("error").is_none());
+    // Memo cleanup removed - memos are now permanent
 }
 
 /// Test memo get with invalid ID
@@ -739,101 +579,10 @@ async fn test_mcp_memo_update() {
     assert!(text.contains("Updated content via MCP"));
     assert!(text.contains("Update Test Memo")); // Title should remain same
 
-    // Clean up the memo we created (use title as ID)
-    let delete_request = create_tool_request(
-        3,
-        "memo_delete",
-        json!({
-            "id": "Update Test Memo"
-        }),
-    );
-
-    send_request(&mut stdin, delete_request).unwrap();
-    let delete_response = read_response(&mut reader).unwrap();
-    assert!(delete_response.get("error").is_none());
+    // Memo cleanup removed - memos are now permanent
 }
 
-/// Test memo delete via MCP
-#[tokio::test]
-#[serial]
-async fn test_mcp_memo_delete() {
-    let mut server = start_mcp_server().unwrap();
-    wait_for_server_ready().await;
 
-    let mut stdin = server.child.stdin.take().unwrap();
-    let stdout = server.child.stdout.take().unwrap();
-    let mut reader = BufReader::new(stdout);
-
-    // Initialize MCP connection
-    initialize_mcp_connection(&mut stdin, &mut reader).unwrap();
-
-    // Clean up any existing memos to ensure clean test state
-    cleanup_all_memos(&mut stdin, &mut reader).unwrap();
-
-    // Create a memo first
-    let create_request = create_tool_request(
-        1,
-        "memo_create",
-        json!({
-            "title": "Delete Test Memo",
-            "content": "To be deleted"
-        }),
-    );
-
-    send_request(&mut stdin, create_request).unwrap();
-    let create_response = read_response(&mut reader).unwrap();
-    let memo_id = extract_memo_id_from_response(
-        create_response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap(),
-    );
-
-    // Delete the memo
-    let delete_request = create_tool_request(
-        2,
-        "memo_delete",
-        json!({
-            "id": memo_id
-        }),
-    );
-
-    send_request(&mut stdin, delete_request).unwrap();
-    let delete_response = read_response(&mut reader).unwrap();
-
-    assert!(delete_response.get("error").is_none());
-    let result = &delete_response["result"];
-    assert!(result["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("Successfully deleted memo"));
-
-    // Verify memo is actually deleted by trying to get it
-    let get_request = create_tool_request(
-        3,
-        "memo_get",
-        json!({
-            "id": memo_id
-        }),
-    );
-
-    send_request(&mut stdin, get_request).unwrap();
-    let get_response = read_response(&mut reader).unwrap();
-
-    // Should return success response with "not found" message since memo is deleted
-    assert!(get_response.get("error").is_none());
-    let result = &get_response["result"];
-    assert_eq!(
-        result
-            .get("is_error")
-            .or(result.get("isError"))
-            .unwrap_or(&serde_json::Value::Bool(false)),
-        &serde_json::Value::Bool(false)
-    );
-    assert!(result["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("Memo not found"));
-}
 
 /// Test memo list via MCP
 #[tokio::test]
@@ -1127,18 +876,7 @@ async fn test_mcp_memo_large_content() {
         .unwrap()
         .contains("Large Content Memo"));
 
-    // Clean up the memo we created (use title as ID)
-    let delete_request = create_tool_request(
-        3,
-        "memo_delete",
-        json!({
-            "id": unique_title
-        }),
-    );
-
-    send_request(&mut stdin, delete_request).unwrap();
-    let delete_response = read_response(&mut reader).unwrap();
-    assert!(delete_response.get("error").is_none());
+    // Memo cleanup removed - memos are now permanent
 }
 
 /// Test MCP error handling for malformed requests
@@ -1224,7 +962,6 @@ async fn test_mcp_memo_tool_list() {
         "memo_create",
         "memo_get",
         "memo_update",
-        "memo_delete",
         "memo_list",
         "memo_get_all_context",
     ];
@@ -1346,53 +1083,8 @@ mod stress_tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
 
-        // Delete all memos
-        for (i, memo_id) in memo_ids.iter().enumerate() {
-            let delete_request = create_tool_request(
-                i as i64 + (num_memos * 2) + 1,
-                "memo_delete",
-                json!({
-                    "id": memo_id
-                }),
-            );
-
-            if let Err(e) = send_request(&mut stdin, delete_request) {
-                panic!("Failed to send delete request for memo {memo_id}: {e}");
-            }
-
-            let response = match read_response(&mut reader) {
-                Ok(resp) => resp,
-                Err(e) => panic!("Failed to read delete response for memo {memo_id}: {e}"),
-            };
-
-            assert!(
-                response.get("error").is_none(),
-                "Failed to delete memo {memo_id}: {:?}",
-                response.get("error")
-            );
-
-            // Small delay to prevent server overload
-            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-        }
-
-        // Verify all memos are deleted
-        let list_request = create_tool_request(num_memos * 3 + 1, "memo_list", json!({}));
-        send_request(&mut stdin, list_request).unwrap();
-        let list_response = read_response(&mut reader).unwrap();
-
-        let text = list_response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap();
-        println!("DEBUG performance test: text = '{}'", text);
-        println!(
-            "DEBUG performance test: full response = {}",
-            serde_json::to_string_pretty(&list_response).unwrap()
-        );
-        assert!(
-            text.contains("No memos found") || text.contains("Found 0 memos"),
-            "Expected empty memo list, but got: '{}'",
-            text
-        );
+        // Memo deletion removed - memos are now permanent
+        println!("DEBUG performance test: Memos are permanent, skipping deletion verification");
     }
 
     /// Performance test: Search performance is disabled

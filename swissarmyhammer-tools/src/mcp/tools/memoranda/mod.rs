@@ -19,11 +19,10 @@
 //!
 //! ## Tool Categories
 //!
-//! ### CRUD Operations
+//! ### Core Operations
 //! - **create**: Generate new memos with titles and content
 //! - **get**: Retrieve individual memos by ULID
 //! - **update**: Modify existing memo content (title remains unchanged)
-//! - **delete**: Permanently remove memos (irreversible operation)
 //!
 //! ### Discovery & Retrieval
 //! - **list**: Get all memos with metadata previews
@@ -45,7 +44,6 @@
 //! - Full-text search indexing for efficient queries
 
 pub mod create;
-pub mod delete;
 pub mod get;
 pub mod get_all_context;
 pub mod list;
@@ -60,5 +58,4 @@ pub fn register_memoranda_tools(registry: &mut ToolRegistry) {
     registry.register(get_all_context::GetAllContextMemoTool::new());
     registry.register(get::GetMemoTool::new());
     registry.register(update::UpdateMemoTool::new());
-    registry.register(delete::DeleteMemoTool::new());
 }

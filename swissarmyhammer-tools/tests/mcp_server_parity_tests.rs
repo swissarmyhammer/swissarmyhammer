@@ -89,7 +89,6 @@ fn get_http_static_tools() -> Vec<String> {
         "memo_list",
         "memo_get",
         "memo_update",
-        "memo_delete",
         "memo_get_all_context",
         "search_index",
         "search_query",
@@ -141,8 +140,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     // Test HTTP static definition
     let http_tools = get_http_static_tools();
     assert!(
-        http_tools.len() >= 30,
-        "HTTP static definition should have at least 30 tools, got {}. Tools: {:?}",
+        http_tools.len() >= 29,
+        "HTTP static definition should have at least 29 tools, got {}. Tools: {:?}",
         http_tools.len(),
         http_tools
     );
@@ -150,8 +149,8 @@ async fn test_mcp_tool_definitions_return_sufficient_tools() -> Result<()> {
     // Test STDIN registry
     let stdin_tools = get_stdin_registry_tools();
     assert!(
-        stdin_tools.len() >= 30,
-        "STDIN registry should have at least 30 tools, got {}. Tools: {:?}",
+        stdin_tools.len() >= 29,
+        "STDIN registry should have at least 29 tools, got {}. Tools: {:?}",
         stdin_tools.len(),
         stdin_tools
     );

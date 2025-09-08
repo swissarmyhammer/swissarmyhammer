@@ -361,6 +361,5 @@ Key operations:
 - `memo_get()` - Retrieve specific memos
 - `memo_list()` - List all memos with metadata
 - `memo_update()` - Modify existing memo content
-- `memo_delete()` - Remove memos permanently
 
 The memoranda system provides a foundation for building institutional knowledge and supporting effective development workflows through organized documentation.

@@ -41,7 +41,6 @@ SwissArmyHammer exposes several categories of MCP tools:
 - `memo_search` - Search memo content
 - `memo_get` - Retrieve specific memos
 - `memo_update` - Modify memo content
-- `memo_delete` - Remove memos
 
 **Search Tools**:
 - `search_index` - Index files for semantic search
