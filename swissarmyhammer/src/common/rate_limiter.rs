@@ -3,6 +3,7 @@
 //! This module provides configurable rate limiting for MCP operations and other API endpoints
 //! using a token bucket algorithm with per-operation and per-client limits.
 
+use crate::error::CommonError;
 use crate::{Result, SwissArmyHammerError};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -168,11 +169,13 @@ impl RateLimiter {
 
         if !global_bucket.try_consume(cost) {
             let wait_time = global_bucket.time_until_token();
-            return Err(SwissArmyHammerError::Other(format!(
-                "Global rate limit exceeded for operation '{}'. Retry after {}ms",
-                operation,
-                wait_time.as_millis()
-            )));
+            return Err(SwissArmyHammerError::Common(CommonError::Other {
+                message: format!(
+                    "Global rate limit exceeded for operation '{}'. Retry after {}ms",
+                    operation,
+                    wait_time.as_millis()
+                )
+            }));
         }
 
         // Check per-client rate limit
@@ -183,11 +186,13 @@ impl RateLimiter {
 
         if !client_bucket.try_consume(cost) {
             let wait_time = client_bucket.time_until_token();
-            return Err(SwissArmyHammerError::Other(format!(
-                "Client rate limit exceeded for '{}'. Retry after {}ms",
-                client_id,
-                wait_time.as_millis()
-            )));
+            return Err(SwissArmyHammerError::Common(CommonError::Other {
+                message: format!(
+                    "Client rate limit exceeded for '{}'. Retry after {}ms",
+                    client_id,
+                    wait_time.as_millis()
+                )
+            }));
         }
 
         Ok(())

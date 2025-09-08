@@ -28,6 +28,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 
+# SwissArmyHammer common functionality
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
 # Template engine
 liquid = { workspace = true }
 liquid-core = { workspace = true }
@@ -93,7 +96,6 @@ git2 = { workspace = true }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 
 # Common utilities
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 
 # Configuration support
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }

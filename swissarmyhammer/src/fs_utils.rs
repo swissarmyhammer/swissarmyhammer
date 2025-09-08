@@ -673,7 +673,7 @@ pub mod tests {
         let result = utils.validate_file_path("");
         assert!(result.is_err());
 
-        if let Err(SwissArmyHammerError::InvalidFilePath { path, suggestion }) = result {
+        if let Err(SwissArmyHammerError::Common(CommonError::InvalidFilePath { path, suggestion })) = result {
             assert_eq!(path, "");
             assert!(suggestion.contains("cannot be empty"));
         } else {
@@ -684,7 +684,7 @@ pub mod tests {
         let result = utils.validate_file_path("   ");
         assert!(result.is_err());
 
-        if let Err(SwissArmyHammerError::InvalidFilePath { path, suggestion }) = result {
+        if let Err(SwissArmyHammerError::Common(CommonError::InvalidFilePath { path, suggestion })) = result {
             assert_eq!(path, "   ");
             assert!(suggestion.contains("cannot be empty"));
         } else {
@@ -701,7 +701,7 @@ pub mod tests {
         let result = utils.validate_file_path("nonexistent.md");
         assert!(result.is_err());
 
-        if let Err(SwissArmyHammerError::FileNotFound { path, suggestion }) = result {
+        if let Err(SwissArmyHammerError::Common(CommonError::FileNotFound { path, suggestion })) = result {
             assert_eq!(path, "nonexistent.md");
             assert!(suggestion.contains("Check the file path"));
         } else {
@@ -722,7 +722,7 @@ pub mod tests {
         let result = utils.validate_file_path("test_directory");
         assert!(result.is_err());
 
-        if let Err(SwissArmyHammerError::NotAFile { path, suggestion }) = result {
+        if let Err(SwissArmyHammerError::Common(CommonError::NotAFile { path, suggestion })) = result {
             assert_eq!(path, "test_directory");
             assert!(suggestion.contains("directory"));
             assert!(suggestion.contains("Specify a file path"));
@@ -792,11 +792,11 @@ pub mod tests {
         let result = utils.validate_file_path("restricted_file.md");
         assert!(result.is_err());
 
-        if let Err(SwissArmyHammerError::PermissionDenied {
+        if let Err(SwissArmyHammerError::Common(CommonError::PermissionDenied {
             path,
             error,
             suggestion,
-        }) = result
+        })) = result
         {
             assert_eq!(path, "restricted_file.md");
             assert!(error.contains("Permission denied"));
@@ -867,11 +867,11 @@ pub mod tests {
         let result = utils.validate_file_path("corrupted_file.md");
         assert!(result.is_err());
 
-        if let Err(SwissArmyHammerError::PermissionDenied {
+        if let Err(SwissArmyHammerError::Common(CommonError::PermissionDenied {
             path,
             error,
             suggestion,
-        }) = result
+        })) = result
         {
             assert_eq!(path, "corrupted_file.md");
             assert!(error.contains("Invalid UTF-8"));

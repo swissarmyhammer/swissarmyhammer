@@ -88,7 +88,7 @@ impl VectorStorage {
 
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(SwissArmyHammerError::Io)?;
+            std::fs::create_dir_all(parent)?;
         }
 
         // Create DuckDB connection

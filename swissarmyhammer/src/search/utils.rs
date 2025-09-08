@@ -107,7 +107,7 @@ impl SemanticUtils {
     /// Ensure the database directory exists
     pub fn ensure_database_dir() -> Result<PathBuf> {
         let db_dir = Self::get_database_dir()?;
-        std::fs::create_dir_all(&db_dir).map_err(crate::error::SwissArmyHammerError::Io)?;
+        std::fs::create_dir_all(&db_dir)?;
         Ok(db_dir)
     }
 
@@ -163,7 +163,7 @@ impl FileHasher {
     /// Calculate MD5 hash of file content
     pub fn hash_file(path: impl AsRef<Path>) -> Result<ContentHash> {
         let path = path.as_ref();
-        let content = std::fs::read(path).map_err(crate::error::SwissArmyHammerError::Io)?;
+        let content = std::fs::read(path)?;
         let hash = Self::hash_content(&content);
         Ok(hash)
     }

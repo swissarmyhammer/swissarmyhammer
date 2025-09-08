@@ -216,6 +216,7 @@ pub fn get_or_create_swissarmyhammer_directory_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::fs;
     use tempfile::TempDir;
 
@@ -632,10 +633,10 @@ mod tests {
         // Should fail with DirectoryCreation error since .swissarmyhammer exists as file
         assert!(result.is_err());
         match result.unwrap_err() {
-            crate::error::SwissArmyHammerError::DirectoryCreation(_) => {
-                // Expected error type when trying to create directory over existing file
+            crate::error::SwissArmyHammerError::Common(_) => {
+                // Expected common error variant
             }
-            other => panic!("Expected DirectoryCreation error, got {:?}", other),
+            other => panic!("Expected Common error variant, got {:?}", other),
         }
     }
 

@@ -4,7 +4,7 @@
 //! the SwissArmyHammer system. This centralizes the abort file creation logic to
 //! eliminate duplication between different components.
 
-use crate::{Result, SwissArmyHammerError};
+use crate::Result;
 use std::fs;
 use std::path::Path;
 
@@ -34,30 +34,21 @@ pub fn create_abort_file<P: AsRef<Path>>(work_dir: P, reason: &str) -> Result<()
     let work_dir = work_dir.as_ref();
 
     // Use centralized path utility to get .swissarmyhammer directory
-    let sah_dir = if work_dir
-        == std::env::current_dir().map_err(|e| SwissArmyHammerError::Io {
-            message: e.to_string(),
-        })? {
+    let sah_dir = if work_dir == std::env::current_dir()? {
         // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir().map_err(|e| SwissArmyHammerError::Io {
-            message: e.to_string(),
-        })?
+        crate::utils::paths::get_swissarmyhammer_dir()?
     } else {
         // For other work directories, maintain the same behavior
         let sah_dir = work_dir.join(".swissarmyhammer");
         if !sah_dir.exists() {
-            fs::create_dir_all(&sah_dir).map_err(|e| SwissArmyHammerError::Io {
-                message: e.to_string(),
-            })?;
+            fs::create_dir_all(&sah_dir)?;
         }
         sah_dir
     };
 
     // Create abort file with reason
     let abort_file_path = sah_dir.join(".abort");
-    fs::write(&abort_file_path, reason).map_err(|e| SwissArmyHammerError::Io {
-        message: e.to_string(),
-    })?;
+    fs::write(&abort_file_path, reason)?;
 
     tracing::info!("Created abort file: {}", abort_file_path.display());
     Ok(())
@@ -113,14 +104,9 @@ pub fn abort_file_exists<P: AsRef<Path>>(work_dir: P) -> bool {
 /// * `Err(SwissArmyHammerError)` if there was an error reading the file
 pub fn read_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<Option<String>> {
     let work_dir = work_dir.as_ref();
-    let sah_dir = if work_dir
-        == std::env::current_dir().map_err(|e| SwissArmyHammerError::Io {
-            message: e.to_string(),
-        })? {
+    let sah_dir = if work_dir == std::env::current_dir()? {
         // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir().map_err(|e| SwissArmyHammerError::Io {
-            message: e.to_string(),
-        })?
+        crate::utils::paths::get_swissarmyhammer_dir()?
     } else {
         // For other work directories, maintain the same behavior
         work_dir.join(".swissarmyhammer")
@@ -131,9 +117,7 @@ pub fn read_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let contents = fs::read_to_string(&abort_file_path).map_err(|e| SwissArmyHammerError::Io {
-        message: e.to_string(),
-    })?;
+    let contents = fs::read_to_string(&abort_file_path)?;
     Ok(Some(contents))
 }
 
@@ -148,14 +132,9 @@ pub fn read_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<Option<String>> {
 /// * `Err(SwissArmyHammerError)` if there was an error removing the file
 pub fn remove_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<bool> {
     let work_dir = work_dir.as_ref();
-    let sah_dir = if work_dir
-        == std::env::current_dir().map_err(|e| SwissArmyHammerError::Io {
-            message: e.to_string(),
-        })? {
+    let sah_dir = if work_dir == std::env::current_dir()? {
         // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir().map_err(|e| SwissArmyHammerError::Io {
-            message: e.to_string(),
-        })?
+        crate::utils::paths::get_swissarmyhammer_dir()?
     } else {
         // For other work directories, maintain the same behavior
         work_dir.join(".swissarmyhammer")
@@ -166,9 +145,7 @@ pub fn remove_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<bool> {
         return Ok(false);
     }
 
-    fs::remove_file(&abort_file_path).map_err(|e| SwissArmyHammerError::Io {
-        message: e.to_string(),
-    })?;
+    fs::remove_file(&abort_file_path)?;
     tracing::info!("Removed abort file: {}", abort_file_path.display());
     Ok(true)
 }

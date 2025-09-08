@@ -137,3 +137,66 @@ Move core error types to `swissarmyhammer-common` where they can be shared by al
 This is a foundational change that will enable other migration completions. Many incomplete migrations are blocked by this error dependency. Once complete, it will significantly reduce the coupling between swissarmyhammer-tools and the main crate.
 
 Moving errors to `swissarmyhammer-common` follows the pattern of other shared utilities and makes sense architecturally since errors are truly cross-cutting concerns.
+
+## Proposed Solution
+
+Based on my analysis of the current error usage, I propose moving the core error types from the main `swissarmyhammer` crate to `swissarmyhammer-common` to break the circular dependency.
+
+### Current State Analysis Summary
+
+**Main Dependencies Found:**
+- **swissarmyhammer-tools**: Extensively uses `SwissArmyHammerError` and `Result` in:
+  - `src/mcp/error_handling.rs` - Error handling and retry logic
+  - `src/mcp/shared_utils.rs` - MCP error conversion and validation
+  - `src/mcp/file_watcher.rs` - File watching operations
+  - `src/mcp/server.rs` - MCP server operations
+  - `src/mcp/tool_handlers.rs` - Tool execution
+- **swissarmyhammer-cli**: Uses errors in flow commands and parameter handling
+- **Domain crates with main crate dependency**: swissarmyhammer-search, swissarmyhammer-config
+- **Common crate**: Already has basic error types but much simpler than main crate
+
+**Key Error Categories Identified:**
+1. **Core Infrastructure Errors** (move to common):
+   - `Io`, `Serialization`, `Json`
+   - `NotInGitRepository`, `DirectoryCreation`, `DirectoryAccess`
+   - File operation errors (`FileNotFound`, `NotAFile`, `PermissionDenied`, etc.)
+   - `Other`, `Context`
+   - `Result<T>` type alias
+
+2. **Domain-Specific Errors** (keep in main crate):
+   - Prompt/Template errors
+   - Workflow errors
+   - Semantic search errors
+   - Plan command errors
+   - Git-specific errors (complex git2 integration)
+   - Issue/Memo domain errors
+
+3. **Conversion Infrastructure** (add to common):
+   - Error conversion traits
+   - Enhanced error context utilities
+
+### Implementation Strategy
+
+**Phase 1: Extend swissarmyhammer-common error system**
+- Move core infrastructure error types from main crate to common crate
+- Add `Result<T>` type alias to common crate
+- Add error conversion utilities and context traits
+- Ensure backward compatibility with existing common error types
+
+**Phase 2: Update main crate**
+- Keep domain-specific errors in main crate
+- Add dependency on swissarmyhammer-common for core errors
+- Re-export common errors for backward compatibility
+- Update error conversions to use common types
+
+**Phase 3: Update consuming crates**
+- Update swissarmyhammer-tools to import core errors from common crate
+- Update other crates that depend on main crate errors
+- Remove main crate dependencies where only errors were needed
+
+**Phase 4: Testing and verification**
+- Ensure all error handling behavior is preserved
+- Verify no circular dependencies exist
+- Test error messages and conversion chains
+
+This approach will eliminate the major coupling point while preserving all existing error handling functionality.

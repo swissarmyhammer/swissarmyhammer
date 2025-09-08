@@ -26,6 +26,7 @@
 
 use crate::common::{Parameter, ParameterProvider, ParameterType};
 use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
+use crate::error::CommonError;
 use crate::{Result, SwissArmyHammerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -992,10 +993,10 @@ impl PromptLoader {
         let mut prompts = Vec::new();
 
         if !path.exists() {
-            return Err(SwissArmyHammerError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Directory not found: {}", path.display()),
-            )));
+            return Err(SwissArmyHammerError::Common(CommonError::FileNotFound {
+                path: path.display().to_string(),
+                suggestion: "Check that the directory path is correct and accessible".to_string(),
+            }));
         }
 
         for entry in walkdir::WalkDir::new(path)

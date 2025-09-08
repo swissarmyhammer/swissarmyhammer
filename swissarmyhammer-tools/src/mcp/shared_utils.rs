@@ -178,9 +178,7 @@ impl McpErrorHandler {
                     McpError::internal_error(msg, None)
                 }
             }
-            SwissArmyHammerError::Context { message, .. } => {
-                McpError::internal_error(message, None)
-            }
+
             SwissArmyHammerError::Semantic(err) => {
                 McpError::internal_error(format!("Semantic search error: {err}"), None)
             }
@@ -227,26 +225,29 @@ impl McpErrorHandler {
                     swissarmyhammer_common::SwissArmyHammerError::NotInGitRepository => {
                         SwissArmyHammerError::Other("Not in a Git repository".to_string())
                     }
-                    swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(io_err) => {
-                        SwissArmyHammerError::Io(io_err)
+                    swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(error_msg) => {
+                        SwissArmyHammerError::Other(format!("Directory creation error: {}", error_msg))
                     }
                     swissarmyhammer_common::SwissArmyHammerError::InvalidPath { path } => {
                         SwissArmyHammerError::Other(format!("Invalid path: {}", path.display()))
                     }
-                    swissarmyhammer_common::SwissArmyHammerError::PermissionDenied { path } => {
+                    swissarmyhammer_common::SwissArmyHammerError::PermissionDenied { path, .. } => {
                         SwissArmyHammerError::Other(format!(
                             "Permission denied accessing: {}",
-                            path.display()
+                            path
                         ))
                     }
-                    swissarmyhammer_common::SwissArmyHammerError::Io { message } => {
-                        SwissArmyHammerError::Other(format!("I/O error: {}", message))
+                    swissarmyhammer_common::SwissArmyHammerError::Io(io_error) => {
+                        SwissArmyHammerError::Other(format!("I/O error: {}", io_error))
                     }
                     swissarmyhammer_common::SwissArmyHammerError::Semantic { message } => {
                         SwissArmyHammerError::Other(format!("Semantic error: {}", message))
                     }
                     swissarmyhammer_common::SwissArmyHammerError::Other { message } => {
                         SwissArmyHammerError::Other(message)
+                    }
+                    _ => {
+                        SwissArmyHammerError::Other(format!("Common error: {}", common_err))
                     }
                 };
                 Self::handle_error(main_err, operation)
