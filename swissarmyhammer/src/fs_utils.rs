@@ -5,7 +5,7 @@
 //! `std::fs` usage.
 
 use crate::common::error_context::IoResultExt;
-use crate::error::{CommonError, Result, SwissArmyHammerError};
+use crate::error::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -455,6 +455,7 @@ impl Default for FileSystemUtils {
 /// Test utilities and mock implementations for file system operations
 pub mod tests {
     use super::*;
+    use crate::error::CommonError;
     use std::collections::HashMap;
     use std::sync::Mutex;
 

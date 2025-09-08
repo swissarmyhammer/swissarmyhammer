@@ -445,16 +445,8 @@ impl McpTool for EditFileTool {
             replace_all,
         )?;
 
-        // Create detailed success response
-        let success_message = format!(
-            "Successfully edited file: {} | {} replacements made | {} bytes written | Encoding: {} | Line endings: {} | Metadata preserved: {}",
-            request.file_path,
-            edit_result.replacements_made,
-            edit_result.bytes_written,
-            edit_result.encoding_detected,
-            edit_result.line_endings_preserved,
-            edit_result.metadata_preserved
-        );
+        // Create simple success response
+        let success_message = "OK".to_string();
 
         debug!(
             path = %request.file_path,
@@ -904,12 +896,7 @@ mod tests {
             _ => panic!("Expected text content in response"),
         };
 
-        assert!(response_text.contains("Successfully edited file"));
-        assert!(response_text.contains(&*test_file.to_string_lossy()));
-        assert!(response_text.contains("1 replacements made"));
-        assert!(response_text.contains("Encoding:"));
-        assert!(response_text.contains("Line endings:"));
-        assert!(response_text.contains("Metadata preserved:"));
+        assert_eq!(response_text, "OK");
     }
 
     #[test]

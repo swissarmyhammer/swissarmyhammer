@@ -190,10 +190,7 @@ impl McpTool for WriteFileTool {
         // Perform atomic write operation
         let bytes_written = Self::write_file_atomic(&path_buf, &request.content)?;
 
-        let success_message = format!(
-            "Successfully wrote {} bytes to {}",
-            bytes_written, request.file_path
-        );
+        let success_message = "OK".to_string();
 
         debug!(
             path = %request.file_path,
@@ -581,8 +578,6 @@ mod tests {
             _ => panic!("Expected text content in response"),
         };
 
-        assert!(response_text.contains("Successfully wrote"));
-        assert!(response_text.contains(&test_content.len().to_string()));
-        assert!(response_text.contains(&*test_file.to_string_lossy()));
+        assert_eq!(response_text, "OK");
     }
 }
