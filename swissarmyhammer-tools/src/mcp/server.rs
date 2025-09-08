@@ -7,7 +7,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
+use crate::mcp::file_watcher::{FileWatcher, McpFileWatcherCallback};
+
 use swissarmyhammer::workflow::{
     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,
@@ -642,50 +643,7 @@ impl McpServer {
     }
 }
 
-/// Callback implementation for file watcher that handles prompt reloading
-#[derive(Clone)]
-struct McpFileWatcherCallback {
-    server: McpServer,
-    peer: rmcp::Peer<RoleServer>,
-}
 
-impl McpFileWatcherCallback {
-    fn new(server: McpServer, peer: rmcp::Peer<RoleServer>) -> Self {
-        Self { server, peer }
-    }
-}
-
-impl FileWatcherCallback for McpFileWatcherCallback {
-    async fn on_file_changed(&self, paths: Vec<std::path::PathBuf>) -> Result<()> {
-        tracing::info!("📄 Prompt file changed: {:?}", paths);
-
-        // Reload the library
-        if let Err(e) = self.server.reload_prompts().await {
-            tracing::error!("❌ Failed to reload prompts: {}", e);
-            return Err(e);
-        }
-        tracing::info!("✅ Prompts reloaded successfully");
-
-        // Send notification to client about prompt list change
-        let peer_clone = self.peer.clone();
-        tokio::spawn(async move {
-            match peer_clone.notify_prompt_list_changed().await {
-                Ok(_) => {
-                    tracing::info!("📢 Sent prompts/listChanged notification to client");
-                }
-                Err(e) => {
-                    tracing::error!("❌ Failed to send notification: {}", e);
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    async fn on_error(&self, error: String) {
-        tracing::error!("❌ File watcher error: {}", error);
-    }
-}
 
 impl ServerHandler for McpServer {
     async fn initialize(

@@ -6773,6 +6773,7 @@ dependencies = [
  "ignore",
  "libc",
  "markdowndown",
+ "notify",
  "proptest",
  "rand 0.8.5",
  "regex",

@@ -54,6 +54,9 @@ glob = { workspace = true }
 walkdir = { workspace = true }
 ignore = { workspace = true }
 
+# File watching
+notify = { workspace = true }
+
 # File editing enhanced dependencies
 encoding_rs = { workspace = true }
 filetime = { workspace = true }

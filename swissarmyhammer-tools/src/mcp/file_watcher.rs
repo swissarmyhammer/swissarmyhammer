@@ -1,10 +1,195 @@
 //! File watching functionality for MCP server
 
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rmcp::RoleServer;
+use std::path::Path;
 use std::sync::Arc;
-use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
-use swissarmyhammer::{Result, SwissArmyHammerError};
-use tokio::sync::Mutex;
+use swissarmyhammer::common::file_types::{is_any_prompt_file, is_prompt_file};
+use swissarmyhammer::{PromptResolver, Result, SwissArmyHammerError};
+use tokio::sync::{mpsc, Mutex};
+
+
+/// Callback trait for handling file system events
+pub trait FileWatcherCallback: Send + Sync + 'static {
+    /// Called when a relevant file change is detected
+    fn on_file_changed(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    /// Called when the file watcher encounters an error
+    fn on_error(&self, error: String) -> impl std::future::Future<Output = ()> + Send;
+}
+
+/// File watcher for monitoring prompt directories
+pub struct FileWatcher {
+    /// Handle to the background watcher task
+    watcher_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Shutdown sender to gracefully stop the watcher
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl FileWatcher {
+    /// Create a new file watcher instance.
+    /// 
+    /// The file watcher starts in an inactive state. Call `start_watching()` to begin
+    /// monitoring file system changes.
+    /// 
+    /// # Example
+    /// 
+    /// ```
+    /// let mut watcher = FileWatcher::new();
+    /// // watcher.start_watching(callback).await?;
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            watcher_handle: None,
+            shutdown_tx: None,
+        }
+    }
+
+    /// Start watching prompt directories for changes
+    pub async fn start_watching<C>(&mut self, callback: C) -> Result<()>
+    where
+        C: FileWatcherCallback + Clone,
+    {
+        // Stop existing watcher if running
+        self.stop_watching();
+
+        tracing::info!("Starting file watching for prompt directories");
+
+        // Get the directories to watch using the same logic as PromptResolver
+        let resolver = PromptResolver::new();
+        let watch_paths = resolver.get_prompt_directories()?;
+
+        tracing::info!(
+            "Found {} directories to watch: {:?}",
+            watch_paths.len(),
+            watch_paths
+        );
+
+        // The resolver already returns only existing paths
+        if watch_paths.is_empty() {
+            tracing::warn!("No prompt directories found to watch");
+            return Ok(());
+        }
+
+        // Create shutdown channel
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
+
+        // Create the file watcher
+        let (tx, mut rx) = mpsc::channel(100);
+        let mut watcher = RecommendedWatcher::new(
+            move |result: std::result::Result<Event, notify::Error>| {
+                if let Ok(event) = result {
+                    if let Err(e) = tx.blocking_send(event) {
+                        tracing::error!("Failed to send file watch event: {}", e);
+                    }
+                }
+            },
+            notify::Config::default(),
+        )
+        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create file watcher: {}", e)))?;
+
+        // Watch all directories
+        for path in &watch_paths {
+            watcher
+                .watch(path, RecursiveMode::Recursive)
+                .map_err(|e| SwissArmyHammerError::Other(format!("Failed to watch directory {path:?}: {}", e)))?;
+            tracing::info!("Watching directory: {:?}", path);
+        }
+
+        // Spawn the event handler task
+        let handle = tokio::spawn(async move {
+            // Keep the watcher alive for the duration of this task
+            let _watcher = watcher;
+
+            loop {
+                tokio::select! {
+                    // Handle file system events
+                    event = rx.recv() => {
+                        match event {
+                            Some(event) => {
+                                tracing::debug!("📁 File system event: {:?}", event);
+
+                                // Check if this is a relevant event
+                                match event.kind {
+                                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                                        // Check if it's a prompt file
+                                        let relevant_paths: Vec<std::path::PathBuf> = event
+                                            .paths
+                                            .iter()
+                                            .filter(|p| is_any_prompt_file(p))
+                                            .cloned()
+                                            .collect();
+
+                                        if !relevant_paths.is_empty() {
+                                            tracing::info!("📄 Prompt file changed: {:?}", relevant_paths);
+
+                                            // Notify callback about the change
+                                            if let Err(e) = callback.on_file_changed(relevant_paths).await {
+                                                tracing::error!("❌ File watcher callback failed: {}", e);
+                                                callback.on_error(format!("Callback failed: {e}")).await;
+                                            }
+                                        } else {
+                                            tracing::debug!("🚫 Ignoring non-prompt file: {:?}", event.paths);
+                                        }
+                                    }
+                                    _ => {
+                                        tracing::debug!("🚫 Ignoring event type: {:?}", event.kind);
+                                    }
+                                }
+                            }
+                            None => {
+                                // Channel closed, exit loop
+                                tracing::debug!("📁 File watch channel closed, stopping watcher");
+                                break;
+                            }
+                        }
+                    }
+                    // Handle shutdown signal
+                    _ = &mut shutdown_rx => {
+                        tracing::debug!("📁 Received shutdown signal, stopping file watcher");
+                        break;
+                    }
+                }
+            }
+            tracing::debug!("📁 File watcher task exiting");
+        });
+
+        // Store the handle and shutdown sender
+        self.watcher_handle = Some(handle);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        Ok(())
+    }
+
+    /// Stop file watching
+    pub fn stop_watching(&mut self) {
+        // Send shutdown signal if available
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(()); // Ignore error if receiver is dropped
+        }
+
+        // Wait for the task to complete
+        if let Some(handle) = self.watcher_handle.take() {
+            handle.abort();
+            tracing::debug!("📁 File watcher task aborted");
+        }
+    }
+}
+
+impl Default for FileWatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for FileWatcher {
+    fn drop(&mut self) {
+        self.stop_watching();
+    }
+}
 
 /// Callback implementation for file watcher that handles prompt reloading
 #[derive(Clone)]
@@ -165,12 +350,3 @@ impl McpFileWatcher {
     }
 }
 
-/// Get the workflow runs directory path
-pub fn get_workflow_runs_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        })
-        .join(".swissarmyhammer")
-        .join("workflow-runs")
-}
