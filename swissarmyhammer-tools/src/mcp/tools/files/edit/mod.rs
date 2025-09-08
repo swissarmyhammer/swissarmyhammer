@@ -489,7 +489,7 @@ mod tests {
 
         let test_env = TestIssueEnvironment::new();
         let issue_storage = Arc::new(RwLock::new(
-            Box::new(test_env.storage()) as Box<dyn swissarmyhammer::issues::IssueStorage>
+            Box::new(test_env.storage()) as Box<dyn swissarmyhammer_issues::IssueStorage>
         ));
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         // Create temporary directory for memo storage

@@ -4,7 +4,7 @@
 //! covering complete workflows, MCP tool integration, and edge cases.
 
 use std::sync::Arc;
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::GitOperations;
 use tempfile::TempDir;
 use tokio::sync::RwLock;

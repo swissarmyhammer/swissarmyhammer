@@ -8,8 +8,9 @@ use proptest::test_runner::Config as ProptestConfig;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_common::rate_limiter::RateLimiterConfig;
+
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;
 use swissarmyhammer_git::GitOperations;
@@ -35,7 +36,7 @@ async fn create_property_test_context() -> ToolContext {
 
     let rate_limiter = Arc::new(
         swissarmyhammer_common::rate_limiter::RateLimiter::with_config(
-            swissarmyhammer_common::rate_limiter::RateLimiterConfig {
+            RateLimiterConfig {
                 global_limit: 10000,
                 per_client_limit: 1000,
                 expensive_operation_limit: 500,

@@ -102,6 +102,9 @@ swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 # Memoranda support
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 
+# Issues support
+swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
+
 # Search support
 swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 

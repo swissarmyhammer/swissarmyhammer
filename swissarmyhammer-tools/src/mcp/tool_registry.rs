@@ -224,7 +224,7 @@ use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use swissarmyhammer_common::RateLimitChecker;
-use swissarmyhammer::issues::IssueStorage;
+use swissarmyhammer_issues::IssueStorage;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_memoranda::MemoStorage;
 use tokio::sync::{Mutex, RwLock};
@@ -1410,7 +1410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution() {
-        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer_issues::IssueStorage;
         use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
@@ -1421,7 +1421,7 @@ mod tests {
 
         // Create mock storage and handlers for context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
+            swissarmyhammer_issues::FileSystemIssueStorage::new(test_issues_dir).unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
         // Create memo storage using temporary directory

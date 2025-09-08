@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::workflow::{
     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,

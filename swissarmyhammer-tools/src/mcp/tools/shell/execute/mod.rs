@@ -1678,7 +1678,7 @@ mod tests {
 
     fn create_test_context() -> ToolContext {
         use crate::test_utils::TestIssueEnvironment;
-        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer_issues::IssueStorage;
         use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::BranchName;
 use swissarmyhammer_git::GitOperations;
 use tempfile::TempDir;

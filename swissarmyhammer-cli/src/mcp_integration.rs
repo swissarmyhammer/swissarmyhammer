@@ -17,7 +17,7 @@ use swissarmyhammer_tools::{ToolContext, ToolRegistry};
 use tokio::sync::{Mutex, RwLock};
 
 /// Type alias for issue storage to reduce complexity
-type IssueStorageArc = Arc<RwLock<Box<dyn swissarmyhammer::issues::IssueStorage>>>;
+type IssueStorageArc = Arc<RwLock<Box<dyn swissarmyhammer_issues::IssueStorage>>>;
 
 /// CLI-specific tool context that can create and execute MCP tools
 pub struct CliToolContext {
@@ -64,7 +64,7 @@ impl CliToolContext {
     ) -> Result<IssueStorageArc, Box<dyn std::error::Error>> {
         // Create storage with working directory - no global directory changes needed
         // This avoids race conditions in parallel test execution
-        let storage = swissarmyhammer::issues::FileSystemIssueStorage::new_default_in(working_dir)?;
+        let storage = swissarmyhammer_issues::FileSystemIssueStorage::new_default_in(working_dir)?;
 
         Ok(Arc::new(RwLock::new(Box::new(storage))))
     }
@@ -310,7 +310,7 @@ mod tests {
         use std::path::PathBuf;
 
         let issue_storage: IssueStorageArc = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+            swissarmyhammer_issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
                 .unwrap(),
         )));
 

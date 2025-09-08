@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;
 use swissarmyhammer_git::GitOperations;

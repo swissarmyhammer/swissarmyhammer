@@ -28,7 +28,7 @@ pub struct ListPromptsRequest {
 /// Create a named issue (will create file like `000123_feature_name.md`):
 /// ```ignore
 /// CreateIssueRequest {
-///     name: Some(swissarmyhammer::issues::IssueName("feature_name".to_string())),
+///     name: Some(swissarmyhammer_issues::IssueName("feature_name".to_string())),
 ///     content: "# Implement new feature\n\nDetails...".to_string(),
 /// }
 /// ```
@@ -45,7 +45,7 @@ pub struct CreateIssueRequest {
     /// Name of the issue (will be used in filename) - optional
     /// When `Some(name)`, creates files like `000123_name.md`
     /// When `None`, creates files like `000123.md`
-    pub name: Option<swissarmyhammer::issues::IssueName>,
+    pub name: Option<swissarmyhammer_issues::IssueName>,
     /// Markdown content of the issue
     pub content: String,
 }
@@ -54,7 +54,7 @@ pub struct CreateIssueRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MarkCompleteRequest {
     /// Issue name to mark as complete
-    pub name: swissarmyhammer::issues::IssueName,
+    pub name: swissarmyhammer_issues::IssueName,
 }
 
 /// Request to check if all issues are complete
@@ -67,7 +67,7 @@ pub struct AllCompleteRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct UpdateIssueRequest {
     /// Issue name to update
-    pub name: swissarmyhammer::issues::IssueName,
+    pub name: swissarmyhammer_issues::IssueName,
     /// New markdown content for the issue
     pub content: String,
     /// If true, append to existing content instead of replacing
@@ -79,21 +79,21 @@ pub struct UpdateIssueRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WorkIssueRequest {
     /// Issue name to work on
-    pub name: swissarmyhammer::issues::IssueName,
+    pub name: swissarmyhammer_issues::IssueName,
 }
 
 /// Request to merge an issue
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MergeIssueRequest {
     /// Issue name to merge
-    pub name: swissarmyhammer::issues::IssueName,
+    pub name: swissarmyhammer_issues::IssueName,
     /// Whether to delete the branch after merging (default: false)
     #[serde(default)]
     pub delete_branch: bool,
 }
 
 // Re-export IssueName for convenience
-pub use swissarmyhammer::issues::IssueName;
+pub use swissarmyhammer_issues::IssueName;
 
 /// Request to fetch web content
 ///

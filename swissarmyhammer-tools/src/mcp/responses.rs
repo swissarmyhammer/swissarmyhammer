@@ -1,7 +1,7 @@
 //! Response creation utilities for MCP operations
 
 use rmcp::model::*;
-use swissarmyhammer::issues::{Issue, IssueInfo};
+use swissarmyhammer_issues::{Issue, IssueInfo};
 
 /// Create a success response for MCP tool calls
 pub fn create_success_response(message: String) -> CallToolResult {

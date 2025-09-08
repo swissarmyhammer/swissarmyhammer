@@ -491,14 +491,14 @@ mod tests {
         use crate::mcp::tool_handlers::ToolHandlers;
         use std::path::PathBuf;
         use std::sync::Arc;
-        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer_issues::IssueStorage;
         use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+            swissarmyhammer_issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
                 .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
@@ -542,14 +542,14 @@ mod tests {
         use crate::mcp::tool_handlers::ToolHandlers;
         use std::path::PathBuf;
         use std::sync::Arc;
-        use swissarmyhammer::issues::IssueStorage;
+        use swissarmyhammer_issues::IssueStorage;
         use swissarmyhammer_git::GitOperations;
         use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
         use tokio::sync::{Mutex, RwLock};
 
         // Create mock context
         let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
-            swissarmyhammer::issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
+            swissarmyhammer_issues::FileSystemIssueStorage::new(PathBuf::from("./test_issues"))
                 .unwrap(),
         )));
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));

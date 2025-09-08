@@ -28,6 +28,7 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
+swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 
 # CLI dependencies
 clap = { workspace = true }

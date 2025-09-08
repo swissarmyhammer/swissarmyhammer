@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
-use swissarmyhammer::issues::IssueInfo;
+use swissarmyhammer_issues::IssueInfo;
 use swissarmyhammer_issues_config::Config;
 
 /// Request structure for showing an issue
@@ -164,7 +164,7 @@ impl McpTool for ShowIssueTool {
                     match issue_storage.get_issue_info(&next_issue.name).await {
                         Ok(issue_info) => issue_info,
                         Err(e) => {
-                            return Err(McpErrorHandler::handle_error(e, "get next issue info"));
+                            return Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "get next issue info"));
                         }
                     }
                 }
@@ -174,7 +174,7 @@ impl McpTool for ShowIssueTool {
                     ));
                 }
                 Err(e) => {
-                    return Err(McpErrorHandler::handle_error(e, "get next issue"));
+                    return Err(McpErrorHandler::handle_error(swissarmyhammer::SwissArmyHammerError::Other(e.to_string()), "get next issue"));
                 }
             }
         } else {

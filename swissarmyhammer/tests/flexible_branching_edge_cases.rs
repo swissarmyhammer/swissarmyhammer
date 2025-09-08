@@ -4,7 +4,7 @@
 //! for the flexible branching functionality.
 
 use std::sync::Arc;
-use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
+use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::BranchName;
 use swissarmyhammer_git::GitOperations;
 use tempfile::TempDir;

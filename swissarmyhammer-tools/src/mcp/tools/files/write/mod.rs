@@ -214,7 +214,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
-    use swissarmyhammer::issues::FileSystemIssueStorage;
+    use swissarmyhammer_issues::FileSystemIssueStorage;
     use swissarmyhammer_git::GitOperations;
     use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;
@@ -225,7 +225,7 @@ mod tests {
         let issue_storage = Arc::new(RwLock::new(Box::new(
             FileSystemIssueStorage::new(PathBuf::from("./test_issues")).unwrap(),
         )
-            as Box<dyn swissarmyhammer::issues::IssueStorage>));
+            as Box<dyn swissarmyhammer_issues::IssueStorage>));
         let git_ops = Arc::new(Mutex::new(None::<GitOperations>));
         // Create temporary directory for memo storage
         let temp_dir = tempfile::tempdir().unwrap();

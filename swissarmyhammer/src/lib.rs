@@ -69,8 +69,7 @@ pub mod workflow;
 /// Shared frontmatter parsing functionality
 pub mod frontmatter;
 
-/// Issue tracking and management
-pub mod issues;
+
 
 /// Memoranda management and storage system (re-exported from swissarmyhammer-memoranda)
 pub mod memoranda {
