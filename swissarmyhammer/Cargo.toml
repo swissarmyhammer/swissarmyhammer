@@ -102,8 +102,7 @@ swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 # Memoranda support
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 
-# Issues support
-swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
+
 
 # Search support
 swissarmyhammer-search = { path = "../swissarmyhammer-search" }
@@ -147,6 +146,7 @@ rand = { workspace = true }
 
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 
 [lib]
 name = "swissarmyhammer"

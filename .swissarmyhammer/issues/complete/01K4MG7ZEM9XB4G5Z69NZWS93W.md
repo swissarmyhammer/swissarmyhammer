@@ -99,3 +99,49 @@ Search results show no active imports of `use swissarmyhammer::issues` in the co
 This completes the final cleanup phase of a nearly-finished domain crate migration. The functional migration is complete - this is just removing leftover duplicate code and cleaning up dependencies.
 
 Similar pattern to the search migration issue - domain crates were created but old code was never removed.
+
+## Proposed Solution
+
+After analyzing the current state, I will implement a systematic cleanup approach that follows Test-Driven Development principles:
+
+### Implementation Steps
+
+1. **Verification Phase**: First, I'll verify the current state and ensure the domain crate migration is truly complete
+   - Search for any remaining usage of `use swissarmyhammer::issues` 
+   - Confirm all consumers use the domain crate
+   - Run tests to establish a working baseline
+
+2. **Safe Removal Phase**: Remove duplicate code in a controlled manner
+   - Remove the `swissarmyhammer/src/issues/` directory entirely
+   - Update `swissarmyhammer/src/lib.rs` to remove issues module exports
+   - Remove the circular dependency from `swissarmyhammer/Cargo.toml`
+
+3. **Documentation Update Phase**: Clean up any references to old API
+   - Update documentation examples that reference `swissarmyhammer::issues`
+   - Ensure all docs point to the domain crate
+
+4. **Validation Phase**: Comprehensive testing
+   - Build the entire workspace
+   - Run all tests, especially issue-related functionality
+   - Verify MCP tools continue to work
+   - Test CLI issue management functionality
+
+### Risk Mitigation Strategy
+
+- Verify no hidden dependencies before removal
+- Make granular commits for easy rollback
+- Test after each significant change
+- Use TDD approach with failing tests first
+
+This approach ensures we safely complete the migration cleanup without breaking existing functionality.
+## Implementation Progress
+
+### ✅ Verification Phase Complete
+- **Confirmed no active usage**: Search shows no `use swissarmyhammer::issues` imports in active code
+- **Confirmed main crate doesn't export issues module**: `lib.rs` has no `pub mod issues` 
+- **Identified duplicate files**: Found 4 files in `swissarmyhammer/src/issues/` that need removal
+- **Baseline established**: Tests run (1 unrelated failure in memoranda, issues functionality unaffected)
+- **Confirmed circular dependency**: Main crate unnecessarily depends on `swissarmyhammer-issues`
+
+### Current Status
+Ready to proceed with safe removal of duplicate code. All verification checks passed.

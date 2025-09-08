@@ -293,7 +293,7 @@ Git-integrated issue tracking system.
 #### Core Types
 
 ```rust
-use swissarmyhammer::issues::{Issue, IssueName, IssueStorage};
+use swissarmyhammer_issues::{Issue, IssueName, FileSystemIssueStorage};
 
 // Create issue
 let issue = Issue {
@@ -305,7 +305,7 @@ let issue = Issue {
 };
 
 // Storage operations
-let storage = IssueStorage::new("./issues")?;
+let storage = FileSystemIssueStorage::new("./issues")?;
 storage.create(&issue).await?;
 storage.complete(&issue.name).await?;
 ```
@@ -313,7 +313,7 @@ storage.complete(&issue.name).await?;
 #### Git Integration
 
 ```rust
-use swissarmyhammer::issues::{IssueManager, GitIntegration};
+use swissarmyhammer_issues::{IssueManager, GitIntegration};
 
 let manager = IssueManager::new("./issues")?
     .with_git_integration();
