@@ -49,7 +49,9 @@ impl From<Error> for swissarmyhammer_common::SwissArmyHammerError {
             Error::IssueAlreadyExists(id) => swissarmyhammer_common::SwissArmyHammerError::Other {
                 message: format!("Issue already exists: {}", id),
             },
-            Error::Io(e) => swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(e.to_string()),
+            Error::Io(e) => {
+                swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(e.to_string())
+            }
             Error::Git(e) => swissarmyhammer_common::SwissArmyHammerError::Other {
                 message: format!("Git error: {}", e),
             },

@@ -14,7 +14,7 @@ impl HierarchyBuilder {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Build a hierarchy from outline nodes (placeholder implementation)
     pub fn build(&self, _nodes: &[OutlineNode]) -> Result<()> {
         // TODO: Implement hierarchy building logic

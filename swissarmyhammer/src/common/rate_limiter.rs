@@ -174,7 +174,7 @@ impl RateLimiter {
                     "Global rate limit exceeded for operation '{}'. Retry after {}ms",
                     operation,
                     wait_time.as_millis()
-                )
+                ),
             }));
         }
 
@@ -191,7 +191,7 @@ impl RateLimiter {
                     "Client rate limit exceeded for '{}'. Retry after {}ms",
                     client_id,
                     wait_time.as_millis()
-                )
+                ),
             }));
         }
 

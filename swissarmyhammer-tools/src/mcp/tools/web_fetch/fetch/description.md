@@ -36,80 +36,29 @@ Fetch web content and convert HTML to markdown for AI processing. Leverages the 
   - Used for server identification and request tracking
   - Should identify your application appropriately
 
-## Response Formats
+## Response Format
 
 ### Successful Fetch Response
-When content is successfully fetched and converted to markdown:
-```json
-{
-  "content": [{
-    "type": "text",
-    "text": "Successfully fetched content from URL"
-  }],
-  "is_error": false,
-  "metadata": {
-    "url": "https://example.com/page",
-    "final_url": "https://example.com/page",
-    "title": "Example Page Title",
-    "content_type": "text/html",
-    "content_length": 15420,
-    "status_code": 200,
-    "response_time_ms": 245,
-    "markdown_content": "# Example Page Title\n\nThis is the converted markdown content...",
-    "word_count": 856,
-    "headers": {
-      "server": "nginx/1.18.0",
-      "content-encoding": "gzip",
-      "last-modified": "Wed, 01 Jan 2025 12:00:00 GMT"
-    }
-  }
-}
+When content is successfully fetched, the tool returns only the converted markdown content:
+
+**Response Content:** The actual fetched content converted to markdown format.
+
+**Example Response:**
+```
+# Example Page Title
+
+This is the converted markdown content from the fetched webpage...
+
+## Section Heading
+
+Content paragraphs and other markdown elements are preserved in the conversion.
 ```
 
-**Key Response Fields:**
-- `url`: Original requested URL
-- `final_url`: Final URL after redirects (same as url if no redirects)
-- `title`: Extracted HTML page title
-- `content_type`: Response Content-Type header
-- `content_length`: Size of content in bytes
-- `status_code`: HTTP status code (200 for success)
-- `response_time_ms`: Total request duration in milliseconds
-- `markdown_content`: Converted markdown content
-- `word_count`: Number of words in converted content
-- `headers`: Selected HTTP response headers
-
-### Redirect Response Format
-When redirects are followed (`follow_redirects: true`):
-```json
-{
-  "content": [{
-    "type": "text",
-    "text": "URL redirected to final destination"
-  }],
-  "is_error": false,
-  "metadata": {
-    "url": "https://example.com/old-page",
-    "final_url": "https://example.com/new-page", 
-    "redirect_count": 2,
-    "status_code": 200,
-    "response_time_ms": 432,
-    "markdown_content": "# Redirected Page Content...",
-    "redirect_chain": [
-      "https://example.com/old-page -> 301",
-      "https://example.com/temp-page -> 302", 
-      "https://example.com/new-page -> 200"
-    ],
-    "title": "Final Page Title",
-    "content_type": "text/html",
-    "word_count": 1245
-  }
-}
-```
-
-**Additional Redirect Fields:**
-- `redirect_count`: Number of redirects followed
-- `redirect_chain`: Complete chain of URLs and status codes
-- `final_url`: URL where content was actually fetched
+**Key Benefits:**
+- Clean content delivery without technical metadata
+- Direct markdown format ready for AI processing  
+- No verbose announcements or performance metrics
+- Redirects handled transparently by the underlying library
 
 ### Error Response Format
 When requests fail or encounter errors:

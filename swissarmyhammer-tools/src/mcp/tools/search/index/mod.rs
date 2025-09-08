@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::time::Instant;
-use swissarmyhammer_search::{SemanticConfig, indexer::FileIndexer, storage::VectorStorage};
+use swissarmyhammer_search::{indexer::FileIndexer, storage::VectorStorage, SemanticConfig};
 
 /// Tool for indexing files for semantic search
 #[derive(Default)]
@@ -107,18 +107,25 @@ impl McpTool for SearchIndexTool {
                 SemanticConfig::default()
             }
         };
-        let storage = VectorStorage::new(config.clone())
-            .map_err(|e| McpError::internal_error(format!("Failed to initialize vector storage: {}", e), None))?;
+        let storage = VectorStorage::new(config.clone()).map_err(|e| {
+            McpError::internal_error(format!("Failed to initialize vector storage: {}", e), None)
+        })?;
 
-        storage
-            .initialize()
-            .map_err(|e| McpError::internal_error(format!("Failed to initialize storage database: {}", e), None))?;
+        storage.initialize().map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to initialize storage database: {}", e),
+                None,
+            )
+        })?;
 
         let mut indexer = {
             #[cfg(test)]
             {
                 FileIndexer::new_for_testing(storage).await.map_err(|e| {
-                    McpError::internal_error(format!("Failed to create file indexer for testing: {}", e), None)
+                    McpError::internal_error(
+                        format!("Failed to create file indexer for testing: {}", e),
+                        None,
+                    )
                 })?
             }
             #[cfg(not(test))]
@@ -138,7 +145,10 @@ impl McpTool for SearchIndexTool {
                 .index_glob(pattern, request.force)
                 .await
                 .map_err(|e| {
-                    McpError::internal_error(format!("Failed to index pattern '{}': {}", pattern, e), None)
+                    McpError::internal_error(
+                        format!("Failed to index pattern '{}': {}", pattern, e),
+                        None,
+                    )
                 })?;
 
             match combined_report {

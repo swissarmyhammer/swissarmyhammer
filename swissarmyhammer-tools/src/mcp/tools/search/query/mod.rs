@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use std::time::Instant;
-use swissarmyhammer_search::{SearchQuery, SemanticConfig, searcher::SemanticSearcher, storage::VectorStorage};
+use swissarmyhammer_search::{
+    searcher::SemanticSearcher, storage::VectorStorage, SearchQuery, SemanticConfig,
+};
 
 /// Tool for performing semantic search queries
 #[derive(Default)]
@@ -110,12 +112,16 @@ impl McpTool for SearchQueryTool {
                 SemanticConfig::default()
             }
         };
-        let storage = VectorStorage::new(config.clone())
-            .map_err(|e| McpError::internal_error(format!("Failed to initialize vector storage: {}", e), None))?;
+        let storage = VectorStorage::new(config.clone()).map_err(|e| {
+            McpError::internal_error(format!("Failed to initialize vector storage: {}", e), None)
+        })?;
 
-        storage
-            .initialize()
-            .map_err(|e| McpError::internal_error(format!("Failed to initialize storage database: {}", e), None))?;
+        storage.initialize().map_err(|e| {
+            McpError::internal_error(
+                format!("Failed to initialize storage database: {}", e),
+                None,
+            )
+        })?;
 
         let searcher = {
             #[cfg(test)]
@@ -123,13 +129,19 @@ impl McpTool for SearchQueryTool {
                 SemanticSearcher::new_for_testing(storage, config)
                     .await
                     .map_err(|e| {
-                        McpError::internal_error(format!("Failed to create semantic searcher for testing: {}", e), None)
+                        McpError::internal_error(
+                            format!("Failed to create semantic searcher for testing: {}", e),
+                            None,
+                        )
                     })?
             }
             #[cfg(not(test))]
             {
                 SemanticSearcher::new(storage, config).await.map_err(|e| {
-                    McpError::internal_error(format!("Failed to create semantic searcher: {}", e), None)
+                    McpError::internal_error(
+                        format!("Failed to create semantic searcher: {}", e),
+                        None,
+                    )
                 })?
             }
         };
@@ -143,7 +155,10 @@ impl McpTool for SearchQueryTool {
         };
 
         let search_results = searcher.search(&search_query).await.map_err(|e| {
-            McpError::internal_error(format!("Failed to search for '{}': {}", request.query, e), None)
+            McpError::internal_error(
+                format!("Failed to search for '{}': {}", request.query, e),
+                None,
+            )
         })?;
 
         let duration = start_time.elapsed();

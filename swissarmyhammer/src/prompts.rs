@@ -25,8 +25,8 @@
 //! ```
 
 use crate::common::{Parameter, ParameterProvider, ParameterType};
-use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::error::CommonError;
+use crate::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::{Result, SwissArmyHammerError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

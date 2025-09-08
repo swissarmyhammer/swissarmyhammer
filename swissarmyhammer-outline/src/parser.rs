@@ -54,8 +54,14 @@ impl OutlineParser {
         // Register Tree-sitter languages
         languages.insert(Language::Rust, tree_sitter_rust::LANGUAGE.into());
         languages.insert(Language::Python, tree_sitter_python::LANGUAGE.into());
-        languages.insert(Language::TypeScript, tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into());
-        languages.insert(Language::JavaScript, tree_sitter_javascript::LANGUAGE.into());
+        languages.insert(
+            Language::TypeScript,
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        );
+        languages.insert(
+            Language::JavaScript,
+            tree_sitter_javascript::LANGUAGE.into(),
+        );
         languages.insert(Language::Dart, tree_sitter_dart::language());
 
         Ok(Self {
@@ -106,7 +112,12 @@ impl OutlineParser {
     }
 
     /// Extract symbols from a parsed Tree-sitter tree
-    fn extract_symbols(&self, tree: &Tree, source: &str, language: &Language) -> Result<Vec<OutlineNode>> {
+    fn extract_symbols(
+        &self,
+        tree: &Tree,
+        source: &str,
+        language: &Language,
+    ) -> Result<Vec<OutlineNode>> {
         let root_node = tree.root_node();
         let mut symbols = Vec::new();
 
@@ -143,7 +154,12 @@ impl OutlineParser {
     }
 
     /// Convert a Tree-sitter node to an outline symbol if applicable
-    fn node_to_symbol(&self, node: &Node, source: &str, language: &Language) -> Result<Option<OutlineNode>> {
+    fn node_to_symbol(
+        &self,
+        node: &Node,
+        source: &str,
+        language: &Language,
+    ) -> Result<Option<OutlineNode>> {
         let node_type = match (language, node.kind()) {
             // Rust symbols
             (Language::Rust, "function_item") => Some(OutlineNodeType::Function),
@@ -164,12 +180,20 @@ impl OutlineParser {
             (Language::Python, "import_from_statement") => Some(OutlineNodeType::Import),
 
             // TypeScript/JavaScript symbols
-            (Language::TypeScript | Language::JavaScript, "function_declaration") => Some(OutlineNodeType::Function),
-            (Language::TypeScript | Language::JavaScript, "method_definition") => Some(OutlineNodeType::Method),
-            (Language::TypeScript | Language::JavaScript, "class_declaration") => Some(OutlineNodeType::Class),
+            (Language::TypeScript | Language::JavaScript, "function_declaration") => {
+                Some(OutlineNodeType::Function)
+            }
+            (Language::TypeScript | Language::JavaScript, "method_definition") => {
+                Some(OutlineNodeType::Method)
+            }
+            (Language::TypeScript | Language::JavaScript, "class_declaration") => {
+                Some(OutlineNodeType::Class)
+            }
             (Language::TypeScript, "interface_declaration") => Some(OutlineNodeType::Interface),
             (Language::TypeScript, "type_alias_declaration") => Some(OutlineNodeType::TypeAlias),
-            (Language::TypeScript | Language::JavaScript, "import_statement") => Some(OutlineNodeType::Import),
+            (Language::TypeScript | Language::JavaScript, "import_statement") => {
+                Some(OutlineNodeType::Import)
+            }
 
             // Dart symbols
             (Language::Dart, "function_signature") => Some(OutlineNodeType::Function),
@@ -219,7 +243,12 @@ impl OutlineParser {
     }
 
     /// Extract the name of a symbol from a Tree-sitter node
-    fn extract_symbol_name(&self, node: &Node, source: &str, _language: &Language) -> Result<String> {
+    fn extract_symbol_name(
+        &self,
+        node: &Node,
+        source: &str,
+        _language: &Language,
+    ) -> Result<String> {
         // Look for identifier nodes within the symbol node
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -232,12 +261,16 @@ impl OutlineParser {
         }
 
         // Fallback: try to extract from node text directly
-        let text = node.utf8_text(source.as_bytes()).map_err(|e| {
-            OutlineError::TreeSitter(format!("Failed to extract node text: {}", e))
-        })?;
+        let text = node
+            .utf8_text(source.as_bytes())
+            .map_err(|e| OutlineError::TreeSitter(format!("Failed to extract node text: {}", e)))?;
 
         // Extract the first word as a simple fallback
-        Ok(text.split_whitespace().next().unwrap_or("unnamed").to_string())
+        Ok(text
+            .split_whitespace()
+            .next()
+            .unwrap_or("unnamed")
+            .to_string())
     }
 
     /// Extract function/method signature
@@ -251,11 +284,16 @@ impl OutlineParser {
     }
 
     /// Extract documentation comment for a symbol
-    fn extract_documentation(&self, node: &Node, source: &str, _language: &Language) -> Option<String> {
+    fn extract_documentation(
+        &self,
+        node: &Node,
+        source: &str,
+        _language: &Language,
+    ) -> Option<String> {
         // Look for comment nodes immediately before this symbol
         let parent = node.parent()?;
         let mut cursor = parent.walk();
-        
+
         for child in parent.children(&mut cursor) {
             if child.id() == node.id() {
                 break;
@@ -266,12 +304,17 @@ impl OutlineParser {
                 }
             }
         }
-        
+
         None
     }
 
     /// Extract visibility modifier for a symbol
-    fn extract_visibility(&self, node: &Node, _source: &str, language: &Language) -> Option<SymbolVisibility> {
+    fn extract_visibility(
+        &self,
+        node: &Node,
+        _source: &str,
+        language: &Language,
+    ) -> Option<SymbolVisibility> {
         match language {
             Language::Rust => {
                 // Look for 'pub' keyword
@@ -304,7 +347,7 @@ mod tests {
     fn test_parse_rust_function() {
         let config = OutlineParserConfig::default();
         let mut parser = OutlineParser::new(config).unwrap();
-        
+
         let rust_code = r#"
             pub fn main() {
                 println!("Hello, world!");
@@ -313,12 +356,12 @@ mod tests {
 
         let file_path = PathBuf::from("test.rs");
         let result = parser.parse_file(&file_path, rust_code);
-        
+
         assert!(result.is_ok());
         let outline = result.unwrap();
         assert_eq!(outline.language, Language::Rust);
         assert!(!outline.symbols.is_empty());
-        
+
         let main_fn = &outline.symbols[0];
         assert_eq!(main_fn.name, "main");
         assert_eq!(main_fn.node_type, OutlineNodeType::Function);
@@ -328,7 +371,7 @@ mod tests {
     fn test_parse_python_class() {
         let config = OutlineParserConfig::default();
         let mut parser = OutlineParser::new(config).unwrap();
-        
+
         let python_code = r#"
             class TestClass:
                 def method(self):
@@ -337,14 +380,16 @@ mod tests {
 
         let file_path = PathBuf::from("test.py");
         let result = parser.parse_file(&file_path, python_code);
-        
+
         assert!(result.is_ok());
         let outline = result.unwrap();
         assert_eq!(outline.language, Language::Python);
         assert!(!outline.symbols.is_empty());
-        
+
         // Should find the class
-        let class_symbol = outline.symbols.iter()
+        let class_symbol = outline
+            .symbols
+            .iter()
             .find(|s| s.node_type == OutlineNodeType::Class);
         assert!(class_symbol.is_some());
         assert_eq!(class_symbol.unwrap().name, "TestClass");

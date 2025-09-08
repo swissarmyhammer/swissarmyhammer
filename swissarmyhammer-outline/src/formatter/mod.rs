@@ -3,8 +3,8 @@
 //! This module provides various formatters to convert outline structures
 //! into different output formats like YAML, JSON, etc.
 
-use crate::types::{OutlineHierarchy, FileOutline, OutlineNode, SymbolVisibility};
-use crate::{Result, OutlineError};
+use crate::types::{FileOutline, OutlineHierarchy, OutlineNode, SymbolVisibility};
+use crate::{OutlineError, Result};
 use std::fmt::Write;
 
 /// YAML formatter for outline structures
@@ -41,7 +41,7 @@ impl Default for FormatterConfig {
 
 impl YamlFormatter {
     /// Create a new YAML formatter with default configuration
-    /// 
+    ///
     /// Uses sensible defaults:
     /// - 2-space indentation
     /// - Line numbers included
@@ -53,33 +53,33 @@ impl YamlFormatter {
             config: FormatterConfig::default(),
         }
     }
-    
+
     /// Create a new YAML formatter with custom configuration
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `config` - Custom formatting configuration options
     pub fn new(config: FormatterConfig) -> Self {
         Self { config }
     }
 
     /// Format a complete hierarchical outline structure into YAML
-    /// 
+    ///
     /// Converts an outline hierarchy into a structured YAML format suitable for
     /// code navigation and understanding. The output includes file paths, symbol
     /// names, types, line numbers, signatures, and documentation where available.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `hierarchy` - The outline hierarchy to format
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Returns a YAML string representing the outline structure, or an error
     /// if formatting fails.
-    /// 
+    ///
     /// # Example Output
-    /// 
+    ///
     /// ```yaml
     /// outline:
     ///   - name: "main.rs"
@@ -96,20 +96,17 @@ impl YamlFormatter {
     /// ```
     pub fn format_hierarchy(&self, hierarchy: &OutlineHierarchy) -> Result<String> {
         let mut result = String::new();
-        writeln!(result, "outline:").map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
+        writeln!(result, "outline:")
+            .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
 
         for file in &hierarchy.files {
             self.format_file(file, 1, &mut result)?;
         }
 
-        writeln!(result, "files_processed: {}", hierarchy.total_files()).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
-        writeln!(result, "symbols_found: {}", hierarchy.total_symbols()).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
+        writeln!(result, "files_processed: {}", hierarchy.total_files())
+            .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
+        writeln!(result, "symbols_found: {}", hierarchy.total_symbols())
+            .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
 
         Ok(result)
     }
@@ -117,28 +114,35 @@ impl YamlFormatter {
     /// Format a file and its symbols
     fn format_file(&self, file: &FileOutline, depth: usize, result: &mut String) -> Result<()> {
         let indent = " ".repeat(depth * self.config.indent_size);
-        let file_name = file.file_path.file_name()
+        let file_name = file
+            .file_path
+            .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("unknown");
 
-        writeln!(result, "{}  - name: {}", indent, Self::escape_yaml_string(file_name)).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
-        writeln!(result, "{}    kind: \"file\"", indent).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
-        writeln!(result, "{}    path: {}", indent, Self::escape_yaml_string(&file.file_path.to_string_lossy())).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
+        writeln!(
+            result,
+            "{}  - name: {}",
+            indent,
+            Self::escape_yaml_string(file_name)
+        )
+        .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
+        writeln!(result, "{}    kind: \"file\"", indent)
+            .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
+        writeln!(
+            result,
+            "{}    path: {}",
+            indent,
+            Self::escape_yaml_string(&file.file_path.to_string_lossy())
+        )
+        .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
 
         if file.symbols.is_empty() {
-            writeln!(result, "{}    children: null", indent).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(result, "{}    children: null", indent)
+                .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
         } else {
-            writeln!(result, "{}    children:", indent).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(result, "{}    children:", indent)
+                .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
 
             for symbol in &file.symbols {
                 if self.should_include_symbol(symbol) {
@@ -154,53 +158,70 @@ impl YamlFormatter {
     fn format_symbol(&self, symbol: &OutlineNode, depth: usize, result: &mut String) -> Result<()> {
         let indent = " ".repeat(depth * self.config.indent_size);
 
-        writeln!(result, "{}  - name: {}", indent, Self::escape_yaml_string(&symbol.name)).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
-        writeln!(result, "{}    kind: \"{}\"", indent, symbol.node_type.display_name()).map_err(|e| {
-            OutlineError::Generation(format!("Format write error: {e}"))
-        })?;
+        writeln!(
+            result,
+            "{}  - name: {}",
+            indent,
+            Self::escape_yaml_string(&symbol.name)
+        )
+        .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
+        writeln!(
+            result,
+            "{}    kind: \"{}\"",
+            indent,
+            symbol.node_type.display_name()
+        )
+        .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
 
         if self.config.include_line_numbers {
-            writeln!(result, "{}    line: {}", indent, symbol.start_line).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(result, "{}    line: {}", indent, symbol.start_line)
+                .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
         }
 
         // Optional signature
         if self.config.include_signatures {
             if let Some(ref signature) = symbol.signature {
                 let formatted_sig = self.format_signature(signature)?;
-                writeln!(result, "{}    signature: {}", indent, Self::escape_yaml_string(&formatted_sig)).map_err(|e| {
-                    OutlineError::Generation(format!("Format write error: {e}"))
-                })?;
+                writeln!(
+                    result,
+                    "{}    signature: {}",
+                    indent,
+                    Self::escape_yaml_string(&formatted_sig)
+                )
+                .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
             }
         }
 
         // Optional documentation
         if let Some(ref doc) = symbol.documentation {
             let formatted_doc = self.format_documentation(doc)?;
-            writeln!(result, "{}    doc: {}", indent, Self::escape_yaml_string(&formatted_doc)).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(
+                result,
+                "{}    doc: {}",
+                indent,
+                Self::escape_yaml_string(&formatted_doc)
+            )
+            .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
         }
 
         // Optional type information (from visibility)
         if let Some(ref visibility) = symbol.visibility {
-            writeln!(result, "{}    type_info: {}", indent, Self::escape_yaml_string(&format!("{visibility:?}"))).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(
+                result,
+                "{}    type_info: {}",
+                indent,
+                Self::escape_yaml_string(&format!("{visibility:?}"))
+            )
+            .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
         }
 
         // Optional children
         if symbol.children.is_empty() {
-            writeln!(result, "{}    children: null", indent).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(result, "{}    children: null", indent)
+                .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
         } else {
-            writeln!(result, "{}    children:", indent).map_err(|e| {
-                OutlineError::Generation(format!("Format write error: {e}"))
-            })?;
+            writeln!(result, "{}    children:", indent)
+                .map_err(|e| OutlineError::Generation(format!("Format write error: {e}")))?;
 
             for child in &symbol.children {
                 if self.should_include_symbol(child) {
@@ -246,7 +267,12 @@ impl YamlFormatter {
     /// Escape a string for safe YAML output
     fn escape_yaml_string(s: &str) -> String {
         // Handle YAML string escaping
-        if s.contains('\n') || s.contains('"') || s.contains('\\') || s.contains(' ') || s.is_empty() {
+        if s.contains('\n')
+            || s.contains('"')
+            || s.contains('\\')
+            || s.contains(' ')
+            || s.is_empty()
+        {
             format!(
                 "\"{}\"",
                 s.replace('\\', "\\\\")

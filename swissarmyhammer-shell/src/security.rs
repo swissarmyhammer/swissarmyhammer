@@ -310,11 +310,11 @@ impl ShellSecurityValidator {
     fn compile_blocked_patterns(patterns: &[String]) -> Result<Vec<Regex>> {
         let mut compiled = Vec::new();
         for pattern in patterns {
-            compiled.push(Regex::new(pattern).map_err(|e| {
-                SwissArmyHammerError::Other { 
-                    message: format!("Failed to compile blocked pattern '{pattern}': {e}")
-                }
-            })?);
+            compiled.push(
+                Regex::new(pattern).map_err(|e| SwissArmyHammerError::Other {
+                    message: format!("Failed to compile blocked pattern '{pattern}': {e}"),
+                })?,
+            );
         }
         Ok(compiled)
     }
@@ -743,10 +743,10 @@ mod tests {
     fn test_workflow_validation_functions() {
         // Test the workflow validation functions that are now part of this crate
         assert!(validate_command("echo hello").is_ok());
-        
+
         let temp_dir = TempDir::new().unwrap();
         assert!(validate_working_directory_security(temp_dir.path()).is_ok());
-        
+
         let env_vars = HashMap::new();
         assert!(validate_environment_variables_security(&env_vars).is_ok());
     }
@@ -755,17 +755,25 @@ mod tests {
     fn test_path_traversal_detection() {
         // Test that path traversal attempts are blocked
         use std::path::Path;
-        
+
         let dangerous_paths = ["../parent", "path/../parent", "/absolute/../parent"];
-        
+
         for path in &dangerous_paths {
             let result = validate_working_directory_security(Path::new(path));
-            assert!(result.is_err(), "Path traversal attempt '{}' should be blocked", path);
-            
+            assert!(
+                result.is_err(),
+                "Path traversal attempt '{}' should be blocked",
+                path
+            );
+
             // Also test through the validator directly
             let validator = get_validator();
             let result2 = validator.validate_directory_access(Path::new(path));
-            assert!(result2.is_err(), "Direct validator call for '{}' should also be blocked", path);
+            assert!(
+                result2.is_err(),
+                "Direct validator call for '{}' should also be blocked",
+                path
+            );
         }
     }
 }

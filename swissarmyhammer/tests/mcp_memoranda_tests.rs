@@ -290,9 +290,7 @@ async fn test_mcp_memo_create() {
     }
     assert!(response.get("error").is_none());
     let result = &response["result"];
-    assert_eq!(result["content"][0]["text"]
-        .as_str()
-        .unwrap(), "OK");
+    assert_eq!(result["content"][0]["text"].as_str().unwrap(), "OK");
 
     // Memo cleanup removed - memos are now permanent
 }
@@ -841,9 +839,12 @@ async fn test_mcp_memo_large_content() {
     let create_response = read_response(&mut reader).unwrap();
 
     assert!(create_response.get("error").is_none());
-    assert_eq!(create_response["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap(), "OK");
+    assert_eq!(
+        create_response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap(),
+        "OK"
+    );
 
     let get_request = create_tool_request(
         2,
@@ -961,14 +962,11 @@ async fn test_mcp_memo_tool_list() {
 }
 
 /// Helper function to extract memo ID from MCP response text
-
-
 #[cfg(test)]
 mod stress_tests {
     use super::*;
 
     /// Performance test: Create, update, and delete memos with optimized timing
-
     #[tokio::test]
     #[serial]
     async fn test_mcp_memo_performance_operations() {
@@ -987,7 +985,6 @@ mod stress_tests {
 
         // Reduced from 50 to 12 memos to ensure test completes in under 10 seconds
         let num_memos = 12;
-
 
         // Create memos with small delays to prevent overwhelming the server
         for i in 1..=num_memos {
@@ -1016,7 +1013,10 @@ mod stress_tests {
             );
 
             // Verify create response is OK
-            assert_eq!(response["result"]["content"][0]["text"].as_str().unwrap(), "OK");
+            assert_eq!(
+                response["result"]["content"][0]["text"].as_str().unwrap(),
+                "OK"
+            );
 
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;

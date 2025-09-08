@@ -11,17 +11,12 @@ use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
 // Re-export core error types from swissarmyhammer-common
-pub use swissarmyhammer_common::{
-    Result as CommonResult, 
-    SwissArmyHammerError as CommonError,
-};
+pub use swissarmyhammer_common::{Result as CommonResult, SwissArmyHammerError as CommonError};
 // Re-export error utilities from common crate
-pub use swissarmyhammer_common::error::{
-    ErrorChain, ErrorChainExt, ErrorContext,
-};
+pub use swissarmyhammer_common::error::{ErrorChain, ErrorChainExt, ErrorContext};
 
 /// The main error type for the SwissArmyHammer library
-/// 
+///
 /// This enum contains domain-specific errors for the SwissArmyHammer library.
 /// Core infrastructure errors (IO, JSON, etc.) are handled by the common crate
 /// and can be accessed via the `Common` variant or direct re-exports.
@@ -69,7 +64,7 @@ pub enum SwissArmyHammerError {
     NotInGitRepository,
 
     /// Serialization error - delegates to common crate
-    #[error(transparent)] 
+    #[error(transparent)]
     Serialization(#[from] serde_yaml::Error),
 
     /// JSON error - delegates to common crate
@@ -92,8 +87,6 @@ pub enum SwissArmyHammerError {
     /// Git repository found but .swissarmyhammer directory is not accessible
     #[error("Git repository found but .swissarmyhammer directory is not accessible: {0}")]
     DirectoryAccess(String),
-
-
 
     /// Issue not found
     #[error("Issue not found: {0}")]
@@ -224,10 +217,6 @@ pub enum SwissArmyHammerError {
     /// Workflow executor error
     #[error("Workflow executor error: {0}")]
     ExecutorError(#[from] crate::workflow::ExecutorError),
-
-
-
-
 
     /// Plan command specific error
     #[error("Plan command error: {0}")]
@@ -947,10 +936,6 @@ pub use serde_json::Error as JsonError;
 /// Re-export of YAML serialization error for backward compatibility
 pub use serde_yaml::Error as SerializationError;
 
-
-
-
-
 /// Helper functions for creating standardized error messages
 impl SwissArmyHammerError {
     /// Create a git operation error with consistent formatting
@@ -1383,10 +1368,6 @@ impl SwissArmyHammerError {
         }
     }
 }
-
-
-
-
 
 /// Conversion from swissarmyhammer_git::GitError to SwissArmyHammerError
 impl From<swissarmyhammer_git::GitError> for SwissArmyHammerError {

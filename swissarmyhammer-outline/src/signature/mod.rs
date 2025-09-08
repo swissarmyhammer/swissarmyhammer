@@ -13,7 +13,7 @@ impl SignatureExtractor {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Extract signature from source text (placeholder implementation)
     pub fn extract_signature(&self, _source: &str, _language: &Language) -> Result<Option<String>> {
         // TODO: Implement signature extraction logic

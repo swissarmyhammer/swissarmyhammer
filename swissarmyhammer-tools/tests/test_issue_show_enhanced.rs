@@ -6,11 +6,11 @@
 use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::sync::Arc;
-use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_issues_config::Config;
+use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
 use swissarmyhammer_tools::mcp::tools::issues::show::ShowIssueTool;

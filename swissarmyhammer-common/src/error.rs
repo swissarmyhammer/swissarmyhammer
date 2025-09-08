@@ -4,7 +4,6 @@
 //! throughout the SwissArmyHammer ecosystem. This includes core infrastructure
 //! errors that are shared across all SwissArmyHammer crates.
 
-
 use std::fmt;
 use std::io;
 use std::path::PathBuf;

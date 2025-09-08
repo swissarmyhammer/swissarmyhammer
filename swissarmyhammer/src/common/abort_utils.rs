@@ -36,8 +36,7 @@ pub fn create_abort_file<P: AsRef<Path>>(work_dir: P, reason: &str) -> Result<()
     // Use centralized path utility to get .swissarmyhammer directory
     let sah_dir = if work_dir == std::env::current_dir()? {
         // If work_dir is current directory, use the common utility
-        swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
-?
+        swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()?
     } else {
         // For other work directories, maintain the same behavior
         let sah_dir = work_dir.join(".swissarmyhammer");
@@ -107,8 +106,7 @@ pub fn read_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<Option<String>> {
     let work_dir = work_dir.as_ref();
     let sah_dir = if work_dir == std::env::current_dir()? {
         // If work_dir is current directory, use the common utility
-        swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()
-?
+        swissarmyhammer_common::utils::paths::get_swissarmyhammer_dir()?
     } else {
         // For other work directories, maintain the same behavior
         work_dir.join(".swissarmyhammer")

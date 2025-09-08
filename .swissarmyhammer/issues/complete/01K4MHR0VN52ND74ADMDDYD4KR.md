@@ -115,3 +115,114 @@ This addresses the disobedience of adding unnecessary technical details and succ
 The principle is: **fetch the content correctly, but respond with just the content** - no need for technical metrics or success announcements.
 
 Web tools should be transparent - users should get the content they requested without implementation details cluttering the response.
+
+## Proposed Solution
+
+Based on the issue analysis, I will implement the following solution:
+
+### 1. Core Implementation Changes
+- Modify the web_fetch tool response to return only the actual fetched content
+- Remove verbose success messages like "Successfully fetched content from..."
+- Remove performance metrics (ms, bytes, words, KB/s) from responses
+- Keep the core functionality intact while simplifying output
+
+### 2. Response Format Changes  
+- For successful fetches: Return just the markdown content without announcements
+- For errors: Keep meaningful error messages for debugging
+- Maintain the same tool interface but clean up response verbosity
+
+### 3. Test Updates
+- Update test assertions to expect clean content-only responses
+- Remove checks for verbose success messages
+- Focus tests on verifying content is correctly fetched
+
+### 4. Documentation Updates
+- Update examples in description files to show clean responses
+- Remove verbose response format examples
+- Ensure documentation reflects the simple content delivery approach
+
+### Implementation Steps:
+1. First, examine the current web_fetch implementation
+2. Identify all locations where verbose messages are generated
+3. Replace with simple content delivery
+4. Update tests to match new response format
+5. Update documentation examples
+
+This approach follows the principle: fetch the content correctly, return just the content.
+## Implementation Results
+
+### Completed Changes
+
+✅ **Phase 1: Fixed Web Fetch Response Format**
+- Updated `swissarmyhammer-tools/src/mcp/tools/web_fetch/fetch/mod.rs`
+- Removed verbose success message and performance metrics from response
+- Changed `build_success_response` to return only the fetched markdown content
+- Eliminated technical metadata and success announcements
+
+✅ **Phase 2: Cleaned Up Response Construction** 
+- Simplified response building logic to return only actual web content
+- Removed performance tracking (ms, bytes, words, KB/s)
+- Kept error handling intact for failed fetches
+- Error responses still include detailed information for debugging
+
+✅ **Phase 3: Updated Tests**
+- Updated test expectations in `tests/web_fetch_integration_tests.rs`
+- Removed assertions for verbose success messages and metadata
+- Tests now verify content is fetched correctly without checking verbosity
+- All unit tests and integration tests pass successfully
+
+✅ **Phase 4: Updated Documentation**
+- Updated `src/mcp/tools/web_fetch/fetch/description.md`
+- Removed examples showing verbose "Successfully fetched" responses
+- Added clean content-only response examples
+- Documentation now reflects simple content delivery approach
+
+✅ **Phase 5: Removed Unused Code**
+- Deleted unused helper methods (`extract_title_from_markdown`, `count_words`)
+- Removed associated unit tests that tested the deleted methods
+- Code compiles cleanly with no warnings
+
+### Technical Implementation Details
+
+**Before Fix:**
+```json
+{
+  "content": [{"type": "text", "text": "Successfully fetched content from URL"}],
+  "is_error": false,
+  "metadata": {
+    "url": "https://example.com",
+    "response_time_ms": 245,
+    "content_length": 15420,
+    "word_count": 856,
+    "performance_metrics": {...}
+  }
+}
+```
+
+**After Fix:**
+```
+# Actual Page Title
+
+This is the converted markdown content from the fetched webpage...
+
+## Section Heading
+
+Content paragraphs preserved in markdown conversion.
+```
+
+### Success Criteria Met
+
+- ✅ Web fetch tool returns only the fetched content
+- ✅ No performance metrics in responses (ms, bytes, words, KB/s) 
+- ✅ No "Successfully fetched" announcements
+- ✅ No technical implementation details in responses
+- ✅ Web fetching functionality continues to work correctly
+- ✅ Error cases still return appropriate error messages
+- ✅ Tests pass with simple response expectations
+- ✅ Documentation reflects clean response format
+
+### Principle Achieved
+
+**"Fetch the content correctly, but respond with just the content"**
+
+The web fetch tool now follows the core principle of doing what was asked (fetching web content) without adding unnecessary technical details, success announcements, or performance metrics. Users get exactly what they requested: the web content converted to markdown format.

@@ -1478,15 +1478,16 @@ impl McpTool for ShellExecuteTool {
                 .map_err(|e| McpErrorHandler::handle_error(e, "validate working directory"))?;
 
             // Apply security validation from workflow system
-            swissarmyhammer_shell::validate_working_directory_security(std::path::Path::new(working_dir)).map_err(
-                |e| {
-                    tracing::warn!("Working directory security validation failed: {}", e);
-                    McpError::invalid_params(
-                        format!("Working directory security check failed: {e}"),
-                        None,
-                    )
-                },
-            )?;
+            swissarmyhammer_shell::validate_working_directory_security(std::path::Path::new(
+                working_dir,
+            ))
+            .map_err(|e| {
+                tracing::warn!("Working directory security validation failed: {}", e);
+                McpError::invalid_params(
+                    format!("Working directory security check failed: {e}"),
+                    None,
+                )
+            })?;
         }
 
         // Parse and validate environment variables if provided
@@ -1503,14 +1504,15 @@ impl McpTool for ShellExecuteTool {
                     })?;
 
                 // Validate environment variables with security checks
-                swissarmyhammer_shell::validate_environment_variables_security(&env_vars)
-                    .map_err(|e| {
+                swissarmyhammer_shell::validate_environment_variables_security(&env_vars).map_err(
+                    |e| {
                         tracing::warn!("Environment variables security validation failed: {}", e);
                         McpError::invalid_params(
                             format!("Environment variables security check failed: {e}"),
                             None,
                         )
-                    })?;
+                    },
+                )?;
 
                 Some(env_vars)
             } else {
@@ -3242,9 +3244,7 @@ mod tests {
 
             // Verify the error type is correct
             match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern {
-                    ..
-                } => (),
+                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern { .. } => (),
                 other_error => {
                     panic!("Expected blocked pattern error for '{pattern}', got: {other_error:?}")
                 }
@@ -3348,9 +3348,7 @@ mod tests {
 
             // Verify the error type is correct
             match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern {
-                    ..
-                } => (),
+                swissarmyhammer_shell::ShellSecurityError::BlockedCommandPattern { .. } => (),
                 other_error => {
                     panic!("Expected blocked pattern error for '{command}', got: {other_error:?}")
                 }
@@ -3384,10 +3382,7 @@ mod tests {
         assert!(result.is_err());
 
         match result.unwrap_err() {
-            swissarmyhammer_shell::ShellSecurityError::CommandTooLong {
-                length,
-                limit,
-            } => {
+            swissarmyhammer_shell::ShellSecurityError::CommandTooLong { length, limit } => {
                 assert_eq!(length, 101);
                 assert_eq!(limit, 100);
             }
@@ -3427,9 +3422,7 @@ mod tests {
         assert!(result.is_err(), "Access to forbidden directory should fail");
 
         match result.unwrap_err() {
-            swissarmyhammer_shell::ShellSecurityError::DirectoryAccessDenied {
-                directory,
-            } => {
+            swissarmyhammer_shell::ShellSecurityError::DirectoryAccessDenied { directory } => {
                 assert_eq!(directory, forbidden_path);
             }
             other_error => panic!("Expected directory access denied error, got: {other_error:?}"),
@@ -3480,8 +3473,12 @@ mod tests {
             );
 
             match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariable { .. } => (),
-                other_error => panic!("Expected invalid env var error for '{name}', got: {other_error:?}"),
+                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariable {
+                    ..
+                } => (),
+                other_error => {
+                    panic!("Expected invalid env var error for '{name}', got: {other_error:?}")
+                }
             }
         }
 
@@ -3496,7 +3493,10 @@ mod tests {
         );
 
         match result.unwrap_err() {
-            swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue { name, reason } => {
+            swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue {
+                name,
+                reason,
+            } => {
                 assert_eq!(name, "LONG_VAR");
                 assert!(reason.contains("exceeds maximum"));
             }
@@ -3521,8 +3521,12 @@ mod tests {
             );
 
             match result.unwrap_err() {
-                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue { .. } => (),
-                other_error => panic!("Expected invalid value error for '{name}', got: {other_error:?}"),
+                swissarmyhammer_shell::ShellSecurityError::InvalidEnvironmentVariableValue {
+                    ..
+                } => (),
+                other_error => {
+                    panic!("Expected invalid value error for '{name}', got: {other_error:?}")
+                }
             }
         }
     }

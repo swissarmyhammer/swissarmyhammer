@@ -69,12 +69,8 @@ pub mod workflow;
 /// Shared frontmatter parsing functionality
 pub mod frontmatter;
 
-
-
 /// Security utilities for path validation and resource limits
 pub mod security;
-
-
 
 /// File watching functionality for prompt directories
 pub mod file_watcher;
@@ -129,8 +125,6 @@ pub use workflow::{
     WorkflowRunStatus,
 };
 
-
-
 /// Validation types and traits
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
 
@@ -169,8 +163,6 @@ pub mod prelude {
         State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
         WorkflowRunStatus,
     };
-
-
 
     // Semantic search types for convenient access
     pub use crate::search::{

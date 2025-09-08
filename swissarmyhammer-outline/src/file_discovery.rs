@@ -2,7 +2,9 @@
 
 use crate::{
     types::{DiscoveredFile, FileDiscoveryConfig, FileDiscoveryReport, Language},
-    utils::{get_relative_path, is_likely_generated_file, matches_glob_pattern, parse_glob_pattern},
+    utils::{
+        get_relative_path, is_likely_generated_file, matches_glob_pattern, parse_glob_pattern,
+    },
     OutlineError, Result,
 };
 use ignore::WalkBuilder;
@@ -70,7 +72,8 @@ impl FileDiscovery {
         tracing::info!("Starting file discovery with patterns: {:?}", self.patterns);
 
         for pattern in &self.patterns {
-            let (pattern_files, pattern_total, pattern_filtered) = self.discover_files_for_pattern(pattern)?;
+            let (pattern_files, pattern_total, pattern_filtered) =
+                self.discover_files_for_pattern(pattern)?;
             discovered_files.extend(pattern_files);
             total_files += pattern_total;
             filtered_files += pattern_filtered;
@@ -97,7 +100,10 @@ impl FileDiscovery {
     }
 
     /// Discover files for a single glob pattern
-    fn discover_files_for_pattern(&self, pattern: &str) -> Result<(Vec<DiscoveredFile>, usize, usize)> {
+    fn discover_files_for_pattern(
+        &self,
+        pattern: &str,
+    ) -> Result<(Vec<DiscoveredFile>, usize, usize)> {
         let mut files = Vec::new();
         let mut total_count = 0;
         let mut filtered_count = 0;
@@ -261,24 +267,30 @@ impl FileDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[allow(dead_code)]
     fn create_test_files(temp_dir: &TempDir) -> Result<()> {
         // Create various test files
-        fs::write(temp_dir.path().join("main.rs"), "fn main() {}").map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("lib.py"), "def hello(): pass").map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("app.ts"), "console.log('hello');").map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("script.js"), "alert('test');").map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("widget.dart"), "void main() {}").map_err(OutlineError::FileSystem)?;
+        fs::write(temp_dir.path().join("main.rs"), "fn main() {}")
+            .map_err(OutlineError::FileSystem)?;
+        fs::write(temp_dir.path().join("lib.py"), "def hello(): pass")
+            .map_err(OutlineError::FileSystem)?;
+        fs::write(temp_dir.path().join("app.ts"), "console.log('hello');")
+            .map_err(OutlineError::FileSystem)?;
+        fs::write(temp_dir.path().join("script.js"), "alert('test');")
+            .map_err(OutlineError::FileSystem)?;
+        fs::write(temp_dir.path().join("widget.dart"), "void main() {}")
+            .map_err(OutlineError::FileSystem)?;
         fs::write(temp_dir.path().join("README.md"), "# Test").map_err(OutlineError::FileSystem)?;
 
         // Create subdirectory with files
         let subdir = temp_dir.path().join("src");
         fs::create_dir_all(&subdir).map_err(OutlineError::FileSystem)?;
-        fs::write(subdir.join("module.rs"), "pub fn test() {}").map_err(OutlineError::FileSystem)?;
+        fs::write(subdir.join("module.rs"), "pub fn test() {}")
+            .map_err(OutlineError::FileSystem)?;
         fs::write(subdir.join("utils.py"), "import os").map_err(OutlineError::FileSystem)?;
 
         Ok(())

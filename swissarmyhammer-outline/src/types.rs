@@ -229,7 +229,12 @@ pub struct OutlineNode {
 
 impl OutlineNode {
     /// Create a new outline node
-    pub fn new(name: String, node_type: OutlineNodeType, start_line: usize, end_line: usize) -> Self {
+    pub fn new(
+        name: String,
+        node_type: OutlineNodeType,
+        start_line: usize,
+        end_line: usize,
+    ) -> Self {
         Self {
             name,
             node_type,
@@ -252,7 +257,11 @@ impl OutlineNode {
 
     /// Get the total number of symbols (including nested)
     pub fn symbol_count(&self) -> usize {
-        1 + self.children.iter().map(|child| child.symbol_count()).sum::<usize>()
+        1 + self
+            .children
+            .iter()
+            .map(|child| child.symbol_count())
+            .sum::<usize>()
     }
 
     /// Check if this node has children
@@ -290,7 +299,10 @@ impl FileOutline {
 
     /// Get the total number of symbols in this file (including nested)
     pub fn total_symbol_count(&self) -> usize {
-        self.symbols.iter().map(|symbol| symbol.symbol_count()).sum()
+        self.symbols
+            .iter()
+            .map(|symbol| symbol.symbol_count())
+            .sum()
     }
 }
 
@@ -322,7 +334,10 @@ impl OutlineHierarchy {
 
     /// Get total symbol count across all files
     pub fn total_symbols(&self) -> usize {
-        self.files.iter().map(|file| file.total_symbol_count()).sum()
+        self.files
+            .iter()
+            .map(|file| file.total_symbol_count())
+            .sum()
     }
 
     /// Get total file count
@@ -356,7 +371,12 @@ mod tests {
 
     #[test]
     fn test_outline_node() {
-        let mut node = OutlineNode::new("test_function".to_string(), OutlineNodeType::Function, 10, 20);
+        let mut node = OutlineNode::new(
+            "test_function".to_string(),
+            OutlineNodeType::Function,
+            10,
+            20,
+        );
         assert_eq!(node.name, "test_function");
         assert_eq!(node.node_type, OutlineNodeType::Function);
         assert_eq!(node.start_line, 10);
@@ -378,7 +398,7 @@ mod tests {
             "file.rs".to_string(),
             1000,
         );
-        
+
         assert_eq!(file.path, PathBuf::from("/test/file.rs"));
         assert_eq!(file.language, Language::Rust);
         assert!(file.is_supported());

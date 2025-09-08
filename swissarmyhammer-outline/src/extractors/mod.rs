@@ -6,14 +6,14 @@
 // Note: These extractors are placeholders and need full implementation
 // The functionality is currently integrated into the parser module
 
-pub mod rust;
-pub mod python;
-pub mod typescript;
-pub mod javascript;
 pub mod dart;
+pub mod javascript;
+pub mod python;
+pub mod rust;
+pub mod typescript;
 
-pub use rust::RustExtractor;
-pub use python::PythonExtractor; 
-pub use typescript::TypeScriptExtractor;
-pub use javascript::JavaScriptExtractor;
 pub use dart::DartExtractor;
+pub use javascript::JavaScriptExtractor;
+pub use python::PythonExtractor;
+pub use rust::RustExtractor;
+pub use typescript::TypeScriptExtractor;

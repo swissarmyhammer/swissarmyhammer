@@ -118,86 +118,18 @@ impl WebFetchTool {
         config
     }
 
-    /// Extracts title from markdown content (first # heading)
-    fn extract_title_from_markdown(&self, markdown: &str) -> Option<String> {
-        for line in markdown.lines() {
-            let trimmed = line.trim();
-            if let Some(title) = trimmed.strip_prefix("# ") {
-                return Some(title.trim().to_string());
-            }
-        }
-        None
-    }
-
-    /// Counts words in text content
-    fn count_words(&self, text: &str) -> usize {
-        text.split_whitespace().count()
-    }
-
-    /// Builds a success response with the same format as the original implementation
+    /// Builds a success response that returns only the fetched content
     fn build_success_response(
         &self,
-        request: &WebFetchRequest,
+        _request: &WebFetchRequest,
         markdown_content: String,
-        response_time_ms: u64,
+        _response_time_ms: u64,
     ) -> Result<CallToolResult, McpError> {
-        let title = self
-            .extract_title_from_markdown(&markdown_content)
-            .unwrap_or_else(|| "Web Content".to_string());
-        let word_count = self.count_words(&markdown_content);
-        let content_length = markdown_content.len();
-
-        // Calculate performance metrics
-        let transfer_rate_kbps = if response_time_ms > 0 {
-            (content_length as f64 / 1024.0) / (response_time_ms as f64 / 1000.0)
-        } else {
-            0.0
-        };
-
-        tracing::info!(
-            "Successfully fetched content from {} ({}ms, {} bytes, {} words, {:.1} KB/s)",
-            request.url,
-            response_time_ms,
-            content_length,
-            word_count,
-            transfer_rate_kbps
-        );
-
-        // Build metadata object per specification
-        let metadata = serde_json::json!({
-            "url": request.url,
-            "final_url": request.url, // markdowndown handles redirects internally
-            "title": title,
-            "content_type": "text/html",
-            "content_length": content_length,
-            "status_code": 200, // markdowndown only returns success cases
-            "response_time_ms": response_time_ms,
-            "markdown_content": markdown_content,
-            "word_count": word_count,
-            "headers": {}, // markdowndown doesn't expose headers
-            "performance_metrics": {
-                "transfer_rate_kbps": format!("{:.2}", transfer_rate_kbps),
-                "content_efficiency": format!("{:.2}", word_count as f64 / content_length as f64 * 100.0),
-                "processing_optimized": true
-            }
-        });
-
-        let success_message = "Successfully fetched content from URL".to_string();
-
-        // Build the specification-compliant response
-        let response = serde_json::json!({
-            "content": [{
-                "type": "text",
-                "text": success_message
-            }],
-            "is_error": false,
-            "metadata": metadata
-        });
-
+        // Return only the actual fetched content without verbose announcements
         Ok(CallToolResult {
             content: vec![rmcp::model::Annotated::new(
                 rmcp::model::RawContent::Text(rmcp::model::RawTextContent {
-                    text: serde_json::to_string_pretty(&response).unwrap_or_default(),
+                    text: markdown_content,
                     meta: None,
                 }),
                 None,
@@ -475,42 +407,6 @@ mod tests {
         assert_eq!(config.http.timeout, std::time::Duration::from_secs(60));
         assert_eq!(config.http.user_agent, "CustomAgent/1.0");
         assert_eq!(config.http.max_redirects, 0);
-    }
-
-    #[test]
-    fn test_extract_title_from_markdown() {
-        let tool = WebFetchTool::new();
-
-        // Test with title
-        let markdown = "# Main Title\n\nSome content here.";
-        assert_eq!(
-            tool.extract_title_from_markdown(markdown),
-            Some("Main Title".to_string())
-        );
-
-        // Test without title
-        let markdown = "Just some content without title.";
-        assert_eq!(tool.extract_title_from_markdown(markdown), None);
-
-        // Test with multiple headings (should return first)
-        let markdown = "# First Title\n\n## Second Title\n\n# Third Title";
-        assert_eq!(
-            tool.extract_title_from_markdown(markdown),
-            Some("First Title".to_string())
-        );
-    }
-
-    #[test]
-    fn test_count_words() {
-        let tool = WebFetchTool::new();
-
-        assert_eq!(tool.count_words("Hello world"), 2);
-        assert_eq!(tool.count_words(""), 0);
-        assert_eq!(
-            tool.count_words("   Multiple   spaces   between   words   "),
-            4
-        );
-        assert_eq!(tool.count_words("Single"), 1);
     }
 
     #[test]
