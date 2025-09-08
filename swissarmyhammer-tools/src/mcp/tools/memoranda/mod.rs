@@ -47,7 +47,6 @@ pub mod create;
 pub mod get;
 pub mod get_all_context;
 pub mod list;
-pub mod update;
 
 use crate::mcp::tool_registry::ToolRegistry;
 
@@ -57,5 +56,4 @@ pub fn register_memoranda_tools(registry: &mut ToolRegistry) {
     registry.register(list::ListMemoTool::new());
     registry.register(get_all_context::GetAllContextMemoTool::new());
     registry.register(get::GetMemoTool::new());
-    registry.register(update::UpdateMemoTool::new());
 }

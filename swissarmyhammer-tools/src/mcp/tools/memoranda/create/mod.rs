@@ -55,7 +55,7 @@ impl McpTool for CreateMemoTool {
     ) -> std::result::Result<CallToolResult, McpError> {
         let request: CreateMemoRequest = BaseToolImpl::parse_arguments(arguments)?;
 
-        tracing::debug!("Creating memo with title: {}", request.title);
+        tracing::debug!("Creating/replacing memo with title: {}", request.title);
 
         // Note: Both title and content can be empty - storage layer supports this
 
@@ -70,25 +70,60 @@ impl McpTool for CreateMemoTool {
             }
         };
 
-        match memo_storage.create(title, request.content.into()).await {
-            Ok(memo) => {
-                tracing::info!("Created memo {}", memo.title);
-                Ok(BaseToolImpl::create_success_response(format!(
-                    "Successfully created memo '{}' with ID: {}\n\nMemo Details:\n- ID: {}\n- Title: {}\n- Created: {}\n- Updated: {}\n- Content: {}",
-                    memo.title, 
-                    memo.title,
-                    memo.title,
-                    memo.title,
-                    crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
-                    crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
-                    memo.content
-                )))
+        // Check if memo already exists
+        let existing_memo = match memo_storage.get(&title).await {
+            Ok(memo) => memo,
+            Err(e) => {
+                return Err(McpErrorHandler::handle_error(
+                    swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
+                    "check existing memo",
+                ));
             }
-            Err(e) => Err(McpErrorHandler::handle_error(
-                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
-                "create memo",
-            )),
-        }
+        };
+
+        let (memo, action) = if existing_memo.is_some() {
+            // Memo exists, replace it
+            match memo_storage.update(&title, request.content.into()).await {
+                Ok(memo) => {
+                    tracing::info!("Replaced memo {}", memo.title);
+                    (memo, "replaced")
+                }
+                Err(e) => {
+                    return Err(McpErrorHandler::handle_error(
+                        swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
+                        "replace memo",
+                    ));
+                }
+            }
+        } else {
+            // Memo doesn't exist, create it
+            match memo_storage.create(title, request.content.into()).await {
+                Ok(memo) => {
+                    tracing::info!("Created memo {}", memo.title);
+                    (memo, "created")
+                }
+                Err(e) => {
+                    return Err(McpErrorHandler::handle_error(
+                        swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
+                        "create memo",
+                    ));
+                }
+            }
+        };
+
+        let action_verb = if action == "created" { "created" } else { "replaced" };
+        Ok(BaseToolImpl::create_success_response(format!(
+            "Successfully {} memo '{}' with ID: {}\n\nMemo Details:\n- ID: {}\n- Title: {}\n- Created: {}\n- Updated: {}\n- Action: {}\n- Content: {}",
+            action_verb,
+            memo.title, 
+            memo.title,
+            memo.title,
+            memo.title,
+            crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.created_at),
+            crate::mcp::shared_utils::McpFormatter::format_timestamp(memo.updated_at),
+            action,
+            memo.content
+        )))
     }
 }
 
@@ -196,5 +231,95 @@ mod tests {
 
         let result = tool.execute(arguments, &context).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_create_memo_tool_execute_replacement() {
+        let tool = CreateMemoTool::new();
+        let context = create_test_context().await;
+
+        // First, create a memo
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test Replacement Memo".to_string()),
+        );
+        arguments.insert(
+            "content".to_string(),
+            serde_json::Value::String("Original content".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        let response_text = call_result.content[0].as_text().unwrap().text.as_str();
+        assert!(response_text.contains("Successfully created memo"));
+        assert!(response_text.contains("Action: created"));
+
+        // Now, replace the same memo with new content
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "title".to_string(),
+            serde_json::Value::String("Test Replacement Memo".to_string()),
+        );
+        arguments.insert(
+            "content".to_string(),
+            serde_json::Value::String("Replaced content".to_string()),
+        );
+
+        let result = tool.execute(arguments, &context).await;
+        assert!(result.is_ok());
+
+        let call_result = result.unwrap();
+        assert_eq!(call_result.is_error, Some(false));
+        let response_text = call_result.content[0].as_text().unwrap().text.as_str();
+        assert!(response_text.contains("Successfully replaced memo"));
+        assert!(response_text.contains("Action: replaced"));
+        assert!(response_text.contains("Replaced content"));
+    }
+
+    #[tokio::test]
+    async fn test_create_memo_tool_execute_replacement_preserves_creation_time() {
+        let tool = CreateMemoTool::new();
+        let context = create_test_context().await;
+
+        // First, create a memo
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "title".to_string(),
+            serde_json::Value::String("Time Test Memo".to_string()),
+        );
+        arguments.insert(
+            "content".to_string(),
+            serde_json::Value::String("Original content".to_string()),
+        );
+
+        let result1 = tool.execute(arguments, &context).await;
+        assert!(result1.is_ok());
+
+        // Add a small delay to ensure different update time
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        // Now, replace the same memo with new content
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "title".to_string(),
+            serde_json::Value::String("Time Test Memo".to_string()),
+        );
+        arguments.insert(
+            "content".to_string(),
+            serde_json::Value::String("Replaced content".to_string()),
+        );
+
+        let result2 = tool.execute(arguments, &context).await;
+        assert!(result2.is_ok());
+
+        // Verify that the memo was replaced (not created anew)
+        let call_result = result2.unwrap();
+        let response_text = call_result.content[0].as_text().unwrap().text.as_str();
+        assert!(response_text.contains("Successfully replaced memo"));
+        assert!(response_text.contains("Action: replaced"));
     }
 }

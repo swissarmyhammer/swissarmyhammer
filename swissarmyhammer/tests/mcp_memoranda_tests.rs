@@ -527,7 +527,7 @@ async fn test_mcp_memo_get_nonexistent() {
 /// Test memo update via MCP
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_update() {
+async fn test_mcp_memo_replacement() {
     let mut server = start_mcp_server().unwrap();
     wait_for_server_ready().await;
 
@@ -546,38 +546,38 @@ async fn test_mcp_memo_update() {
         1,
         "memo_create",
         json!({
-            "title": "Update Test Memo",
+            "title": "Replacement Test Memo",
             "content": "Original content"
         }),
     );
 
     send_request(&mut stdin, create_request).unwrap();
     let create_response = read_response(&mut reader).unwrap();
-    let memo_id = extract_memo_id_from_response(
-        create_response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap(),
-    );
+    assert!(create_response.get("error").is_none());
+    let create_text = create_response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(create_text.contains("Successfully created memo"));
+    assert!(create_text.contains("Action: created"));
 
-    // Update the memo
-    let update_request = create_tool_request(
+    // Replace the memo using memo_create with the same title
+    let replace_request = create_tool_request(
         2,
-        "memo_update",
+        "memo_create",
         json!({
-            "id": memo_id,
-            "content": "Updated content via MCP"
+            "title": "Replacement Test Memo",
+            "content": "Replaced content via MCP"
         }),
     );
 
-    send_request(&mut stdin, update_request).unwrap();
-    let update_response = read_response(&mut reader).unwrap();
+    send_request(&mut stdin, replace_request).unwrap();
+    let replace_response = read_response(&mut reader).unwrap();
 
-    assert!(update_response.get("error").is_none());
-    let result = &update_response["result"];
+    assert!(replace_response.get("error").is_none());
+    let result = &replace_response["result"];
     let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Successfully updated memo"));
-    assert!(text.contains("Updated content via MCP"));
-    assert!(text.contains("Update Test Memo")); // Title should remain same
+    assert!(text.contains("Successfully replaced memo"));
+    assert!(text.contains("Action: replaced"));
+    assert!(text.contains("Replaced content via MCP"));
+    assert!(text.contains("Replacement Test Memo")); // Title should remain same
 
     // Memo cleanup removed - memos are now permanent
 }
@@ -961,7 +961,6 @@ async fn test_mcp_memo_tool_list() {
     let expected_memo_tools = vec![
         "memo_create",
         "memo_get",
-        "memo_update",
         "memo_list",
         "memo_get_all_context",
     ];
@@ -1053,31 +1052,35 @@ mod stress_tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
         }
 
-        // Update all memos
-        for (i, memo_id) in memo_ids.iter().enumerate() {
-            let update_request = create_tool_request(
-                i as i64 + num_memos + 1,
-                "memo_update",
+        // Replace all memos using memo_create with same titles
+        for i in 1..=num_memos {
+            let replace_request = create_tool_request(
+                i + num_memos,
+                "memo_create",
                 json!({
-                    "id": memo_id,
-                    "content": format!("Updated content for memo {}", i + 1)
+                    "title": format!("Performance Test Memo {}", i),
+                    "content": format!("Updated content for memo {}", i)
                 }),
             );
 
-            if let Err(e) = send_request(&mut stdin, update_request) {
-                panic!("Failed to send update request for memo {memo_id}: {e}");
+            if let Err(e) = send_request(&mut stdin, replace_request) {
+                panic!("Failed to send replace request for memo {i}: {e}");
             }
 
             let response = match read_response(&mut reader) {
                 Ok(resp) => resp,
-                Err(e) => panic!("Failed to read update response for memo {memo_id}: {e}"),
+                Err(e) => panic!("Failed to read replace response for memo {i}: {e}"),
             };
 
             assert!(
                 response.get("error").is_none(),
-                "Failed to update memo {memo_id}: {:?}",
+                "Failed to replace memo {i}: {:?}",
                 response.get("error")
             );
+
+            // Verify it was a replacement, not creation
+            let text = response["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Successfully replaced memo"), "Expected replacement but got: {}", text);
 
             // Small delay to prevent server overload
             tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
