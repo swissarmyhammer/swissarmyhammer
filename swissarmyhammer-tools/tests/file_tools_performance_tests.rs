@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};

@@ -94,7 +94,7 @@ impl McpTool for AbortCreateTool {
 mod tests {
     use super::*;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
-    use swissarmyhammer::test_utils::IsolatedTestHome;
+    use swissarmyhammer_common::test_utils::IsolatedTestHome;
     use swissarmyhammer_common::create_abort_file;
     use tempfile::TempDir;
 

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use swissarmyhammer_common::rate_limiter::RateLimiterConfig;
 
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};

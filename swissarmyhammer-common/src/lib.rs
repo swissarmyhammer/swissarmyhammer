@@ -26,6 +26,9 @@ pub mod constants;
 pub mod env_loader;
 pub mod error;
 pub mod rate_limiter;
+/// Test utilities for creating isolated test environments
+#[cfg(any(test, feature = "testing"))]
+pub mod test_utils;
 pub mod traits;
 pub mod types;
 pub mod utils;
@@ -59,4 +62,11 @@ pub use rate_limiter::{
 pub use abort_utils::{
     abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
     remove_abort_file,
+};
+
+// Re-export test utilities for convenience (when testing)
+#[cfg(any(test, feature = "testing"))]
+pub use test_utils::{
+    acquire_semantic_db_lock, create_isolated_test_home, create_temp_dir, IsolatedTestHome,
+    ProcessGuard,
 };

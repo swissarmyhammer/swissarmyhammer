@@ -91,3 +91,4 @@ futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 proptest = "1.4"
 git2 = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
