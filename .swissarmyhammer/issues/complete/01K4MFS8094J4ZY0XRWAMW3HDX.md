@@ -63,3 +63,42 @@ Based on the current usage in swissarmyhammer-tools:
 - Ensure the new crate has minimal external dependencies
 - Consider TreeSitter dependencies and how they should be handled
 - Make sure error types are properly defined in the new domain
+## Proposed Solution
+
+After analyzing the current outline code structure, I propose the following implementation approach:
+
+### 1. New Crate Structure
+- Create `swissarmyhammer-outline/` with standard domain crate layout
+- Minimal dependencies: tree-sitter parsers, serde, thiserror, chrono, ulid
+- Clean separation from main crate's complex dependency tree
+
+### 2. Core Components to Move
+- **Types**: All outline types from `types.rs` including `OutlineNode`, `OutlineNodeType`, etc.
+- **Parser**: Tree-sitter integration and language detection
+- **Extractors**: Language-specific symbol extraction (rust, python, typescript, javascript, dart)
+- **File Discovery**: Glob pattern matching and file filtering
+- **Hierarchy Builder**: Organizing symbols into hierarchical structures  
+- **Formatters**: YAML and other output formatting
+- **Utilities**: Helper functions and configuration
+
+### 3. Dependencies Strategy
+- Tree-sitter parsers: Move to new crate
+- Language detection: Extract from search crate or duplicate minimal logic
+- Error handling: New domain-specific error types
+- File system operations: Standard library + walkdir/ignore crates
+
+### 4. API Design
+- Clean public API following other domain crates
+- Re-export main types and builders at crate root
+- Maintain backward compatibility during transition
+
+### 5. Migration Steps
+1. Create new crate structure with Cargo.toml
+2. Move and adapt core types and error handling
+3. Move file discovery and parser functionality
+4. Move language-specific extractors
+5. Update swissarmyhammer-tools imports
+6. Remove old code from main crate
+7. Test and verify functionality
+
+This approach follows the established pattern of other domain crates and creates clear separation of concerns.

@@ -1,0 +1,47 @@
+[package]
+name = "swissarmyhammer-outline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Code outline generation and analysis for SwissArmyHammer"
+
+[dependencies]
+# Workspace dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+# Core async and serialization
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Utility and system
+chrono = { workspace = true }
+ulid = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+
+# File system operations
+walkdir = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
+
+# Tree-sitter parsers for code analysis
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-dart = { workspace = true }
+
+# Hash for file change detection
+md5 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = "0.4"

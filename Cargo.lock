@@ -6648,6 +6648,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "swissarmyhammer-outline"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "glob",
+ "ignore",
+ "md5",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "swissarmyhammer-common",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-dart",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "ulid",
+ "walkdir",
+]
+
+[[package]]
 name = "swissarmyhammer-search"
 version = "0.1.0"
 dependencies = [

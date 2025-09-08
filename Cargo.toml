@@ -15,6 +15,7 @@ members = [
     "swissarmyhammer-git",
     "swissarmyhammer-search",
     "swissarmyhammer-todo",
+    "swissarmyhammer-outline",
 ]
 resolver = "2"
 
