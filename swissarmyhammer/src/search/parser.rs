@@ -1636,67 +1636,54 @@ impl ExecutionVisualizer {
             let _is_supported = parser.is_supported_file(file_path);
         }
 
-        // Test with memo.rs content
-        let memo_content = r#"use crate::cli::MemoCommands;
-use colored::*;
-use std::io::{self, Read};
-use swissarmyhammer::memoranda::{
-    AdvancedMemoSearchEngine, MarkdownMemoStorage, MemoId, MemoStorage, SearchOptions,
-};
+        // Test with simple Rust content
+        let rust_content = r#"use std::collections::HashMap;
+use std::error::Error;
+use serde::{Deserialize, Serialize};
 
-// Configurable preview length constants
-const DEFAULT_LIST_PREVIEW_LENGTH: usize = 100;
-const DEFAULT_SEARCH_PREVIEW_LENGTH: usize = 150;
+// Configuration constants
+const DEFAULT_BUFFER_SIZE: usize = 1024;
+const MAX_RETRIES: usize = 3;
 
-/// Format content preview with specified maximum length
-fn format_content_preview(content: &str, max_length: usize) -> String {
-    let preview = if content.len() > max_length {
-        format!("{}...", &content[..max_length])
-    } else {
-        content.to_string()
-    };
-    preview.replace('\n', " ")
+/// Simple data structure for testing
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TestData {
+    pub id: String,
+    pub value: i32,
+    pub metadata: HashMap<String, String>,
 }
 
-pub async fn handle_memo_command(command: MemoCommands) -> Result<(), Box<dyn std::error::Error>> {
-    let storage = MarkdownMemoStorage::new_default()?;
-
-    match command {
-        MemoCommands::Create { title, content } => {
-            create_memo(storage, title, content).await?;
-        }
-        MemoCommands::List => {
-            list_memos(storage).await?;
-        }
-        MemoCommands::Get { id } => {
-            get_memo(storage, &id).await?;
-        }
-        MemoCommands::Update { id, content } => {
-            update_memo(storage, &id, content).await?;
-        }
-        MemoCommands::Delete { id } => {
-            delete_memo(storage, &id).await?;
-        }
-        MemoCommands::Search { query } => {
-            search_memos(storage, &query).await?;
-        }
-        MemoCommands::Context => {
-            get_context(storage).await?;
+impl TestData {
+    /// Create new test data instance
+    pub fn new(id: String, value: i32) -> Self {
+        Self {
+            id,
+            value,
+            metadata: HashMap::new(),
         }
     }
+    
+    /// Add metadata entry
+    pub fn add_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
+    }
+}
 
-    Ok(())
+pub async fn process_data(data: TestData) -> Result<String, Box<dyn Error>> {
+    // Simple processing logic
+    let result = format!("Processed: {} with value {}", data.id, data.value);
+    Ok(result)
 }
 "#;
 
-        let memo_file_path = Path::new("./swissarmyhammer-cli/src/memo.rs");
-        let memo_chunks = parser.parse_file(memo_file_path, memo_content).unwrap();
+        let rust_file_path = Path::new("./test_data.rs");
+        let rust_chunks = parser.parse_file(rust_file_path, rust_content).unwrap();
 
-        memo_chunks.is_empty();
+        rust_chunks.is_empty();
 
         // The test should pass if we extract chunks from either file
         assert!(
-            !chunks.is_empty() || !memo_chunks.is_empty(),
+            !chunks.is_empty() || !rust_chunks.is_empty(),
             "Should extract chunks from at least one of the test files"
         );
     }

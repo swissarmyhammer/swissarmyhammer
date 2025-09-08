@@ -3,7 +3,7 @@
 //! This module provides various formatters to convert outline structures
 //! into different output formats like YAML, JSON, etc.
 
-use crate::types::{OutlineHierarchy, FileOutline, OutlineNode, OutlineNodeType, SymbolVisibility};
+use crate::types::{OutlineHierarchy, FileOutline, OutlineNode, SymbolVisibility};
 use crate::{Result, OutlineError};
 use std::fmt::Write;
 

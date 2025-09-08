@@ -333,7 +333,7 @@ let current = manager.current_issue().await?;
 Note-taking and knowledge management system.
 
 ```rust
-use swissarmyhammer::memoranda::{MemoStorage, Memo};
+use swissarmyhammer_memoranda::{MemoStorage, Memo};
 
 let storage = MemoStorage::new("./memos")?;
 

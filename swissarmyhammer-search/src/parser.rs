@@ -1640,7 +1640,7 @@ impl ExecutionVisualizer {
         let memo_content = r#"use crate::cli::MemoCommands;
 use colored::*;
 use std::io::{self, Read};
-use swissarmyhammer::memoranda::{
+use swissarmyhammer_memoranda::{
     AdvancedMemoSearchEngine, MarkdownMemoStorage, MemoId, MemoStorage, SearchOptions,
 };
 

@@ -49,9 +49,7 @@ pub enum SwissArmyHammerError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// Memoranda storage error
-    #[error("Memoranda error: {0}")]
-    Memoranda(#[from] swissarmyhammer_memoranda::error::MemorandaError),
+
 
     /// Issue not found
     #[error("Issue not found: {0}")]

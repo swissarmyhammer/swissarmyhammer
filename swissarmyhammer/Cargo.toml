@@ -56,7 +56,7 @@ ort = { workspace = true }
 tokenizers = { workspace = true }
 hf-hub = { workspace = true }
 ndarray = { workspace = true }
-fastembed = { version = "5.0.0" } # Latest version - attempting to resolve previous version conflicts
+fastembed = { workspace = true }
 duckdb = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
@@ -99,8 +99,10 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 
-# Memoranda support
+# Memoranda support for examples only
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
+
+
 
 
 

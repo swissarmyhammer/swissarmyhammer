@@ -6,7 +6,7 @@
 use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::sync::Arc;
-use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
+use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};

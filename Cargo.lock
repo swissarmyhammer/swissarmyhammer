@@ -6700,6 +6700,7 @@ dependencies = [
  "sha2",
  "swissarmyhammer",
  "swissarmyhammer-common",
+ "swissarmyhammer-memoranda",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

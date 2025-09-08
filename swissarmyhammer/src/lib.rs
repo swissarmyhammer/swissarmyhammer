@@ -69,10 +69,7 @@ pub mod workflow;
 /// Shared frontmatter parsing functionality
 pub mod frontmatter;
 
-/// Memoranda management and storage system (re-exported from swissarmyhammer-memoranda)
-pub mod memoranda {
-    pub use swissarmyhammer_memoranda::*;
-}
+
 
 /// Security utilities for path validation and resource limits
 pub mod security;
@@ -139,11 +136,7 @@ pub use workflow::{
     WorkflowRunStatus,
 };
 
-/// Memoranda (memo/note) management types
-pub use memoranda::{
-    CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse, MarkdownMemoStorage,
-    Memo, MemoContent, MemoService, MemoStorage, MemoTitle, UpdateMemoRequest,
-};
+
 
 /// Validation types and traits
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
@@ -184,12 +177,7 @@ pub mod prelude {
         WorkflowRunStatus,
     };
 
-    // Memoranda types for convenient access
-    pub use crate::memoranda::{
-        CreateMemoRequest, DeleteMemoRequest, GetMemoRequest, ListMemosResponse,
-        MarkdownMemoStorage, Memo, MemoContent, MemoService, MemoStorage, MemoTitle,
-        UpdateMemoRequest,
-    };
+
 
     // Semantic search types for convenient access
     pub use crate::search::{

@@ -103,7 +103,7 @@ impl CliToolContext {
 
     /// Create tool handlers for backward compatibility
     fn create_tool_handlers(
-        memo_storage: Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>>,
+        memo_storage: Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>>,
     ) -> Arc<swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers> {
         Arc::new(swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage))
     }
@@ -316,12 +316,12 @@ mod tests {
 
         let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
 
-        let memo_storage: Arc<RwLock<Box<dyn swissarmyhammer::memoranda::MemoStorage>>> =
+        let memo_storage: Arc<RwLock<Box<dyn swissarmyhammer_memoranda::MemoStorage>>> =
             Arc::new(RwLock::new(Box::new(
-                swissarmyhammer::memoranda::MarkdownMemoStorage::new_default()
+                swissarmyhammer_memoranda::MarkdownMemoStorage::new_default()
                     .await
                     .unwrap_or_else(|_| {
-                        swissarmyhammer::memoranda::MarkdownMemoStorage::new(PathBuf::from(
+                        swissarmyhammer_memoranda::MarkdownMemoStorage::new(PathBuf::from(
                             "./test_issues",
                         ))
                     }),
