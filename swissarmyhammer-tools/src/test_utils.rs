@@ -5,7 +5,7 @@ use crate::mcp::tool_registry::ToolContext;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
+use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};

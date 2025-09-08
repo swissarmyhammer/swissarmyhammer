@@ -27,6 +27,8 @@ pub mod error;
 pub mod traits;
 pub mod types;
 pub mod utils;
+pub mod rate_limiter;
+pub mod abort_utils;
 
 // Re-export commonly used constants for convenience
 pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;
@@ -45,3 +47,16 @@ pub use error::{Result, SwissArmyHammerError};
 
 // Re-export env_loader for convenience
 pub use env_loader::EnvLoader;
+
+// Re-export rate limiting functionality for convenience
+pub use rate_limiter::{
+    get_rate_limiter, init_rate_limiter, RateLimitChecker, RateLimitStatus, RateLimiter,
+    RateLimiterConfig, DEFAULT_EXPENSIVE_OPERATION_LIMIT, DEFAULT_GLOBAL_RATE_LIMIT,
+    DEFAULT_PER_CLIENT_RATE_LIMIT,
+};
+
+// Re-export abort utilities for convenience
+pub use abort_utils::{
+    abort_file_exists, create_abort_file, create_abort_file_current_dir, read_abort_file,
+    remove_abort_file,
+};

@@ -14,5 +14,9 @@ thiserror.workspace = true
 anyhow.workspace = true
 ulid.workspace = true
 
+# Rate limiting and concurrency
+dashmap.workspace = true
+tracing.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

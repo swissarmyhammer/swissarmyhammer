@@ -43,6 +43,13 @@ pub enum SwissArmyHammerError {
         message: String,
     },
 
+    /// Semantic search related error
+    #[error("Semantic search error: {message}")]
+    Semantic {
+        /// Error message from semantic search operations
+        message: String,
+    },
+
     /// Other error with custom message
     #[error("{message}")]
     Other {
@@ -70,6 +77,11 @@ impl SwissArmyHammerError {
     /// Create a new I/O error with context
     pub fn io(message: String) -> Self {
         Self::Io { message }
+    }
+
+    /// Create a new semantic search error
+    pub fn semantic(message: String) -> Self {
+        Self::Semantic { message }
     }
 
     /// Create a new other error

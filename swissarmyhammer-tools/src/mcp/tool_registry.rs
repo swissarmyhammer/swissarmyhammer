@@ -223,7 +223,7 @@ use rmcp::model::{Annotated, CallToolResult, RawContent, RawTextContent, Tool};
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer::common::rate_limiter::RateLimitChecker;
+use swissarmyhammer_common::RateLimitChecker;
 use swissarmyhammer::issues::IssueStorage;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_memoranda::MemoStorage;
@@ -1436,8 +1436,8 @@ mod tests {
             git_ops,
             memo_storage,
             Arc::new(
-                swissarmyhammer::common::rate_limiter::RateLimiter::with_config(
-                    swissarmyhammer::common::rate_limiter::RateLimiterConfig {
+                swissarmyhammer_common::RateLimiter::with_config(
+                    swissarmyhammer_common::RateLimiterConfig {
                         global_limit: 10000,
                         per_client_limit: 1000,
                         expensive_operation_limit: 500,

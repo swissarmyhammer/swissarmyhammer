@@ -242,6 +242,9 @@ impl McpErrorHandler {
                     swissarmyhammer_common::SwissArmyHammerError::Io { message } => {
                         SwissArmyHammerError::Other(format!("I/O error: {}", message))
                     }
+                    swissarmyhammer_common::SwissArmyHammerError::Semantic { message } => {
+                        SwissArmyHammerError::Other(format!("Semantic error: {}", message))
+                    }
                     swissarmyhammer_common::SwissArmyHammerError::Other { message } => {
                         SwissArmyHammerError::Other(message)
                     }

@@ -1674,7 +1674,7 @@ mod tests {
     use crate::mcp::tool_registry::ToolContext;
 
     use std::sync::Arc;
-    use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
+    use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
 
     fn create_test_context() -> ToolContext {
         use crate::test_utils::TestIssueEnvironment;

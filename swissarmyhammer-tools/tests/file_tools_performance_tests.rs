@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer::test_utils::IsolatedTestHome;
@@ -243,14 +244,12 @@ async fn create_test_context() -> ToolContext {
     );
 
     let rate_limiter = Arc::new(
-        swissarmyhammer::common::rate_limiter::RateLimiter::with_config(
-            swissarmyhammer::common::rate_limiter::RateLimiterConfig {
-                global_limit: 10000,
-                per_client_limit: 1000,
-                expensive_operation_limit: 500,
-                window_duration: std::time::Duration::from_secs(1),
-            },
-        ),
+        RateLimiter::with_config(RateLimiterConfig {
+            global_limit: 10000,
+            per_client_limit: 1000,
+            expensive_operation_limit: 500,
+            window_duration: std::time::Duration::from_secs(1),
+        }),
     );
     let tool_handlers = Arc::new(ToolHandlers::new(memo_storage.clone()));
 

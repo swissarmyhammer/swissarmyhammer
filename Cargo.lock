@@ -6538,6 +6538,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer",
+ "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-memoranda",
@@ -6555,9 +6556,11 @@ name = "swissarmyhammer-common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dashmap",
  "serde",
  "tempfile",
  "thiserror 1.0.69",
+ "tracing",
  "ulid",
 ]
 

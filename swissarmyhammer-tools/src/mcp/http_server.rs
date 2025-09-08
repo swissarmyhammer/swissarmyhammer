@@ -14,7 +14,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use swissarmyhammer::Result;
+use swissarmyhammer_common::Result;
 use swissarmyhammer_config::McpServerConfig;
 use tokio::sync::{Mutex, RwLock};
 
@@ -89,8 +89,16 @@ pub async fn start_in_process_mcp_server(config: &McpServerConfig) -> Result<Mcp
 
     // Create the underlying MCP server
     let library = swissarmyhammer::PromptLibrary::new();
-    let mcp_server = McpServer::new(library).await?;
-    mcp_server.initialize().await?;
+    let mcp_server = McpServer::new(library).await.map_err(|e| {
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: e.to_string(),
+        }
+    })?;
+    mcp_server.initialize().await.map_err(|e| {
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: e.to_string(),
+        }
+    })?;
 
     // Start HTTP server with the MCP server
     start_http_server_with_mcp_server(host, config.port, mcp_server).await
@@ -104,8 +112,16 @@ pub async fn start_http_server(bind_addr: &str) -> Result<McpServerHandle> {
 
     // Create the underlying MCP server
     let library = swissarmyhammer::PromptLibrary::new();
-    let mcp_server = McpServer::new(library).await?;
-    mcp_server.initialize().await?;
+    let mcp_server = McpServer::new(library).await.map_err(|e| {
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: e.to_string(),
+        }
+    })?;
+    mcp_server.initialize().await.map_err(|e| {
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: e.to_string(),
+        }
+    })?;
 
     start_http_server_with_mcp_server(&host, port, mcp_server).await
 }
@@ -120,14 +136,18 @@ async fn start_http_server_with_mcp_server(
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .map_err(|e| {
-            swissarmyhammer::SwissArmyHammerError::Other(format!(
-                "Failed to bind to {}: {}",
-                bind_addr, e
-            ))
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!(
+                    "Failed to bind to {}: {}",
+                    bind_addr, e
+                ),
+            }
         })?;
 
     let actual_addr = listener.local_addr().map_err(|e| {
-        swissarmyhammer::SwissArmyHammerError::Other(format!("Failed to get local address: {}", e))
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Failed to get local address: {}", e),
+        }
     })?;
 
     // Create shutdown channel
@@ -334,10 +354,12 @@ async fn handle_mcp_request(
 /// Parse bind address string into host and port
 fn parse_bind_address(bind_addr: &str) -> Result<(String, u16)> {
     let addr: SocketAddr = bind_addr.parse().map_err(|e| {
-        swissarmyhammer::SwissArmyHammerError::Other(format!(
-            "Invalid bind address '{}': {}",
-            bind_addr, e
-        ))
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!(
+                "Invalid bind address '{}': {}",
+                bind_addr, e
+            ),
+        }
     })?;
 
     Ok((addr.ip().to_string(), addr.port()))

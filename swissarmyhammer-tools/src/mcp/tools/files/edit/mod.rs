@@ -477,7 +477,7 @@ mod tests {
     use crate::mcp::tool_registry::ToolContext;
     use std::fs;
     use std::sync::Arc;
-    use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
+    use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
     use swissarmyhammer_git::GitOperations;
     use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
     use tempfile::TempDir;

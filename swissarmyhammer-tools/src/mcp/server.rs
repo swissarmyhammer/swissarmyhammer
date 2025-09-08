@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer::common::rate_limiter::get_rate_limiter;
+use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer::file_watcher::{FileWatcher, FileWatcherCallback};
 use swissarmyhammer::issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer::workflow::{

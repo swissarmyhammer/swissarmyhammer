@@ -9,7 +9,7 @@ use crate::mcp::types::WorkIssueRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use swissarmyhammer::common::create_abort_file_current_dir;
+use swissarmyhammer_common::create_abort_file_current_dir;
 
 /// Tool for switching to work on an issue
 #[derive(Default)]
@@ -155,7 +155,7 @@ impl McpTool for WorkIssueTool {
 
 #[cfg(test)]
 mod tests {
-    use swissarmyhammer::common::abort_utils::create_abort_file;
+    use swissarmyhammer_common::create_abort_file;
     use swissarmyhammer::test_utils::IsolatedTestHome;
     use tempfile::TempDir;
 

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
-use swissarmyhammer::common::create_abort_file_current_dir;
+use swissarmyhammer_common::create_abort_file_current_dir;
 
 /// Request structure for creating an abort file
 #[derive(Debug, Deserialize)]
@@ -94,7 +94,7 @@ impl McpTool for AbortCreateTool {
 mod tests {
     use super::*;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
-    use swissarmyhammer::common::create_abort_file;
+    use swissarmyhammer_common::create_abort_file;
     use swissarmyhammer::test_utils::IsolatedTestHome;
     use tempfile::TempDir;
 

@@ -8,7 +8,7 @@ use crate::mcp::types::MergeIssueRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
-use swissarmyhammer::common::create_abort_file_current_dir;
+use swissarmyhammer_common::create_abort_file_current_dir;
 
 /// Tool for merging an issue work branch
 #[derive(Default)]

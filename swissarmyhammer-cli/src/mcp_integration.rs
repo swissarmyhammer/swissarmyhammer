@@ -7,6 +7,7 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
 use std::sync::Arc;
+use swissarmyhammer_common::rate_limiter::{RateLimitChecker, RateLimiter};
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_tools::{
     register_file_tools, register_issue_tools, register_memo_tools, register_search_tools,
@@ -108,8 +109,8 @@ impl CliToolContext {
     }
 
     /// Create rate limiter
-    fn create_rate_limiter() -> Arc<dyn swissarmyhammer::common::rate_limiter::RateLimitChecker> {
-        Arc::new(swissarmyhammer::common::rate_limiter::RateLimiter::new())
+    fn create_rate_limiter() -> Arc<dyn RateLimitChecker> {
+        Arc::new(RateLimiter::new())
     }
 
     /// Create and populate tool registry
@@ -330,8 +331,8 @@ mod tests {
             swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers::new(memo_storage.clone()),
         );
 
-        let rate_limiter: Arc<dyn swissarmyhammer::common::rate_limiter::RateLimitChecker> =
-            Arc::new(swissarmyhammer::common::rate_limiter::RateLimiter::new());
+        let rate_limiter: Arc<dyn RateLimitChecker> =
+            Arc::new(RateLimiter::new());
 
         ToolContext::new(
             tool_handlers,

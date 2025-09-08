@@ -213,7 +213,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use swissarmyhammer::common::rate_limiter::{RateLimiter, RateLimiterConfig};
+    use swissarmyhammer_common::{RateLimiter, RateLimiterConfig};
     use swissarmyhammer::issues::FileSystemIssueStorage;
     use swissarmyhammer_git::GitOperations;
     use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
