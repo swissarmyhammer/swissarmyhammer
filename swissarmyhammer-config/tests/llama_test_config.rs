@@ -35,7 +35,7 @@ impl TestConfig {
     /// Load test configuration from environment variables (cached)
     pub fn from_environment() -> &'static Self {
         static CONFIG: OnceLock<TestConfig> = OnceLock::new();
-        CONFIG.get_or_init(|| Self::from_environment_uncached())
+        CONFIG.get_or_init(Self::from_environment_uncached)
     }
 
     /// Load test configuration from environment variables (uncached, for testing)

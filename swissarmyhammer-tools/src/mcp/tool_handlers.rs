@@ -25,8 +25,6 @@ impl ToolHandlers {
         Self { memo_storage }
     }
 
-
-
     /// Handle memo operation errors consistently based on error type
     ///
     /// Uses the shared error handler for consistent error mapping across all MCP operations.
@@ -221,7 +219,9 @@ impl ToolHandlers {
                 } else {
                     let memo_list = memos
                         .iter()
-                        .map(|memo| McpFormatter::format_memo_preview(memo, MEMO_LIST_PREVIEW_LENGTH))
+                        .map(|memo| {
+                            McpFormatter::format_memo_preview(memo, MEMO_LIST_PREVIEW_LENGTH)
+                        })
                         .collect::<Vec<_>>()
                         .join("\n\n");
 
