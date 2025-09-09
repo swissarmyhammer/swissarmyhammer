@@ -18,6 +18,7 @@ members = [
     "swissarmyhammer-todo",
     "swissarmyhammer-outline",
     "swissarmyhammer-templating",
+    "swissarmyhammer-workflow",
 ]
 resolver = "2"
 
@@ -107,6 +108,7 @@ indicatif = "0.17"
 sha2 = "0.10"
 futures-util = "0.3"
 tempfile = "3.0"
+serial_test = "3.0"
 textwrap = "0.16"
 csv = "1.3"
 rand = "0.8"

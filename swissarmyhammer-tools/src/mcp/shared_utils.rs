@@ -8,7 +8,11 @@ use std::collections::HashMap;
 use swissarmyhammer_common::{SwissArmyHammerError, Result};
 use swissarmyhammer_todo::TodoError;
 
-// Use the common error type directly
+/// Type alias for common error type used across MCP tools
+/// 
+/// This provides a consistent error type for all MCP operations while maintaining
+/// backwards compatibility with existing code. It serves as a bridge between the
+/// domain-specific error types and the unified error handling system.
 pub type CommonError = SwissArmyHammerError;
 
 
