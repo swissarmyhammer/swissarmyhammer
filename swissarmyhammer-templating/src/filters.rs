@@ -54,8 +54,8 @@ pub fn preprocess_custom_filters(template_str: &str, args: &HashMap<String, Stri
     let mut processed = template_str.to_string();
 
     // Handle slugify filter: {{ variable | slugify }}
-    let slugify_regex = Regex::new(r"\{\{\s*(\w+)\s*\|\s*slugify\s*\}\}")
-        .expect("Failed to compile slugify regex");
+    let slugify_regex =
+        Regex::new(r"\{\{\s*(\w+)\s*\|\s*slugify\s*\}\}").expect("Failed to compile slugify regex");
 
     for cap in slugify_regex.captures_iter(template_str) {
         let var_name = &cap[1];

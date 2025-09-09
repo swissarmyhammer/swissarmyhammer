@@ -3,14 +3,12 @@
 //! This module tests that nested workflows with the same state names
 //! don't interfere with each other during execution.
 
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 use crate::actions::{clear_test_storage, set_test_storage};
-use crate::storage::{
-    MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowStorageBackend,
-};
+use crate::storage::{MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowStorageBackend};
 use crate::{MermaidParser, WorkflowExecutor, WorkflowStorage};
 use serde_json::Value;
 use serial_test::serial;
+use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
 use std::sync::Arc;
 
@@ -36,7 +34,7 @@ fn setup_test_storage_with_workflows(workflows: &[(&str, &str)]) -> Arc<Workflow
 async fn test_nested_workflow_state_name_pollution() {
     // Clear test storage first to ensure clean state
     clear_test_storage();
-    
+
     let _guard =
         IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
     // This test verifies that when a parent workflow calls a sub-workflow,
@@ -99,7 +97,8 @@ stateDiagram-v2
     set_test_storage(storage);
 
     // Parse workflows
-    let parent_workflow = MermaidParser::parse(parent_workflow_content, "pollution-test-workflow-a").unwrap();
+    let parent_workflow =
+        MermaidParser::parse(parent_workflow_content, "pollution-test-workflow-a").unwrap();
 
     // Create executor
     let mut executor = WorkflowExecutor::new();
@@ -151,7 +150,7 @@ stateDiagram-v2
 async fn test_nested_workflow_correct_action_execution() {
     // Clear test storage first to ensure clean state
     clear_test_storage();
-    
+
     let _guard =
         IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
     // Create a more complex test where both workflows have conflicting state names
@@ -212,7 +211,8 @@ stateDiagram-v2
     set_test_storage(storage);
 
     // Parse workflows
-    let parent_workflow = MermaidParser::parse(parent_workflow_content, "action-exec-test-workflow-parent").unwrap();
+    let parent_workflow =
+        MermaidParser::parse(parent_workflow_content, "action-exec-test-workflow-parent").unwrap();
 
     // Create executor
     let mut executor = WorkflowExecutor::new();
@@ -259,7 +259,7 @@ stateDiagram-v2
 async fn test_deeply_nested_workflows_state_isolation() {
     // Clear test storage first to ensure clean state
     clear_test_storage();
-    
+
     let _guard =
         IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
     // Test with 3 levels of nesting to ensure state isolation works at depth
@@ -339,7 +339,8 @@ stateDiagram-v2
     set_test_storage(storage);
 
     // Parse workflows
-    let workflow_a = MermaidParser::parse(workflow_a_content, "nested-isolation-test-workflow-level-a").unwrap();
+    let workflow_a =
+        MermaidParser::parse(workflow_a_content, "nested-isolation-test-workflow-level-a").unwrap();
 
     // Execute top-level workflow
     let mut executor = WorkflowExecutor::new();

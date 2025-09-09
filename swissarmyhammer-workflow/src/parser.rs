@@ -7,13 +7,13 @@ use crate::{
     ConditionType, State, StateId, StateType, Transition, TransitionCondition, Workflow,
     WorkflowName,
 };
-use swissarmyhammer::common::{Parameter, ParameterType};
-use swissarmyhammer::frontmatter;
 use mermaid_parser::{
     common::ast::{DiagramType, StateDiagram, StateTransition},
     parse_diagram,
 };
 use std::collections::HashMap;
+use swissarmyhammer::common::{Parameter, ParameterType};
+use swissarmyhammer::frontmatter;
 use thiserror::Error;
 
 /// Errors that can occur during Mermaid parsing
@@ -197,17 +197,14 @@ impl MermaidParser {
     }
 
     /// Parse frontmatter and extract workflow parameters
-    fn extract_parameters_from_frontmatter(
-        input: &str,
-    ) -> ParseResult<Vec<Parameter>> {
+    fn extract_parameters_from_frontmatter(input: &str) -> ParseResult<Vec<Parameter>> {
         let mut parameters = Vec::new();
 
         // Use shared frontmatter parsing
-        let frontmatter = frontmatter::parse_frontmatter(input).map_err(|e| {
-            ParseError::InvalidStructure {
+        let frontmatter =
+            frontmatter::parse_frontmatter(input).map_err(|e| ParseError::InvalidStructure {
                 message: e.to_string(),
-            }
-        })?;
+            })?;
 
         // Extract parameters from frontmatter if present
         let frontmatter_value = match frontmatter.metadata {
@@ -272,8 +269,7 @@ impl MermaidParser {
                                 });
 
                         let mut param =
-                            Parameter::new(name, description, parameter_type)
-                                .required(required);
+                            Parameter::new(name, description, parameter_type).required(required);
 
                         if let Some(default_value) = default {
                             param = param.with_default(default_value);

@@ -96,10 +96,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         assert_eq!(log_action.message, "Hello, Bob!");
     }
 
@@ -133,10 +130,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // When template vars are empty, liquid keeps the original template
         assert_eq!(log_action.message, "Hello, {{ name }}!");
     }
@@ -155,10 +149,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // With invalid syntax, should fall back to original text
         assert_eq!(log_action.message, "Hello, {{ name");
     }
@@ -177,10 +168,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // Should fall back to original text due to parse error
         assert!(log_action.message.contains("{% for item in {{ items }}"));
     }
@@ -199,10 +187,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // With undefined filter, liquid keeps the original template
         assert_eq!(
             log_action.message,
@@ -248,10 +233,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // With empty template vars, liquid keeps the original template
         assert_eq!(log_action.message, "Hello, {{ name }}!");
     }
@@ -269,10 +251,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // Liquid renders null as empty string
         assert_eq!(log_action.message, "Value is: ");
     }
@@ -297,10 +276,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // Liquid supports dot notation for object properties
         assert_eq!(log_action.message, "User: Bob (ID: 123)");
     }
@@ -319,10 +295,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         assert_eq!(log_action.message, "First item: a, Count: 3");
     }
 
@@ -341,10 +314,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
         // Special characters should be preserved
         assert_eq!(
             log_action.message,
@@ -425,10 +395,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let log_action = action
-            .as_any()
-            .downcast_ref::<crate::LogAction>()
-            .unwrap();
+        let log_action = action.as_any().downcast_ref::<crate::LogAction>().unwrap();
 
         // Should use workflow variables, not config variables
         assert_eq!(

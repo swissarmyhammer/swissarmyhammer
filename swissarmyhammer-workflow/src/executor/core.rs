@@ -68,13 +68,13 @@ impl WorkflowExecutor {
     }
 
     /// Get the workflow storage (test storage if available, otherwise create file system storage)
-    pub fn get_storage(&self) -> swissarmyhammer_common::Result<Arc<crate::storage::WorkflowStorage>> {
+    pub fn get_storage(
+        &self,
+    ) -> swissarmyhammer_common::Result<Arc<crate::storage::WorkflowStorage>> {
         if let Some(storage) = &self.test_storage {
             Ok(storage.clone())
         } else {
-            Ok(Arc::new(
-                crate::storage::WorkflowStorage::file_system()?,
-            ))
+            Ok(Arc::new(crate::storage::WorkflowStorage::file_system()?))
         }
     }
 

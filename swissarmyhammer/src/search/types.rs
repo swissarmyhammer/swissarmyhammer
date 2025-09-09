@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use swissarmyhammer_common::utils::find_swissarmyhammer_directory;
 
-
-
 /// Unique identifier for indexed files
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileId(pub String);

@@ -42,7 +42,8 @@ pub const DEFAULT_EXPENSIVE_OPERATION_LIMIT: u32 = 5; // requests per minute
 #[derive(Debug)]
 pub struct RateLimiter {
     /// Global rate limiters by operation type
-    global_limiters: DashMap<String, GovernorRateLimiter<String, DashMap<String, InMemoryState>, DefaultClock>>,
+    global_limiters:
+        DashMap<String, GovernorRateLimiter<String, DashMap<String, InMemoryState>, DefaultClock>>,
     /// Per-client rate limiter
     client_limiter: GovernorRateLimiter<String, DashMap<String, InMemoryState>, DefaultClock>,
     /// Configuration for operation limits
@@ -84,7 +85,9 @@ impl RateLimiter {
         // Create per-client rate limiter
         let client_quota = Quota::with_period(config.window_duration)
             .expect("Invalid duration for rate limiting")
-            .allow_burst(NonZeroU32::new(config.per_client_limit).expect("Invalid per_client_limit"));
+            .allow_burst(
+                NonZeroU32::new(config.per_client_limit).expect("Invalid per_client_limit"),
+            );
         let client_limiter = GovernorRateLimiter::keyed(client_quota);
 
         Self {
@@ -109,22 +112,29 @@ impl RateLimiter {
     pub fn check_rate_limit(&self, client_id: &str, operation: &str, cost: u32) -> Result<()> {
         // Check global rate limit for this operation type
         let global_key = format!("global:{operation}");
-        let global_limiter = self.global_limiters.entry(global_key.clone()).or_insert_with(|| {
-            let limit = self.operation_limit(operation);
-            let quota = Quota::with_period(self.config.window_duration)
-                .expect("Invalid duration for rate limiting")
-                .allow_burst(NonZeroU32::new(limit).expect("Invalid operation limit"));
-            GovernorRateLimiter::keyed(quota)
-        });
+        let global_limiter = self
+            .global_limiters
+            .entry(global_key.clone())
+            .or_insert_with(|| {
+                let limit = self.operation_limit(operation);
+                let quota = Quota::with_period(self.config.window_duration)
+                    .expect("Invalid duration for rate limiting")
+                    .allow_burst(NonZeroU32::new(limit).expect("Invalid operation limit"));
+                GovernorRateLimiter::keyed(quota)
+            });
 
         // Try to consume tokens from global limiter
         let global_ok = if cost == 1 {
             global_limiter.check_key(&global_key).is_ok()
         } else {
-            let cost_nonzero = NonZeroU32::new(cost).ok_or_else(|| SwissArmyHammerError::Other {
-                message: "Invalid cost value: must be greater than 0".to_string(),
-            })?;
-            matches!(global_limiter.check_key_n(&global_key, cost_nonzero), Ok(Ok(())))
+            let cost_nonzero =
+                NonZeroU32::new(cost).ok_or_else(|| SwissArmyHammerError::Other {
+                    message: "Invalid cost value: must be greater than 0".to_string(),
+                })?;
+            matches!(
+                global_limiter.check_key_n(&global_key, cost_nonzero),
+                Ok(Ok(()))
+            )
         };
 
         if !global_ok {
@@ -142,10 +152,15 @@ impl RateLimiter {
         let client_ok = if cost == 1 {
             self.client_limiter.check_key(&client_id_string).is_ok()
         } else {
-            let cost_nonzero = NonZeroU32::new(cost).ok_or_else(|| SwissArmyHammerError::Other {
-                message: "Invalid cost value: must be greater than 0".to_string(),
-            })?;
-            matches!(self.client_limiter.check_key_n(&client_id_string, cost_nonzero), Ok(Ok(())))
+            let cost_nonzero =
+                NonZeroU32::new(cost).ok_or_else(|| SwissArmyHammerError::Other {
+                    message: "Invalid cost value: must be greater than 0".to_string(),
+                })?;
+            matches!(
+                self.client_limiter
+                    .check_key_n(&client_id_string, cost_nonzero),
+                Ok(Ok(()))
+            )
         };
 
         if !client_ok {
@@ -196,7 +211,7 @@ impl RateLimiter {
         // Governor handles cleanup internally, but we can clean up our global limiters map
         // Remove entries that haven't been used recently
         let _cutoff = Instant::now() - self.config.window_duration * 2;
-        
+
         // For simplicity in this implementation, we'll rely on governor's internal cleanup
         // In a production system, you might want to implement more sophisticated cleanup
         if self.global_limiters.len() > 1000 {
@@ -253,7 +268,6 @@ pub fn init_rate_limiter(config: RateLimiterConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_rate_limiter_basic() {

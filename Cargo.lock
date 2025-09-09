@@ -6906,6 +6906,7 @@ dependencies = [
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",
+ "swissarmyhammer-workflow",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

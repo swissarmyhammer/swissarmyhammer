@@ -4,9 +4,7 @@
 //! including execution trace generation, Mermaid diagram generation, HTML output,
 //! and security features.
 
-use crate::visualization::{
-    MAX_EXECUTION_STEPS, MAX_PATH_LENGTH_FULL, MAX_PATH_LENGTH_MINIMAL,
-};
+use crate::visualization::{MAX_EXECUTION_STEPS, MAX_PATH_LENGTH_FULL, MAX_PATH_LENGTH_MINIMAL};
 use crate::{
     test_helpers::*, visualization::*, ConditionType, MemoryMetrics, RunMetrics, StateId,
     WorkflowName, WorkflowRun, WorkflowRunId, WorkflowRunStatus,

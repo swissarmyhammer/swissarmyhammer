@@ -84,7 +84,9 @@ impl ToolHandlers {
                 )))
             }
             Err(e) => Err(Self::handle_memo_error(
-                SwissArmyHammerError::Other { message: e.to_string() },
+                SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                },
                 "create memo",
             )),
         }
@@ -135,7 +137,9 @@ impl ToolHandlers {
                 memo_title
             ))),
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Other { message: e.to_string() },
+                SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                },
                 "get memo",
             )),
         }
@@ -188,7 +192,9 @@ impl ToolHandlers {
                 )))
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Other { message: e.to_string() },
+                SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                },
                 "update memo",
             )),
         }
@@ -230,7 +236,9 @@ impl ToolHandlers {
                 }
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Other { message: e.to_string() },
+                SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                },
                 "list memos",
             )),
         }
@@ -283,7 +291,9 @@ impl ToolHandlers {
                 }
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Other { message: e.to_string() },
+                SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                },
                 "get memo context",
             )),
         }

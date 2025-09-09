@@ -2,12 +2,43 @@
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rmcp::RoleServer;
+use std::path::Path;
 use std::sync::Arc;
-use swissarmyhammer::common::file_types::is_any_prompt_file;
 use swissarmyhammer::PromptResolver;
-use swissarmyhammer_common::{SwissArmyHammerError, Result};
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use tokio::sync::{mpsc, Mutex};
 
+/// Common prompt file extensions
+const PROMPT_EXTENSIONS: &[&str] = &["md", "yaml", "yml", "markdown"];
+
+/// Compound prompt file extensions (checked first due to specificity)
+const COMPOUND_PROMPT_EXTENSIONS: &[&str] =
+    &["md.liquid", "markdown.liquid", "yaml.liquid", "yml.liquid"];
+
+/// Check if a file has a compound extension (more specific check)
+fn has_compound_extension<P: AsRef<Path>>(path: P) -> bool {
+    let path_str = path.as_ref().to_string_lossy().to_lowercase();
+    COMPOUND_PROMPT_EXTENSIONS.iter().any(|&ext| {
+        let extension = format!(".{ext}");
+        path_str.ends_with(&extension)
+    })
+}
+
+/// Check if a file has a prompt extension
+fn is_prompt_file<P: AsRef<Path>>(path: P) -> bool {
+    let path = path.as_ref();
+    if let Some(ext) = path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        PROMPT_EXTENSIONS.contains(&ext_str.as_str())
+    } else {
+        false
+    }
+}
+
+/// Check if a file is any kind of prompt file (simple or compound extension)
+fn is_any_prompt_file<P: AsRef<Path>>(path: P) -> bool {
+    has_compound_extension(&path) || is_prompt_file(path)
+}
 
 /// Callback trait for handling file system events
 pub trait FileWatcherCallback: Send + Sync + 'static {
@@ -31,12 +62,12 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     /// Create a new file watcher instance.
-    /// 
+    ///
     /// The file watcher starts in an inactive state. Call `start_watching()` to begin
     /// monitoring file system changes.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```
     /// let mut watcher = FileWatcher::new();
     /// // watcher.start_watching(callback).await?;
@@ -60,8 +91,12 @@ impl FileWatcher {
 
         // Get the directories to watch using the same logic as PromptResolver
         let resolver = PromptResolver::new();
-        let watch_paths = resolver.get_prompt_directories()
-            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
+        let watch_paths =
+            resolver
+                .get_prompt_directories()
+                .map_err(|e| SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                })?;
 
         tracing::info!(
             "Found {} directories to watch: {:?}",
@@ -90,13 +125,17 @@ impl FileWatcher {
             },
             notify::Config::default(),
         )
-        .map_err(|e| SwissArmyHammerError::Other { message: format!("Failed to create file watcher: {}", e) })?;
+        .map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to create file watcher: {}", e),
+        })?;
 
         // Watch all directories
         for path in &watch_paths {
-            watcher
-                .watch(path, RecursiveMode::Recursive)
-                .map_err(|e| SwissArmyHammerError::Other { message: format!("Failed to watch directory {path:?}: {}", e) })?;
+            watcher.watch(path, RecursiveMode::Recursive).map_err(|e| {
+                SwissArmyHammerError::Other {
+                    message: format!("Failed to watch directory {path:?}: {}", e),
+                }
+            })?;
             tracing::info!("Watching directory: {:?}", path);
         }
 
@@ -350,4 +389,3 @@ impl McpFileWatcher {
         }
     }
 }
-

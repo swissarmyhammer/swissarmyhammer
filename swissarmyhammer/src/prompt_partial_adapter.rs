@@ -71,7 +71,10 @@ impl PromptPartialAdapter {
 
 impl PartialLoader for PromptPartialAdapter {
     fn contains(&self, name: &str) -> bool {
-        tracing::debug!("PromptPartialAdapter::contains called with name: '{}'", name);
+        tracing::debug!(
+            "PromptPartialAdapter::contains called with name: '{}'",
+            name
+        );
 
         // Try exact name first
         if self.library.get(name).is_ok() {

@@ -820,14 +820,22 @@ impl PromptLibrary {
         let liquid_vars = enhanced_context.to_liquid_context();
         tracing::debug!("Liquid Context: {:?}", liquid_vars);
 
-        let partial_adapter = crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(full_library));
-        let template_with_partials = swissarmyhammer_templating::Template::with_partials(&prompt.template, partial_adapter)
-            .map_err(|e| SwissArmyHammerError::Template(format!("Failed to create template with partials: {e}")))?;
+        let partial_adapter =
+            crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(full_library));
+        let template_with_partials =
+            swissarmyhammer_templating::Template::with_partials(&prompt.template, partial_adapter)
+                .map_err(|e| {
+                    SwissArmyHammerError::Template(format!(
+                        "Failed to create template with partials: {e}"
+                    ))
+                })?;
 
         // Render with template context
-        template_with_partials.render_with_context(&enhanced_context).map_err(|e| {
-            SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
-        })
+        template_with_partials
+            .render_with_context(&enhanced_context)
+            .map_err(|e| {
+                SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
+            })
     }
 
     /// Searches for prompts matching the given query.

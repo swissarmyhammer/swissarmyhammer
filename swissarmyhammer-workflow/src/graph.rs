@@ -286,9 +286,7 @@ impl<'a> WorkflowGraphAnalyzer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ConditionType, State, StateType, Transition, TransitionCondition, WorkflowName,
-    };
+    use crate::{ConditionType, State, StateType, Transition, TransitionCondition, WorkflowName};
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new(

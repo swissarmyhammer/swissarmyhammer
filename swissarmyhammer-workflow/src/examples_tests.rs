@@ -487,12 +487,8 @@ stateDiagram-v2
             .expect("Workflow should be valid");
 
         // Verify states
-        assert!(workflow
-            .states
-            .contains_key(&crate::StateId::new("Start")));
-        assert!(workflow
-            .states
-            .contains_key(&crate::StateId::new("End")));
+        assert!(workflow.states.contains_key(&crate::StateId::new("Start")));
+        assert!(workflow.states.contains_key(&crate::StateId::new("End")));
 
         // Verify initial state
         assert_eq!(workflow.initial_state.as_str(), "Start");

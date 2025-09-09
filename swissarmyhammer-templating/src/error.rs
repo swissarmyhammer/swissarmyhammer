@@ -30,9 +30,9 @@ pub enum TemplatingError {
 
     /// Template timeout during rendering
     #[error("Template rendering timed out after {timeout_ms}ms")]
-    Timeout { 
+    Timeout {
         /// The timeout duration in milliseconds
-        timeout_ms: u64 
+        timeout_ms: u64,
     },
 
     /// IO error during template operations

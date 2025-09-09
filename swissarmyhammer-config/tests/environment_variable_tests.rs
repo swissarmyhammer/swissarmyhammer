@@ -22,7 +22,6 @@ struct IsolatedEnvTest {
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
     original_sah_vars: std::collections::HashMap<String, String>,
-    #[allow(dead_code)]
     _lock_guard: std::sync::MutexGuard<'static, ()>,
 }
 

@@ -33,7 +33,6 @@ use walkdir::WalkDir;
 /// Maximum file size to load (10MB)
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
-
 /// Source of a file (builtin, user, local, or dynamic)
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum FileSource {

@@ -267,34 +267,9 @@ impl FileDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::PathBuf;
-    use tempfile::TempDir;
 
-    #[allow(dead_code)]
-    fn create_test_files(temp_dir: &TempDir) -> Result<()> {
-        // Create various test files
-        fs::write(temp_dir.path().join("main.rs"), "fn main() {}")
-            .map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("lib.py"), "def hello(): pass")
-            .map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("app.ts"), "console.log('hello');")
-            .map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("script.js"), "alert('test');")
-            .map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("widget.dart"), "void main() {}")
-            .map_err(OutlineError::FileSystem)?;
-        fs::write(temp_dir.path().join("README.md"), "# Test").map_err(OutlineError::FileSystem)?;
 
-        // Create subdirectory with files
-        let subdir = temp_dir.path().join("src");
-        fs::create_dir_all(&subdir).map_err(OutlineError::FileSystem)?;
-        fs::write(subdir.join("module.rs"), "pub fn test() {}")
-            .map_err(OutlineError::FileSystem)?;
-        fs::write(subdir.join("utils.py"), "import os").map_err(OutlineError::FileSystem)?;
-
-        Ok(())
-    }
 
     #[test]
     fn test_file_discovery_creation() {

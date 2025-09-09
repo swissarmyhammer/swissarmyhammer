@@ -1,12 +1,12 @@
 //! Storage abstractions and implementations for workflows and workflow runs
 
-use swissarmyhammer::file_loader::{FileSource, VirtualFileSystem};
 use crate::{MermaidParser, Workflow, WorkflowName, WorkflowRun, WorkflowRunId};
-use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer::file_loader::{FileSource, VirtualFileSystem};
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 
 // Include the generated builtin workflows
 include!(concat!(env!("OUT_DIR"), "/builtin_workflows.rs"));
@@ -31,7 +31,9 @@ impl WorkflowResolver {
     /// Get all directories that workflows are loaded from
     /// Returns paths in the same order as loading precedence
     pub fn get_workflow_directories(&self) -> Result<Vec<PathBuf>> {
-        self.vfs.get_directories().map_err(|e| SwissArmyHammerError::other(e.to_string()))
+        self.vfs
+            .get_directories()
+            .map_err(|e| SwissArmyHammerError::other(e.to_string()))
     }
 
     /// Load all workflows following the correct precedence:
@@ -43,7 +45,9 @@ impl WorkflowResolver {
         self.load_builtin_workflows()?;
 
         // Load all files from directories using VFS
-        self.vfs.load_all().map_err(|e| SwissArmyHammerError::other(e.to_string()))?;
+        self.vfs
+            .load_all()
+            .map_err(|e| SwissArmyHammerError::other(e.to_string()))?;
 
         // Process all loaded files into workflows
         for file in self.vfs.list() {
@@ -795,9 +799,8 @@ impl WorkflowStorageBackend for CompressedWorkflowStorage {
                 .map_err(|e| SwissArmyHammerError::other(format!("Base64 decode failed: {e}")))?;
 
             let json_data = self.decompress_data(&compressed_data)?;
-            let workflow: Workflow = serde_json::from_slice(&json_data).map_err(|e| {
-                SwissArmyHammerError::other(format!("Deserialization failed: {e}"))
-            })?;
+            let workflow: Workflow = serde_json::from_slice(&json_data)
+                .map_err(|e| SwissArmyHammerError::other(format!("Deserialization failed: {e}")))?;
 
             Ok(workflow)
         } else {
@@ -884,8 +887,8 @@ impl WorkflowStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
     use crate::{State, StateId, StateType};
+    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new(
@@ -1045,8 +1048,8 @@ mod tests {
 
     #[test]
     fn test_workflow_resolver_user_workflows() {
-        use swissarmyhammer::test_utils::IsolatedTestEnvironment;
         use std::fs;
+        use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
@@ -1100,8 +1103,8 @@ stateDiagram-v2
 
     #[test]
     fn test_workflow_resolver_local_workflows() {
-        use swissarmyhammer::test_utils::IsolatedTestEnvironment;
         use std::fs;
+        use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
         let env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");

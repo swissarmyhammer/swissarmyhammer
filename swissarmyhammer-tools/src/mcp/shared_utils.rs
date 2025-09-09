@@ -5,17 +5,15 @@
 
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
-use swissarmyhammer_common::{SwissArmyHammerError, Result};
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_todo::TodoError;
 
 /// Type alias for common error type used across MCP tools
-/// 
+///
 /// This provides a consistent error type for all MCP operations while maintaining
 /// backwards compatibility with existing code. It serves as a bridge between the
 /// domain-specific error types and the unified error handling system.
 pub type CommonError = SwissArmyHammerError;
-
-
 
 /// Standard response format for MCP operations
 #[derive(Debug)]
@@ -64,8 +62,6 @@ impl McpResponse {
 pub struct McpErrorHandler;
 
 impl McpErrorHandler {
-
-
     /// Convert SwissArmyHammerError to appropriate MCP error response
     ///
     /// This provides consistent error mapping across all MCP operations:
@@ -77,18 +73,14 @@ impl McpErrorHandler {
 
         match error {
             // File system errors
-            SwissArmyHammerError::FileNotFound { path, suggestion } => {
-                McpError::invalid_params(
-                    format!("File not found: {path}. Suggestion: {suggestion}"),
-                    None,
-                )
-            }
-            SwissArmyHammerError::NotAFile { path, suggestion } => {
-                McpError::invalid_params(
-                    format!("Path is not a file: {path}. Suggestion: {suggestion}"),
-                    None,
-                )
-            }
+            SwissArmyHammerError::FileNotFound { path, suggestion } => McpError::invalid_params(
+                format!("File not found: {path}. Suggestion: {suggestion}"),
+                None,
+            ),
+            SwissArmyHammerError::NotAFile { path, suggestion } => McpError::invalid_params(
+                format!("Path is not a file: {path}. Suggestion: {suggestion}"),
+                None,
+            ),
             SwissArmyHammerError::PermissionDenied {
                 path,
                 error,
@@ -97,12 +89,10 @@ impl McpErrorHandler {
                 format!("Permission denied: {path} - {error}. Suggestion: {suggestion}"),
                 None,
             ),
-            SwissArmyHammerError::InvalidFilePath { path, suggestion } => {
-                McpError::invalid_params(
-                    format!("Invalid file path: {path}. Suggestion: {suggestion}"),
-                    None,
-                )
-            }
+            SwissArmyHammerError::InvalidFilePath { path, suggestion } => McpError::invalid_params(
+                format!("Invalid file path: {path}. Suggestion: {suggestion}"),
+                None,
+            ),
 
             // System-level errors
             SwissArmyHammerError::Io(err) => {
@@ -128,10 +118,8 @@ impl McpErrorHandler {
                 }
             }
 
-            // Handle all other variants generically  
-            _ => {
-                McpError::internal_error(format!("Operation failed: {error}"), None)
-            }
+            // Handle all other variants generically
+            _ => McpError::internal_error(format!("Operation failed: {error}"), None),
         }
     }
 
@@ -186,12 +174,14 @@ impl McpValidation {
     /// Validate string length
     pub fn validate_string_length(value: &str, field: &str, max_length: usize) -> Result<()> {
         if value.len() > max_length {
-            return Err(SwissArmyHammerError::Other { message: format!(
-                "{} too long: {} characters (max: {})",
-                Self::capitalize_first_letter(field),
-                value.len(),
-                max_length
-            ) });
+            return Err(SwissArmyHammerError::Other {
+                message: format!(
+                    "{} too long: {} characters (max: {})",
+                    Self::capitalize_first_letter(field),
+                    value.len(),
+                    max_length
+                ),
+            });
         }
         Ok(())
     }
@@ -199,10 +189,9 @@ impl McpValidation {
     /// Validate string is not empty
     pub fn validate_not_empty(value: &str, field: &str) -> Result<()> {
         if value.trim().is_empty() {
-            return Err(SwissArmyHammerError::Other { message: format!(
-                "{} cannot be empty",
-                Self::capitalize_first_letter(field)
-            ) });
+            return Err(SwissArmyHammerError::Other {
+                message: format!("{} cannot be empty", Self::capitalize_first_letter(field)),
+            });
         }
         Ok(())
     }
@@ -219,10 +208,9 @@ impl McpValidation {
     /// Validate identifier format (alphanumeric, hyphens, underscores only)
     pub fn validate_identifier(value: &str, field: &str) -> Result<()> {
         if value.is_empty() {
-            return Err(SwissArmyHammerError::Other { message: format!(
-                "{} cannot be empty",
-                Self::capitalize_first_letter(field)
-            ) });
+            return Err(SwissArmyHammerError::Other {
+                message: format!("{} cannot be empty", Self::capitalize_first_letter(field)),
+            });
         }
 
         for char in value.chars() {
@@ -241,9 +229,9 @@ impl McpValidation {
     /// Validate ULID format
     pub fn validate_ulid(value: &str, field: &str) -> Result<()> {
         if value.len() != 26 {
-            return Err(SwissArmyHammerError::Other { message: format!(
-                "{field} must be 26 characters long (ULID format)"
-            ) });
+            return Err(SwissArmyHammerError::Other {
+                message: format!("{field} must be 26 characters long (ULID format)"),
+            });
         }
 
         for char in value.chars() {

@@ -95,7 +95,9 @@ impl McpTool for UpdateIssueTool {
                 }
             ))),
             Err(e) => Err(McpErrorHandler::handle_error(
-                swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: e.to_string(),
+                },
                 "update issue",
             )),
         }
