@@ -18,6 +18,15 @@ use swissarmyhammer_common::SwissArmyHammerError;
 use swissarmyhammer_templating::TemplateEngine;
 use swissarmyhammer_config::TemplateContext;
 
+// Declare modules
+mod prompts;
+
+// Re-export the PromptLoader from prompts module
+pub use prompts::PromptLoader;
+
+// Include the generated builtin prompts
+include!(concat!(env!("OUT_DIR"), "/builtin_prompts.rs"));
+
 /// Result type for prompt operations
 pub type Result<T> = std::result::Result<T, SwissArmyHammerError>;
 
@@ -84,6 +93,71 @@ impl Prompt {
             .map_err(|e| SwissArmyHammerError::Other { 
                 message: format!("Failed to render prompt '{}': {}", self.name, e) 
             })
+    }
+}
+
+/// Handles loading prompts from various sources with proper precedence
+#[derive(Debug, Default)]
+pub struct PromptResolver {
+    /// Track the source of each prompt by name
+    pub prompt_sources: HashMap<String, PromptSource>,
+}
+
+impl PromptResolver {
+    /// Create a new PromptResolver
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Load all prompts following the correct precedence
+    /// Loads built-in prompts first, then user/local prompts
+    pub fn load_all_prompts(&mut self, library: &mut PromptLibrary) -> Result<()> {
+        tracing::debug!("Starting to load all prompts");
+        
+        // Load builtin prompts first (lowest precedence)
+        self.load_builtin_prompts(library)?;
+        
+        let final_count = library.get_all().len();
+        tracing::debug!("Total prompts in library after loading: {}", final_count);
+        
+        // TODO: Add user and local prompt loading here
+        // For now, just load built-ins to fix the failing tests
+        
+        Ok(())
+    }
+
+    /// Load built-in prompts into the library
+    fn load_builtin_prompts(&mut self, library: &mut PromptLibrary) -> Result<()> {
+        let builtin_prompts = get_builtin_prompts();
+        tracing::debug!("Loading {} builtin prompts", builtin_prompts.len());
+        
+        let loader = PromptLoader::new();
+        let mut loaded_count = 0;
+        
+        for (name, content) in builtin_prompts {
+            tracing::debug!("Loading builtin prompt: {}", name);
+            match loader.load_from_string(name, content) {
+                Ok(prompt) => {
+                    self.prompt_sources.insert(name.to_string(), PromptSource::Builtin);
+                    library.add_prompt(prompt, PromptSource::Builtin);
+                    loaded_count += 1;
+                    tracing::debug!("Successfully loaded builtin prompt: {}", name);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load builtin prompt '{}': {}", name, e);
+                    // Continue loading other prompts even if one fails
+                }
+            }
+        }
+        
+        tracing::debug!("Loaded {} builtin prompts successfully", loaded_count);
+        Ok(())
+    }
+
+    /// Get all directories that prompts are loaded from
+    pub fn get_prompt_directories(&self) -> Result<Vec<std::path::PathBuf>> {
+        // TODO: Implement actual directory discovery
+        Ok(vec![])
     }
 }
 
@@ -160,33 +234,7 @@ impl PromptLibrary {
     }
 }
 
-/// Handles loading prompts from various sources with proper precedence
-#[derive(Debug, Default)]
-pub struct PromptResolver {
-    /// Track the source of each prompt by name
-    pub prompt_sources: HashMap<String, PromptSource>,
-}
 
-impl PromptResolver {
-    /// Create a new PromptResolver
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Load all prompts following the correct precedence
-    /// For now, this is a placeholder that creates an empty library
-    pub fn load_all_prompts(&mut self, _library: &mut PromptLibrary) -> Result<()> {
-        // TODO: Implement actual prompt loading from files
-        // This is a minimal implementation for migration
-        Ok(())
-    }
-
-    /// Get all directories that prompts are loaded from
-    pub fn get_prompt_directories(&self) -> Result<Vec<std::path::PathBuf>> {
-        // TODO: Implement actual directory discovery
-        Ok(vec![])
-    }
-}
 
 #[cfg(test)]
 mod tests {

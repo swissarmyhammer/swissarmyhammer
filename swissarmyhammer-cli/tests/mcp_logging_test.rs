@@ -6,7 +6,7 @@ mod test_utils;
 use test_utils::ProcessGuard;
 
 /// Test that MCP server logs to ./.swissarmyhammer/mcp.log by default
-#[ignore = "Disabled pending MCP connection fix"]
+
 #[tokio::test]
 async fn test_mcp_logging_to_current_directory() {
     // Clean up any existing home logs from previous tests
@@ -85,7 +85,7 @@ async fn test_mcp_logging_to_current_directory() {
 }
 
 /// Test that SWISSARMYHAMMER_LOG_FILE environment variable overrides log filename
-#[ignore = "Disabled pending MCP connection fix"]
+
 #[tokio::test]
 async fn test_mcp_logging_env_var_override() {
     let temp_dir = TempDir::new().unwrap();
@@ -143,7 +143,7 @@ async fn test_mcp_logging_env_var_override() {
 }
 
 /// Test that log directory is created if it doesn't exist
-#[ignore = "Disabled pending MCP connection fix"]
+
 #[tokio::test]
 async fn test_mcp_logging_creates_directory() {
     let temp_dir = TempDir::new().unwrap();

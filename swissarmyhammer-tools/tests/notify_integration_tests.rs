@@ -13,7 +13,7 @@ use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::notify;
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 
 /// Creates a test rate limiter with generous limits suitable for testing
 fn create_test_rate_limiter() -> Arc<RateLimiter> {

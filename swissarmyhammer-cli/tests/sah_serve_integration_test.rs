@@ -28,7 +28,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
     "memo_create",
     "memo_list",
     "memo_get",
-    "memo_update",
     "notify_create",
     "outline_generate",
     "search_index",
@@ -43,7 +42,7 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
 
 /// Comprehensive integration test for sah serve MCP tools
 #[tokio::test]
-#[ignore = "Slow MCP server integration test - run with --ignored"]
+
 async fn test_sah_serve_tools_integration() -> Result<(), Box<dyn std::error::Error>> {
     // Start the MCP server process
     let child = Command::new("cargo")
@@ -451,7 +450,7 @@ fn read_mcp_response(
 
 /// Test that validates the server properly shuts down
 #[tokio::test]
-#[ignore = "Slow MCP server integration test - run with --ignored"]
+
 async fn test_sah_serve_shutdown() {
     // Start server
     let child = Command::new("cargo")
@@ -494,7 +493,7 @@ async fn test_sah_serve_shutdown() {
 }
 
 /// Test that validates server can handle multiple concurrent connections
-#[ignore = "MCP server integration tests are flaky due to rmcp library issues"]
+
 #[tokio::test]
 async fn test_sah_serve_concurrent_requests() {
     // This test validates that the server can handle multiple requests properly

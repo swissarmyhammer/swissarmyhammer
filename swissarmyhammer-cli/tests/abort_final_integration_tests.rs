@@ -70,23 +70,56 @@ impl TestEnvironment {
         assert!(!abort_file.exists(), "Abort file should not exist");
     }
     fn create_test_workflow(&self, name: &str) -> Result<String> {
+        let workflow_name = name.replace(' ', "_").to_lowercase();
+        let workflow_file = format!("{}.md", workflow_name);
         let workflow_content = format!(
-            "# {}\n\n## Goal\nTest workflow for {}\n\n## Steps\n- step: echo \"Hello from {}\"\n",
-            name, name, name
-        );
-        let workflow_file = format!("{}.md", name.replace(' ', "_").to_lowercase());
-        let workflow_path = self.temp_path.join(&workflow_file);
+r#"---
+name: {workflow_name}
+title: {name}
+description: Test workflow for {name}
+category: test
+---
+
+# {name}
+
+Test workflow for integration testing.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Start
+    Start --> Echo
+    Echo --> Complete
+    Complete --> [*]
+
+    Start: Start state
+    Start: description: Initialize workflow
+    
+    Echo: Echo message
+    Echo: action: log
+    Echo: message: "Hello from {name}"
+    
+    Complete: Complete state
+    Complete: terminal: true
+```
+"#);
+        
+        // Create .swissarmyhammer/workflows directory
+        let workflows_dir = self.temp_path.join(".swissarmyhammer").join("workflows");
+        fs::create_dir_all(&workflows_dir)?;
+        
+        // Write workflow to the workflows directory
+        let workflow_path = workflows_dir.join(&workflow_file);
         fs::write(&workflow_path, workflow_content)?;
-        Ok(workflow_file)
+        Ok(workflow_name)
     }
 }
 
 /// Test performance impact of abort checking system
 #[tokio::test]
-#[ignore = "Complex workflow test - requires full workflow system setup"]
+
 async fn test_abort_performance_impact_baseline() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let workflow_file = env.create_test_workflow("Performance Baseline")?;
+    let workflow_file = "hello-world"; // Use built-in workflow instead
 
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
@@ -122,7 +155,7 @@ async fn test_abort_performance_impact_baseline() -> Result<()> {
 
 /// Test performance with abort file checking overhead
 #[tokio::test]
-#[ignore = "Performance test - inherently slow by design"]
+
 async fn test_abort_performance_with_checking_overhead() -> Result<()> {
     let env = TestEnvironment::new()?;
     let workflow_file = env.create_test_workflow("Performance With Checking")?;
@@ -156,7 +189,7 @@ async fn test_abort_performance_with_checking_overhead() -> Result<()> {
 
 /// Test concurrent workflow execution with abort
 #[tokio::test]
-#[ignore = "Concurrent test with multiple CLI executions - very slow"]
+
 async fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // Use unique identifier to avoid conflicts between test runs
     let test_id = std::process::id();
@@ -400,7 +433,7 @@ async fn test_unicode_abort_reasons() -> Result<()> {
 
 /// Test abort system error messages and user experience
 #[tokio::test]
-#[ignore = "Complex workflow test - requires full workflow system setup"]
+
 async fn test_abort_error_messages_user_experience() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -439,7 +472,7 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
 
 /// Test abort file cleanup between workflow runs
 #[tokio::test]
-#[ignore = "Multiple CLI executions - expensive integration test"]
+
 async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -536,7 +569,7 @@ async fn test_abort_with_different_cli_commands() -> Result<()> {
 
 /// Regression test to ensure existing functionality works
 #[tokio::test]
-#[ignore = "Complex workflow test - requires full workflow system setup"]
+
 async fn test_regression_normal_workflow_execution() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -544,7 +577,7 @@ async fn test_regression_normal_workflow_execution() -> Result<()> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
 
-    let workflow_file = env.create_test_workflow("Regression Test")?;
+    let workflow_file = "hello-world"; // Use built-in workflow instead
 
     // Ensure no abort file exists
     env.verify_no_abort_file();

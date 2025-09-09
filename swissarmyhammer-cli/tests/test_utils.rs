@@ -58,6 +58,12 @@ pub struct SemanticTestGuard {
     _database_file: Option<tempfile::NamedTempFile>,
 }
 
+impl Default for SemanticTestGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SemanticTestGuard {
     /// Create a new semantic test guard with isolated environment
     #[allow(dead_code)]

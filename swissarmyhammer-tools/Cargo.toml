@@ -27,7 +27,6 @@ swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-outline = { path = "../swissarmyhammer-outline" }
 swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
-swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 
 # Async and JSON processing
 tokio = { workspace = true }

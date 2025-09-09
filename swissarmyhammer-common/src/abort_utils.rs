@@ -6,7 +6,35 @@
 
 use crate::Result;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Get or create the .swissarmyhammer directory for the given work directory
+///
+/// This helper function centralizes the logic for resolving the .swissarmyhammer directory
+/// path and ensuring it exists. If the work directory is the current directory, it uses
+/// the common utility function. Otherwise, it creates the directory directly.
+///
+/// # Arguments
+/// * `work_dir` - The working directory to resolve the .swissarmyhammer directory for
+///
+/// # Returns
+/// * `Ok(PathBuf)` containing the path to the .swissarmyhammer directory
+/// * `Err(SwissArmyHammerError)` if there was an error resolving or creating the directory
+fn get_swissarmyhammer_dir_for_path<P: AsRef<Path>>(work_dir: P) -> Result<PathBuf> {
+    let work_dir = work_dir.as_ref();
+    
+    if work_dir == std::env::current_dir()? {
+        // If work_dir is current directory, use the common utility
+        Ok(crate::utils::paths::get_swissarmyhammer_dir()?)
+    } else {
+        // For other work directories, create the directory as needed
+        let sah_dir = work_dir.join(".swissarmyhammer");
+        if !sah_dir.exists() {
+            fs::create_dir_all(&sah_dir)?;
+        }
+        Ok(sah_dir)
+    }
+}
 
 /// Create an abort file with the specified reason
 ///
@@ -31,20 +59,7 @@ use std::path::Path;
 /// assert!(result.is_ok());
 /// ```
 pub fn create_abort_file<P: AsRef<Path>>(work_dir: P, reason: &str) -> Result<()> {
-    let work_dir = work_dir.as_ref();
-
-    // Use centralized path utility to get .swissarmyhammer directory
-    let sah_dir = if work_dir == std::env::current_dir()? {
-        // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir()?
-    } else {
-        // For other work directories, maintain the same behavior
-        let sah_dir = work_dir.join(".swissarmyhammer");
-        if !sah_dir.exists() {
-            fs::create_dir_all(&sah_dir)?;
-        }
-        sah_dir
-    };
+    let sah_dir = get_swissarmyhammer_dir_for_path(work_dir)?;
 
     // Create abort file with reason
     let abort_file_path = sah_dir.join(".abort");
@@ -80,17 +95,13 @@ pub fn create_abort_file_current_dir(reason: &str) {
 /// # Returns
 /// * `true` if the abort file exists, `false` otherwise
 pub fn abort_file_exists<P: AsRef<Path>>(work_dir: P) -> bool {
-    let work_dir = work_dir.as_ref();
-    let sah_dir = if work_dir == std::env::current_dir().unwrap_or_default() {
-        // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir()
-            .unwrap_or_else(|_| work_dir.join(".swissarmyhammer"))
-    } else {
-        // For other work directories, maintain the same behavior
-        work_dir.join(".swissarmyhammer")
-    };
-    let abort_file_path = sah_dir.join(".abort");
-    abort_file_path.exists()
+    match get_swissarmyhammer_dir_for_path(work_dir) {
+        Ok(sah_dir) => {
+            let abort_file_path = sah_dir.join(".abort");
+            abort_file_path.exists()
+        }
+        Err(_) => false,
+    }
 }
 
 /// Read the abort file contents if it exists
@@ -103,14 +114,7 @@ pub fn abort_file_exists<P: AsRef<Path>>(work_dir: P) -> bool {
 /// * `Ok(None)` if the abort file does not exist
 /// * `Err(SwissArmyHammerError)` if there was an error reading the file
 pub fn read_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<Option<String>> {
-    let work_dir = work_dir.as_ref();
-    let sah_dir = if work_dir == std::env::current_dir()? {
-        // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir()?
-    } else {
-        // For other work directories, maintain the same behavior
-        work_dir.join(".swissarmyhammer")
-    };
+    let sah_dir = get_swissarmyhammer_dir_for_path(work_dir)?;
     let abort_file_path = sah_dir.join(".abort");
 
     if !abort_file_path.exists() {
@@ -131,14 +135,7 @@ pub fn read_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<Option<String>> {
 /// * `Ok(false)` if the abort file did not exist
 /// * `Err(SwissArmyHammerError)` if there was an error removing the file
 pub fn remove_abort_file<P: AsRef<Path>>(work_dir: P) -> Result<bool> {
-    let work_dir = work_dir.as_ref();
-    let sah_dir = if work_dir == std::env::current_dir()? {
-        // If work_dir is current directory, use the common utility
-        crate::utils::paths::get_swissarmyhammer_dir()?
-    } else {
-        // For other work directories, maintain the same behavior
-        work_dir.join(".swissarmyhammer")
-    };
+    let sah_dir = get_swissarmyhammer_dir_for_path(work_dir)?;
     let abort_file_path = sah_dir.join(".abort");
 
     if !abort_file_path.exists() {

@@ -58,7 +58,7 @@ fn test_mcp_server_exits_on_client_disconnect() {
 }
 
 #[test]
-#[ignore = "Signal handling may not work correctly in test environment"]
+
 fn test_mcp_server_responds_to_ctrl_c() {
     use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;

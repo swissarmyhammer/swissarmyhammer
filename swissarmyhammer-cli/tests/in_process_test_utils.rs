@@ -347,7 +347,14 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
             use swissarmyhammer_cli::cli::FlowSubcommand;
 
             match subcommand {
-                FlowSubcommand::Test { workflow, .. } => {
+                FlowSubcommand::Test { workflow, vars, .. } => {
+                    // First validate variable format (like the real flow.rs does)
+                    for var in vars {
+                        if !var.contains('=') {
+                            return Ok((String::new(), format!("Invalid variable format: '{}'. Expected 'key=value' format. Example: --var input=test", var), EXIT_ERROR));
+                        }
+                    }
+
                     // For flow test, check for builtin and test workflows
                     let builtin_workflows = [
                         "example-actions",
@@ -387,6 +394,7 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     workflow,
                     vars,
                     dry_run,
+                    timeout,
                     ..
                 } => {
                     // First validate variable format (like the real flow.rs does)
@@ -424,7 +432,11 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
 
                     if workflow_exists {
                         let mut output = if dry_run {
-                            format!("🔍 Dry run mode\nRunning workflow: {}", workflow)
+                            let mut dry_output = format!("🔍 Dry run mode\nRunning workflow: {}", workflow);
+                            if let Some(timeout_val) = timeout {
+                                dry_output.push_str(&format!("\nTimeout: {}", timeout_val));
+                            }
+                            dry_output
                         } else {
                             format!("Running workflow: {}", workflow)
                         };
