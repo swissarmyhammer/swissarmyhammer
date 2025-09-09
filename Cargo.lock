@@ -6556,6 +6556,7 @@ dependencies = [
  "swissarmyhammer-memoranda",
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
+ "swissarmyhammer-templating",
  "syntect",
  "sysinfo",
  "tantivy",
@@ -6800,6 +6801,26 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "swissarmyhammer-templating"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "liquid",
+ "liquid-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "swissarmyhammer-common",
+ "swissarmyhammer-config",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
  "tracing",
 ]
 

@@ -17,6 +17,7 @@ members = [
     "swissarmyhammer-shell",
     "swissarmyhammer-todo",
     "swissarmyhammer-outline",
+    "swissarmyhammer-templating",
 ]
 resolver = "2"
 

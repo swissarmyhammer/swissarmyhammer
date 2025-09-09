@@ -1,0 +1,52 @@
+[package]
+name = "swissarmyhammer-templating"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Template engine domain crate for SwissArmyHammer using Liquid templates"
+documentation = "https://docs.rs/swissarmyhammer-templating"
+readme = "../README.md"
+keywords = ["template", "liquid", "templating", "engine", "domain"]
+categories = ["template-engine", "development-tools"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Template engine core
+liquid = { workspace = true }
+liquid-core = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Common functionality
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+
+# Configuration integration
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
+# Text processing
+regex = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Serialization (for template context)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time handling for security timeouts
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = "0.4"
+serial_test = "3.1"
+
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!

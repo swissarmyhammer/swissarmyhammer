@@ -560,6 +560,14 @@ pub struct PromptLibrary {
     storage: Box<dyn crate::StorageBackend>,
 }
 
+impl std::fmt::Debug for PromptLibrary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptLibrary")
+            .field("storage", &"<StorageBackend>")
+            .finish()
+    }
+}
+
 impl PromptLibrary {
     /// Creates a new prompt library with default in-memory storage.
     ///
@@ -812,25 +820,12 @@ impl PromptLibrary {
         let liquid_vars = enhanced_context.to_liquid_context();
         tracing::debug!("Liquid Context: {:?}", liquid_vars);
 
-        let partial_source = crate::template::PromptPartialSource::new(Arc::new(full_library));
-        let partial_compiler = liquid::partials::EagerCompiler::new(partial_source);
+        let partial_adapter = crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(full_library));
+        let template_with_partials = swissarmyhammer_templating::Template::with_partials(&prompt.template, partial_adapter)
+            .map_err(|e| SwissArmyHammerError::Template(format!("Failed to create template with partials: {e}")))?;
 
-        // Parse and render the template with partials support
-        let liquid_template = liquid::ParserBuilder::with_stdlib()
-            .partials(partial_compiler)
-            .tag(crate::template::PartialTag::new())
-            .build()
-            .map_err(|e| {
-                SwissArmyHammerError::Template(format!(
-                    "Failed to create liquid parser with partials: {e}"
-                ))
-            })?
-            .parse(&prompt.template)
-            .map_err(|e| {
-                SwissArmyHammerError::Template(format!("Failed to parse template '{}': {e}", name))
-            })?;
-
-        liquid_template.render(&liquid_vars).map_err(|e| {
+        // Render with template context
+        template_with_partials.render_with_context(&enhanced_context).map_err(|e| {
             SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
         })
     }

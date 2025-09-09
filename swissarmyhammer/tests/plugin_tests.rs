@@ -4,7 +4,7 @@ use liquid::model::Value;
 use liquid::ValueView;
 use std::collections::HashMap;
 use swissarmyhammer::{
-    CustomLiquidFilter, PluginRegistry, Result, SwissArmyHammerPlugin, TemplateEngine,
+    CustomLiquidFilter, PluginRegistry, Result, SwissArmyHammerPlugin,
 };
 
 /// Test plugin that provides a "reverse" filter
@@ -239,7 +239,7 @@ fn test_template_engine_plugin_registry_access() {
         .register_plugin(Box::new(plugin))
         .expect("Failed to register plugin");
 
-    let engine = TemplateEngine::with_plugins(registry);
+    let engine = swissarmyhammer::template::TemplateEngine::with_plugins(registry);
 
     // Test that we can access the plugin registry from the engine
     let plugin_registry = engine
@@ -251,7 +251,7 @@ fn test_template_engine_plugin_registry_access() {
 
 #[test]
 fn test_template_engine_without_plugins() {
-    let engine = TemplateEngine::new();
+    let engine = swissarmyhammer::template::TemplateEngine::new();
 
     // Test that engine without plugins doesn't have plugin registry
     assert!(engine.plugin_registry().is_none());
