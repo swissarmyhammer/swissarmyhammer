@@ -694,6 +694,8 @@ async fn start_http_mcp_server(
 ///
 /// # Example
 /// ```rust
+/// use swissarmyhammer::workflow::agents::llama_agent_executor::LlamaResourceStats;
+/// 
 /// let stats = LlamaResourceStats {
 ///     memory_usage_mb: 2048,
 ///     model_size_mb: 1500,

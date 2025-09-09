@@ -128,7 +128,7 @@ async fn test_abort_performance_impact_baseline() -> Result<()> {
     // Baseline measurement without abort file
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
-    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     let baseline_duration = start_time.elapsed();
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
@@ -169,7 +169,7 @@ async fn test_abort_performance_with_checking_overhead() -> Result<()> {
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
-    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     let abort_duration = start_time.elapsed();
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
@@ -225,7 +225,7 @@ async fn test_concurrent_workflow_abort_handling() -> Result<()> {
             std::env::set_current_dir(&test_dir).unwrap();
 
             std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-            let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await;
+            let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await;
             std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
             // Restore original directory
@@ -354,7 +354,7 @@ async fn test_large_abort_reasons() -> Result<()> {
     env.verify_abort_file(&large_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     let stderr = &result.stderr;
@@ -417,7 +417,7 @@ async fn test_unicode_abort_reasons() -> Result<()> {
     env.verify_abort_file(unicode_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     assert!(
@@ -447,7 +447,7 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
     env.create_abort_file(abort_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should exit with proper exit code
@@ -486,12 +486,12 @@ async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     env.create_abort_file("First run abort")?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result1 = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result1 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
 
     assert!(result1.exit_code != 0, "First run should fail due to abort");
 
     // Second run without abort file - should clean up and succeed
-    let result2 = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result2 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Second run should succeed (abort file should be cleaned up)
@@ -534,7 +534,7 @@ async fn test_abort_with_different_cli_commands() -> Result<()> {
 
     // Test flow command with actual workflow - should be affected by abort file
     let workflow_file = env.create_test_workflow("CLI Test")?;
-    let result2 = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result2 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Flow command should detect abort and fail appropriately
@@ -583,7 +583,7 @@ async fn test_regression_normal_workflow_execution() -> Result<()> {
     env.verify_no_abort_file();
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should complete successfully without abort

@@ -39,8 +39,7 @@ liquid-core = { workspace = true }
 
 # File system
 walkdir = { workspace = true }
-notify = { workspace = true }
-async-watcher = { workspace = true }
+
 glob = { workspace = true }
 ignore = { workspace = true }
 tempfile = { workspace = true }

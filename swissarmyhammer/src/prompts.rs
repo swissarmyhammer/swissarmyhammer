@@ -88,12 +88,14 @@ use swissarmyhammer_config::TemplateContext;
 ///             .with_default(serde_json::Value::String("unknown".to_string()))
 ///     );
 ///
-/// // Render with arguments
-/// let mut args = HashMap::new();
-/// args.insert("error".to_string(), "NullPointerException".to_string());
-/// args.insert("language".to_string(), "Java".to_string());
+/// // Render with arguments using a library
+/// let mut library = swissarmyhammer::PromptLibrary::new();
+/// library.add(prompt).unwrap();
+/// let mut context = swissarmyhammer_config::TemplateContext::new();
+/// context.insert("error".to_string(), "NullPointerException".into());
+/// context.insert("language".to_string(), "Java".into());
 ///
-/// let rendered = prompt.render(&args).unwrap();
+/// let rendered = library.render("debug", &context).unwrap();
 /// assert!(rendered.contains("Java"));
 /// assert!(rendered.contains("NullPointerException"));
 /// ```
@@ -734,13 +736,13 @@ impl PromptLibrary {
     ///
     /// ```no_run
     /// use swissarmyhammer::PromptLibrary;
-    /// use std::collections::HashMap;
+    /// use swissarmyhammer_config::TemplateContext;
     ///
     /// let library = PromptLibrary::new();
-    /// let mut args = HashMap::new();
-    /// args.insert("name".to_string(), "World".to_string());
+    /// let mut context = TemplateContext::new();
+    /// context.insert("name".to_string(), "World".into());
     ///
-    /// let result = library.render_prompt("greeting", &args).unwrap();
+    /// let result = library.render("greeting", &context).unwrap();
     /// ```
     /// **THE ONE TRUE RENDER METHOD**
     ///

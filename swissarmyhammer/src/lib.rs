@@ -25,12 +25,11 @@
 //!     library.add_directory("./.swissarmyhammer/prompts")?;
 //! }
 //!
-//! // Get a prompt and render it
-//! let prompt = library.get("code-review")?;
-//! let mut args = HashMap::new();
-//! args.insert("language".to_string(), "rust".to_string());
-//! args.insert("file".to_string(), "main.rs".to_string());
-//! let rendered = prompt.render(&args)?;
+//! // Render a prompt
+//! let mut context = swissarmyhammer::TemplateContext::new();
+//! context.insert("language".to_string(), "rust".into());
+//! context.insert("file".to_string(), "main.rs".into());
+//! let rendered = library.render("code-review", &context)?;
 //!
 //! println!("{}", rendered);
 //! # Ok(())
@@ -73,8 +72,7 @@ pub mod frontmatter;
 /// Security utilities for path validation and resource limits
 pub mod security;
 
-/// File watching functionality for prompt directories
-pub mod file_watcher;
+
 
 /// Virtual file system for unified file loading
 pub mod file_loader;

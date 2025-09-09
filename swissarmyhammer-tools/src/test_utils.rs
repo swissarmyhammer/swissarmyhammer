@@ -33,10 +33,14 @@ pub fn create_test_rate_limiter() -> Arc<RateLimiter> {
 /// Each call creates a unique test directory to prevent conflicts between parallel tests.
 #[cfg(test)]
 pub async fn create_test_context() -> ToolContext {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique_id = format!("{}_{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
+    
     // Use system temp directory to avoid path issues
     let test_issues_dir = std::env::temp_dir()
         .join("sah_test_issues")
-        .join(format!("{}", std::process::id()));
+        .join(&unique_id);
     let issue_storage: Arc<RwLock<Box<dyn IssueStorage>>> = Arc::new(RwLock::new(Box::new(
         FileSystemIssueStorage::new(test_issues_dir).unwrap(),
     )));
@@ -44,7 +48,7 @@ pub async fn create_test_context() -> ToolContext {
     // Create temporary directory for memo storage in tests
     let memo_temp_dir = std::env::temp_dir()
         .join("sah_test_memos")
-        .join(format!("{}", std::process::id()));
+        .join(&unique_id);
 
     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
         MarkdownMemoStorage::new(memo_temp_dir),
