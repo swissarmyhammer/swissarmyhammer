@@ -47,8 +47,7 @@ pub mod prompt_filter;
 /// Prompt loading and resolution
 pub mod prompt_resolver;
 
-/// Template engine and rendering (legacy - being migrated to swissarmyhammer-templating)
-pub mod template;
+
 
 /// Adapter to make PromptLibrary work with new templating domain crate
 pub mod prompt_partial_adapter;
@@ -110,7 +109,7 @@ pub use prompts::{Prompt, PromptLibrary, PromptLoader};
 pub use storage::{PromptStorage, StorageBackend};
 
 /// Template engine and rendering functionality (re-exported from swissarmyhammer-templating)
-pub use template::{Template, TemplateEngine};
+pub use swissarmyhammer_templating::{Template, TemplateEngine};
 
 /// Workflow system for state-based execution
 pub use workflow::{

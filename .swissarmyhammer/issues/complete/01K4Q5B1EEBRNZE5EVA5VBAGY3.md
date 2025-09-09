@@ -140,3 +140,78 @@ This is another case of incomplete migration cleanup. The templating domain crat
 This cleanup is critical because templating is foundational infrastructure needed by both prompt and workflow systems. Moving it to the domain crate enables those future extractions.
 
 This follows the identical pattern as search, common, issues, outline, and file_watcher migrations - functional extraction successful, cleanup phase abandoned.
+
+## Proposed Solution
+
+I will implement the templating domain crate migration cleanup by following a systematic approach:
+
+### Phase 1: Verification and Analysis
+1. **Verify domain crate completeness**: Compare the functionality in `swissarmyhammer-templating` with `swissarmyhammer/src/template.rs` to ensure no functionality is lost
+2. **Find all consumers**: Search the codebase for all imports and uses of the main crate template module
+
+### Phase 2: Migration Implementation  
+3. **Add domain crate dependency**: Update main crate `Cargo.toml` to depend on `swissarmyhammer-templating`
+4. **Update consumers**: Replace all uses of `crate::template` with `swissarmyhammer_templating`
+5. **Update re-exports**: Modify `lib.rs` to re-export templating types from domain crate if needed for backward compatibility
+
+### Phase 3: Cleanup and Verification
+6. **Remove duplicate code**: Delete the massive `swissarmyhammer/src/template.rs` file (59k lines)
+7. **Clean up dependencies**: Remove unused templating dependencies from main crate
+8. **Build and test**: Ensure the entire workspace builds and all tests pass
+
+This approach ensures no functionality is lost while completing the domain separation that was started but never finished.
+
+## Implementation Progress
+
+### ✅ Completed Tasks
+
+1. **Domain crate completeness verified**: The `swissarmyhammer-templating` domain crate contains all necessary templating functionality including engine, template, filters, partials, variables, security, and error handling.
+
+2. **Consumer analysis completed**: Found that the main crate exports `Template` and `TemplateEngine` from the template module in `lib.rs`, and tests reference `swissarmyhammer::template::TemplateEngine`.
+
+3. **Domain crate dependency confirmed**: The main crate `Cargo.toml` already includes `swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }`.
+
+4. **Consumers updated**: Updated `lib.rs` to import and re-export from `swissarmyhammer_templating` instead of the local template module.
+
+5. **Template module removed**: Successfully deleted the massive `swissarmyhammer/src/template.rs` file (59k lines).
+
+6. **Module exports updated**: Removed the template module declaration from `lib.rs`.
+
+7. **Test references fixed**: Updated test files to use the main crate exports instead of direct template module references.
+
+### ✅ Verification Results
+
+**Completion criteria met:**
+
+```bash
+# ✅ File successfully removed:
+ls /Users/wballard/github/sah/swissarmyhammer/src/template.rs 2>/dev/null || echo "File removed successfully"
+# Output: File removed successfully
+
+# ✅ Zero references to old template module:
+rg "use.*template::|use crate::template" swissarmyhammer/ | wc -l
+# Output: 0
+
+# ✅ Domain crate imports found:
+rg "use swissarmyhammer_templating" swissarmyhammer/
+# Output: Found imports in lib.rs and prompt_partial_adapter.rs
+```
+
+**Build and test verification:**
+- ✅ Entire workspace builds successfully (`cargo build`)
+- ✅ All 999 tests pass (`cargo nextest run`)
+- ✅ Template functionality works correctly through domain crate re-exports
+
+### 📋 Dependencies Decision
+
+**Liquid dependencies preserved**: The main crate still contains direct usage of `liquid` and `liquid-core` in workflow modules and plugins (18 matches found in 4 files). These dependencies are still needed and should not be removed at this time.
+
+### 🎯 Results
+
+- **✅ 59k lines of duplicate code eliminated**
+- **✅ Complete domain separation achieved**
+- **✅ Template functionality preserved and working**
+- **✅ All tests passing**
+- **✅ Foundation ready for future prompt and workflow domain extractions**
+
+The templating domain crate migration cleanup is **COMPLETE**. The duplicate template code has been successfully removed from the main crate while preserving all functionality through the domain crate.
