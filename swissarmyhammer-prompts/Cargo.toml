@@ -37,10 +37,14 @@ ulid = { workspace = true }
 glob = { workspace = true }
 ignore = { workspace = true }
 fuzzy-matcher = { workspace = true }
+dirs = "5.0"
 
 # Data structures
 dashmap = { workspace = true }
 lru = "0.12"
+
+# Template engine
+liquid = "0.26"
 
 # Include functionality for builtin prompts
 include_dir = "0.7"

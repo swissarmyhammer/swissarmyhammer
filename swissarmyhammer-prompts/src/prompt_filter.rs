@@ -1,277 +1,307 @@
 //! Prompt filtering functionality
 //!
-//! This module provides filtering capabilities for prompts based on various criteria
-//! such as source, category, and search terms.
+//! This module provides filtering capabilities to select prompts based
+//! on various criteria like name patterns, tags, categories, and sources.
 
-use crate::{Prompt, PromptSource};
+use crate::prompts::Prompt;
+use crate::PromptSource;
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
-/// Filter options for prompt selection
-#[derive(Debug, Clone, Default)]
+/// Filter criteria for selecting prompts
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PromptFilter {
-    /// Filter by prompt source
-    pub source: Option<PromptSource>,
-    /// Filter by category
+    /// Name pattern to match (supports glob patterns)
+    pub name_pattern: Option<String>,
+    /// Category to filter by
     pub category: Option<String>,
-    /// Filter by search term (matches name, description, tags)
-    pub search_term: Option<String>,
-    /// Filter by required argument name
-    pub has_arg: Option<String>,
-    /// Filter to only show prompts with no arguments
-    pub no_args: bool,
+    /// Tags that prompts must have (any match)
+    pub tags: Vec<String>,
+    /// Sources to include
+    pub sources: Vec<PromptSource>,
+    /// Whether to include partial templates
+    pub include_partials: bool,
 }
 
 impl PromptFilter {
-    /// Creates a new empty filter
+    /// Create a new empty filter
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Sets the source filter
-    pub fn with_source(mut self, source: PromptSource) -> Self {
-        self.source = Some(source);
+    /// Create a filter for a specific name pattern
+    pub fn by_name_pattern(pattern: impl Into<String>) -> Self {
+        Self {
+            name_pattern: Some(pattern.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Create a filter for a specific category
+    pub fn by_category(category: impl Into<String>) -> Self {
+        Self {
+            category: Some(category.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Create a filter for specific tags
+    pub fn by_tags(tags: Vec<String>) -> Self {
+        Self {
+            tags,
+            ..Self::default()
+        }
+    }
+
+    /// Create a filter for specific sources
+    pub fn by_sources(sources: Vec<PromptSource>) -> Self {
+        Self {
+            sources,
+            ..Self::default()
+        }
+    }
+
+    /// Set whether to include partial templates
+    pub fn with_partials(mut self, include_partials: bool) -> Self {
+        self.include_partials = include_partials;
         self
     }
 
-    /// Sets the category filter
+    /// Set the name pattern
+    pub fn with_name_pattern(mut self, pattern: impl Into<String>) -> Self {
+        self.name_pattern = Some(pattern.into());
+        self
+    }
+
+    /// Set the category filter
     pub fn with_category(mut self, category: impl Into<String>) -> Self {
         self.category = Some(category.into());
         self
     }
 
-    /// Sets the search term filter
-    pub fn with_search_term(mut self, term: impl Into<String>) -> Self {
-        self.search_term = Some(term.into());
+    /// Add tags to filter by
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
         self
     }
 
-    /// Sets the has_arg filter
-    pub fn with_has_arg(mut self, arg_name: impl Into<String>) -> Self {
-        self.has_arg = Some(arg_name.into());
+    /// Set the source filter
+    pub fn with_sources(mut self, sources: Vec<PromptSource>) -> Self {
+        self.sources = sources;
         self
     }
 
-    /// Sets the no_args filter
-    pub fn with_no_args(mut self, no_args: bool) -> Self {
-        self.no_args = no_args;
-        self
-    }
-
-    /// Applies the filter to a list of prompts
-    pub fn apply(
-        &self,
-        prompts: Vec<Prompt>,
-        sources: &HashMap<String, PromptSource>,
-    ) -> Vec<Prompt> {
+    /// Apply the filter to a list of prompts
+    pub fn apply(&self, prompts: Vec<&Prompt>, sources: &HashMap<String, PromptSource>) -> Vec<Prompt> {
         prompts
             .into_iter()
             .filter(|prompt| self.matches(prompt, sources))
+            .cloned()
             .collect()
     }
 
-    /// Checks if a prompt matches the filter criteria
+    /// Check if a prompt matches the filter criteria
     pub fn matches(&self, prompt: &Prompt, sources: &HashMap<String, PromptSource>) -> bool {
-        // Check source filter
-        if let Some(ref filter_source) = self.source {
-            let prompt_source = sources.get(&prompt.name);
-            if prompt_source != Some(filter_source) {
+        // Check name pattern
+        if let Some(pattern) = &self.name_pattern {
+            if !self.matches_pattern(&prompt.name, pattern) {
                 return false;
             }
         }
 
-        // Check category filter
-        if let Some(ref filter_category) = self.category {
-            if prompt.category.as_deref() != Some(filter_category) {
+        // Check category
+        if let Some(category) = &self.category {
+            match &prompt.category {
+                Some(prompt_category) if prompt_category == category => {},
+                _ => return false,
+            }
+        }
+
+        // Check tags (any match)
+        if !self.tags.is_empty() {
+            let has_matching_tag = self.tags.iter().any(|filter_tag| {
+                prompt.tags.iter().any(|prompt_tag| prompt_tag == filter_tag)
+            });
+            if !has_matching_tag {
                 return false;
             }
         }
 
-        // Check search term filter
-        if let Some(ref search_term) = self.search_term {
-            let search_lower = search_term.to_lowercase();
-            let name_matches = prompt.name.to_lowercase().contains(&search_lower);
-            let desc_matches = prompt
-                .description
-                .as_ref()
-                .map(|d| d.to_lowercase().contains(&search_lower))
-                .unwrap_or(false);
-            let category_matches = prompt
-                .category
-                .as_ref()
-                .map(|c| c.to_lowercase().contains(&search_lower))
-                .unwrap_or(false);
-            let tag_matches = prompt
-                .tags
-                .iter()
-                .any(|t| t.to_lowercase().contains(&search_lower));
-
-            if !(name_matches || desc_matches || category_matches || tag_matches) {
+        // Check sources
+        if !self.sources.is_empty() {
+            if let Some(prompt_source) = sources.get(&prompt.name) {
+                if !self.sources.contains(prompt_source) {
+                    return false;
+                }
+            } else {
+                // If source is unknown, exclude it
                 return false;
             }
         }
 
-        // Check has_arg filter
-        if let Some(ref arg_name) = self.has_arg {
-            if !prompt
-                .parameters
-                .iter()
-                .any(|param| param.name == *arg_name)
-            {
-                return false;
-            }
-        }
-
-        // Check no_args filter
-        if self.no_args && !prompt.parameters.is_empty() {
+        // Check if it's a partial template
+        if !self.include_partials && self.is_partial(prompt) {
             return false;
         }
 
         true
+    }
+
+    /// Check if a prompt is a partial template
+    fn is_partial(&self, prompt: &Prompt) -> bool {
+        prompt.description
+            .as_ref()
+            .map(|desc| desc == "Partial template for reuse in other prompts")
+            .unwrap_or(false)
+            || prompt.name.to_lowercase().contains("partial")
+            || prompt.name.starts_with('_')
+            || prompt.template.trim_start().starts_with("{% partial %}")
+    }
+
+    /// Check if a string matches a pattern (supports basic glob patterns)
+    fn matches_pattern(&self, text: &str, pattern: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+
+        if pattern.contains('*') || pattern.contains('?') {
+            // Use glob matching
+            if let Ok(glob) = glob::Pattern::new(pattern) {
+                return glob.matches(text);
+            }
+        }
+
+        // Exact match or contains match
+        text.contains(pattern)
+    }
+
+    /// Check if the filter is empty (matches everything)
+    pub fn is_empty(&self) -> bool {
+        self.name_pattern.is_none()
+            && self.category.is_none()
+            && self.tags.is_empty()
+            && self.sources.is_empty()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{common::Parameter, common::ParameterType, Prompt, PromptSource};
-    use std::collections::HashMap;
+
 
     fn create_test_prompt(name: &str, category: Option<&str>, tags: Vec<&str>) -> Prompt {
-        let mut prompt = Prompt::new(name, format!("Template for {name}"))
-            .with_description(format!("Description for {name}"));
-
+        let mut prompt = Prompt::new(name, "Template content");
         if let Some(cat) = category {
-            prompt = prompt.with_category(cat);
+            prompt.category = Some(cat.to_string());
         }
-
-        if !tags.is_empty() {
-            prompt = prompt.with_tags(tags.into_iter().map(|s| s.to_string()).collect());
-        }
-
+        prompt.tags = tags.iter().map(|s| s.to_string()).collect();
         prompt
     }
 
-    fn create_test_sources() -> HashMap<String, PromptSource> {
+    #[test]
+    fn test_empty_filter() {
+        let filter = PromptFilter::new();
+        let prompt = create_test_prompt("test", None, vec![]);
+        let sources = HashMap::new();
+        
+        assert!(filter.matches(&prompt, &sources));
+        assert!(filter.is_empty());
+    }
+
+    #[test]
+    fn test_name_pattern_filter() {
+        let filter = PromptFilter::by_name_pattern("test*");
+        let sources = HashMap::new();
+
+        let matching_prompt = create_test_prompt("test_prompt", None, vec![]);
+        let non_matching_prompt = create_test_prompt("other_prompt", None, vec![]);
+
+        assert!(filter.matches(&matching_prompt, &sources));
+        assert!(!filter.matches(&non_matching_prompt, &sources));
+    }
+
+    #[test]
+    fn test_category_filter() {
+        let filter = PromptFilter::by_category("development");
+        let sources = HashMap::new();
+
+        let matching_prompt = create_test_prompt("test", Some("development"), vec![]);
+        let non_matching_prompt = create_test_prompt("test", Some("other"), vec![]);
+        let no_category_prompt = create_test_prompt("test", None, vec![]);
+
+        assert!(filter.matches(&matching_prompt, &sources));
+        assert!(!filter.matches(&non_matching_prompt, &sources));
+        assert!(!filter.matches(&no_category_prompt, &sources));
+    }
+
+    #[test]
+    fn test_tags_filter() {
+        let filter = PromptFilter::by_tags(vec!["coding".to_string(), "review".to_string()]);
+        let sources = HashMap::new();
+
+        let matching_prompt = create_test_prompt("test", None, vec!["coding", "helper"]);
+        let non_matching_prompt = create_test_prompt("test", None, vec!["other", "helper"]);
+        let no_tags_prompt = create_test_prompt("test", None, vec![]);
+
+        assert!(filter.matches(&matching_prompt, &sources));
+        assert!(!filter.matches(&non_matching_prompt, &sources));
+        assert!(!filter.matches(&no_tags_prompt, &sources));
+    }
+
+    #[test]
+    fn test_source_filter() {
+        let filter = PromptFilter::by_sources(vec![PromptSource::Builtin]);
         let mut sources = HashMap::new();
         sources.insert("builtin_prompt".to_string(), PromptSource::Builtin);
         sources.insert("user_prompt".to_string(), PromptSource::User);
-        sources.insert("local_prompt".to_string(), PromptSource::Local);
-        sources
+
+        let builtin_prompt = create_test_prompt("builtin_prompt", None, vec![]);
+        let user_prompt = create_test_prompt("user_prompt", None, vec![]);
+        let unknown_prompt = create_test_prompt("unknown_prompt", None, vec![]);
+
+        assert!(filter.matches(&builtin_prompt, &sources));
+        assert!(!filter.matches(&user_prompt, &sources));
+        assert!(!filter.matches(&unknown_prompt, &sources));
     }
 
     #[test]
-    fn test_filter_by_source() {
-        let prompts = vec![
-            create_test_prompt("builtin_prompt", Some("dev"), vec![]),
-            create_test_prompt("user_prompt", Some("dev"), vec![]),
-            create_test_prompt("local_prompt", Some("dev"), vec![]),
-        ];
-        let sources = create_test_sources();
-
-        let filter = PromptFilter::new().with_source(PromptSource::Builtin);
-        let filtered = filter.apply(prompts, &sources);
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "builtin_prompt");
-    }
-
-    #[test]
-    fn test_filter_by_category() {
-        let prompts = vec![
-            create_test_prompt("prompt1", Some("development"), vec![]),
-            create_test_prompt("prompt2", Some("writing"), vec![]),
-            create_test_prompt("prompt3", Some("development"), vec![]),
-        ];
+    fn test_partial_detection() {
+        let filter = PromptFilter::new().with_partials(false);
         let sources = HashMap::new();
 
-        let filter = PromptFilter::new().with_category("development");
+        let partial_by_description = Prompt {
+            name: "test".to_string(),
+            template: "content".to_string(),
+            description: Some("Partial template for reuse in other prompts".to_string()),
+            category: None,
+            tags: vec![],
+            parameters: vec![],
+            source: None,
+            metadata: HashMap::new(),
+        };
+
+        let partial_by_name = create_test_prompt("_partial_test", None, vec![]);
+        let regular_prompt = create_test_prompt("regular_prompt", None, vec![]);
+
+        assert!(!filter.matches(&partial_by_description, &sources));
+        assert!(!filter.matches(&partial_by_name, &sources));
+        assert!(filter.matches(&regular_prompt, &sources));
+    }
+
+    #[test]
+    fn test_apply_filter() {
+        let filter = PromptFilter::by_category("development");
+        let sources = HashMap::new();
+
+        let prompt1 = create_test_prompt("test1", Some("development"), vec![]);
+        let prompt2 = create_test_prompt("test2", Some("other"), vec![]);
+        let prompt3 = create_test_prompt("test3", Some("development"), vec![]);
+
+        let prompts = vec![&prompt1, &prompt2, &prompt3];
         let filtered = filter.apply(prompts, &sources);
 
         assert_eq!(filtered.len(), 2);
-        assert!(filtered
-            .iter()
-            .all(|p| p.category.as_deref() == Some("development")));
-    }
-
-    #[test]
-    fn test_filter_by_search_term() {
-        let prompts = vec![
-            create_test_prompt("debug_helper", Some("dev"), vec!["debugging", "code"]),
-            create_test_prompt("write_essay", Some("writing"), vec!["essay", "text"]),
-            create_test_prompt("code_review", Some("dev"), vec!["review", "code"]),
-        ];
-        let sources = HashMap::new();
-
-        // Search by name
-        let filter = PromptFilter::new().with_search_term("debug");
-        let filtered = filter.apply(prompts.clone(), &sources);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "debug_helper");
-
-        // Search by tag
-        let filter = PromptFilter::new().with_search_term("code");
-        let filtered = filter.apply(prompts.clone(), &sources);
-        assert_eq!(filtered.len(), 2);
-
-        // Search by description
-        let filter = PromptFilter::new().with_search_term("Description for write");
-        let filtered = filter.apply(prompts, &sources);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "write_essay");
-    }
-
-    #[test]
-    fn test_filter_by_arguments() {
-        let prompt_with_args = create_test_prompt("with_args", Some("dev"), vec![]).add_parameter(
-            Parameter::new("input", "Input data", ParameterType::String).required(true),
-        );
-
-        let prompt_no_args = create_test_prompt("no_args", Some("dev"), vec![]);
-
-        let prompts = vec![prompt_with_args.clone(), prompt_no_args.clone()];
-        let sources = HashMap::new();
-
-        // Filter by has_arg
-        let filter = PromptFilter::new().with_has_arg("input");
-        let filtered = filter.apply(prompts.clone(), &sources);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "with_args");
-
-        // Filter by no_args
-        let filter = PromptFilter::new().with_no_args(true);
-        let filtered = filter.apply(prompts, &sources);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "no_args");
-    }
-
-    #[test]
-    fn test_combined_filters() {
-        let prompts = vec![
-            create_test_prompt("builtin_debug", Some("development"), vec!["debug"]),
-            create_test_prompt("user_write", Some("writing"), vec!["text"]),
-            create_test_prompt("local_debug", Some("development"), vec!["debug"]),
-        ];
-
-        // Add source mappings
-        let mut sources = HashMap::new();
-        sources.insert("builtin_debug".to_string(), PromptSource::Builtin);
-        sources.insert("user_write".to_string(), PromptSource::User);
-        sources.insert("local_debug".to_string(), PromptSource::Local);
-
-        // Combine source and category filters
-        let filter = PromptFilter::new()
-            .with_source(PromptSource::Builtin)
-            .with_category("development");
-        let filtered = filter.apply(prompts.clone(), &sources);
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "builtin_debug");
-
-        // Combine category and search term
-        let filter = PromptFilter::new()
-            .with_category("development")
-            .with_search_term("debug");
-        let filtered = filter.apply(prompts, &sources);
-        assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().all(|p| p.name.contains("debug")));
+        assert_eq!(filtered[0].name, "test1");
+        assert_eq!(filtered[1].name, "test3");
     }
 }

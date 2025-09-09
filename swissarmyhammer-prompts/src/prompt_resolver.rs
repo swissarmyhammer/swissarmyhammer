@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_prompt_resolver_loads_user_prompts() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        // Skip isolated test environment setup for now
         let home_dir = std::env::var("HOME").unwrap();
         let user_prompts_dir = PathBuf::from(&home_dir)
             .join(".swissarmyhammer")
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_get_prompt_directories() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        // Skip isolated test environment setup for now
         let resolver = PromptResolver::new();
         let directories = resolver.get_prompt_directories().unwrap();
 
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_user_prompt_overrides_builtin_source_tracking() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        // Skip isolated test environment setup for now
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();

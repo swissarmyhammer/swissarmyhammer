@@ -24,16 +24,16 @@
 //! assert_eq!(result, "Hello World!");
 //! ```
 
-use swissarmyhammer_common::{SwissArmyHammerError, Result as CommonResult};
-use swissarmyhammer_templating::{TemplateEngine, TemplateRenderer};
+use swissarmyhammer_common::SwissArmyHammerError;
+
 use swissarmyhammer_config::TemplateContext;
-use crate::Result;
+use crate::{Result, ValidationIssue, ValidationLevel, Validatable};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::borrow::Cow;
-use tracing::{debug, error, warn};
+
+
 
 // Temporary re-exports until Parameter types are moved to swissarmyhammer-common
 // TODO: Move these types to swissarmyhammer-common
@@ -651,7 +651,7 @@ impl PromptLibrary {
         let count = prompts.len();
 
         for prompt in prompts {
-            self.storage.store(prompt)?;
+            self.storage.store(&prompt.name, &prompt)?;
         }
 
         Ok(count)
@@ -689,7 +689,9 @@ impl PromptLibrary {
     /// assert_eq!(retrieved.name, "test");
     /// ```
     pub fn get(&self, name: &str) -> Result<Prompt> {
-        self.storage.get(name)
+        self.storage.get(name)?.ok_or_else(|| SwissArmyHammerError::Other {
+            message: format!("Prompt '{}' not found", name)
+        })
     }
 
     /// Lists all prompts in the library.
@@ -717,6 +719,19 @@ impl PromptLibrary {
     /// ```
     pub fn list(&self) -> Result<Vec<Prompt>> {
         self.storage.list()
+    }
+
+    /// Lists all prompt names in the library.
+    ///
+    /// # Returns
+    ///
+    /// A vector of all prompt names currently stored in the library.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage backend fails to list keys.
+    pub fn list_names(&self) -> Result<Vec<String>> {
+        self.storage.list_keys()
     }
 
     /// Renders a prompt with partial support
@@ -828,16 +843,18 @@ impl PromptLibrary {
         let template_with_partials =
             swissarmyhammer_templating::Template::with_partials(&prompt.template, partial_adapter)
                 .map_err(|e| {
-                    SwissArmyHammerError::Template(format!(
-                        "Failed to create template with partials: {e}"
-                    ))
+                    SwissArmyHammerError::Other {
+                        message: format!("Failed to create template with partials: {e}")
+                    }
                 })?;
 
         // Render with template context
         template_with_partials
             .render_with_context(&enhanced_context)
             .map_err(|e| {
-                SwissArmyHammerError::Template(format!("Failed to render template '{}': {e}", name))
+                SwissArmyHammerError::Other {
+                    message: format!("Failed to render template '{}': {e}", name)
+                }
             })
     }
 
@@ -912,7 +929,8 @@ impl PromptLibrary {
         sources: &HashMap<String, crate::PromptSource>,
     ) -> Result<Vec<Prompt>> {
         let all_prompts = self.list()?;
-        Ok(filter.apply(all_prompts, sources))
+        let prompt_refs: Vec<&Prompt> = all_prompts.iter().collect();
+        Ok(filter.apply(prompt_refs, sources))
     }
 
     /// Adds a single prompt to the library.
@@ -935,7 +953,7 @@ impl PromptLibrary {
     /// assert!(library.get("example").is_ok());
     /// ```
     pub fn add(&mut self, prompt: Prompt) -> Result<()> {
-        self.storage.store(prompt)
+        self.storage.store(&prompt.name, &prompt)
     }
 
     /// Removes a prompt from the library.
@@ -960,7 +978,8 @@ impl PromptLibrary {
     /// assert!(library.get("temp").is_err());
     /// ```
     pub fn remove(&mut self, name: &str) -> Result<()> {
-        self.storage.remove(name)
+        self.storage.remove(name)?;
+        Ok(())
     }
 }
 
@@ -999,10 +1018,10 @@ impl PromptLoader {
         let mut prompts = Vec::new();
 
         if !path.exists() {
-            return Err(SwissArmyHammerError::Common(CommonError::FileNotFound {
+            return Err(SwissArmyHammerError::FileNotFound {
                 path: path.display().to_string(),
                 suggestion: "Check that the directory path is correct and accessible".to_string(),
-            }));
+            });
         }
 
         for entry in walkdir::WalkDir::new(path)
@@ -1364,136 +1383,12 @@ impl Default for PromptLoader {
     }
 }
 
-/// Custom partial source that works directly with a storage backend
-pub struct LibraryPartialSource<'a> {
-    storage: &'a dyn crate::StorageBackend,
-    names: Vec<String>,
-}
 
-impl<'a> LibraryPartialSource<'a> {
-    /// Create a new partial source from a storage backend
-    pub fn new(storage: &'a dyn crate::StorageBackend) -> Self {
-        let mut names = Vec::new();
-        if let Ok(prompts) = storage.list() {
-            for prompt in prompts.iter() {
-                names.push(prompt.name.clone());
-
-                // Strip common prompt extensions to make them available as partials
-                let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
-                for ext in &extensions {
-                    if let Some(name_without_ext) = prompt.name.strip_suffix(ext) {
-                        names.push(name_without_ext.to_string());
-                    }
-                }
-            }
-        }
-        Self { storage, names }
-    }
-}
-
-impl<'a> std::fmt::Debug for LibraryPartialSource<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LibraryPartialSource")
-            .field("storage", &"<StorageBackend>")
-            .field("names", &self.names)
-            .finish()
-    }
-}
-
-impl<'a> liquid::partials::PartialSource for LibraryPartialSource<'a> {
-    fn contains(&self, name: &str) -> bool {
-        tracing::debug!(
-            "LibraryPartialSource::contains called with name: '{}'",
-            name
-        );
-
-        // Try exact name first
-        if self.storage.get(name).is_ok() {
-            return true;
-        }
-
-        // Try with various prompt file extensions
-        let extensions = [".md", ".markdown", ".liquid", ".md.liquid"];
-        for ext in &extensions {
-            let name_with_ext = format!("{name}{ext}");
-            if self.storage.get(&name_with_ext).is_ok() {
-                return true;
-            }
-        }
-
-        // If the name already has an extension, try stripping it
-        if name.contains('.') {
-            // Try stripping each known extension
-            for ext in &extensions {
-                if let Some(name_without_ext) = name.strip_suffix(ext) {
-                    if self.storage.get(name_without_ext).is_ok() {
-                        return true;
-                    }
-                    // Also try with other extensions
-                    for other_ext in &extensions {
-                        if ext != other_ext {
-                            let name_with_other_ext = format!("{name_without_ext}{other_ext}");
-                            if self.storage.get(&name_with_other_ext).is_ok() {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        tracing::debug!("No match found for partial '{}'", name);
-        false
-    }
-
-    fn names(&self) -> Vec<&str> {
-        self.names.iter().map(|s| s.as_str()).collect()
-    }
-
-    fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
-        // Try exact name first
-        if let Ok(prompt) = self.storage.get(name) {
-            return Some(Cow::Owned(prompt.template));
-        }
-
-        // Try with various prompt file extensions - prioritize .md.liquid for partials
-        let extensions = [".md.liquid", ".liquid.md", ".liquid", ".md", ".markdown"];
-        for ext in &extensions {
-            let name_with_ext = format!("{name}{ext}");
-            if let Ok(prompt) = self.storage.get(&name_with_ext) {
-                return Some(Cow::Owned(prompt.template));
-            }
-        }
-
-        // If the name already has an extension, try stripping it
-        if name.contains('.') {
-            // Try stripping each known extension
-            for ext in &extensions {
-                if let Some(name_without_ext) = name.strip_suffix(ext) {
-                    if let Ok(prompt) = self.storage.get(name_without_ext) {
-                        return Some(Cow::Owned(prompt.template));
-                    }
-                    // Also try with other extensions
-                    for other_ext in &extensions {
-                        if ext != other_ext {
-                            let name_with_other_ext = format!("{name_without_ext}{other_ext}");
-                            if let Ok(prompt) = self.storage.get(&name_with_other_ext) {
-                                return Some(Cow::Owned(prompt.template));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{Parameter, ParameterType};
+    use crate::parameter_types::{Parameter, ParameterType};
     use serde_json::{json, Value};
 
     #[test]
@@ -1651,7 +1546,7 @@ This is another prompt.
 
     #[test]
     fn test_shared_parameter_system_integration() {
-        use crate::common::ParameterProvider;
+        use crate::parameter_types::ParameterProvider;
 
         let prompt = Prompt::new("test", "Hello {{name}}!").add_parameter(
             Parameter::new("name", "Name to greet", ParameterType::String).required(true),
