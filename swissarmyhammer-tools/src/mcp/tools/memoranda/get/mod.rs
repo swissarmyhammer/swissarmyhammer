@@ -79,7 +79,7 @@ impl McpTool for GetMemoTool {
                 memo_title
             ))),
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                swissarmyhammer::error::SwissArmyHammerError::Storage(e.to_string()),
+                swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("Storage error: {}", e) },
                 "get memo",
             )),
         }

@@ -4,6 +4,7 @@
 
 use crate::mcp::responses::create_success_response;
 use crate::mcp::shared_utils::McpErrorHandler;
+use swissarmyhammer_common::SwissArmyHammerError;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::types::WorkIssueRequest;
 use async_trait::async_trait;
@@ -61,7 +62,7 @@ impl McpTool for WorkIssueTool {
                 Ok(None) => "HEAD".to_string(), // Handle detached HEAD
                 Err(e) => {
                     return Err(McpErrorHandler::handle_error(
-                        e.into(),
+                        SwissArmyHammerError::Other { message: e.to_string() },
                         "get current branch",
                     ))
                 }
@@ -98,7 +99,7 @@ impl McpTool for WorkIssueTool {
                 Ok(issue) => issue,
                 Err(e) => {
                     return Err(McpErrorHandler::handle_error(
-                        swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                        swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
                         "get issue",
                     ))
                 }
@@ -116,7 +117,7 @@ impl McpTool for WorkIssueTool {
 
                     // Check if branch exists first
                     let branch_exists = ops.branch_exists(&branch_name_obj).map_err(|e| {
-                        McpErrorHandler::handle_error(e.into(), "check branch exists")
+                        McpErrorHandler::handle_error(SwissArmyHammerError::Other { message: e.to_string() }, "check branch exists")
                     })?;
 
                     if branch_exists {
@@ -126,7 +127,7 @@ impl McpTool for WorkIssueTool {
                                 "Switched to work branch: {full_branch_name}"
                             ))),
                             Err(e) => Err(McpErrorHandler::handle_error(
-                                e.into(),
+                                SwissArmyHammerError::Other { message: e.to_string() },
                                 "checkout work branch",
                             )),
                         }
@@ -137,7 +138,7 @@ impl McpTool for WorkIssueTool {
                                 "Created and switched to work branch: {full_branch_name}"
                             ))),
                             Err(e) => Err(McpErrorHandler::handle_error(
-                                e.into(),
+                                SwissArmyHammerError::Other { message: e.to_string() },
                                 "create work branch",
                             )),
                         }

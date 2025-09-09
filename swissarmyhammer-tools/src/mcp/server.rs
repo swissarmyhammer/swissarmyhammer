@@ -13,7 +13,8 @@ use swissarmyhammer::workflow::{
     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,
 };
-use swissarmyhammer::{PromptLibrary, PromptResolver, Result, SwissArmyHammerError};
+use swissarmyhammer::{PromptLibrary, PromptResolver};
+use swissarmyhammer_common::{SwissArmyHammerError, Result};
 use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
@@ -80,7 +81,7 @@ impl McpServer {
         // Initialize workflow storage with filesystem backend
         let workflow_backend = Arc::new(FileSystemWorkflowStorage::new().map_err(|e| {
             tracing::error!("Failed to create workflow storage: {}", e);
-            SwissArmyHammerError::Other(format!("Failed to create workflow storage: {e}"))
+            SwissArmyHammerError::Other { message: format!("Failed to create workflow storage: {e}") }
         })?) as Arc<dyn WorkflowStorageBackend>;
 
         // Create runs directory in user's home directory
@@ -88,7 +89,7 @@ impl McpServer {
 
         let run_backend = Arc::new(FileSystemWorkflowRunStorage::new(runs_path).map_err(|e| {
             tracing::error!("Failed to create workflow run storage: {}", e);
-            SwissArmyHammerError::Other(format!("Failed to create workflow run storage: {e}"))
+            SwissArmyHammerError::Other { message: format!("Failed to create workflow run storage: {e}") }
         })?) as Arc<dyn WorkflowRunStorageBackend>;
 
         let workflow_storage = WorkflowStorage::new(workflow_backend, run_backend);
@@ -101,14 +102,14 @@ impl McpServer {
             // Set working directory context for storage creation if different from current
             if needs_dir_change {
                 std::env::set_current_dir(&work_dir).map_err(|e| {
-                    SwissArmyHammerError::Other(format!("Failed to set working directory: {e}"))
+                    SwissArmyHammerError::Other { message: format!("Failed to set working directory: {e}") }
                 })?;
             }
 
             // Create storage
             let storage = FileSystemIssueStorage::new_default().map_err(|e| {
                 tracing::error!("Failed to create issue storage: {}", e);
-                SwissArmyHammerError::Other(format!("Failed to create issue storage: {e}"))
+                SwissArmyHammerError::Other { message: format!("Failed to create issue storage: {e}") }
             })?;
 
             // Always restore original working directory if we changed it and it still exists
@@ -145,9 +146,9 @@ impl McpServer {
                         // Fallback to temporary directory for tests
                         let temp_dir = std::env::temp_dir().join("swissarmyhammer-mcp-test");
                         std::fs::create_dir_all(&temp_dir).map_err(|err| {
-                            SwissArmyHammerError::Other(format!(
+                            SwissArmyHammerError::Other { message: format!(
                                 "Failed to create temporary memo directory: {err}"
-                            ))
+                            ) }
                         })?;
                         Box::new(MarkdownMemoStorage::new(temp_dir)) as Box<dyn MemoStorage>
                     }
@@ -231,15 +232,18 @@ impl McpServer {
         let mut resolver = PromptResolver::new();
 
         // Use the same loading logic as CLI
-        resolver.load_all_prompts(&mut library)?;
+        resolver.load_all_prompts(&mut library)
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
 
-        let total = library.list()?.len();
+        let total = library.list()
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?.len();
         tracing::debug!("Loaded {} prompts total", total);
 
         // Initialize workflows - workflows are loaded automatically by FileSystemWorkflowStorage
         // so we just need to check how many are available
         let workflow_storage = self.workflow_storage.read().await;
-        let workflow_count = workflow_storage.list_workflows()?.len();
+        let workflow_count = workflow_storage.list_workflows()
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?.len();
         tracing::debug!("Loaded {} workflows total", workflow_count);
 
         Ok(())
@@ -255,7 +259,8 @@ impl McpServer {
     /// * `Result<Vec<String>>` - List of prompt names or an error
     pub async fn list_prompts(&self) -> Result<Vec<String>> {
         let library = self.library.read().await;
-        let prompts = library.list()?;
+        let prompts = library.list()
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
         Ok(prompts
             .iter()
             .filter(|p| !Self::is_partial_template(p))
@@ -270,7 +275,8 @@ impl McpServer {
     /// * `Result<Vec<String>>` - List of workflow names or an error
     pub async fn list_workflows(&self) -> Result<Vec<String>> {
         let workflow_storage = self.workflow_storage.read().await;
-        let workflows = workflow_storage.list_workflows()?;
+        let workflows = workflow_storage.list_workflows()
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
         Ok(workflows.iter().map(|w| w.name.to_string()).collect())
     }
 
@@ -376,13 +382,14 @@ impl McpServer {
         arguments: Option<&HashMap<String, String>>,
     ) -> Result<String> {
         let library = self.library.read().await;
-        let prompt = library.get(name)?;
+        let prompt = library.get(name)
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
 
         // Check if this is a partial template
         if Self::is_partial_template(&prompt) {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "Cannot access partial template '{name}' via MCP. Partial templates are for internal use only."
-            )));
+            ) });
         }
 
         // Handle arguments if provided
@@ -394,12 +401,10 @@ impl McpServer {
                         .collect(),
                 )
                 .map_err(|e| {
-                    SwissArmyHammerError::git_operation_failed(
-                        "template_context",
-                        &format!("Failed to create template context: {e}"),
-                    )
+                    SwissArmyHammerError::Other { message: format!("Failed to create template context: {e}") }
                 })?;
-                library.render(name, &template_context)?
+                library.render(name, &template_context)
+                    .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?
             }
         } else {
             prompt.template.clone()
@@ -519,7 +524,7 @@ impl McpServer {
         }
 
         Err(last_error
-            .unwrap_or_else(|| SwissArmyHammerError::Other("Prompt reload failed".to_string())))
+            .unwrap_or_else(|| SwissArmyHammerError::Other { message: "Prompt reload failed".to_string() }))
     }
 
     /// Check if an error is a retryable file system error
@@ -552,9 +557,9 @@ impl McpServer {
 
         // Clear existing prompts and reload
         *library = PromptLibrary::new();
-        resolver.load_all_prompts(&mut library)?;
+        resolver.load_all_prompts(&mut library).map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
 
-        let after_count = library.list()?.len();
+        let after_count = library.list().map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?.len();
         tracing::info!(
             "🔄 Reloaded prompts: {} → {} prompts",
             before_count,
@@ -630,7 +635,7 @@ impl McpServer {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            SwissArmyHammerError::Other("File watcher initialization failed".to_string())
+            SwissArmyHammerError::Other { message: "File watcher initialization failed".to_string() }
         }))
     }
 

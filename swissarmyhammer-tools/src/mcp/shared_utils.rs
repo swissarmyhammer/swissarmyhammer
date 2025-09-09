@@ -5,9 +5,13 @@
 
 use rmcp::ErrorData as McpError;
 use std::collections::HashMap;
-use swissarmyhammer::{Result, SwissArmyHammerError};
-use swissarmyhammer_common;
+use swissarmyhammer_common::{SwissArmyHammerError, Result};
 use swissarmyhammer_todo::TodoError;
+
+// Use the common error type directly
+pub type CommonError = SwissArmyHammerError;
+
+
 
 /// Standard response format for MCP operations
 #[derive(Debug)]
@@ -56,6 +60,8 @@ impl McpResponse {
 pub struct McpErrorHandler;
 
 impl McpErrorHandler {
+
+
     /// Convert SwissArmyHammerError to appropriate MCP error response
     ///
     /// This provides consistent error mapping across all MCP operations:
@@ -66,96 +72,37 @@ impl McpErrorHandler {
         tracing::error!("MCP operation '{}' failed: {}", operation, error);
 
         match error {
-            // User input validation errors
-            SwissArmyHammerError::IssueNotFound(name) => {
-                McpError::invalid_params(format!("Issue not found: {name}"), None)
+            // File system errors
+            SwissArmyHammerError::FileNotFound { path, suggestion } => {
+                McpError::invalid_params(
+                    format!("File not found: {path}. Suggestion: {suggestion}"),
+                    None,
+                )
             }
-            SwissArmyHammerError::IssueAlreadyExists(num) => {
-                McpError::invalid_params(format!("Issue already exists: #{num:06}"), None)
+            SwissArmyHammerError::NotAFile { path, suggestion } => {
+                McpError::invalid_params(
+                    format!("Path is not a file: {path}. Suggestion: {suggestion}"),
+                    None,
+                )
             }
-            SwissArmyHammerError::MemoNotFound(id) => {
-                McpError::invalid_params(format!("Memo not found: {id}"), None)
-            }
-            SwissArmyHammerError::InvalidMemoId(id) => {
-                McpError::invalid_params(format!("Invalid memo ID format: {id}"), None)
-            }
-            SwissArmyHammerError::MemoAlreadyExists(id) => {
-                McpError::invalid_params(format!("Memo already exists: {id}"), None)
-            }
-            SwissArmyHammerError::MemoValidationFailed(reason) => {
-                McpError::invalid_params(format!("Memo validation failed: {reason}"), None)
-            }
-            SwissArmyHammerError::PromptNotFound(name) => {
-                McpError::invalid_params(format!("Prompt not found: {name}"), None)
-            }
-            SwissArmyHammerError::WorkflowNotFound(name) => {
-                McpError::invalid_params(format!("Workflow not found: {name}"), None)
-            }
-            SwissArmyHammerError::WorkflowRunNotFound(id) => {
-                McpError::invalid_params(format!("Workflow run not found: {id}"), None)
-            }
-            SwissArmyHammerError::Config(msg) => {
-                McpError::invalid_params(format!("Configuration error: {msg}"), None)
-            }
-            // Security and validation errors
-            SwissArmyHammerError::Template(msg)
-                if msg.contains("too large") || msg.contains("too complex") =>
-            {
-                McpError::invalid_params(format!("Template validation failed: {msg}"), None)
-            }
-            // Git operation errors (could be user error or system error)
-            SwissArmyHammerError::GitOperationFailed {
-                operation: git_op,
-                details,
-            } => {
-                if details.contains("not a git repository") || details.contains("branch") {
-                    McpError::invalid_params(format!("Git {git_op} failed: {details}"), None)
-                } else {
-                    McpError::internal_error(format!("Git {git_op} failed: {details}"), None)
-                }
-            }
-            SwissArmyHammerError::GitCommandFailed {
-                command,
-                exit_code,
-                stderr,
-            } => McpError::internal_error(
-                format!("Git command '{command}' failed with exit code {exit_code}: {stderr}"),
+            SwissArmyHammerError::PermissionDenied {
+                path,
+                error,
+                suggestion,
+            } => McpError::invalid_params(
+                format!("Permission denied: {path} - {error}. Suggestion: {suggestion}"),
                 None,
             ),
-            SwissArmyHammerError::GitRepositoryNotFound { path } => {
-                McpError::invalid_params(format!("Git repository not found at: {path}"), None)
+            SwissArmyHammerError::InvalidFilePath { path, suggestion } => {
+                McpError::invalid_params(
+                    format!("Invalid file path: {path}. Suggestion: {suggestion}"),
+                    None,
+                )
             }
-            SwissArmyHammerError::GitBranchOperationFailed {
-                operation: git_op,
-                branch,
-                details,
-            } => {
-                // Enhanced error handling for branch operations with recovery suggestions
-                let error_message =
-                    format!("Git {git_op} operation failed for branch '{branch}': {details}");
 
-                // Add context-specific recovery suggestions
-                let recovery_message = match git_op.as_str() {
-                    "merge" if details.contains("does not exist") => {
-                        format!("{error_message}\n\nRecovery: The source branch may have been deleted. Check with your team to determine the correct target branch for merging.")
-                    }
-                    "merge"
-                        if details.contains("CONFLICT")
-                            || details.contains("Manual resolution required") =>
-                    {
-                        format!("{error_message}\n\nRecovery: Merge conflicts require manual resolution. Use 'git status' to see conflicted files and resolve them manually.")
-                    }
-                    "create" if details.contains("Issue branches cannot be used as source") => {
-                        format!("{error_message}\n\nRecovery: Switch to a non-issue branch (such as a feature, develop, or base branch) before creating a new issue branch.")
-                    }
-                    _ => error_message,
-                };
-
-                McpError::invalid_params(recovery_message, None)
-            }
-            // System errors
+            // System-level errors
             SwissArmyHammerError::Io(err) => {
-                McpError::internal_error(format!("IO error: {err}"), None)
+                McpError::internal_error(format!("I/O error: {err}"), None)
             }
             SwissArmyHammerError::Serialization(err) => {
                 McpError::internal_error(format!("Serialization error: {err}"), None)
@@ -163,26 +110,24 @@ impl McpErrorHandler {
             SwissArmyHammerError::Json(err) => {
                 McpError::internal_error(format!("JSON error: {err}"), None)
             }
-            SwissArmyHammerError::Storage(msg) => {
-                McpError::internal_error(format!("Storage error: {msg}"), None)
+            SwissArmyHammerError::Semantic { message } => {
+                McpError::internal_error(format!("Search error: {message}"), None)
             }
-            // Generic errors
-            SwissArmyHammerError::Template(msg) => {
-                McpError::internal_error(format!("Template error: {msg}"), None)
-            }
-            SwissArmyHammerError::Other(msg) => {
-                // Check if this is a rate limiting error
-                if msg.contains("rate limit") || msg.contains("Rate limit") {
-                    McpError::invalid_params(msg, None)
+            SwissArmyHammerError::Other { message } => {
+                // Try to infer the error type from the message
+                if message.contains("not found") {
+                    McpError::invalid_params(message, None)
+                } else if message.contains("already exists") {
+                    McpError::invalid_params(message, None)
                 } else {
-                    McpError::internal_error(msg, None)
+                    McpError::internal_error(message, None)
                 }
             }
 
-            SwissArmyHammerError::Semantic(err) => {
-                McpError::internal_error(format!("Semantic search error: {err}"), None)
+            // Handle all other variants generically  
+            _ => {
+                McpError::internal_error(format!("Operation failed: {error}"), None)
             }
-            _ => McpError::internal_error(format!("Unexpected error: {error}"), None),
         }
     }
 
@@ -220,38 +165,8 @@ impl McpErrorHandler {
             TodoError::Io(err) => McpError::internal_error(format!("IO error: {err}"), None),
             TodoError::Yaml(err) => McpError::internal_error(format!("YAML error: {err}"), None),
             TodoError::Common(common_err) => {
-                // Convert common error to main SwissArmyHammerError and delegate
-                let main_err = match common_err {
-                    swissarmyhammer_common::SwissArmyHammerError::NotInGitRepository => {
-                        SwissArmyHammerError::Other("Not in a Git repository".to_string())
-                    }
-                    swissarmyhammer_common::SwissArmyHammerError::DirectoryCreation(error_msg) => {
-                        SwissArmyHammerError::Other(format!(
-                            "Directory creation error: {}",
-                            error_msg
-                        ))
-                    }
-                    swissarmyhammer_common::SwissArmyHammerError::InvalidPath { path } => {
-                        SwissArmyHammerError::Other(format!("Invalid path: {}", path.display()))
-                    }
-                    swissarmyhammer_common::SwissArmyHammerError::PermissionDenied {
-                        path, ..
-                    } => SwissArmyHammerError::Other(format!(
-                        "Permission denied accessing: {}",
-                        path
-                    )),
-                    swissarmyhammer_common::SwissArmyHammerError::Io(io_error) => {
-                        SwissArmyHammerError::Other(format!("I/O error: {}", io_error))
-                    }
-                    swissarmyhammer_common::SwissArmyHammerError::Semantic { message } => {
-                        SwissArmyHammerError::Other(format!("Semantic error: {}", message))
-                    }
-                    swissarmyhammer_common::SwissArmyHammerError::Other { message } => {
-                        SwissArmyHammerError::Other(message)
-                    }
-                    _ => SwissArmyHammerError::Other(format!("Common error: {}", common_err)),
-                };
-                Self::handle_error(main_err, operation)
+                // Since we're now using the common error type directly, just delegate
+                Self::handle_error(common_err, operation)
             }
             TodoError::Other(msg) => {
                 McpError::internal_error(format!("Todo operation failed: {msg}"), None)
@@ -267,12 +182,12 @@ impl McpValidation {
     /// Validate string length
     pub fn validate_string_length(value: &str, field: &str, max_length: usize) -> Result<()> {
         if value.len() > max_length {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "{} too long: {} characters (max: {})",
                 Self::capitalize_first_letter(field),
                 value.len(),
                 max_length
-            )));
+            ) });
         }
         Ok(())
     }
@@ -280,10 +195,10 @@ impl McpValidation {
     /// Validate string is not empty
     pub fn validate_not_empty(value: &str, field: &str) -> Result<()> {
         if value.trim().is_empty() {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "{} cannot be empty",
                 Self::capitalize_first_letter(field)
-            )));
+            ) });
         }
         Ok(())
     }
@@ -300,19 +215,19 @@ impl McpValidation {
     /// Validate identifier format (alphanumeric, hyphens, underscores only)
     pub fn validate_identifier(value: &str, field: &str) -> Result<()> {
         if value.is_empty() {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "{} cannot be empty",
                 Self::capitalize_first_letter(field)
-            )));
+            ) });
         }
 
         for char in value.chars() {
             if !char.is_alphanumeric() && char != '-' && char != '_' {
-                return Err(SwissArmyHammerError::Other(format!(
+                return Err(SwissArmyHammerError::Other { message: format!(
                     "{} contains invalid character: '{}'. Only alphanumeric characters, hyphens, and underscores are allowed",
                     Self::capitalize_first_letter(field),
                     char
-                )));
+                ) });
             }
         }
 
@@ -322,16 +237,16 @@ impl McpValidation {
     /// Validate ULID format
     pub fn validate_ulid(value: &str, field: &str) -> Result<()> {
         if value.len() != 26 {
-            return Err(SwissArmyHammerError::InvalidMemoId(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "{field} must be 26 characters long (ULID format)"
-            )));
+            ) });
         }
 
         for char in value.chars() {
             if !char.is_ascii_uppercase() && !char.is_ascii_digit() {
-                return Err(SwissArmyHammerError::InvalidMemoId(format!(
+                return Err(SwissArmyHammerError::Other { message: format!(
                     "{field} contains invalid character: '{char}'. ULIDs must only contain uppercase letters and digits"
-                )));
+                ) });
             }
         }
 

@@ -4,7 +4,8 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rmcp::RoleServer;
 use std::sync::Arc;
 use swissarmyhammer::common::file_types::is_any_prompt_file;
-use swissarmyhammer::{PromptResolver, Result, SwissArmyHammerError};
+use swissarmyhammer::PromptResolver;
+use swissarmyhammer_common::{SwissArmyHammerError, Result};
 use tokio::sync::{mpsc, Mutex};
 
 
@@ -59,7 +60,8 @@ impl FileWatcher {
 
         // Get the directories to watch using the same logic as PromptResolver
         let resolver = PromptResolver::new();
-        let watch_paths = resolver.get_prompt_directories()?;
+        let watch_paths = resolver.get_prompt_directories()
+            .map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
 
         tracing::info!(
             "Found {} directories to watch: {:?}",
@@ -88,13 +90,13 @@ impl FileWatcher {
             },
             notify::Config::default(),
         )
-        .map_err(|e| SwissArmyHammerError::Other(format!("Failed to create file watcher: {}", e)))?;
+        .map_err(|e| SwissArmyHammerError::Other { message: format!("Failed to create file watcher: {}", e) })?;
 
         // Watch all directories
         for path in &watch_paths {
             watcher
                 .watch(path, RecursiveMode::Recursive)
-                .map_err(|e| SwissArmyHammerError::Other(format!("Failed to watch directory {path:?}: {}", e)))?;
+                .map_err(|e| SwissArmyHammerError::Other { message: format!("Failed to watch directory {path:?}: {}", e) })?;
             tracing::info!("Watching directory: {:?}", path);
         }
 

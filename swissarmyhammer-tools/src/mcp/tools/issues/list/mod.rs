@@ -181,7 +181,7 @@ impl McpTool for ListIssuesTool {
         let issue_storage = context.issue_storage.read().await;
         let all_issue_infos = issue_storage.list_issues_info().await.map_err(|e| {
             McpErrorHandler::handle_error(
-                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
                 "list issues",
             )
         })?;

@@ -3,6 +3,7 @@
 //! This module provides the ShowIssueTool for displaying specific issues through the MCP protocol.
 
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
+use swissarmyhammer_common::SwissArmyHammerError;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
@@ -132,7 +133,7 @@ impl McpTool for ShowIssueTool {
                     }
                     Err(e) => {
                         return Err(McpErrorHandler::handle_error(
-                            e.into(),
+                            SwissArmyHammerError::Other { message: e.to_string() },
                             "get current branch",
                         ));
                     }
@@ -165,7 +166,7 @@ impl McpTool for ShowIssueTool {
                         Ok(issue_info) => issue_info,
                         Err(e) => {
                             return Err(McpErrorHandler::handle_error(
-                                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                                swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
                                 "get next issue info",
                             ));
                         }
@@ -178,7 +179,7 @@ impl McpTool for ShowIssueTool {
                 }
                 Err(e) => {
                     return Err(McpErrorHandler::handle_error(
-                        swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                        swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
                         "get next issue",
                     ));
                 }

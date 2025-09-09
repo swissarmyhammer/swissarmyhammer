@@ -6,7 +6,7 @@ use super::shared_utils::{McpErrorHandler, McpFormatter, McpValidation};
 use rmcp::model::*;
 use rmcp::ErrorData as McpError;
 use std::sync::Arc;
-use swissarmyhammer::error::SwissArmyHammerError;
+use swissarmyhammer_common::SwissArmyHammerError;
 use swissarmyhammer_memoranda::{MemoContent, MemoStorage, MemoTitle};
 use tokio::sync::RwLock;
 
@@ -37,10 +37,7 @@ impl ToolHandlers {
     /// # Returns
     ///
     /// * `McpError` - Appropriate MCP error response
-    fn handle_memo_error(
-        error: swissarmyhammer::error::SwissArmyHammerError,
-        operation: &str,
-    ) -> McpError {
+    fn handle_memo_error(error: SwissArmyHammerError, operation: &str) -> McpError {
         McpErrorHandler::handle_error(error, operation)
     }
 
@@ -87,7 +84,7 @@ impl ToolHandlers {
                 )))
             }
             Err(e) => Err(Self::handle_memo_error(
-                SwissArmyHammerError::Storage(e.to_string()),
+                SwissArmyHammerError::Other { message: e.to_string() },
                 "create memo",
             )),
         }
@@ -138,7 +135,7 @@ impl ToolHandlers {
                 memo_title
             ))),
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Storage(e.to_string()),
+                SwissArmyHammerError::Other { message: e.to_string() },
                 "get memo",
             )),
         }
@@ -191,7 +188,7 @@ impl ToolHandlers {
                 )))
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Storage(e.to_string()),
+                SwissArmyHammerError::Other { message: e.to_string() },
                 "update memo",
             )),
         }
@@ -233,7 +230,7 @@ impl ToolHandlers {
                 }
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Storage(e.to_string()),
+                SwissArmyHammerError::Other { message: e.to_string() },
                 "list memos",
             )),
         }
@@ -286,7 +283,7 @@ impl ToolHandlers {
                 }
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                SwissArmyHammerError::Storage(e.to_string()),
+                SwissArmyHammerError::Other { message: e.to_string() },
                 "get memo context",
             )),
         }

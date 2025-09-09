@@ -4,6 +4,7 @@
 
 use crate::mcp::responses::create_mark_complete_response;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
+use swissarmyhammer_common::SwissArmyHammerError;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::mcp::types::MarkCompleteRequest;
 use async_trait::async_trait;
@@ -89,7 +90,7 @@ impl McpTool for MarkCompleteIssueTool {
                     }
                     Err(e) => {
                         return Err(McpErrorHandler::handle_error(
-                            e.into(),
+                            SwissArmyHammerError::Other { message: e.to_string() },
                             "get current branch",
                         ));
                     }
@@ -112,7 +113,7 @@ impl McpTool for MarkCompleteIssueTool {
                 Ok(create_mark_complete_response(&issue))
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                swissarmyhammer::SwissArmyHammerError::Other(e.to_string()),
+                swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
                 "mark issue complete",
             )),
         }

@@ -147,3 +147,43 @@ This issue is marked as complete but clearly wasn't implemented. The migration s
 - No major code restructuring should be needed
 
 This is a critical foundation for other domain separations since error handling is cross-cutting.
+## Proposed Solution
+
+After analyzing both error implementations, the migration path is clear:
+
+### Analysis Summary
+
+**swissarmyhammer-common/src/error.rs** has:
+- Complete core error infrastructure 
+- `SwissArmyHammerError` enum with common variants (IO, JSON, YAML, etc.)
+- `Result<T>` type alias
+- Comprehensive error utilities (ErrorContext, ErrorChain, etc.)
+- All necessary infrastructure errors
+
+**swissarmyhammer/src/error.rs** has:
+- Domain-specific errors plus duplicated infrastructure errors
+- Already imports and re-exports common errors
+- Has redundant variants that should delegate to common crate
+
+**swissarmyhammer-tools** currently imports from the main crate instead of common crate.
+
+### Implementation Steps
+
+1. **Update all swissarmyhammer-tools imports** to use `swissarmyhammer_common` instead of `swissarmyhammer` for error types
+2. **Files to update** (5 files total):
+   - `src/mcp/error_handling.rs:4`
+   - `src/mcp/file_watcher.rs:7`
+   - `src/mcp/shared_utils.rs:8`
+   - `src/mcp/server.rs:16`
+   - `src/mcp/tool_handlers.rs:9`
+
+3. **Verify Cargo.toml** already has swissarmyhammer-common dependency
+4. **Build and test** to ensure no compilation errors
+5. **Verify** no imports remain from main crate
+
+### Expected Impact
+- Reduces coupling between swissarmyhammer-tools and main crate by 5+ imports
+- Aligns with architectural goal of using common crate for shared infrastructure
+- No functional changes - just import source changes
+
+The fix is straightforward since swissarmyhammer-common already has all needed error types.

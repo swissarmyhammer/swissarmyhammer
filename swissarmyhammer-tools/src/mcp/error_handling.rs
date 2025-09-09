@@ -1,7 +1,8 @@
 //! Error handling and retry logic for MCP operations
 
 use std::sync::Arc;
-use swissarmyhammer::{PromptLibrary, PromptResolver, Result, SwissArmyHammerError};
+use swissarmyhammer::{PromptLibrary, PromptResolver};
+use swissarmyhammer_common::{SwissArmyHammerError, Result};
 use tokio::sync::RwLock;
 
 /// Error handling implementation for MCP server
@@ -94,9 +95,9 @@ impl ErrorHandler {
 
         // Clear existing prompts and reload
         *library = PromptLibrary::new();
-        resolver.load_all_prompts(&mut library)?;
+        resolver.load_all_prompts(&mut library).map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
 
-        let after_count = library.list()?.len();
+        let after_count = library.list().map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?.len();
         tracing::info!(
             "🔄 Reloaded prompts: {} → {} prompts",
             before_count,
