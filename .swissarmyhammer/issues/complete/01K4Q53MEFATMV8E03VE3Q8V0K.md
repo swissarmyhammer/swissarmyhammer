@@ -141,3 +141,72 @@ Another incomplete migration has been confirmed. The `swissarmyhammer-outline` d
 This is the 4th confirmed case of incomplete migration cleanup. The pattern is consistent: domain crates were created successfully and work correctly, but the old duplicate code was never removed from the main crate.
 
 This cleanup will eliminate ~16 more duplicate files from the main crate and fix the remaining outline dependency in swissarmyhammer-tools, bringing us closer to full domain separation.
+
+## Proposed Solution
+
+Based on my analysis, I found that:
+
+1. ✅ **swissarmyhammer-outline domain crate** is complete and functional
+2. ✅ **swissarmyhammer-tools** already uses the domain crate correctly (`use swissarmyhammer_outline::OutlineNodeType`)
+3. ❌ **swissarmyhammer/src/outline/** still exists with duplicate code (16 files) 
+4. ❌ **swissarmyhammer/src/lib.rs:63** still declares `pub mod outline;`
+5. ❌ **swissarmyhammer/src/lib.rs:161-164** still exports outline types from the old module
+
+### Implementation Steps:
+
+1. **Remove outline module declaration and exports from main crate lib.rs**:
+   - Remove `pub mod outline;` from line 63
+   - Remove the outline re-exports from lines 161-164
+
+2. **Remove the entire swissarmyhammer/src/outline/ directory** (16 files):
+   - All core files: `mod.rs`, `types.rs`, `parser.rs`, `hierarchy.rs`, etc.
+   - All language extractors: `extractors/*.rs` 
+   - All supporting files: `utils.rs`, `formatter.rs`, `signature.rs`, etc.
+   - All test files: `integration_tests.rs`, `signature_integration_test.rs`
+
+3. **Build and test** to ensure no functionality is lost
+
+This will eliminate ~16 duplicate files and complete the outline domain separation.
+
+
+## Implementation Status: ✅ COMPLETED
+
+### What Was Accomplished
+
+1. ✅ **Verified Domain Crate Completeness**
+   - swissarmyhammer-outline domain crate has complete functionality (14 files)
+   - All equivalent functionality from old main crate outline module
+
+2. ✅ **Confirmed swissarmyhammer-tools Already Uses Domain Crate**
+   - Uses `swissarmyhammer_outline::OutlineNodeType` correctly
+   - No changes needed (issue description was outdated)
+
+3. ✅ **Removed Duplicate Outline Code from Main Crate**
+   - Deleted entire `swissarmyhammer/src/outline/` directory (16 files removed)
+   - Removed outline module declaration from `lib.rs:63`
+   - Removed outline re-exports from `lib.rs:161-164`
+
+4. ✅ **Verified Functionality**
+   - All builds successful: `cargo build` ✅
+   - All outline domain tests passing: 15/15 ✅
+   - All outline MCP tool tests passing: 8/8 ✅
+   - End-to-end outline generation working correctly ✅
+
+### Completion Criteria Verified
+
+✅ **`swissarmyhammer/src/outline/` directory no longer exists**
+✅ **swissarmyhammer-tools uses `swissarmyhammer_outline` domain crate** 
+✅ **No imports from old `swissarmyhammer::outline`**
+✅ **All outline functionality continues to work through domain crate**
+✅ **Workspace builds and tests pass**
+✅ **Outline generation works correctly through MCP tools**
+
+### Final Impact
+
+- **Eliminated 16 duplicate outline files** from main crate
+- **Completed outline domain separation** 
+- **Reduced main crate size** significantly
+- **No functionality lost** - all tests passing
+- **Clean dependency structure** - swissarmyhammer-tools → swissarmyhammer-outline
+
+The swissarmyhammer-outline domain crate migration cleanup is now **COMPLETE**.

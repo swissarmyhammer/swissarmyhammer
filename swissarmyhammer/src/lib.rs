@@ -59,8 +59,7 @@ pub mod storage;
 
 
 
-/// Outline generation functionality for Tree-sitter based code analysis
-pub mod outline;
+
 
 /// Plugin system for extensibility
 pub mod plugins;
@@ -157,10 +156,7 @@ pub mod prelude {
 
 
 
-    // Outline generation types for convenient access
-    pub use crate::outline::{
-        DiscoveredFile, FileDiscovery, FileDiscoveryConfig, FileDiscoveryReport, OutlineError,
-    };
+
 
     // sah.toml configuration types removed (migrated to swissarmyhammer-config)
     // All TOML configuration functionality now provided by swissarmyhammer-config crate using figment
