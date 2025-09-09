@@ -1,6 +1,6 @@
 //! Core data structures for outline generation functionality
 
-use crate::search::types::Language;
+use swissarmyhammer_search::Language;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

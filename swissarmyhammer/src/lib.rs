@@ -57,8 +57,7 @@ pub mod prompt_partial_adapter;
 /// Storage abstractions and implementations
 pub mod storage;
 
-/// Semantic search functionality with vector embeddings
-pub mod search;
+
 
 /// Outline generation functionality for Tree-sitter based code analysis
 pub mod outline;
@@ -156,11 +155,7 @@ pub mod prelude {
         WorkflowRunStatus,
     };
 
-    // Semantic search types for convenient access
-    pub use crate::search::{
-        CodeChunk, EmbeddingEngine, FileIndexer, IndexingOptions, IndexingStats, Language,
-        SemanticConfig, SemanticSearcher, SemanticUtils, VectorStorage,
-    };
+
 
     // Outline generation types for convenient access
     pub use crate::outline::{

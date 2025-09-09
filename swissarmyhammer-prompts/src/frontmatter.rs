@@ -104,8 +104,8 @@ fn find_closing_delimiter(content: &str) -> Option<usize> {
         if line.trim() == "---" {
             // Calculate the byte position of this line
             let mut pos = 0;
-            for j in 0..i {
-                pos += lines[j].len();
+            for line in lines.iter().take(i) {
+                pos += line.len();
                 pos += 1; // for the newline character
             }
             return Some(pos);

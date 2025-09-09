@@ -4,7 +4,7 @@
 //! complex scenarios across all languages, generating accurate function/method
 //! signatures with complete type information, parameter details, and return types.
 
-use crate::search::types::Language;
+use swissarmyhammer_search::Language;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use tree_sitter::Node;

@@ -8,8 +8,7 @@ use crate::outline::extractors::{
     DartExtractor, JavaScriptExtractor, PythonExtractor, RustExtractor, TypeScriptExtractor,
 };
 use crate::outline::{OutlineNode, OutlineNodeType, OutlineTree, Result, Visibility};
-use crate::search::parser::{CodeParser, ParserConfig};
-use crate::search::types::Language;
+use swissarmyhammer_search::{CodeParser, Language, ParserConfig};
 use std::collections::HashMap;
 use std::path::Path;
 use tree_sitter::{Node, Tree};

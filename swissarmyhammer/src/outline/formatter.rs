@@ -390,7 +390,7 @@ mod tests {
     use crate::outline::{
         HierarchyBuilder, OutlineFile, OutlineNode, OutlineNodeType, OutlineTree, Visibility,
     };
-    use crate::search::types::Language;
+    use swissarmyhammer_search::Language;
     use std::path::PathBuf;
 
     fn create_test_hierarchy() -> crate::outline::OutlineHierarchy {

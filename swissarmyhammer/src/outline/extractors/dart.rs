@@ -11,7 +11,7 @@ use crate::outline::signature::{
 };
 use crate::outline::types::{OutlineNode, OutlineNodeType, Visibility};
 use crate::outline::{OutlineError, Result};
-use crate::search::types::Language;
+use swissarmyhammer_search::Language;
 use std::collections::HashMap;
 use tree_sitter::{Node, Query, QueryCursor, StreamingIterator, Tree};
 

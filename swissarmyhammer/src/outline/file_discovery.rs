@@ -7,8 +7,7 @@ use crate::outline::{
     },
     OutlineError, Result,
 };
-use crate::search::parser::LanguageRegistry;
-use crate::search::types::Language;
+use swissarmyhammer_search::{Language, LanguageRegistry};
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

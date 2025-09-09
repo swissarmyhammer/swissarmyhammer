@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 /// Represents the type of a parameter
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ParameterType {
     /// String parameter
+    #[default]
     String,
     /// Integer parameter
     Integer,
@@ -50,11 +51,7 @@ impl FromStr for ParameterType {
     }
 }
 
-impl Default for ParameterType {
-    fn default() -> Self {
-        ParameterType::String
-    }
-}
+
 
 /// Represents a parameter specification for a prompt template
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

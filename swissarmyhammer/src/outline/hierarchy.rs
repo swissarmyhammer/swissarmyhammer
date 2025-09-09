@@ -6,7 +6,7 @@
 //! directory organization and symbol relationships.
 
 use crate::outline::{OutlineNode, OutlineTree, Result};
-use crate::search::types::Language;
+use swissarmyhammer_search::Language;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -403,7 +403,7 @@ fn visibility_order(visibility: &Option<crate::outline::Visibility>) -> u8 {
 mod tests {
     use super::*;
     use crate::outline::{OutlineNodeType, OutlineTree};
-    use crate::search::types::Language;
+    use swissarmyhammer_search::Language;
     use std::path::PathBuf;
 
     fn create_test_outline_tree(file_path: &str, symbols: Vec<OutlineNode>) -> OutlineTree {

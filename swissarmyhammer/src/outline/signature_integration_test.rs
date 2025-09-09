@@ -7,7 +7,7 @@
 #[cfg(test)]
 mod tests {
     use crate::outline::signature::{GenericParameter, Modifier, Parameter, Signature, TypeInfo};
-    use crate::search::types::Language;
+    use swissarmyhammer_search::Language;
 
     #[test]
     fn test_comprehensive_rust_signature_creation() {

@@ -283,7 +283,7 @@ impl McpServer {
         })?;
         Ok(prompts
             .iter()
-            .filter(|p| !Self::is_partial_template(*p))
+            .filter(|p| !Self::is_partial_template(p))
             .map(|p| p.name.clone())
             .collect())
     }
@@ -712,7 +712,7 @@ impl ServerHandler for McpServer {
             Ok(prompts) => {
                 let prompt_list: Vec<Prompt> = prompts
                     .iter()
-                    .filter(|p| !Self::is_partial_template(*p)) // Filter out partial templates
+                    .filter(|p| !Self::is_partial_template(p)) // Filter out partial templates
                     .map(|p| {
                         // Domain prompts don't have parameters yet - using empty list for now
                         let arguments = None;
