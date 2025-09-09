@@ -3566,80 +3566,9 @@ mod tests {
     // Note: Performance tests would be implemented here with proper tooling and dependencies
 
     /*
-    #[tokio::test]
-    async fn test_large_output_handling_performance() {
-        // Test handling of commands that produce large amounts of output
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
 
-        // Generate large output (~100KB)
-        let large_output_request = serde_json::json!({
-            "command": "head -c 100000 /dev/zero | base64",
-            "timeout": 60
-        });
 
-        let start = std::time::Instant::now();
-        let result = tool.execute(
-            large_output_request.as_object().unwrap().clone(),
-            &context,
-        ).await;
-        let elapsed = start.elapsed();
 
-        // Should handle large output within reasonable time
-        assert!(elapsed < Duration::from_secs(30), "Large output should be handled efficiently, took: {:?}", elapsed);
-
-        // Should succeed (possibly with truncation)
-        assert!(result.is_ok(), "Large output command should succeed or handle gracefully");
-
-        if let Ok(response) = result {
-            assert!(!response.content.is_empty(), "Should have response content");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_shell_execution_performance() {
-        // Test multiple concurrent shell executions
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
-
-        // Create multiple concurrent requests
-        let requests = (0..10).map(|i| {
-            let tool_clone = tool.clone();
-            let context_clone = context.clone();
-            tokio::spawn(async move {
-                let request = serde_json::json!({
-                    "command": format!("echo 'Concurrent test {}' && sleep 0.1", i),
-                    "timeout": 30
-                });
-
-                let start = std::time::Instant::now();
-                let result = tool_clone.execute(
-                    request.as_object().unwrap().clone(),
-                    &context_clone,
-                ).await;
-                let elapsed = start.elapsed();
-
-                (i, result, elapsed)
-            })
-        }).collect::<Vec<_>>();
-
-        let start = std::time::Instant::now();
-        let mut results = Vec::new();
-        for request in requests {
-            results.push(request.await);
-        }
-        let total_elapsed = start.elapsed();
-
-        // Concurrent execution should be faster than sequential
-        assert!(total_elapsed < Duration::from_secs(5), "Concurrent execution should be efficient");
-
-        // All requests should succeed
-        for result in results {
-            let (i, exec_result, individual_elapsed) = result.expect("Task should complete");
-            assert!(exec_result.is_ok(), "Concurrent request {} should succeed", i);
-            assert!(individual_elapsed < Duration::from_secs(2), "Individual request should complete quickly");
-        }
-    }
 
     #[tokio::test]
     async fn test_memory_usage_with_repeated_executions() {
@@ -3728,53 +3657,7 @@ mod tests {
         // This is verified by the process cleanup mechanisms in AsyncProcessGuard
     }
 
-    #[tokio::test]
-    async fn test_timeout_handling_performance() {
-        // Test that timeouts are handled efficiently without resource leaks
-        let tool = ShellExecuteTool::new();
-        let context = create_test_context();
 
-        let timeout_requests = 10;
-        let tasks = (0..timeout_requests).map(|i| {
-            let tool_clone = tool.clone();
-            let context_clone = context.clone();
-            tokio::spawn(async move {
-                let request = serde_json::json!({
-                    "command": format!("sleep {}", 5 + i), // Commands that would take 5+ seconds
-                    "timeout": 1 // 1 second timeout
-                });
-
-                let start = std::time::Instant::now();
-                let result = tool_clone.execute(
-                    request.as_object().unwrap().clone(),
-                    &context_clone,
-                ).await;
-                let elapsed = start.elapsed();
-
-                (i, result, elapsed)
-            })
-        }).collect::<Vec<_>>();
-
-        let start = std::time::Instant::now();
-        let mut results = Vec::new();
-        for task in tasks {
-            results.push(task.await);
-        }
-        let total_elapsed = start.elapsed();
-
-        // All timeouts should be handled quickly
-        assert!(total_elapsed < Duration::from_secs(5), "Timeout handling should be efficient");
-
-        for result in results {
-            let (i, exec_result, individual_elapsed) = result.expect("Task should complete");
-            // Individual timeouts should be respected
-            assert!(individual_elapsed < Duration::from_secs(3),
-                "Timeout {} should be handled quickly: {:?}", i, individual_elapsed);
-
-            // Result may be success with timeout metadata or error - both are acceptable
-            // The important thing is that it completes quickly and doesn't hang
-        }
-    }
 
     #[tokio::test]
     async fn test_resource_limits_under_stress() {

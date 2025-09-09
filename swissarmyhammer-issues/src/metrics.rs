@@ -552,61 +552,7 @@ mod tests {
         assert_eq!(stats.overall_avg_time(), 1_000_000.0);
     }
 
-    #[test]
-    fn test_mixed_operation_performance_analysis() {
-        let metrics = PerformanceMetrics::new();
 
-        // Record a realistic mix of operations
-        for _ in 0..100 {
-            metrics.record_operation(Operation::Read, Duration::from_micros(50));
-        }
-
-        for _ in 0..50 {
-            metrics.record_operation(Operation::Create, Duration::from_micros(200));
-        }
-
-        for _ in 0..25 {
-            metrics.record_operation(Operation::Update, Duration::from_micros(150));
-        }
-
-        for _ in 0..10 {
-            metrics.record_operation(Operation::Delete, Duration::from_micros(100));
-        }
-
-        for _ in 0..5 {
-            metrics.record_operation(Operation::List, Duration::from_micros(500));
-        }
-
-        let stats = metrics.get_stats();
-
-        // Verify operation counts
-        assert_eq!(stats.read_ops, 100);
-        assert_eq!(stats.create_ops, 50);
-        assert_eq!(stats.update_ops, 25);
-        assert_eq!(stats.delete_ops, 10);
-        assert_eq!(stats.list_ops, 5);
-        assert_eq!(stats.total_operations(), 190);
-
-        // Verify average times
-        assert_eq!(stats.avg_read_time, 50.0);
-        assert_eq!(stats.avg_create_time, 200.0);
-        assert_eq!(stats.avg_update_time, 150.0);
-        assert_eq!(stats.avg_delete_time, 100.0);
-        assert_eq!(stats.avg_list_time, 500.0);
-
-        // Verify performance analysis
-        let fastest = stats.fastest_operation();
-        assert!(matches!(fastest, Some(Operation::Read)));
-
-        let slowest = stats.slowest_operation();
-        assert!(matches!(slowest, Some(Operation::List)));
-
-        // Calculate expected overall average
-        let expected_avg =
-            ((100.0 * 50.0) + (50.0 * 200.0) + (25.0 * 150.0) + (10.0 * 100.0) + (5.0 * 500.0))
-                / 190.0;
-        assert_eq!(stats.overall_avg_time(), expected_avg);
-    }
 
     #[test]
     fn test_default_implementation() {

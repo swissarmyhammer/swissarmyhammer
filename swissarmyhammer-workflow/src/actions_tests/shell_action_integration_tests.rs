@@ -243,34 +243,7 @@ async fn test_shell_action_mixed_with_other_action_types() {
         .contains("Completed at timestamp:"));
 }
 
-#[tokio::test]
-async fn test_shell_action_performance_with_sequential_execution() {
-    // Test performance of multiple shell actions in sequence
-    let mut context = WorkflowTemplateContext::with_vars_for_test(HashMap::new());
 
-    let start_time = std::time::Instant::now();
-
-    // Execute multiple shell actions sequentially
-    for i in 1..=5 {
-        let cmd =
-            ShellAction::new(format!("echo 'test{i}'")).with_result_variable(format!("result{i}"));
-        let _result = cmd.execute(&mut context).await.unwrap();
-    }
-
-    let duration = start_time.elapsed();
-
-    // Verify performance is acceptable (increased for parallel test execution)
-    assert!(duration < Duration::from_secs(15)); // Should complete reasonably quickly
-    assert_eq!(context.get("success"), Some(&Value::Bool(true)));
-
-    // Verify all results are present
-    for i in 1..=5 {
-        let result_key = format!("result{i}");
-        assert!(context.contains_key(&result_key));
-        let result = context.get(&result_key).unwrap().as_str().unwrap();
-        assert!(result.contains(&format!("test{i}")));
-    }
-}
 
 #[tokio::test]
 async fn test_shell_action_result_variable_chaining() {

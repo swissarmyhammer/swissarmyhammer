@@ -411,7 +411,7 @@ impl McpServer {
         })?;
 
         // Check if this is a partial template
-        if Self::is_partial_template(&prompt) {
+        if Self::is_partial_template(prompt) {
             return Err(SwissArmyHammerError::Other { message: format!(
                 "Cannot access partial template '{name}' via MCP. Partial templates are for internal use only."
             ) });
@@ -743,7 +743,7 @@ impl ServerHandler for McpServer {
         match library.get(&request.name) {
             Ok(prompt) => {
                 // Check if this is a partial template
-                if Self::is_partial_template(&prompt) {
+                if Self::is_partial_template(prompt) {
                     return Err(McpError::invalid_request(
                         format!(
                             "Cannot access partial template '{}' via MCP. Partial templates are for internal use only.",

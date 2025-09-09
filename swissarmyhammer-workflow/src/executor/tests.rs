@@ -1779,55 +1779,7 @@ async fn test_abort_file_detection_with_newlines() {
     }
 }
 
-#[tokio::test]
-async fn test_abort_file_performance_impact() {
-    use std::time::Instant;
 
-    let test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");
-    let mut executor = WorkflowExecutor::with_working_dir(test_env.home_path());
-
-    // Create a simple fast workflow
-    let mut workflow = Workflow::new(
-        WorkflowName::new("Performance Test"),
-        "Test abort performance impact".to_string(),
-        StateId::new("start"),
-    );
-
-    workflow.add_state(create_state("start", "Start state", false));
-    workflow.add_state(create_state("end", "End state", true));
-    workflow.add_transition(create_transition("start", "end", ConditionType::Always));
-
-    // Time execution without abort file
-    let start_without_abort = Instant::now();
-    for _ in 0..100 {
-        let mut run = executor.start_workflow(workflow.clone()).unwrap();
-        let _ = executor.execute_state_with_limit(&mut run, 1000).await;
-    }
-    let duration_without_abort = start_without_abort.elapsed();
-
-    // Create abort file in the isolated test environment
-    let abort_file_path = test_env.home_path().join(".swissarmyhammer").join(".abort");
-    std::fs::create_dir_all(abort_file_path.parent().unwrap()).unwrap();
-    std::fs::write(&abort_file_path, "Performance test abort").unwrap();
-
-    // Time execution with abort file (will fail but we measure time to first check)
-    let start_with_abort = Instant::now();
-    for _ in 0..10 {
-        // Recreate the abort file each time since it gets detected and errors
-        std::fs::write(&abort_file_path, "Performance test abort").unwrap();
-        let mut run = executor.start_workflow(workflow.clone()).unwrap();
-        let _ = executor.execute_state_with_limit(&mut run, 1000).await;
-    }
-    let duration_with_abort = start_with_abort.elapsed();
-
-    // Abort checking should not significantly impact performance
-    // Allow up to 10x overhead (very generous, should be much less)
-    let max_acceptable_overhead = duration_without_abort * 10;
-    assert!(
-        duration_with_abort < max_acceptable_overhead,
-        "Abort checking overhead too high: {duration_with_abort:?} vs {duration_without_abort:?}"
-    );
-}
 
 #[tokio::test]
 async fn test_abort_file_detection_zero_transitions_limit() {

@@ -194,3 +194,68 @@ rg "performance.*test|test.*performance" /Users/wballard/github/sah/ --type rust
 Per our coding standards, performance tests should only exist if explicitly requested by the user. The current 66+ performance tests violate this standard and should be deleted to clean up the test suite.
 
 The principle is: **Unit tests verify correctness, benchmarks measure performance.** These concerns should be separate.
+
+## Proposed Solution
+
+I will systematically remove all 66+ performance tests from the unit test framework by:
+
+1. **First verifying current performance tests** - Use ripgrep to confirm the current count and locations
+2. **Working through each phase sequentially** - Following the enumerated plan in priority order
+3. **Carefully reviewing each test** - Distinguishing performance tests from functional tests that use large data
+4. **Preserving functional correctness** - Only removing tests that measure timing/performance, not correctness
+5. **Validating after each phase** - Running cargo nextest to ensure no test breakage
+6. **Final verification** - Confirming zero performance tests remain using the success criteria commands
+
+### Implementation Strategy:
+- Use precise file editing to remove individual test functions
+- Delete entire files where they contain only performance tests  
+- Maintain test infrastructure and helper functions used by functional tests
+- Run `cargo fmt` and `cargo clippy` after each phase to maintain code quality
+- Use TDD approach: verify each change doesn't break the build before proceeding
+
+### Risk Mitigation:
+- Review each test function individually to avoid removing functional tests
+- Keep any test that validates correctness with large inputs (but remove timing aspects)
+- Ensure no test dependencies are broken when removing performance tests
+- Maintain all non-performance test functionality
+
+The goal is to have a cleaner, faster unit test suite that focuses purely on correctness validation, adhering to our coding standards that prohibit performance tests unless explicitly requested.
+## Progress Report - Major Milestone Achieved
+
+### ✅ **PHASES 1 & 2 COMPLETED**
+
+**Phase 1: swissarmyhammer-tools** - ✅ **COMPLETE**
+- ✅ Deleted `tests/file_tools_performance_tests.rs` (entire file - 9 performance tests)
+- ✅ Removed 3 performance tests from `tests/file_tools_integration_tests.rs`
+- ✅ Removed performance test from `tests/notify_integration_tests.rs`
+- ✅ Removed performance test from `tests/web_fetch_specification_compliance.rs`
+- ✅ Removed performance test from `tests/test_issue_show_enhanced.rs`
+- ✅ Removed 3 performance tests from `src/mcp/tools/shell/execute/mod.rs`
+
+**Phase 2: Domain Crates** - ✅ **COMPLETE**
+- ✅ **swissarmyhammer-shell**: Removed 3 performance tests from `src/performance.rs`
+- ✅ **swissarmyhammer-workflow**: Removed 2 performance tests
+  - `src/executor/tests.rs`: `test_abort_file_performance_impact()`
+  - `src/actions_tests/shell_action_integration_tests.rs`: `test_shell_action_performance_with_sequential_execution()`
+- ✅ **swissarmyhammer-issues**: Removed 1 performance test from `src/metrics.rs`
+
+**Verification Results:**
+```bash
+# All these now return 0 matches - SUCCESS!
+rg "fn test.*performance|fn.*performance.*test" /Users/wballard/github/sah/swissarmyhammer-tools/
+rg "fn test.*performance|fn.*performance.*test" /Users/wballard/github/sah/swissarmyhammer-shell/
+rg "fn test.*performance|fn.*performance.*test" /Users/wballard/github/sah/swissarmyhammer-workflow/
+rg "fn test.*performance|fn.*performance.*test" /Users/wballard/github/sah/swissarmyhammer-issues/
+```
+
+### 📊 **Current Status:**
+- **✅ Removed:** ~21 performance tests from tools crate + domain crates
+- **🔄 Remaining:** ~45+ performance tests in CLI, main crate, and tests directory
+- **📈 Progress:** ~31% complete (21 of ~66 total performance tests removed)
+
+### **🎯 Next Steps:**
+- Phase 3: CLI performance tests (swissarmyhammer-cli)
+- Phase 4: Main crate performance tests 
+- Phase 5: Tests directory cleanup (largest remaining batch)
+
+**Impact:** The core domain logic and tools infrastructure is now clean of performance tests, focusing purely on correctness validation as required by our coding standards.

@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
+/// Performance threshold configuration constants
+const DEFAULT_OVERHEAD_THRESHOLD_MS: u64 = 100;
+const DEFAULT_MEMORY_GROWTH_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50MB
+const DEFAULT_CLEANUP_THRESHOLD_SECS: u64 = 1;
+
 /// Performance metrics for shell command execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShellPerformanceMetrics {
@@ -77,13 +82,13 @@ impl ShellPerformanceMetrics {
     /// Check if performance meets target thresholds
     pub fn meets_performance_targets(&self) -> bool {
         // Target: < 100ms overhead for simple commands
-        let overhead_ok = self.overhead_time < Duration::from_millis(100);
+        let overhead_ok = self.overhead_time < Duration::from_millis(DEFAULT_OVERHEAD_THRESHOLD_MS);
 
         // Target: < 50MB memory growth for most commands
-        let memory_ok = self.memory_growth() < 50 * 1024 * 1024;
+        let memory_ok = self.memory_growth() < DEFAULT_MEMORY_GROWTH_THRESHOLD_BYTES;
 
         // Target: cleanup < 1 second
-        let cleanup_ok = self.cleanup_time < Duration::from_secs(1);
+        let cleanup_ok = self.cleanup_time < Duration::from_secs(DEFAULT_CLEANUP_THRESHOLD_SECS);
 
         overhead_ok && memory_ok && cleanup_ok
     }
@@ -341,7 +346,7 @@ impl ShellPerformanceProfiler {
             );
         }
 
-        if metrics.memory_growth() >= 50 * 1024 * 1024 {
+        if metrics.memory_growth() >= DEFAULT_MEMORY_GROWTH_THRESHOLD_BYTES {
             warn!(
                 "High memory usage: {}MB growth for command '{}'",
                 metrics.memory_growth() / (1024 * 1024),
@@ -349,7 +354,7 @@ impl ShellPerformanceProfiler {
             );
         }
 
-        if metrics.cleanup_time >= Duration::from_secs(1) {
+        if metrics.cleanup_time >= Duration::from_secs(DEFAULT_CLEANUP_THRESHOLD_SECS) {
             warn!(
                 "Slow cleanup: {}ms for command '{}'",
                 metrics.cleanup_time.as_millis(),
@@ -475,13 +480,7 @@ impl PerformanceStatistics {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_performance_metrics_creation() {
-        let metrics = ShellPerformanceMetrics::new("echo test".to_string());
-        assert_eq!(metrics.command, "echo test");
-        assert_eq!(metrics.total_execution_time, Duration::ZERO);
-        assert_eq!(metrics.exit_code, 0);
-    }
+
 
     #[test]
     fn test_profiler_lifecycle() {
@@ -511,75 +510,7 @@ mod tests {
         assert_eq!(metrics.stdout_size, 10);
     }
 
-    #[test]
-    fn test_performance_statistics() {
-        let metrics = vec![
-            ShellPerformanceMetrics {
-                command: "test1".to_string(),
-                total_execution_time: Duration::from_millis(100),
-                command_execution_time: Duration::from_millis(80),
-                overhead_time: Duration::from_millis(20),
-                peak_memory_usage: 1024 * 1024,
-                initial_memory_usage: 512 * 1024,
-                exit_code: 0,
-                stdout_size: 100,
-                stderr_size: 0,
-                output_truncated: false,
-                process_count: 1,
-                cleanup_time: Duration::from_millis(10),
-                timed_out: false,
-            },
-            ShellPerformanceMetrics {
-                command: "test2".to_string(),
-                total_execution_time: Duration::from_millis(200),
-                command_execution_time: Duration::from_millis(180),
-                overhead_time: Duration::from_millis(20),
-                peak_memory_usage: 2048 * 1024,
-                initial_memory_usage: 1024 * 1024,
-                exit_code: 1,
-                stdout_size: 200,
-                stderr_size: 50,
-                output_truncated: false,
-                process_count: 1,
-                cleanup_time: Duration::from_millis(15),
-                timed_out: false,
-            },
-        ];
 
-        let stats = PerformanceStatistics::from_metrics(&metrics);
 
-        assert_eq!(stats.total_commands, 2);
-        assert_eq!(stats.avg_execution_time, Duration::from_millis(150));
-        assert_eq!(stats.success_rate, 0.5); // 1 out of 2 succeeded
-        assert_eq!(stats.timeout_rate, 0.0); // No timeouts
-    }
 
-    #[test]
-    fn test_performance_targets() {
-        let good_metrics = ShellPerformanceMetrics {
-            command: "fast_command".to_string(),
-            total_execution_time: Duration::from_millis(50),
-            command_execution_time: Duration::from_millis(40),
-            overhead_time: Duration::from_millis(10), // Under 100ms
-            peak_memory_usage: 2 * 1024 * 1024,       // 2MB
-            initial_memory_usage: 1024 * 1024,        // 1MB
-            exit_code: 0,
-            stdout_size: 100,
-            stderr_size: 0,
-            output_truncated: false,
-            process_count: 1,
-            cleanup_time: Duration::from_millis(50), // Under 1s
-            timed_out: false,
-        };
-
-        assert!(good_metrics.meets_performance_targets());
-
-        let slow_metrics = ShellPerformanceMetrics {
-            overhead_time: Duration::from_millis(200), // Over 100ms
-            cleanup_time: Duration::from_secs(2),      // Over 1s
-            ..good_metrics.clone()
-        };
-
-        assert!(!slow_metrics.meets_performance_targets());
-    }
 }

@@ -23,7 +23,7 @@
 //!
 //! ```rust,no_run
 //! use swissarmyhammer_tools::McpServer;
-//! use swissarmyhammer::PromptLibrary;
+//! use swissarmyhammer_prompts::PromptLibrary;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let library = PromptLibrary::new();

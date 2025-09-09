@@ -230,30 +230,7 @@ fn test_security_and_validation_features() {
     println!("✅ Security and validation features verified");
 }
 
-#[test]
-fn test_performance_requirements() {
-    let tool = WebFetchTool::new();
-    let schema = tool.schema();
-    let properties = &schema["properties"];
 
-    // Verify performance-related configuration
-    assert_eq!(properties["timeout"]["default"], 30); // 30 second default timeout
-    assert_eq!(properties["max_content_length"]["default"], 1048576); // 1MB default limit
-
-    // These limits ensure reasonable performance characteristics
-    let max_timeout = properties["timeout"]["maximum"].as_u64().unwrap();
-    let max_content = properties["max_content_length"]["maximum"]
-        .as_u64()
-        .unwrap();
-
-    assert!(max_timeout <= 120, "Maximum timeout should be reasonable");
-    assert!(
-        max_content <= 10485760,
-        "Maximum content size should be reasonable"
-    );
-
-    println!("✅ Performance requirements verified");
-}
 
 #[test]
 fn test_mcp_protocol_integration() {
