@@ -2,9 +2,8 @@
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rmcp::RoleServer;
-use std::path::Path;
 use std::sync::Arc;
-use swissarmyhammer::common::file_types::{is_any_prompt_file, is_prompt_file};
+use swissarmyhammer::common::file_types::is_any_prompt_file;
 use swissarmyhammer::{PromptResolver, Result, SwissArmyHammerError};
 use tokio::sync::{mpsc, Mutex};
 

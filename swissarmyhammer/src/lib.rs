@@ -129,14 +129,7 @@ pub use workflow::{
 pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
 
 // sah.toml configuration types removed (migrated to swissarmyhammer-config)
-
-/// New core data structures for sah.toml configuration  
-pub use toml_core::{
-    load_config as load_toml_core_config, load_repo_config as load_toml_core_repo_config,
-    validate_config_file as validate_toml_core_config_file, ConfigError as TomlCoreError,
-    ConfigParser as TomlCoreParser, ConfigValue as TomlCoreValue,
-    Configuration as TomlCoreConfiguration,
-};
+// All TOML configuration functionality now provided by swissarmyhammer-config crate using figment
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -146,8 +139,7 @@ pub mod error;
 
 // sah.toml configuration support removed (migrated to swissarmyhammer-config)
 
-/// Core TOML configuration data structures (new implementation)
-pub mod toml_core;
+// pub mod toml_core; // REMOVED - All TOML functionality moved to swissarmyhammer-config
 
 pub use error::{ErrorChainExt, ErrorContext, Result, SwissArmyHammerError};
 
@@ -176,15 +168,7 @@ pub mod prelude {
     };
 
     // sah.toml configuration types removed (migrated to swissarmyhammer-config)
-
-    // New core TOML configuration data structures for convenient access
-    pub use crate::toml_core::{
-        load_config as load_toml_core_config, load_repo_config as load_toml_core_repo_config,
-        parse_config_file, parse_config_string,
-        validate_config_file as validate_toml_core_config_file, ConfigError as TomlCoreError,
-        ConfigParser as TomlCoreParser, ConfigValue as TomlCoreValue,
-        Configuration as TomlCoreConfiguration,
-    };
+    // All TOML configuration functionality now provided by swissarmyhammer-config crate using figment
 
     // Common utilities for easy access
     pub use crate::common::{

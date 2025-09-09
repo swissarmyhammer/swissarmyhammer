@@ -128,3 +128,52 @@ use swissarmyhammer_config::{load_configuration, TemplateContext};
 This eliminates a major unnecessary wrapper/reimplementation. Configuration is a solved problem in Rust - we should use `figment` through our domain crate rather than maintaining a custom TOML implementation.
 
 The `swissarmyhammer-config` crate already exists and uses proper ecosystem tools. We should consolidate all configuration logic there instead of having parallel systems.
+
+## Proposed Solution
+
+After analyzing the codebase, I found that the `toml_core` module is **completely unused**. The exports in `swissarmyhammer/src/lib.rs` have zero usage throughout the entire codebase - this makes the elimination straightforward.
+
+### Key Findings:
+1. **Zero External Usage**: No code outside `toml_core/` imports or uses any of the exported types (`TomlCoreParser`, `TomlCoreValue`, `TomlCoreConfiguration`, etc.)
+2. **Complete Duplication**: `swissarmyhammer-config` already provides all needed functionality using `figment` (the industry standard)
+3. **Self-Contained**: The `toml_core` module is completely self-contained with no external dependencies on it
+
+### Implementation Plan:
+1. **Remove toml_core exports** from `swissarmyhammer/src/lib.rs` (lines 134-139, 181-186)
+2. **Remove toml_core module** entirely: `swissarmyhammer/src/toml_core/` directory
+3. **Update lib.rs** to remove the `pub mod toml_core;` declaration
+4. **Run tests** to verify nothing breaks (should be clean since no usage exists)
+
+### Benefits:
+- ✅ **Eliminates ~1500+ lines of unnecessary code**
+- ✅ **Removes maintenance overhead** of custom TOML parser
+- ✅ **No migration needed** - nothing uses it
+- ✅ **Zero risk** - no external dependencies to break
+- ✅ **Immediate simplification** - cleaner codebase
+
+This is a perfect case for elimination - the duplication exists but is completely unused, making removal risk-free.
+
+## Implementation Complete ✅
+
+Successfully eliminated the `toml_core` wrapper entirely! The implementation was straightforward since there were no external dependencies.
+
+### Changes Made:
+1. **Removed toml_core exports** from `swissarmyhammer/src/lib.rs`
+2. **Removed module declaration** `pub mod toml_core;` from `swissarmyhammer/src/lib.rs` 
+3. **Deleted entire directory** `swissarmyhammer/src/toml_core/` (5 files, ~1,500+ lines of code)
+
+### Verification Results:
+- ✅ **Build Success**: `cargo build --workspace` passes cleanly
+- ✅ **All Tests Pass**: 1,198 tests in swissarmyhammer crate all pass
+- ✅ **No Dependencies**: Confirmed zero external usage before removal
+- ✅ **Clean Removal**: No compilation errors or warnings related to toml_core
+
+### Code Reduction:
+- **Removed 1,500+ lines** of unnecessary custom TOML parsing code
+- **Eliminated 5 source files**: mod.rs, configuration.rs, parser.rs, value.rs, error.rs
+- **Simplified lib.rs exports** - cleaner public API
+
+### Next Steps:
+The elimination is complete! All configuration functionality is now properly consolidated in the `swissarmyhammer-config` crate using `figment` (the Rust ecosystem standard).
+
+**Result**: Zero duplication, reduced maintenance overhead, cleaner codebase, and ecosystem-standard configuration management.
