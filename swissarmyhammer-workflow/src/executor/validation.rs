@@ -343,12 +343,7 @@ impl WorkflowExecutor {
         // Check that Never conditions are not used in choice states (they would never be chosen)
         let never_conditions = transitions
             .iter()
-            .filter(|t| {
-                matches!(
-                    t.condition.condition_type,
-                    crate::ConditionType::Never
-                )
-            })
+            .filter(|t| matches!(t.condition.condition_type, crate::ConditionType::Never))
             .count();
 
         if never_conditions > 0 {

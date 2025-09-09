@@ -24,8 +24,8 @@ use syntect::util::as_24_bit_terminal_escaped;
 use thiserror::Error;
 use tokio::time::timeout;
 
-use swissarmyhammer::{PromptLibrary, PromptResolver};
 use async_trait::async_trait;
+use swissarmyhammer::{PromptLibrary, PromptResolver};
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType, LlamaAgentConfig};
 
 use super::agents::LlamaAgentExecutor;
@@ -1250,12 +1250,21 @@ impl VariableSubstitution for AbortAction {}
 #[async_trait::async_trait]
 impl Action for AbortAction {
     async fn execute(&self, context: &mut WorkflowTemplateContext) -> ActionResult<Value> {
-        eprintln!("DEBUG: AbortAction::execute - Original message: '{}'", self.message);
-        eprintln!("DEBUG: AbortAction::execute - Context before substitution: {:?}", context.to_workflow_hashmap());
-        
+        eprintln!(
+            "DEBUG: AbortAction::execute - Original message: '{}'",
+            self.message
+        );
+        eprintln!(
+            "DEBUG: AbortAction::execute - Context before substitution: {:?}",
+            context.to_workflow_hashmap()
+        );
+
         // Substitute variables in message
         let message = self.substitute_string(&self.message, context);
-        eprintln!("DEBUG: AbortAction::execute - Substituted message: '{}'", message);
+        eprintln!(
+            "DEBUG: AbortAction::execute - Substituted message: '{}'",
+            message
+        );
         tracing::error!("***Workflow Aborted***: {}", message);
 
         // Set a special context variable to signal abort request
@@ -1295,7 +1304,11 @@ fn is_valid_argument_key(key: &str) -> bool {
 /// Helper function to substitute variables in a string
 /// Variables are referenced as ${variable_name}
 fn substitute_variables_in_string(input: &str, context: &WorkflowTemplateContext) -> String {
-    eprintln!("DEBUG substitute_variables_in_string: input='{}', context={:?}", input, context.to_workflow_hashmap());
+    eprintln!(
+        "DEBUG substitute_variables_in_string: input='{}', context={:?}",
+        input,
+        context.to_workflow_hashmap()
+    );
     let parser = ActionParser::new().expect("Failed to create ActionParser");
     let context_map = context.to_workflow_hashmap();
     let result = parser
@@ -2263,10 +2276,10 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
     use crate::action_parser::ActionParser;
     use crate::executor_utils;
     use serial_test::serial;
+    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
 
     #[test]
     fn test_variable_substitution() {
@@ -2677,7 +2690,10 @@ mod tests {
         context.insert(WORKFLOW_STACK_KEY.to_string(), Value::Array(workflow_stack));
 
         // This should fail with circular dependency error
-        eprintln!("DEBUG: About to execute action with context: {:?}", context.to_workflow_hashmap());
+        eprintln!(
+            "DEBUG: About to execute action with context: {:?}",
+            context.to_workflow_hashmap()
+        );
         let result = action.execute(&mut context).await;
         eprintln!("DEBUG: Action execution completed");
         assert!(result.is_err());

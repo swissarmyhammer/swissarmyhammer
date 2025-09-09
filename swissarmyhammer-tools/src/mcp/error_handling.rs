@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use swissarmyhammer::{PromptLibrary, PromptResolver};
-use swissarmyhammer_common::{SwissArmyHammerError, Result};
+use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use tokio::sync::RwLock;
 
 /// Error handling implementation for MCP server
@@ -95,9 +95,18 @@ impl ErrorHandler {
 
         // Clear existing prompts and reload
         *library = PromptLibrary::new();
-        resolver.load_all_prompts(&mut library).map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?;
+        resolver
+            .load_all_prompts(&mut library)
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: e.to_string(),
+            })?;
 
-        let after_count = library.list().map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })?.len();
+        let after_count = library
+            .list()
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: e.to_string(),
+            })?
+            .len();
         tracing::info!(
             "🔄 Reloaded prompts: {} → {} prompts",
             before_count,

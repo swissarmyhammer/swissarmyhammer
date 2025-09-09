@@ -154,7 +154,7 @@ impl McpTool for OutlineGenerateTool {
 
         // Use the new file discovery functionality
         let file_discovery =
-            match swissarmyhammer::outline::FileDiscovery::new(request.patterns.clone()) {
+            match swissarmyhammer_outline::FileDiscovery::new(request.patterns.clone()) {
                 Ok(discovery) => discovery,
                 Err(e) => {
                     return Err(McpError::invalid_params(
@@ -178,18 +178,18 @@ impl McpTool for OutlineGenerateTool {
 
         // Filter to only supported files for outline generation
         let supported_files =
-            swissarmyhammer::outline::FileDiscovery::filter_supported_files(discovered_files);
+            swissarmyhammer_outline::FileDiscovery::filter_supported_files(discovered_files);
 
         // Process all supported files and generate outline
-        let outline_parser = swissarmyhammer::outline::OutlineParser::new(
-            swissarmyhammer::outline::OutlineParserConfig::default(),
+        let mut outline_parser = swissarmyhammer_outline::OutlineParser::new(
+            swissarmyhammer_outline::OutlineParserConfig::default(),
         )
         .map_err(|e| {
             McpError::internal_error(format!("Failed to create outline parser: {e}"), None)
         })?;
 
-        // Build hierarchical structure using HierarchyBuilder
-        let mut hierarchy_builder = swissarmyhammer::outline::HierarchyBuilder::new();
+        // Collect all file outlines
+        let mut file_outlines = Vec::new();
         let mut total_symbols = 0;
 
         for discovered_file in &supported_files {
@@ -209,16 +209,9 @@ impl McpTool for OutlineGenerateTool {
             };
 
             match outline_parser.parse_file(&discovered_file.path, &content) {
-                Ok(outline_tree) => {
-                    total_symbols += outline_tree.symbols.len();
-                    hierarchy_builder
-                        .add_file_outline(outline_tree)
-                        .map_err(|e| {
-                            McpError::internal_error(
-                                format!("Failed to add file to hierarchy: {e}"),
-                                None,
-                            )
-                        })?;
+                Ok(file_outline) => {
+                    total_symbols += file_outline.symbols.len();
+                    file_outlines.push(file_outline);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -231,10 +224,8 @@ impl McpTool for OutlineGenerateTool {
             }
         }
 
-        // Build the complete hierarchy
-        let hierarchy = hierarchy_builder.build_hierarchy().map_err(|e| {
-            McpError::internal_error(format!("Failed to build hierarchy: {e}"), None)
-        })?;
+        // Create hierarchy from file outlines
+        let hierarchy = swissarmyhammer_outline::OutlineHierarchy::new(file_outlines);
 
         // Format output based on requested format
         let output_format = request.output_format.as_deref().unwrap_or("yaml");
@@ -262,7 +253,7 @@ impl McpTool for OutlineGenerateTool {
             }
             "yaml" => {
                 // Use the new YamlFormatter for proper hierarchical YAML output
-                let formatter = swissarmyhammer::outline::YamlFormatter::with_defaults();
+                let formatter = swissarmyhammer_outline::YamlFormatter::with_defaults();
                 formatter.format_hierarchy(&hierarchy).map_err(|e| {
                     McpError::internal_error(format!("YAML formatting error: {e}"), None)
                 })?
@@ -282,7 +273,7 @@ impl McpTool for OutlineGenerateTool {
 /// Convert internal OutlineNode to MCP tool OutlineNode (legacy - no children support)
 #[allow(dead_code)]
 fn convert_outline_node(
-    internal_node: swissarmyhammer::outline::types::OutlineNode,
+    internal_node: swissarmyhammer_outline::OutlineNode,
     _file_path: &std::path::Path,
 ) -> Result<OutlineNode, McpError> {
     let kind = convert_outline_node_type(&internal_node.node_type);
@@ -300,7 +291,7 @@ fn convert_outline_node(
 
 /// Convert internal OutlineNode to MCP tool OutlineNode with children support
 fn convert_outline_node_with_children(
-    internal_node: swissarmyhammer::outline::types::OutlineNode,
+    internal_node: swissarmyhammer_outline::OutlineNode,
 ) -> Result<OutlineNode, McpError> {
     let kind = convert_outline_node_type(&internal_node.node_type);
 
@@ -327,10 +318,8 @@ fn convert_outline_node_with_children(
 }
 
 /// Convert internal OutlineNodeType to MCP tool OutlineKind
-fn convert_outline_node_type(
-    node_type: &swissarmyhammer::outline::types::OutlineNodeType,
-) -> OutlineKind {
-    use swissarmyhammer::outline::types::OutlineNodeType;
+fn convert_outline_node_type(node_type: &swissarmyhammer_outline::OutlineNodeType) -> OutlineKind {
+    use swissarmyhammer_outline::OutlineNodeType;
 
     match node_type {
         OutlineNodeType::Class => OutlineKind::Class,

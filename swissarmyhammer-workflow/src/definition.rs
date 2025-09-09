@@ -1,11 +1,11 @@
 //! Main workflow type and validation
 
-use swissarmyhammer::common::{Parameter, ParameterProvider, ParameterType};
-use swissarmyhammer::validation::{Validatable, ValidationIssue, ValidationLevel};
 use crate::{State, StateId, Transition};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use swissarmyhammer::common::{Parameter, ParameterProvider, ParameterType};
+use swissarmyhammer::validation::{Validatable, ValidationIssue, ValidationLevel};
 use thiserror::Error;
 
 /// Errors that can occur when creating workflow-related types
@@ -494,8 +494,8 @@ mod tests {
 
     #[test]
     fn test_shared_parameter_system_integration() {
-        use swissarmyhammer::common::ParameterProvider;
         use crate::test_helpers::*;
+        use swissarmyhammer::common::ParameterProvider;
 
         let mut workflow = create_basic_workflow();
 

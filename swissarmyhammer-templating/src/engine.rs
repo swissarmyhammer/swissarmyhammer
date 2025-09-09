@@ -302,10 +302,10 @@ mod tests {
     fn test_engine_parse() {
         let engine = TemplateEngine::new();
         let template = engine.parse("Hello {{ name }}!").unwrap();
-        
+
         let mut args = HashMap::new();
         args.insert("name".to_string(), "World".to_string());
-        
+
         let result = template.render(&args).unwrap();
         assert_eq!(result, "Hello World!");
     }
@@ -328,7 +328,9 @@ mod tests {
         let engine = TemplateEngine::new();
         let args = HashMap::new();
 
-        let result = engine.render_with_env("Test: {{TEST_ENGINE_VAR}}", &args).unwrap();
+        let result = engine
+            .render_with_env("Test: {{TEST_ENGINE_VAR}}", &args)
+            .unwrap();
         assert!(result.contains("test_value"));
 
         // Clean up

@@ -7,7 +7,7 @@ use crate::error::{Result, TemplatingError};
 use crate::filters::preprocess_custom_filters;
 use crate::partials::{PartialLoader, PartialLoaderAdapter};
 use crate::security::{validate_template_security, MAX_TEMPLATE_RENDER_TIME_MS};
-use crate::variables::{extract_template_variables, create_well_known_variables};
+use crate::variables::{create_well_known_variables, extract_template_variables};
 use liquid::{Object, Parser};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -92,10 +92,13 @@ impl Template {
     }
 
     /// Create a new template with partial support
-    pub fn with_partials<T: PartialLoader + 'static>(template_str: &str, loader: T) -> Result<Self> {
+    pub fn with_partials<T: PartialLoader + 'static>(
+        template_str: &str,
+        loader: T,
+    ) -> Result<Self> {
         let adapter = PartialLoaderAdapter::new(loader);
         let parser = create_parser_with_partials(adapter);
-        
+
         // Validate the template by trying to parse it
         parser
             .parse(template_str)
@@ -430,14 +433,14 @@ mod tests {
     #[test]
     fn test_trusted_vs_untrusted_templates() {
         let template_str = "Hello {{ name }}!";
-        
+
         // Both should work for simple templates
         let trusted = Template::new_trusted(template_str).unwrap();
         let untrusted = Template::new_untrusted(template_str).unwrap();
-        
+
         let mut args = HashMap::new();
         args.insert("name".to_string(), "World".to_string());
-        
+
         assert_eq!(trusted.render(&args).unwrap(), "Hello World!");
         assert_eq!(untrusted.render(&args).unwrap(), "Hello World!");
     }
@@ -521,7 +524,7 @@ mod tests {
     fn test_raw_template_access() {
         let template_str = "Hello {{ name }}!";
         let template = Template::new(template_str).unwrap();
-        
+
         assert_eq!(template.raw(), template_str);
     }
 }

@@ -3,10 +3,10 @@
 //! This file demonstrates consolidating 10 individual test functions into
 //! 3 parameterized tests, reducing test count by 70%.
 
-use swissarmyhammer::test_organization::{PropertyTestGenerator, TestMatrix};
 use crate::actions::*;
 use crate::template_context::WorkflowTemplateContext;
 use serde_json::Value;
+use swissarmyhammer::test_organization::{PropertyTestGenerator, TestMatrix};
 
 #[derive(Debug, Clone)]
 struct LogActionCreationTestCase {

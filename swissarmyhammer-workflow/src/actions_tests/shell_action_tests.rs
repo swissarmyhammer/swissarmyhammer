@@ -734,12 +734,12 @@ mod comprehensive_parser_tests {
         let input = "  Shell   \"echo hello\"  ";
         println!("DEBUG: Input: {:?}", input);
         println!("DEBUG: Input trimmed: {:?}", input.trim());
-        
+
         // Test the regex directly
         let shell_regex = regex::Regex::new(r#"(?i)^shell\s+"([^"]*)"(.*)"#).unwrap();
         let trimmed = input.trim();
         println!("DEBUG: Regex matches: {}", shell_regex.is_match(trimmed));
-        
+
         if let Some(captures) = shell_regex.captures(trimmed) {
             println!("DEBUG: Captures found:");
             for (i, cap) in captures.iter().enumerate() {
@@ -748,7 +748,7 @@ mod comprehensive_parser_tests {
                 }
             }
         }
-        
+
         let result1 = parser.parse_shell_action(input);
         println!("DEBUG: Parse result: {:?}", result1);
         assert!(result1.is_ok(), "First test should parse without error");
@@ -762,7 +762,10 @@ mod comprehensive_parser_tests {
         assert!(result2.is_ok(), "Second test should parse without error");
         let option2 = result2.unwrap();
         if option2.is_none() {
-            panic!("Expected Some(action) but got None for input: {:?}", "Shell\t\"echo hello\"");
+            panic!(
+                "Expected Some(action) but got None for input: {:?}",
+                "Shell\t\"echo hello\""
+            );
         }
         let action = option2.unwrap();
         assert_eq!(action.command, "echo hello");

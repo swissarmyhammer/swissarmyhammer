@@ -91,7 +91,9 @@ impl McpTool for GetAllContextMemoTool {
                 }
             }
             Err(e) => Err(crate::mcp::shared_utils::McpErrorHandler::handle_error(
-                swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("Storage error: {}", e) },
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: format!("Storage error: {}", e),
+                },
                 "get memo context",
             )),
         }

@@ -88,7 +88,7 @@ impl Renderable for PartialRenderable {
 /// Helper function to normalize partial names by trying different extensions
 pub fn normalize_partial_name(requested_name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-    
+
     // Try exact name first
     candidates.push(requested_name.to_string());
 
@@ -116,7 +116,10 @@ pub fn normalize_partial_name(requested_name: &str) -> Vec<String> {
 
     // Remove duplicates while preserving order
     let mut seen = std::collections::HashSet::new();
-    candidates.into_iter().filter(|name| seen.insert(name.clone())).collect()
+    candidates
+        .into_iter()
+        .filter(|name| seen.insert(name.clone()))
+        .collect()
 }
 
 /// Adapter to make any PartialLoader work with Liquid's PartialSource trait
@@ -144,7 +147,10 @@ impl<T: PartialLoader> PartialLoaderAdapter<T> {
 
 impl<T: PartialLoader> liquid::partials::PartialSource for PartialLoaderAdapter<T> {
     fn contains(&self, name: &str) -> bool {
-        tracing::debug!("PartialLoaderAdapter::contains called with name: '{}'", name);
+        tracing::debug!(
+            "PartialLoaderAdapter::contains called with name: '{}'",
+            name
+        );
 
         // Try exact name and normalized variants
         let candidates = normalize_partial_name(name);
@@ -197,8 +203,11 @@ mod tests {
             let mut partials = HashMap::new();
             partials.insert("header".to_string(), "# Header".to_string());
             partials.insert("footer.md".to_string(), "Footer content".to_string());
-            partials.insert("sidebar.liquid".to_string(), "Sidebar {{ title }}".to_string());
-            
+            partials.insert(
+                "sidebar.liquid".to_string(),
+                "Sidebar {{ title }}".to_string(),
+            );
+
             Self { partials }
         }
     }
@@ -220,14 +229,14 @@ mod tests {
     #[test]
     fn test_partial_loader_basic() {
         let loader = TestPartialLoader::new();
-        
+
         assert!(loader.contains("header"));
         assert!(loader.contains("footer.md"));
         assert!(!loader.contains("nonexistent"));
-        
+
         let header = loader.get("header").unwrap();
         assert_eq!(header, "# Header");
-        
+
         let result = loader.get("nonexistent");
         assert!(result.is_err());
     }
@@ -253,14 +262,14 @@ mod tests {
         // Direct matches
         assert!(adapter.contains("header"));
         assert!(adapter.contains("footer.md"));
-        
+
         // Should find content
         let header = adapter.try_get("header").unwrap();
         assert_eq!(header, "# Header");
-        
+
         let footer = adapter.try_get("footer.md").unwrap();
         assert_eq!(footer, "Footer content");
-        
+
         // Non-existent partial
         assert!(!adapter.contains("missing"));
         assert!(adapter.try_get("missing").is_none());

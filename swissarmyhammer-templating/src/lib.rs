@@ -126,7 +126,9 @@ pub use template::{create_default_parser, create_parser_with_partials, Template}
 pub use variables::{create_well_known_variables, extract_template_variables};
 
 // Re-export filter functions for convenience
-pub use filters::{count_lines_in_string, indent_string, preprocess_custom_filters, slugify_string};
+pub use filters::{
+    count_lines_in_string, indent_string, preprocess_custom_filters, slugify_string,
+};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -134,13 +136,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        error::{Result, TemplatingError},
-        partials::{PartialLoader, PartialLoaderAdapter},
-        template::Template,
         engine::TemplateEngine,
+        error::{Result, TemplatingError},
+        filters::{count_lines_in_string, indent_string, slugify_string},
+        partials::{PartialLoader, PartialLoaderAdapter},
         security::validate_template_security,
+        template::Template,
         variables::extract_template_variables,
-        filters::{slugify_string, count_lines_in_string, indent_string},
     };
 }
 
@@ -154,7 +156,7 @@ mod integration_tests {
         let template = Template::new("Hello {{ name }}!").unwrap();
         let mut args = HashMap::new();
         args.insert("name".to_string(), "Integration Test".to_string());
-        
+
         let result = template.render(&args).unwrap();
         assert_eq!(result, "Hello Integration Test!");
     }
@@ -164,7 +166,7 @@ mod integration_tests {
         let engine = TemplateEngine::new();
         let mut args = HashMap::new();
         args.insert("message".to_string(), "Engine Test".to_string());
-        
+
         let result = engine.render("Message: {{ message }}", &args).unwrap();
         assert_eq!(result, "Message: Engine Test");
     }
@@ -174,13 +176,13 @@ mod integration_tests {
         let mut args = HashMap::new();
         args.insert("title".to_string(), "Hello World!".to_string());
         args.insert("text".to_string(), "line1\nline2".to_string());
-        
+
         let slug = slugify_string("Hello World!");
         assert_eq!(slug, "hello-world");
-        
+
         let lines = count_lines_in_string("line1\nline2");
         assert_eq!(lines, 2);
-        
+
         let indented = indent_string("test", 2);
         assert_eq!(indented, "  test");
     }
@@ -189,7 +191,7 @@ mod integration_tests {
     fn test_variable_extraction() {
         let template = "Hello {{ name }}! You have {{ count }} items.";
         let vars = extract_template_variables(template);
-        
+
         assert!(vars.contains(&"name".to_string()));
         assert!(vars.contains(&"count".to_string()));
         assert_eq!(vars.len(), 2);
@@ -199,10 +201,10 @@ mod integration_tests {
     fn test_security_validation() {
         // Safe template should pass
         assert!(validate_template_security("Hello {{ name }}!", false).is_ok());
-        
+
         // Dangerous template should fail
         assert!(validate_template_security("{% include 'dangerous' %}", false).is_err());
-        
+
         // Large template should fail for untrusted
         let large_template = "a".repeat(MAX_TEMPLATE_SIZE + 1);
         assert!(validate_template_security(&large_template, false).is_err());

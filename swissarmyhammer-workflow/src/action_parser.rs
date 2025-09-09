@@ -1,5 +1,5 @@
 //! Action parsing utilities for workflow state descriptions
-//! 
+//!
 //! TEMPORARY IMPLEMENTATION: This is a simplified stub that provides the same
 //! interface as the original ActionParser but uses basic string parsing instead
 //! of chumsky combinators to resolve compilation issues.
@@ -26,21 +26,26 @@ impl ActionParser {
     #[allow(dead_code)] // Used in tests
     pub fn parse(&self, description: &str) -> ActionResult<Box<dyn crate::actions::Action>> {
         let description = description.trim();
-        
+
         // Simple pattern matching for basic actions
         if description.starts_with("shell:") || description.starts_with("SHELL:") {
             let command = description[6..].trim();
             Ok(Box::new(ShellAction::new(command.to_string())))
         } else if description.starts_with("log:") || description.starts_with("LOG:") {
             let message = description[4..].trim();
-            Ok(Box::new(LogAction::new(message.to_string(), LogLevel::Info)))
+            Ok(Box::new(LogAction::new(
+                message.to_string(),
+                LogLevel::Info,
+            )))
         } else if description.starts_with("prompt:") || description.starts_with("PROMPT:") {
             let prompt = description[7..].trim();
             Ok(Box::new(PromptAction::new(prompt.to_string())))
         } else if description.starts_with("wait:") || description.starts_with("WAIT:") {
             let duration_str = description[5..].trim();
             if let Ok(seconds) = duration_str.parse::<u64>() {
-                Ok(Box::new(WaitAction::new_duration(Duration::from_secs(seconds))))
+                Ok(Box::new(WaitAction::new_duration(Duration::from_secs(
+                    seconds,
+                ))))
             } else {
                 Ok(Box::new(WaitAction::new_user_input()))
             }
@@ -53,10 +58,12 @@ impl ActionParser {
                 )))
             } else {
                 Err(ActionError::ParseError(format!(
-                    "Invalid set action format: {}", description
+                    "Invalid set action format: {}",
+                    description
                 )))
             }
-        } else if description.starts_with("subworkflow:") || description.starts_with("SUBWORKFLOW:") {
+        } else if description.starts_with("subworkflow:") || description.starts_with("SUBWORKFLOW:")
+        {
             let workflow_name = description[12..].trim();
             Ok(Box::new(SubWorkflowAction::new(workflow_name.to_string())))
         } else if description.starts_with("abort:") || description.starts_with("ABORT:") {
@@ -71,9 +78,9 @@ impl ActionParser {
     /// Parse action from description with context
     #[allow(dead_code)] // Used in tests
     pub fn parse_with_context(
-        &self, 
-        description: &str, 
-        _context: &crate::WorkflowTemplateContext
+        &self,
+        description: &str,
+        _context: &crate::WorkflowTemplateContext,
     ) -> ActionResult<Box<dyn crate::actions::Action>> {
         // For now, just delegate to basic parse
         // TODO: Implement proper context handling
@@ -84,7 +91,7 @@ impl ActionParser {
     #[allow(dead_code)] // Used in tests
     pub fn get_action_type(&self, description: &str) -> ActionResult<String> {
         let description = description.trim().to_lowercase();
-        
+
         if description.starts_with("shell:") {
             Ok("shell".to_string())
         } else if description.starts_with("log:") {
@@ -107,67 +114,70 @@ impl ActionParser {
     /// Parse shell action specifically (backward compatibility method)
     pub fn parse_shell_action(&self, description: &str) -> ActionResult<Option<ShellAction>> {
         let description = description.trim();
-        
+
         // Parse shell actions with optional parameters
         // Use regex to handle variable whitespace between "shell" and the command
-        let shell_regex = regex::Regex::new(r#"(?i)^shell\s+"([^"]*)"(.*)"#).map_err(|e| {
-            ActionError::ParseError(format!("Failed to create shell regex: {}", e))
-        })?;
-            
+        let shell_regex = regex::Regex::new(r#"(?i)^shell\s+"([^"]*)"(.*)"#)
+            .map_err(|e| ActionError::ParseError(format!("Failed to create shell regex: {}", e)))?;
+
         if let Some(captures) = shell_regex.captures(description) {
-            
-                let command = captures.get(1).unwrap().as_str();
-                let params_str = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-                
-                let mut action = ShellAction::new(command.to_string());
-                
-                // Parse parameters if present
-                if params_str.trim_start().starts_with("with ") {
-                    let params_part = params_str.trim_start();
-                    let params_part = &params_part[5..]; // Remove "with "
-                    
-                    // Check for malformed parameters (key= with no value) - these make the command unparseable
-                    let malformed_param_regex = regex::Regex::new(r"(\w+)=$").map_err(|e| {
-                        ActionError::ParseError(format!("Failed to create malformed param regex: {}", e))
-                    })?;
-                    
-                    if malformed_param_regex.is_match(params_part) {
-                        return Ok(None); // Malformed parameters make the command unparseable
-                    }
-                    
-                    self.parse_shell_parameters(&mut action, params_part)?;
+            let command = captures.get(1).unwrap().as_str();
+            let params_str = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+
+            let mut action = ShellAction::new(command.to_string());
+
+            // Parse parameters if present
+            if params_str.trim_start().starts_with("with ") {
+                let params_part = params_str.trim_start();
+                let params_part = &params_part[5..]; // Remove "with "
+
+                // Check for malformed parameters (key= with no value) - these make the command unparseable
+                let malformed_param_regex = regex::Regex::new(r"(\w+)=$").map_err(|e| {
+                    ActionError::ParseError(format!(
+                        "Failed to create malformed param regex: {}",
+                        e
+                    ))
+                })?;
+
+                if malformed_param_regex.is_match(params_part) {
+                    return Ok(None); // Malformed parameters make the command unparseable
                 }
-                
-                Ok(Some(action))
+
+                self.parse_shell_parameters(&mut action, params_part)?;
+            }
+
+            Ok(Some(action))
         } else {
             // Invalid syntax or not a shell command
             Ok(None)
         }
     }
-    
-    fn parse_shell_parameters(&self, action: &mut ShellAction, params_str: &str) -> ActionResult<()> {
+
+    fn parse_shell_parameters(
+        &self,
+        action: &mut ShellAction,
+        params_str: &str,
+    ) -> ActionResult<()> {
         // Parse timeout=30 result="files" working_dir="/tmp" env_var="value" etc.
         let timeout_regex = regex::Regex::new(r"timeout=(-?\d+)").map_err(|e| {
             ActionError::ParseError(format!("Failed to create timeout regex: {}", e))
         })?;
-        
+
         let result_regex = regex::Regex::new(r#"result="([^"]*)"#).map_err(|e| {
             ActionError::ParseError(format!("Failed to create result regex: {}", e))
         })?;
-        
+
         let working_dir_regex = regex::Regex::new(r#"working_dir="([^"]*)"#).map_err(|e| {
             ActionError::ParseError(format!("Failed to create working_dir regex: {}", e))
         })?;
-        
-        let env_regex = regex::Regex::new(r#"(\w+)="([^"]*)"#).map_err(|e| {
-            ActionError::ParseError(format!("Failed to create env regex: {}", e))
-        })?;
-        
+
+        let env_regex = regex::Regex::new(r#"(\w+)="([^"]*)"#)
+            .map_err(|e| ActionError::ParseError(format!("Failed to create env regex: {}", e)))?;
+
         let unquoted_param_regex = regex::Regex::new(r"(\w+)=([^\s]+)").map_err(|e| {
             ActionError::ParseError(format!("Failed to create unquoted param regex: {}", e))
         })?;
 
-        
         let env_json_regex = regex::Regex::new(r#"env=(\{[^}]+\})"#).map_err(|e| {
             ActionError::ParseError(format!("Failed to create env json regex: {}", e))
         })?;
@@ -176,21 +186,22 @@ impl ActionParser {
         let malformed_timeout_regex = regex::Regex::new(r"timeout=([^\s]+)").map_err(|e| {
             ActionError::ParseError(format!("Failed to create malformed timeout regex: {}", e))
         })?;
-        
+
         if let Some(malformed_match) = malformed_timeout_regex.captures(params_str) {
             let timeout_value = malformed_match.get(1).unwrap().as_str();
             // Check if it's not a valid number
             if timeout_value.parse::<i64>().is_err() {
-                return Err(ActionError::ParseError(
-                    format!("Invalid timeout value: {}", timeout_value),
-                ));
+                return Err(ActionError::ParseError(format!(
+                    "Invalid timeout value: {}",
+                    timeout_value
+                )));
             }
         }
 
         // Parse timeout parameters
         if let Some(timeout_match) = timeout_regex.captures(params_str) {
             let timeout_str = timeout_match.get(1).unwrap().as_str();
-            
+
             match timeout_str.parse::<i64>() {
                 Ok(val) if val <= 0 => {
                     return Err(ActionError::ParseError(
@@ -201,53 +212,58 @@ impl ActionParser {
                     action.timeout = Some(std::time::Duration::from_secs(timeout_secs as u64));
                 }
                 Err(_) => {
-                    return Err(ActionError::ParseError(
-                        format!("Invalid timeout value: {}", timeout_str),
-                    ));
+                    return Err(ActionError::ParseError(format!(
+                        "Invalid timeout value: {}",
+                        timeout_str
+                    )));
                 }
             }
         }
-        
+
         // Validate and parse result variable
         if let Some(result_match) = result_regex.captures(params_str) {
             let result_var = result_match.get(1).unwrap().as_str();
-            
+
             // Validate variable name
             if result_var.is_empty() {
                 return Err(ActionError::ParseError(
                     "Result variable name cannot be empty".to_string(),
                 ));
             }
-            
+
             // Check if variable name is valid (starts with letter or underscore, contains only alphanumeric and underscore)
-            if !result_var.chars().next().unwrap_or('0').is_alphabetic() && !result_var.starts_with('_') {
-                return Err(ActionError::ParseError(
-                    format!("Invalid result variable name: {}", result_var),
-                ));
+            if !result_var.chars().next().unwrap_or('0').is_alphabetic()
+                && !result_var.starts_with('_')
+            {
+                return Err(ActionError::ParseError(format!(
+                    "Invalid result variable name: {}",
+                    result_var
+                )));
             }
-            
+
             if !result_var.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                return Err(ActionError::ParseError(
-                    format!("Invalid result variable name: {}", result_var),
-                ));
+                return Err(ActionError::ParseError(format!(
+                    "Invalid result variable name: {}",
+                    result_var
+                )));
             }
-            
+
             action.result_variable = Some(result_var.to_string());
         }
-        
+
         // Validate and parse working directory
         if let Some(working_dir_match) = working_dir_regex.captures(params_str) {
             let working_dir = working_dir_match.get(1).unwrap().as_str();
-            
+
             if working_dir.is_empty() {
                 return Err(ActionError::ParseError(
                     "Working directory cannot be empty".to_string(),
                 ));
             }
-            
+
             action.working_dir = Some(working_dir.to_string());
         }
-        
+
         // Parse JSON-formatted environment variables first (env={"key": "value"})
         if let Some(env_json_match) = env_json_regex.captures(params_str) {
             let json_str = env_json_match.get(1).unwrap().as_str();
@@ -258,40 +274,41 @@ impl ActionParser {
                     }
                 }
                 Err(e) => {
-                    return Err(ActionError::ParseError(
-                        format!("Invalid JSON in environment variables: {}", e),
-                    ));
+                    return Err(ActionError::ParseError(format!(
+                        "Invalid JSON in environment variables: {}",
+                        e
+                    )));
                 }
             }
         }
-        
 
-        
         // Parse and validate all parameter names (both quoted and unquoted)
         let known_params = ["timeout", "result", "working_dir", "env"];
-        
+
         // Check quoted parameters
         for cap in env_regex.captures_iter(params_str) {
             let key = cap.get(1).unwrap().as_str();
-            
+
             if !known_params.contains(&key) {
-                return Err(ActionError::ParseError(
-                    format!("Unknown parameter: {}", key),
-                ));
+                return Err(ActionError::ParseError(format!(
+                    "Unknown parameter: {}",
+                    key
+                )));
             }
         }
-        
-        // Check unquoted parameters 
+
+        // Check unquoted parameters
         for cap in unquoted_param_regex.captures_iter(params_str) {
             let key = cap.get(1).unwrap().as_str();
-            
+
             if !known_params.contains(&key) {
-                return Err(ActionError::ParseError(
-                    format!("Unknown parameter: {}", key),
-                ));
+                return Err(ActionError::ParseError(format!(
+                    "Unknown parameter: {}",
+                    key
+                )));
             }
         }
-        
+
         Ok(())
     }
 
@@ -299,7 +316,7 @@ impl ActionParser {
     pub fn parse_prompt_action(&self, description: &str) -> ActionResult<Option<PromptAction>> {
         let description = description.trim();
         let lower = description.to_lowercase();
-        
+
         if lower.starts_with("execute prompt ") {
             // Parse "Execute prompt" pattern - more sophisticated parsing needed
             if let Some(action) = self.parse_execute_prompt_pattern(description)? {
@@ -309,55 +326,62 @@ impl ActionParser {
             let prompt = &description[7..];
             return Ok(Some(PromptAction::new(prompt.to_string())));
         }
-        
+
         Ok(None)
     }
-    
-    fn parse_execute_prompt_pattern(&self, description: &str) -> ActionResult<Option<PromptAction>> {
+
+    fn parse_execute_prompt_pattern(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<PromptAction>> {
         // Parse "Execute prompt "name" with arg1="value1" arg2="value2""
-        let regex = regex::Regex::new(r#"^Execute prompt "([^"]+)"(.*)"#).map_err(|e| {
-            ActionError::ParseError(format!("Failed to create regex: {}", e))
-        })?;
-        
+        let regex = regex::Regex::new(r#"^Execute prompt "([^"]+)"(.*)"#)
+            .map_err(|e| ActionError::ParseError(format!("Failed to create regex: {}", e)))?;
+
         if let Some(captures) = regex.captures(description) {
             let prompt_name = captures.get(1).unwrap().as_str();
             let args_str = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            
+
             let mut action = PromptAction::new(prompt_name.to_string());
-            
+
             // Parse arguments if present
             if args_str.starts_with(" with ") {
                 let args_part = &args_str[6..]; // Remove " with "
                 action.arguments = self.parse_arguments(args_part)?;
             }
-            
+
             Ok(Some(action))
         } else {
             Ok(None)
         }
     }
-    
-    fn parse_arguments(&self, args_str: &str) -> ActionResult<std::collections::HashMap<String, String>> {
+
+    fn parse_arguments(
+        &self,
+        args_str: &str,
+    ) -> ActionResult<std::collections::HashMap<String, String>> {
         let mut args = std::collections::HashMap::new();
-        
+
         // Simple parsing of key="value" pairs
-        let regex = regex::Regex::new(r#"(\w+)="([^"]*)"#).map_err(|e| {
-            ActionError::ParseError(format!("Failed to create args regex: {}", e))
-        })?;
-        
+        let regex = regex::Regex::new(r#"(\w+)="([^"]*)"#)
+            .map_err(|e| ActionError::ParseError(format!("Failed to create args regex: {}", e)))?;
+
         for capture in regex.captures_iter(args_str) {
             let key = capture.get(1).unwrap().as_str().to_string();
             let value = capture.get(2).unwrap().as_str().to_string();
             args.insert(key, value);
         }
-        
+
         Ok(args)
     }
-    
+
     /// Strip surrounding quotes from a string
     fn strip_quotes<'a>(&self, s: &'a str) -> &'a str {
-        if s.len() >= 2 && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))) {
-            &s[1..s.len()-1]
+        if s.len() >= 2
+            && ((s.starts_with('"') && s.ends_with('"'))
+                || (s.starts_with('\'') && s.ends_with('\'')))
+        {
+            &s[1..s.len() - 1]
         } else {
             s
         }
@@ -367,10 +391,10 @@ impl ActionParser {
     pub fn parse_wait_action(&self, description: &str) -> ActionResult<Option<WaitAction>> {
         let description = description.trim();
         let lower = description.to_lowercase();
-        
+
         if lower.starts_with("wait ") {
             let rest = &description[5..].trim();
-            
+
             // Handle "Wait 30 seconds" pattern
             if rest.ends_with(" seconds") || rest.ends_with(" second") {
                 let number_part = if rest.ends_with(" seconds") {
@@ -378,17 +402,17 @@ impl ActionParser {
                 } else {
                     &rest[..rest.len() - 7]
                 };
-                
+
                 if let Ok(seconds) = number_part.trim().parse::<u64>() {
                     return Ok(Some(WaitAction::new_duration(Duration::from_secs(seconds))));
                 }
             }
-            
+
             // Handle "Wait for user confirmation" pattern
             if rest.starts_with("for ") {
                 return Ok(Some(WaitAction::new_user_input()));
             }
-            
+
             // Handle simple number format "Wait 30"
             if let Ok(seconds) = rest.parse::<u64>() {
                 Ok(Some(WaitAction::new_duration(Duration::from_secs(seconds))))
@@ -405,12 +429,18 @@ impl ActionParser {
         let description = description.trim();
         if description.to_lowercase().starts_with("log ") {
             let rest = description[4..].trim();
-            
+
             // Handle "Log error "message"" or "Log "message""
             let (level, message_part) = if rest.to_lowercase().starts_with("error ") {
                 (LogLevel::Error, rest[6..].trim())
-            } else if rest.to_lowercase().starts_with("warn ") || rest.to_lowercase().starts_with("warning ") {
-                let offset = if rest.to_lowercase().starts_with("warn ") { 5 } else { 8 };
+            } else if rest.to_lowercase().starts_with("warn ")
+                || rest.to_lowercase().starts_with("warning ")
+            {
+                let offset = if rest.to_lowercase().starts_with("warn ") {
+                    5
+                } else {
+                    8
+                };
                 (LogLevel::Warning, rest[offset..].trim())
             } else if rest.to_lowercase().starts_with("info ") {
                 (LogLevel::Info, rest[5..].trim())
@@ -418,7 +448,7 @@ impl ActionParser {
                 // Default to info level if no level specified
                 (LogLevel::Info, rest)
             };
-            
+
             let message = self.strip_quotes(message_part);
             Ok(Some(LogAction::new(message.to_string(), level)))
         } else {
@@ -427,10 +457,13 @@ impl ActionParser {
     }
 
     /// Parse set variable action (backward compatibility method)
-    pub fn parse_set_variable_action(&self, description: &str) -> ActionResult<Option<SetVariableAction>> {
+    pub fn parse_set_variable_action(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<SetVariableAction>> {
         let description = description.trim();
         let lower = description.to_lowercase();
-        
+
         let rest = if lower.starts_with("set ") {
             &description[4..]
         } else if lower.starts_with("set_variable ") {
@@ -438,7 +471,7 @@ impl ActionParser {
         } else {
             return Ok(None);
         };
-        
+
         if let Some((key, value)) = rest.split_once('=') {
             let clean_value = self.strip_quotes(value.trim());
             Ok(Some(SetVariableAction::new(
@@ -451,12 +484,18 @@ impl ActionParser {
     }
 
     /// Parse sub workflow action (backward compatibility method)
-    pub fn parse_sub_workflow_action(&self, description: &str) -> ActionResult<Option<SubWorkflowAction>> {
+    pub fn parse_sub_workflow_action(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<SubWorkflowAction>> {
         let description = description.trim();
         let lower = description.to_lowercase();
-        
-        eprintln!("DEBUG: parse_sub_workflow_action called with: '{}'", description);
-        
+
+        eprintln!(
+            "DEBUG: parse_sub_workflow_action called with: '{}'",
+            description
+        );
+
         if lower.starts_with("run workflow ") {
             // Parse "Run workflow "name" with input="value""
             if let Some(action) = self.parse_run_workflow_pattern(description)? {
@@ -466,27 +505,29 @@ impl ActionParser {
             let workflow_name = &description[12..];
             return Ok(Some(SubWorkflowAction::new(workflow_name.to_string())));
         }
-        
+
         Ok(None)
     }
-    
-    fn parse_run_workflow_pattern(&self, description: &str) -> ActionResult<Option<SubWorkflowAction>> {
+
+    fn parse_run_workflow_pattern(
+        &self,
+        description: &str,
+    ) -> ActionResult<Option<SubWorkflowAction>> {
         // Parse "Run workflow "name" with input="value""
-        let regex = regex::Regex::new(r#"^Run workflow "([^"]+)"(.*)"#).map_err(|e| {
-            ActionError::ParseError(format!("Failed to create regex: {}", e))
-        })?;
-        
+        let regex = regex::Regex::new(r#"^Run workflow "([^"]+)"(.*)"#)
+            .map_err(|e| ActionError::ParseError(format!("Failed to create regex: {}", e)))?;
+
         if let Some(captures) = regex.captures(description) {
             let workflow_name = captures.get(1).unwrap().as_str();
             let args_str = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            
+
             let mut action = SubWorkflowAction::new(workflow_name.to_string());
-            
+
             // Parse arguments if present
             if args_str.starts_with(" with ") {
                 let args_part = &args_str[6..]; // Remove " with "
                 let parsed_args = self.parse_arguments(args_part)?;
-                
+
                 // Convert parsed arguments to the format SubWorkflowAction expects
                 for (key, value) in parsed_args {
                     if key == "result" {
@@ -500,7 +541,7 @@ impl ActionParser {
                     }
                 }
             }
-            
+
             Ok(Some(action))
         } else {
             Ok(None)
@@ -520,20 +561,30 @@ impl ActionParser {
     }
 
     /// Substitute variables safely (backward compatibility method)
-    pub fn substitute_variables_safe(&self, template: &str, context: &HashMap<String, serde_json::Value>) -> ActionResult<String> {
+    pub fn substitute_variables_safe(
+        &self,
+        template: &str,
+        context: &HashMap<String, serde_json::Value>,
+    ) -> ActionResult<String> {
         use regex::Regex;
-        
-        eprintln!("DEBUG substitute_variables_safe: template='{}', context={:?}", template, context);
-        
+
+        eprintln!(
+            "DEBUG substitute_variables_safe: template='{}', context={:?}",
+            template, context
+        );
+
         // Create regex to match ${variable_name} patterns
         let re = Regex::new(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}").map_err(|e| {
-            ActionError::ExecutionError(format!("Failed to create variable substitution regex: {}", e))
+            ActionError::ExecutionError(format!(
+                "Failed to create variable substitution regex: {}",
+                e
+            ))
         })?;
-        
+
         // Replace all ${variable} with their values from context
         let result = re.replace_all(template, |caps: &regex::Captures| {
             let var_name = &caps[1];
-            
+
             // Look up the variable in the context
             if let Some(value) = context.get(var_name) {
                 // Convert JSON value to string representation
@@ -549,7 +600,7 @@ impl ActionParser {
                 caps[0].to_string()
             }
         });
-        
+
         Ok(result.to_string())
     }
 }
@@ -597,7 +648,10 @@ mod tests {
     fn test_basic_set_parsing() {
         let parser = ActionParser::new().unwrap();
         let action = parser.parse("set: key=value").unwrap();
-        assert!(action.as_any().downcast_ref::<SetVariableAction>().is_some());
+        assert!(action
+            .as_any()
+            .downcast_ref::<SetVariableAction>()
+            .is_some());
     }
 
     #[test]
@@ -605,7 +659,10 @@ mod tests {
         let parser = ActionParser::new().unwrap();
         assert_eq!(parser.get_action_type("shell: echo").unwrap(), "shell");
         assert_eq!(parser.get_action_type("log: message").unwrap(), "log");
-        assert_eq!(parser.get_action_type("prompt: question").unwrap(), "prompt");
+        assert_eq!(
+            parser.get_action_type("prompt: question").unwrap(),
+            "prompt"
+        );
         assert_eq!(parser.get_action_type("wait: 5").unwrap(), "wait");
         assert_eq!(parser.get_action_type("set: a=b").unwrap(), "set");
     }

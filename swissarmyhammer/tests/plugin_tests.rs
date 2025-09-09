@@ -3,9 +3,7 @@
 use liquid::model::Value;
 use liquid::ValueView;
 use std::collections::HashMap;
-use swissarmyhammer::{
-    CustomLiquidFilter, PluginRegistry, Result, SwissArmyHammerPlugin,
-};
+use swissarmyhammer::{CustomLiquidFilter, PluginRegistry, Result, SwissArmyHammerPlugin};
 
 /// Test plugin that provides a "reverse" filter
 struct ReverseFilterPlugin {

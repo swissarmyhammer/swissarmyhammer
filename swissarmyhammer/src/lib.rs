@@ -81,8 +81,6 @@ pub mod file_watcher;
 /// Virtual file system for unified file loading
 pub mod file_loader;
 
-
-
 /// Unified file system utilities for better error handling and testing
 pub mod fs_utils;
 
@@ -178,7 +176,6 @@ pub mod prelude {
         error_context::IoResultExt,
         file_types::{is_prompt_file, ExtensionMatcher},
         mcp_errors::{McpResultExt, ToSwissArmyHammerError},
-
         validation_builders::{quick, ValidationChain, ValidationErrorBuilder},
     };
 }

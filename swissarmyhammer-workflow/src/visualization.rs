@@ -274,11 +274,7 @@ impl ExecutionVisualizer {
     }
 
     /// Generate state line with execution status
-    fn generate_executed_state_line(
-        &self,
-        state: &crate::State,
-        trace: &ExecutionTrace,
-    ) -> String {
+    fn generate_executed_state_line(&self, state: &crate::State, trace: &ExecutionTrace) -> String {
         let step = trace
             .execution_path
             .iter()

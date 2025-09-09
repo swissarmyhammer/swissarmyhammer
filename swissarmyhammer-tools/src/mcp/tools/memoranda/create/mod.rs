@@ -75,7 +75,9 @@ impl McpTool for CreateMemoTool {
             Ok(memo) => memo,
             Err(e) => {
                 return Err(McpErrorHandler::handle_error(
-                    swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("Storage error: {}", e) },
+                    swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Storage error: {}", e),
+                    },
                     "check existing memo",
                 ));
             }
@@ -90,7 +92,9 @@ impl McpTool for CreateMemoTool {
                 }
                 Err(e) => {
                     return Err(McpErrorHandler::handle_error(
-                        swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("Storage error: {}", e) },
+                        swissarmyhammer_common::SwissArmyHammerError::Other {
+                            message: format!("Storage error: {}", e),
+                        },
                         "replace memo",
                     ));
                 }
@@ -104,7 +108,9 @@ impl McpTool for CreateMemoTool {
                 }
                 Err(e) => {
                     return Err(McpErrorHandler::handle_error(
-                        swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("Storage error: {}", e) },
+                        swissarmyhammer_common::SwissArmyHammerError::Other {
+                            message: format!("Storage error: {}", e),
+                        },
                         "create memo",
                     ));
                 }

@@ -3,11 +3,11 @@
 //! This file demonstrates consolidating 8 individual test functions into
 //! 2 parameterized tests using TestMatrix pattern, plus property-based testing.
 
-use swissarmyhammer::test_organization::{PropertyTestGenerator, TestMatrix};
 use crate::actions::*;
 use crate::actions_tests::create_test_context;
 use serde_json::Value;
 use std::time::Duration;
+use swissarmyhammer::test_organization::{PropertyTestGenerator, TestMatrix};
 
 #[derive(Debug, Clone)]
 struct WaitActionCreationTestCase {

@@ -58,7 +58,9 @@ impl McpTool for AllCompleteIssueTool {
             Ok(issue_infos) => issue_infos,
             Err(e) => {
                 return Err(McpErrorHandler::handle_error(
-                    swissarmyhammer_common::SwissArmyHammerError::Other { message: e.to_string() },
+                    swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: e.to_string(),
+                    },
                     "list issues for completion check",
                 ))
             }

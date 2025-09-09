@@ -1,9 +1,9 @@
 //! Workflow runtime execution types
 
-use swissarmyhammer::common::generate_monotonic_ulid;
 use crate::{StateId, Workflow, WorkflowTemplateContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use swissarmyhammer::common::generate_monotonic_ulid;
 use ulid::Ulid;
 
 /// Unique identifier for workflow runs
