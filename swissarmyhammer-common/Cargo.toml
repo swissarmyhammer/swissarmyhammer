@@ -23,6 +23,8 @@ ulid.workspace = true
 # Rate limiting and concurrency
 dashmap.workspace = true
 tracing.workspace = true
+governor.workspace = true
+nonzero_ext.workspace = true
 
 # Testing dependencies (only when testing feature is enabled)
 tempfile = { workspace = true, optional = true }

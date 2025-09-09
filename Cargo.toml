@@ -55,6 +55,8 @@ ignore = "0.4"
 ulid = { version = "1.2.1", features = ["serde"] }
 toml = "0.9.5"
 schemars = "0.8"
+governor = "0.7"
+nonzero_ext = "0.3"
 
 # Semantic Search Dependencies
 ort = "2.0.0-rc.10"

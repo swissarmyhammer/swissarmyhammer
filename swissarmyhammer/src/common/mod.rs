@@ -18,8 +18,7 @@ pub mod mcp_errors;
 /// Validation builders and error construction
 pub mod validation_builders;
 
-/// Rate limiting utilities for API operations
-pub mod rate_limiter;
+
 
 /// Monotonic ULID generator utility
 pub mod ulid_generator;
@@ -62,8 +61,6 @@ pub use parameters::{
     DefaultParameterResolver, Parameter, ParameterError, ParameterProvider, ParameterResolver,
     ParameterResult, ParameterType, ParameterValidator,
 };
-pub use rate_limiter::{
-    get_rate_limiter, init_rate_limiter, RateLimitStatus, RateLimiter, RateLimiterConfig,
-};
+
 pub use ulid_generator::{generate_monotonic_ulid, generate_monotonic_ulid_string};
 pub use validation_builders::{quick, ValidationChain, ValidationErrorBuilder, ValidationResult};

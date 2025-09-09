@@ -176,7 +176,7 @@ pub mod prelude {
         error_context::IoResultExt,
         file_types::{is_prompt_file, ExtensionMatcher},
         mcp_errors::{McpResultExt, ToSwissArmyHammerError},
-        rate_limiter::{get_rate_limiter, RateLimitStatus, RateLimiter, RateLimiterConfig},
+
         validation_builders::{quick, ValidationChain, ValidationErrorBuilder},
     };
 }
