@@ -34,6 +34,7 @@ pub use ulid_generator::{generate_monotonic_ulid, generate_monotonic_ulid_string
 
 // Re-export commonly used directory functions
 pub use directory_utils::{
-    find_git_repository_root_from, get_or_create_swissarmyhammer_directory,
+    find_git_repository_root, find_git_repository_root_from, find_swissarmyhammer_directory,
+    find_swissarmyhammer_directory_from, get_or_create_swissarmyhammer_directory,
     get_or_create_swissarmyhammer_directory_from,
 };

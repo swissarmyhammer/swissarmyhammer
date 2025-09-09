@@ -3,6 +3,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use swissarmyhammer_common::utils::find_swissarmyhammer_directory;
+
+
 
 /// Unique identifier for indexed files
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -299,8 +302,7 @@ impl SemanticConfig {
         }
 
         // Try Git repository .swissarmyhammer directory first
-        if let Some(swissarmyhammer_dir) = crate::directory_utils::find_swissarmyhammer_directory()
-        {
+        if let Some(swissarmyhammer_dir) = find_swissarmyhammer_directory() {
             let semantic_db_path = swissarmyhammer_dir.join("semantic.db");
             tracing::debug!(
                 "Using Git repository semantic database at: {}",

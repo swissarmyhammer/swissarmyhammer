@@ -24,13 +24,15 @@
 //! All skipped files and errors are logged using the `tracing` framework at
 //! appropriate levels (warn for security issues, debug for missing directories).
 
-use crate::directory_utils::{find_swissarmyhammer_directory, walk_files_with_extensions};
 use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::utils::find_swissarmyhammer_directory;
+use walkdir::WalkDir;
 
 /// Maximum file size to load (10MB)
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 
 /// Source of a file (builtin, user, local, or dynamic)
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -268,7 +270,38 @@ impl VirtualFileSystem {
             return Ok(());
         }
 
-        for path in walk_files_with_extensions(&target_dir, &["md", "mermaid"]) {
+        let file_paths = WalkDir::new(&target_dir)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_file())
+            .filter_map(|entry| {
+                let path = entry.path();
+                if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                    // Check for compound extensions first
+                    let compound_extensions = [".md.liquid", ".markdown.liquid", ".liquid.md"];
+
+                    for compound_ext in &compound_extensions {
+                        if filename.ends_with(compound_ext) {
+                            // Check if any part of the compound extension matches our filter
+                            let parts: Vec<&str> =
+                                compound_ext.trim_start_matches('.').split('.').collect();
+                            if parts.iter().any(|part| ["md", "mermaid"].contains(part)) {
+                                return Some(path.to_path_buf());
+                            }
+                        }
+                    }
+
+                    // Fallback to single extension check
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                        if ["md", "mermaid"].contains(&ext) {
+                            return Some(path.to_path_buf());
+                        }
+                    }
+                }
+                None
+            });
+
+        for path in file_paths {
             // Check file size before loading
             match std::fs::metadata(&path) {
                 Ok(metadata) => {

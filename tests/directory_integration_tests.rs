@@ -58,6 +58,21 @@
 
 pub mod directory_integration;
 
+use swissarmyhammer_common::utils::{find_git_repository_root_from, get_or_create_swissarmyhammer_directory_from};
+
+/// Helper function to find swissarmyhammer directory - equivalent to the old directory_utils function
+fn find_swissarmyhammer_directory() -> Option<std::path::PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_git_repository_root_from(&current_dir).map(|git_root| {
+        let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+        if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
+            Some(swissarmyhammer_dir)
+        } else {
+            None
+        }
+    })?
+}
+
 // Re-export test utilities for other integration tests
 pub use directory_integration::{
     GitRepositoryTestGuard,
@@ -120,11 +135,11 @@ fn test_cross_module_compatibility() {
     assert!(guard.swissarmyhammer_dir().unwrap().join("issues").exists());
 
     // Test basic directory resolution (used by all modules)
-    let git_root = swissarmyhammer::directory_utils::find_git_repository_root();
+    let git_root = swissarmyhammer_common::utils::find_git_repository_root_from(&std::env::current_dir().unwrap());
     assert!(git_root.is_some());
     assert_eq!(git_root.unwrap(), guard.path());
 
-    let swissarmyhammer_dir = swissarmyhammer::directory_utils::find_swissarmyhammer_directory();
+    let swissarmyhammer_dir = find_swissarmyhammer_directory();
     assert!(swissarmyhammer_dir.is_some());
     assert_eq!(swissarmyhammer_dir.unwrap(), guard.swissarmyhammer_dir().unwrap());
 
@@ -148,7 +163,7 @@ fn test_performance_baseline() {
 
     // Establish baseline for Git repository detection
     let (git_root, git_time) = measure_time(|| {
-        swissarmyhammer::directory_utils::find_git_repository_root()
+        find_git_repository_root_from(&std::env::current_dir().unwrap())
     });
     
     assert!(git_root.is_some());
@@ -157,7 +172,7 @@ fn test_performance_baseline() {
 
     // Establish baseline for SwissArmyHammer directory detection
     let (swissarmyhammer_dir, sah_time) = measure_time(|| {
-        swissarmyhammer::directory_utils::find_swissarmyhammer_directory()
+        find_swissarmyhammer_directory()
     });
     
     assert!(swissarmyhammer_dir.is_some());
@@ -169,7 +184,7 @@ fn test_performance_baseline() {
         .expect("Failed to remove .swissarmyhammer directory");
 
     let (create_result, create_time) = measure_time(|| {
-        swissarmyhammer::directory_utils::get_or_create_swissarmyhammer_directory()
+        get_or_create_swissarmyhammer_directory_from(&std::env::current_dir().unwrap())
     });
     
     assert!(create_result.is_ok());
@@ -194,13 +209,13 @@ fn test_error_handling_consistency() {
     std::env::set_current_dir(&non_git_dir).expect("Failed to change to non-Git directory");
 
     // All functions should consistently handle non-Git repository scenario
-    let git_root = swissarmyhammer::directory_utils::find_git_repository_root();
+    let git_root = find_git_repository_root_from(&std::env::current_dir().unwrap());
     assert!(git_root.is_none(), "Should not find Git repository");
 
-    let swissarmyhammer_dir = swissarmyhammer::directory_utils::find_swissarmyhammer_directory();
+    let swissarmyhammer_dir = find_swissarmyhammer_directory();
     assert!(swissarmyhammer_dir.is_none(), "Should not find .swissarmyhammer directory");
 
-    let create_result = swissarmyhammer::directory_utils::get_or_create_swissarmyhammer_directory();
+    let create_result = get_or_create_swissarmyhammer_directory_from(&std::env::current_dir().unwrap());
     assert!(create_result.is_err(), "Should fail to create .swissarmyhammer directory");
 
     // Verify error type is consistent
@@ -226,10 +241,10 @@ fn test_resource_cleanup() {
             .with_project_structure();
         
         // Perform some operations
-        let git_root = swissarmyhammer::directory_utils::find_git_repository_root();
+        let git_root = find_git_repository_root_from(&std::env::current_dir().unwrap());
         assert!(git_root.is_some(), "Iteration {}: Should find Git repository", i);
         
-        let swissarmyhammer_dir = swissarmyhammer::directory_utils::find_swissarmyhammer_directory();
+        let swissarmyhammer_dir = find_swissarmyhammer_directory();
         assert!(swissarmyhammer_dir.is_some(), "Iteration {}: Should find .swissarmyhammer directory", i);
         
         // Create some files
@@ -267,11 +282,11 @@ fn test_isolation_verification() {
             barrier.wait(); // Synchronize to increase chance of conflicts
             
             // Perform operations that would conflict if not properly isolated
-            let git_root = swissarmyhammer::directory_utils::find_git_repository_root();
+            let git_root = find_git_repository_root_from(&std::env::current_dir().unwrap());
             assert!(git_root.is_some(), "Thread {}: Should find Git repository", thread_id);
             assert_eq!(git_root.unwrap(), guard.path(), "Thread {}: Git root should be correct", thread_id);
             
-            let swissarmyhammer_dir = swissarmyhammer::directory_utils::find_swissarmyhammer_directory();
+            let swissarmyhammer_dir = find_swissarmyhammer_directory();
             assert!(swissarmyhammer_dir.is_some(), "Thread {}: Should find .swissarmyhammer", thread_id);
             assert_eq!(swissarmyhammer_dir.unwrap(), guard.swissarmyhammer_dir().unwrap(), 
                       "Thread {}: .swissarmyhammer should be correct", thread_id);

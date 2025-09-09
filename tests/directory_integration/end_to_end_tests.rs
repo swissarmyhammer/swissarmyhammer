@@ -5,7 +5,7 @@
 //! Git repository-centric directory structure.
 
 use super::GitRepositoryTestGuard;
-use swissarmyhammer::directory_utils::{find_swissarmyhammer_directory, get_or_create_swissarmyhammer_directory};
+use swissarmyhammer_common::utils::{find_swissarmyhammer_directory, get_or_create_swissarmyhammer_directory};
 use std::fs;
 use std::path::Path;
 use tokio::time::{timeout, Duration};

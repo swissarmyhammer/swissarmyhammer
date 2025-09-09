@@ -5,14 +5,35 @@
 //! race condition prevention, and data consistency.
 
 use super::GitRepositoryTestGuard;
-use swissarmyhammer::directory_utils::{
-    find_git_repository_root,
-    find_swissarmyhammer_directory,
-    get_or_create_swissarmyhammer_directory
-};
+use swissarmyhammer_common::utils::{find_git_repository_root_from, get_or_create_swissarmyhammer_directory_from};
 use std::fs;
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
+
+/// Helper function to find swissarmyhammer directory
+fn find_swissarmyhammer_directory() -> Option<std::path::PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_git_repository_root_from(&current_dir).and_then(|git_root| {
+        let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+        if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
+            Some(swissarmyhammer_dir)
+        } else {
+            None
+        }
+    })
+}
+
+/// Helper function to find git repository root
+fn find_git_repository_root() -> Option<std::path::PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_git_repository_root_from(&current_dir)
+}
+
+/// Helper function to get or create swissarmyhammer directory
+fn get_or_create_swissarmyhammer_directory() -> swissarmyhammer_common::error::Result<std::path::PathBuf> {
+    let current_dir = std::env::current_dir().map_err(|e| swissarmyhammer_common::error::SwissArmyHammerError::directory_creation(e))?;
+    get_or_create_swissarmyhammer_directory_from(&current_dir)
+}
 use std::time::{Duration, Instant};
 
 /// Test concurrent directory resolution operations

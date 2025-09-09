@@ -5,7 +5,7 @@
 //! behavior under adverse conditions and proper error reporting.
 
 use super::{GitRepositoryTestGuard, create_corrupt_git_repository};
-use swissarmyhammer::directory_utils::{
+use swissarmyhammer_common::utils::{
     find_git_repository_root,
     find_swissarmyhammer_directory,
     get_or_create_swissarmyhammer_directory

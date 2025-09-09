@@ -498,7 +498,7 @@ pub fn generate_test_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer::directory_utils::{find_git_repository_root, find_swissarmyhammer_directory};
+    use swissarmyhammer_common::utils::{find_git_repository_root, find_swissarmyhammer_directory};
 
     #[test]
     fn test_git_repository_test_guard_basic() {

@@ -78,8 +78,7 @@ pub mod file_watcher;
 /// Virtual file system for unified file loading
 pub mod file_loader;
 
-/// Directory traversal utilities
-pub mod directory_utils;
+
 
 /// Unified file system utilities for better error handling and testing
 pub mod fs_utils;

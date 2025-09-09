@@ -5,7 +5,7 @@
 //! large directory structures, deep nesting, and high-frequency operations.
 
 use super::{GitRepositoryTestGuard, create_large_git_repository, measure_time};
-use swissarmyhammer::directory_utils::{
+use swissarmyhammer_common::utils::{
     find_git_repository_root,
     find_swissarmyhammer_directory,
     get_or_create_swissarmyhammer_directory

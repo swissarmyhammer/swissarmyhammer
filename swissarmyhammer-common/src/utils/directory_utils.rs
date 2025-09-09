@@ -10,6 +10,20 @@ use std::path::{Path, PathBuf};
 /// This prevents infinite loops and excessive filesystem traversal
 const MAX_DIRECTORY_DEPTH: usize = 10;
 
+/// Find the Git repository root starting from current directory
+///
+/// Walks up the directory tree looking for .git directory to identify
+/// a Git repository. This function respects MAX_DIRECTORY_DEPTH to prevent
+/// infinite traversal and returns None if no Git repository is found.
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if Git repository found, None otherwise
+pub fn find_git_repository_root() -> Option<PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_git_repository_root_from(&current_dir)
+}
+
 /// Find the Git repository root starting from a specific directory
 ///
 /// This function searches upwards from the given directory until it finds
@@ -45,6 +59,43 @@ pub fn find_git_repository_root_from(start_dir: &Path) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Find the SwissArmyHammer directory for the current Git repository
+///
+/// Returns None if not in a Git repository or if no .swissarmyhammer directory exists.
+/// This function enforces the new Git-centric directory resolution approach where
+/// .swissarmyhammer directories should only exist at Git repository roots.
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if Git repository found with .swissarmyhammer directory, None otherwise
+pub fn find_swissarmyhammer_directory() -> Option<PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_swissarmyhammer_directory_from(&current_dir)
+}
+
+/// Find the SwissArmyHammer directory starting from a specific directory
+///
+/// Searches for a Git repository root starting from the given directory
+/// and checks if a .swissarmyhammer directory exists within that root.
+///
+/// # Arguments
+///
+/// * `start_dir` - The directory to start searching from
+///
+/// # Returns
+///
+/// * `Option<PathBuf>` - Some(path) if .swissarmyhammer directory found, None otherwise
+pub fn find_swissarmyhammer_directory_from(start_dir: &Path) -> Option<PathBuf> {
+    let git_root = find_git_repository_root_from(start_dir)?;
+    let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
+
+    if swissarmyhammer_dir.exists() && swissarmyhammer_dir.is_dir() {
+        Some(swissarmyhammer_dir)
+    } else {
+        None
+    }
 }
 
 /// Get or create the .swissarmyhammer directory for the current working directory
@@ -202,5 +253,63 @@ mod tests {
         } else {
             panic!("Expected NotInGitRepository error");
         }
+    }
+
+    #[test]
+    fn test_find_swissarmyhammer_directory_from_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create Git repository with .swissarmyhammer directory
+        fs::create_dir_all(base.join(".git")).unwrap();
+        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+
+        let result = find_swissarmyhammer_directory_from(base);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), base.join(".swissarmyhammer"));
+    }
+
+    #[test]
+    fn test_find_swissarmyhammer_directory_from_git_no_swissarmyhammer() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create Git repository without .swissarmyhammer directory
+        fs::create_dir_all(base.join(".git")).unwrap();
+
+        let result = find_swissarmyhammer_directory_from(base);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_swissarmyhammer_directory_from_no_git_repo() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create .swissarmyhammer directory but no Git repository
+        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+
+        let result = find_swissarmyhammer_directory_from(base);
+        // Should return None since no Git repository was found
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_swissarmyhammer_directory_from_subdirectory() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        // Create nested structure with Git repository and .swissarmyhammer at root
+        let subdir1 = base.join("src");
+        let subdir2 = subdir1.join("lib");
+        fs::create_dir_all(&subdir2).unwrap();
+
+        fs::create_dir_all(base.join(".git")).unwrap();
+        fs::create_dir_all(base.join(".swissarmyhammer")).unwrap();
+
+        // Test from nested subdirectory
+        let result = find_swissarmyhammer_directory_from(&subdir2);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), base.join(".swissarmyhammer"));
     }
 }

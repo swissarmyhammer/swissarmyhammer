@@ -79,7 +79,7 @@ impl Doctor {
         println!();
 
         // First, ensure we're in a Git repository
-        use swissarmyhammer::directory_utils::find_git_repository_root;
+        use swissarmyhammer_common::utils::find_git_repository_root;
 
         let git_root = match find_git_repository_root() {
             Some(path) => {
