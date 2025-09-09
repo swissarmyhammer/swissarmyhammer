@@ -12,8 +12,7 @@ use tempfile::TempDir;
 
 /// Test helper for isolated environment variable testing
 struct IsolatedEnvTest {
-    #[allow(dead_code)]
-    temp_dir: TempDir,
+    _temp_dir: TempDir,
     original_cwd: std::path::PathBuf,
     original_home: Option<String>,
     env_vars_to_restore: Vec<(String, Option<String>)>,
@@ -40,7 +39,7 @@ impl IsolatedEnvTest {
         env::set_current_dir(temp_dir.path()).expect("Failed to set current dir");
 
         Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             original_cwd,
             original_home,
             env_vars_to_restore: Vec::new(),
@@ -56,19 +55,9 @@ impl IsolatedEnvTest {
         env::set_var(key, value);
     }
 
-    #[allow(dead_code)]
-    fn remove_env_var(&mut self, key: &str) {
-        let original = env::var(key).ok();
-        self.env_vars_to_restore.push((key.to_string(), original));
 
-        env::remove_var(key);
-    }
 
-    /// Generate a unique key for testing to avoid race conditions
-    #[allow(dead_code)]
-    fn unique_key(&self, key: &str) -> String {
-        format!("T{}_{}", self.timestamp, key)
-    }
+
 }
 
 impl Drop for IsolatedEnvTest {

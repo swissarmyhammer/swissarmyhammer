@@ -270,24 +270,7 @@ impl McpTool for OutlineGenerateTool {
     }
 }
 
-/// Convert internal OutlineNode to MCP tool OutlineNode (legacy - no children support)
-#[allow(dead_code)]
-fn convert_outline_node(
-    internal_node: swissarmyhammer_outline::OutlineNode,
-    _file_path: &std::path::Path,
-) -> Result<OutlineNode, McpError> {
-    let kind = convert_outline_node_type(&internal_node.node_type);
 
-    Ok(OutlineNode {
-        name: internal_node.name,
-        kind,
-        line: internal_node.start_line as u32,
-        signature: internal_node.signature,
-        doc: internal_node.documentation,
-        type_info: internal_node.visibility.map(|v| format!("{v:?}")),
-        children: None, // Legacy function - no children support
-    })
-}
 
 /// Convert internal OutlineNode to MCP tool OutlineNode with children support
 fn convert_outline_node_with_children(

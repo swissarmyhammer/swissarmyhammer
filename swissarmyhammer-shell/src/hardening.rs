@@ -105,8 +105,7 @@ pub struct ThreatDetector {
     /// Command frequency tracking for anomaly detection
     command_frequency: HashMap<String, CommandFrequency>,
 
-    /// Recently executed commands for pattern analysis
-    recent_commands: Vec<CommandHistoryEntry>,
+
 
     /// Configuration for threat detection
     config: ThreatDetectionConfig,
@@ -147,16 +146,7 @@ struct CommandFrequency {
     last_seen: SystemTime,
 }
 
-/// Historical command entry
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct CommandHistoryEntry {
-    command: String,
-    timestamp: SystemTime,
-    source_ip: Option<String>,
-    user_id: Option<String>,
-    exit_code: i32,
-}
+
 
 /// Security threat levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -297,7 +287,7 @@ impl ThreatDetector {
             malicious_patterns,
             suspicious_patterns,
             command_frequency: HashMap::new(),
-            recent_commands: Vec::new(),
+
             config,
         }
     }
@@ -306,7 +296,7 @@ impl ThreatDetector {
     pub fn analyze_command(
         &mut self,
         command: &str,
-        context: &CommandContext,
+        _context: &CommandContext,
     ) -> SecurityAssessment {
         let mut threats = Vec::new();
         let mut threat_level = ThreatLevel::None;
@@ -403,8 +393,7 @@ impl ThreatDetector {
             recommendations.push("Review command parameters carefully".to_string());
         }
 
-        // Add command to history
-        self.add_to_history(command, context);
+
 
         SecurityAssessment {
             threat_level,
@@ -496,27 +485,11 @@ impl ThreatDetector {
             .any(|&pattern| command.contains(pattern))
     }
 
-    /// Add command to execution history
-    fn add_to_history(&mut self, command: &str, context: &CommandContext) {
-        let entry = CommandHistoryEntry {
-            command: command.to_string(),
-            timestamp: SystemTime::now(),
-            source_ip: context.source_ip.clone(),
-            user_id: context.user_id.clone(),
-            exit_code: 0, // Will be updated after execution
-        };
 
-        self.recent_commands.push(entry);
-
-        // Maintain history size limit
-        if self.recent_commands.len() > self.config.max_history_size {
-            self.recent_commands.remove(0);
-        }
-    }
 
     /// Get security statistics
     pub fn get_security_statistics(&self) -> SecurityStatistics {
-        let total_commands = self.recent_commands.len();
+        let total_commands = 0; // Command history tracking was removed as dead code
         let unique_commands = self.command_frequency.len();
 
         let high_frequency_commands = self

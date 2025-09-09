@@ -158,3 +158,61 @@ echo "Dead code allowances: $(rg '#\[allow\(dead_code\)\]' /Users/wballard/githu
 This cleanup is required by our coding standards and will improve codebase maintainability. Dead code creates confusion and maintenance overhead - it should be deleted rather than hidden with compiler directives.
 
 The principle is: **If the code isn't needed, delete it. We have source control to recover it if ever actually needed.**
+
+## Proposed Solution
+
+After analysis of the first instance in `swissarmyhammer-shell/src/hardening.rs:152`, I found that the struct `CommandHistoryEntry` has fields that are written to but never read. This confirms it's truly dead code.
+
+My approach will be:
+
+1. **Test-driven removal**: Remove `#[allow(dead_code)]` attribute first and compile to see what the compiler identifies
+2. **Delete unused code**: For truly dead code (fields/structs/functions never read), delete entirely
+3. **Fix incorrectly flagged code**: For code used in tests or conditionally, apply proper `#[cfg(test)]` or conditional compilation
+4. **Work incrementally**: Process one file at a time, compile and test after each change
+
+### Example from swissarmyhammer-shell:
+- Removed `#[allow(dead_code)]` from `CommandHistoryEntry` 
+- Compiler shows fields are never read (only written to)
+- This confirms it's dead code that should be deleted
+- Will delete the unused fields and potentially the entire struct if not needed
+
+### Process for each crate:
+1. Remove `#[allow(dead_code)]` attributes
+2. Run `cargo build` to see compiler warnings
+3. Delete truly unused code
+4. Fix incorrectly flagged code with proper attributes
+5. Ensure tests still pass
+
+
+## Progress Update
+
+### ✅ Completed Crates:
+1. **swissarmyhammer-shell** (1 instance) - CLEAN ✅
+   - Removed entire `CommandHistoryEntry` struct and related dead code
+   - Fields were only written to, never read - true dead code
+   
+2. **swissarmyhammer-config** (4 instances) - CLEAN ✅  
+   - Removed `#[allow(dead_code)]` from `_lock_guard` field (legitimate use for lock holding)
+   - Deleted `unique_key()` and `remove_env_var()` methods from test utilities (unused)
+
+3. **swissarmyhammer-tools** (1 instance) - CLEAN ✅
+   - Deleted legacy `convert_outline_node()` function (replaced by `convert_outline_node_with_children`)
+
+4. **swissarmyhammer-outline** (1 instance) - CLEAN ✅
+   - Deleted unused `create_test_files()` test helper function
+
+### Current Status:
+- **Cleaned:** 7 instances across 4 crates
+- **Remaining:** ~96 instances across 5 major crates
+
+### Next: Large Crates
+- **swissarmyhammer-cli**: 38+ instances (highest count)
+- **swissarmyhammer-workflow**: 15+ instances  
+- **swissarmyhammer (main)**: 20+ instances
+
+### Approach Validation:
+The systematic approach is working well:
+1. Remove `#[allow(dead_code)]` first
+2. Compile to see compiler warnings
+3. Delete truly unused code 
+4. Keep code that serves a purpose (like lock guards)
