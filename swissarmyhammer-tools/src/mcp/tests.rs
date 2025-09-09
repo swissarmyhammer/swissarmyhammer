@@ -9,8 +9,7 @@ use super::utils::validate_issue_name;
 use crate::test_utils::TestIssueEnvironment;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
-use swissarmyhammer::prompts::Prompt;
-use swissarmyhammer::PromptLibrary;
+use swissarmyhammer_prompts::{Prompt, PromptLibrary};
 
 #[tokio::test]
 async fn test_mcp_server_creation() {
@@ -130,8 +129,8 @@ async fn test_mcp_server_uses_same_prompt_paths_as_cli() {
     // This test verifies the API is consistent rather than testing file system behavior
     // which can be flaky in test environments
 
-    let mut resolver1 = swissarmyhammer::PromptResolver::new();
-    let mut resolver2 = swissarmyhammer::PromptResolver::new();
+    let mut resolver1 = swissarmyhammer_prompts::PromptResolver::new();
+    let mut resolver2 = swissarmyhammer_prompts::PromptResolver::new();
     let mut lib1 = PromptLibrary::new();
     let mut lib2 = PromptLibrary::new();
 
@@ -175,7 +174,7 @@ async fn test_mcp_server_uses_same_directory_discovery() {
     let _guard = std::env::set_current_dir(test_env.path());
 
     // Verify that MCP server uses same directory discovery as PromptResolver
-    let resolver = swissarmyhammer::PromptResolver::new();
+    let resolver = swissarmyhammer_prompts::PromptResolver::new();
     let resolver_dirs = resolver.get_prompt_directories().unwrap();
 
     // The server should use the same directories for file watching

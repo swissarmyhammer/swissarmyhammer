@@ -106,7 +106,7 @@ async fn handle_http_serve(matches: &clap::ArgMatches) -> i32 {
 async fn handle_stdio_serve() -> i32 {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
-    use swissarmyhammer::PromptLibrary;
+    use swissarmyhammer_prompts::PromptLibrary;
     use swissarmyhammer_tools::McpServer;
 
     tracing::debug!("Starting MCP server in stdio mode");

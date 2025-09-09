@@ -5,7 +5,7 @@ use rmcp::RoleServer;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer::PromptResolver;
+use swissarmyhammer_prompts::PromptResolver;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use tokio::sync::Mutex;
 
