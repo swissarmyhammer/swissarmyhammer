@@ -26,6 +26,10 @@ tracing.workspace = true
 governor.workspace = true
 nonzero_ext.workspace = true
 
+# File system operations
+walkdir.workspace = true
+dirs.workspace = true
+
 # Testing dependencies (only when testing feature is enabled)
 tempfile = { workspace = true, optional = true }
 

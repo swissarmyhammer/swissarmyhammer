@@ -24,10 +24,10 @@
 //! All skipped files and errors are logged using the `tracing` framework at
 //! appropriate levels (warn for security issues, debug for missing directories).
 
-use crate::Result;
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use swissarmyhammer_common::utils::find_swissarmyhammer_directory;
+use crate::utils::find_swissarmyhammer_directory;
 use walkdir::WalkDir;
 
 /// Maximum file size to load (10MB)
@@ -180,7 +180,7 @@ impl FileEntry {
 /// # Example
 ///
 /// ```no_run
-/// use swissarmyhammer::file_loader::{VirtualFileSystem, FileSource};
+/// use swissarmyhammer_common::file_loader::{VirtualFileSystem, FileSource};
 ///
 /// let mut vfs = VirtualFileSystem::new("prompts");
 ///

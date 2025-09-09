@@ -74,9 +74,6 @@ pub mod security;
 
 
 
-/// Virtual file system for unified file loading
-pub mod file_loader;
-
 /// Unified file system utilities for better error handling and testing
 pub mod fs_utils;
 
@@ -86,7 +83,7 @@ pub mod validation;
 // Re-export core types
 
 /// File source for loading prompts from various sources
-pub use file_loader::FileSource;
+pub use swissarmyhammer_common::file_loader::FileSource;
 
 /// File system utilities and abstractions
 pub use fs_utils::{FilePermissions, FileSystem, FileSystemUtils};
@@ -104,7 +101,7 @@ pub use prompt_filter::PromptFilter;
 pub use prompt_resolver::PromptResolver;
 
 /// Backward compatibility alias for FileSource
-pub use file_loader::FileSource as PromptSource;
+pub use swissarmyhammer_common::file_loader::FileSource as PromptSource;
 
 /// Core prompt management types and functionality
 pub use prompts::{Prompt, PromptLibrary, PromptLoader};

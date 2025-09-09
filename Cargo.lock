@@ -6493,6 +6493,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dashmap",
+ "dirs 5.0.1",
  "governor",
  "nonzero_ext",
  "serde",
@@ -6503,6 +6504,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "ulid",
+ "walkdir",
 ]
 
 [[package]]
