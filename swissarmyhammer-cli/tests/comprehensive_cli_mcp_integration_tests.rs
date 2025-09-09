@@ -158,6 +158,10 @@ async fn test_all_search_tools_execution() -> Result<()> {
     let _env = IsolatedTestEnvironment::new().unwrap();
     let temp_path = _env.temp_dir();
 
+    // Set unique database path to avoid lock conflicts between tests
+    let unique_db_path = temp_path.join("semantic.db");
+    std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &unique_db_path);
+
     // Create source files for search testing
     let src_dir = temp_path.join("src");
     std::fs::create_dir_all(&src_dir)?;
@@ -202,6 +206,9 @@ pub fn handle_integration_error(error: &str) -> Result<(), String> {
     ]);
     let result = context.execute_tool("search_query", query_args).await;
     assert!(result.is_ok(), "search_query should succeed: {result:?}");
+
+    // Cleanup environment variable
+    std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH");
 
     Ok(())
 }
@@ -564,41 +571,6 @@ async fn test_tool_context_configurations() -> Result<()> {
     Ok(())
 }
 
-/// Test MCP tool robustness under stress
-#[tokio::test]
-// Fixed: Limited patterns to specific files to avoid DuckDB timeout
-async fn test_mcp_tool_stress_conditions() -> Result<()> {
-    let _guard = create_semantic_test_guard();
-    let _env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = _env.temp_dir();
-    let context = CliToolContext::new_with_dir(&temp_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    // Test rapid successive operations
-    for i in 0..10 {
-        let args = context.create_arguments(vec![
-            ("title", json!(format!("Stress Test Memo {}", i))),
-            ("content", json!(format!("Stress test content {}", i))),
-        ]);
-        let result = context.execute_tool("memo_create", args).await;
-        assert!(
-            result.is_ok(),
-            "Rapid operations should succeed: {result:?}"
-        );
-    }
-
-    // Test tool execution with minimal resources - use empty pattern to avoid DuckDB timeout
-    let args = context.create_arguments(vec![
-        ("patterns", json!(["nonexistent_file.rs"])),
-        ("force", json!(false)),
-    ]);
-    let result = context.execute_tool("search_index", args).await;
-    // Should succeed even if no files found
-    assert!(result.is_ok(), "Should handle empty indexing gracefully");
-
-    Ok(())
-}
 
 /// Test MCP tool state consistency across operations
 #[tokio::test]

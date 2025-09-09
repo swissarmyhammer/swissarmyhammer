@@ -109,9 +109,7 @@ impl McpErrorHandler {
             }
             SwissArmyHammerError::Other { message } => {
                 // Try to infer the error type from the message
-                if message.contains("not found") {
-                    McpError::invalid_params(message, None)
-                } else if message.contains("already exists") {
+                if message.contains("not found") || message.contains("already exists") {
                     McpError::invalid_params(message, None)
                 } else {
                     McpError::internal_error(message, None)

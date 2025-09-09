@@ -345,8 +345,7 @@ impl ActionParser {
             let mut action = PromptAction::new(prompt_name.to_string());
 
             // Parse arguments if present
-            if args_str.starts_with(" with ") {
-                let args_part = &args_str[6..]; // Remove " with "
+            if let Some(args_part) = args_str.strip_prefix(" with ") {
                 action.arguments = self.parse_arguments(args_part)?;
             }
 
@@ -397,10 +396,12 @@ impl ActionParser {
 
             // Handle "Wait 30 seconds" pattern
             if rest.ends_with(" seconds") || rest.ends_with(" second") {
-                let number_part = if rest.ends_with(" seconds") {
-                    &rest[..rest.len() - 8]
+                let number_part = if let Some(stripped) = rest.strip_suffix(" seconds") {
+                    stripped
+                } else if let Some(stripped) = rest.strip_suffix(" second") {
+                    stripped
                 } else {
-                    &rest[..rest.len() - 7]
+                    unreachable!()
                 };
 
                 if let Ok(seconds) = number_part.trim().parse::<u64>() {
@@ -524,8 +525,7 @@ impl ActionParser {
             let mut action = SubWorkflowAction::new(workflow_name.to_string());
 
             // Parse arguments if present
-            if args_str.starts_with(" with ") {
-                let args_part = &args_str[6..]; // Remove " with "
+            if let Some(args_part) = args_str.strip_prefix(" with ") {
                 let parsed_args = self.parse_arguments(args_part)?;
 
                 // Convert parsed arguments to the format SubWorkflowAction expects

@@ -146,7 +146,7 @@ impl Drop for MockClaudeDesktopClient {
     }
 }
 
-// Use the shared test utilities for creating test prompts
+// Use test utilities for creating test prompts
 use crate::test_utils::create_test_prompt_files;
 
 #[cfg(test)]

@@ -8,10 +8,7 @@ use crate::common::file_types::is_any_prompt_file;
 use crate::common::mcp_errors::ToSwissArmyHammerError;
 use crate::{PromptResolver, Result};
 #[cfg(not(test))]
-use notify::{
-    event::{Event, EventKind},
-    RecommendedWatcher, RecursiveMode, Watcher,
-};
+use notify::{RecommendedWatcher, Event, EventKind, Watcher, RecursiveMode};
 #[cfg(not(test))]
 use tokio::sync::mpsc;
 
