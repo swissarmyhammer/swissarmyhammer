@@ -216,7 +216,7 @@ pub enum SwissArmyHammerError {
 
     /// Workflow executor error
     #[error("Workflow executor error: {0}")]
-    ExecutorError(#[from] crate::workflow::ExecutorError),
+    ExecutorError(#[from] swissarmyhammer_workflow::ExecutorError),
 
     /// Plan command specific error
     #[error("Plan command error: {0}")]

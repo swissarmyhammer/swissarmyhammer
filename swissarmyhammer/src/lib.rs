@@ -62,8 +62,7 @@ pub mod storage;
 /// Plugin system for extensibility
 pub mod plugins;
 
-/// Workflow system for state-based execution
-pub mod workflow;
+
 
 /// Shared frontmatter parsing functionality
 pub mod frontmatter;
@@ -111,8 +110,8 @@ pub use storage::{PromptStorage, StorageBackend};
 /// Template engine and rendering functionality (re-exported from swissarmyhammer-templating)
 pub use swissarmyhammer_templating::{Template, TemplateEngine};
 
-/// Workflow system for state-based execution
-pub use workflow::{
+/// Workflow system for state-based execution (re-exported from swissarmyhammer-workflow)
+pub use swissarmyhammer_workflow::{
     State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
     WorkflowRunStatus,
 };
@@ -143,7 +142,7 @@ pub mod prelude {
         SwissArmyHammerPlugin, Template, TemplateEngine,
     };
 
-    pub use crate::workflow::{
+    pub use swissarmyhammer_workflow::{
         State, StateId, Transition, Workflow, WorkflowName, WorkflowRun, WorkflowRunId,
         WorkflowRunStatus,
     };

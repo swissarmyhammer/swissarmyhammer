@@ -32,6 +32,7 @@ async-trait = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }

@@ -12,8 +12,39 @@ use mermaid_parser::{
     parse_diagram,
 };
 use std::collections::HashMap;
-use swissarmyhammer::common::{Parameter, ParameterType};
-use swissarmyhammer::frontmatter;
+// TODO: Fix circular dependency - use local types
+// use swissarmyhammer_common::{Parameter, ParameterType};
+// use swissarmyhammer_common::frontmatter;
+
+use crate::definition::{Parameter, ParameterType};
+
+// Minimal frontmatter parsing to break circular dependency  
+pub mod frontmatter {
+    use serde_yaml;
+    
+    pub fn extract_frontmatter_and_content(input: &str) -> (Option<serde_yaml::Value>, String) {
+        // Simple frontmatter extraction - look for YAML frontmatter between ---
+        if let Some(content) = input.strip_prefix("---\n") {
+            if let Some(end_pos) = content.find("\n---\n") {
+                let frontmatter = &content[..end_pos];
+                let body = &content[end_pos + 5..];
+                
+                if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
+                    return (Some(yaml), body.to_string());
+                }
+            }
+        }
+        (None, input.to_string())
+    }
+    
+    pub fn parse_frontmatter(input: &str) -> Result<(serde_yaml::Value, String), String> {
+        let (frontmatter, content) = extract_frontmatter_and_content(input);
+        match frontmatter {
+            Some(yaml) => Ok((yaml, content)),
+            None => Err("No frontmatter found".to_string()),
+        }
+    }
+}
 use thiserror::Error;
 
 /// Errors that can occur during Mermaid parsing
@@ -200,43 +231,39 @@ impl MermaidParser {
     fn extract_parameters_from_frontmatter(input: &str) -> ParseResult<Vec<Parameter>> {
         let mut parameters = Vec::new();
 
-        // Use shared frontmatter parsing
-        let frontmatter =
-            frontmatter::parse_frontmatter(input).map_err(|e| ParseError::InvalidStructure {
-                message: e.to_string(),
-            })?;
-
-        // Extract parameters from frontmatter if present
-        let frontmatter_value = match frontmatter.metadata {
-            Some(value) => value,
-            None => return Ok(parameters),
+        // Use shared frontmatter parsing - handle case where no frontmatter exists
+        let (frontmatter_option, _content) = frontmatter::extract_frontmatter_and_content(input);
+        
+        let frontmatter_value = match frontmatter_option {
+            Some(yaml) => yaml,
+            None => return Ok(parameters), // No frontmatter = no parameters, which is OK
         };
 
         // Extract parameters from frontmatter if present
         if let Some(params_value) = frontmatter_value.get("parameters") {
-            if let Some(params_array) = params_value.as_array() {
+            if let Some(params_array) = params_value.as_sequence() {
                 for param_value in params_array {
-                    if let Some(param_obj) = param_value.as_object() {
+                    if let Some(param_obj) = param_value.as_mapping() {
                         let name = param_obj
-                            .get("name")
+                            .get(&serde_yaml::Value::String("name".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let description = param_obj
-                            .get("description")
+                            .get(&serde_yaml::Value::String("description".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let required = param_obj
-                            .get("required")
+                            .get(&serde_yaml::Value::String("required".to_string()))
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 
                         // Parse parameter type
                         let type_str = param_obj
-                            .get("type")
+                            .get(&serde_yaml::Value::String("type".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("string");
 
@@ -254,13 +281,13 @@ impl MermaidParser {
                         };
 
                         // Parse default value
-                        let default = param_obj.get("default").cloned();
+                        let default = param_obj.get(&serde_yaml::Value::String("default".to_string())).cloned();
 
                         // Parse choices if present
                         let choices =
                             param_obj
-                                .get("choices")
-                                .and_then(|v| v.as_array())
+                                .get(&serde_yaml::Value::String("choices".to_string()))
+                                .and_then(|v| v.as_sequence())
                                 .map(|seq| {
                                     seq.iter()
                                         .filter_map(|choice| choice.as_str())
@@ -272,7 +299,12 @@ impl MermaidParser {
                             Parameter::new(name, description, parameter_type).required(required);
 
                         if let Some(default_value) = default {
-                            param = param.with_default(default_value);
+                            // Convert serde_yaml::Value to serde_json::Value
+                            let json_default = serde_json::to_value(&default_value)
+                                .map_err(|e| ParseError::InvalidStructure {
+                                    message: format!("Failed to convert default value: {}", e),
+                                })?;
+                            param = param.with_default(json_default);
                         }
 
                         if let Some(choices_vec) = choices {
@@ -1419,8 +1451,10 @@ stateDiagram-v2
     fn test_extract_parameters_from_frontmatter_empty() {
         let input = "No frontmatter here";
         let result = MermaidParser::extract_parameters_from_frontmatter(input);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
+        match result {
+            Ok(params) => assert!(params.is_empty()),
+            Err(e) => panic!("Expected Ok but got error: {}", e),
+        }
     }
 
     #[test]

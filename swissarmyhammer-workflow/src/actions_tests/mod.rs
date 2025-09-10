@@ -41,6 +41,7 @@ pub fn create_test_context() -> WorkflowTemplateContext {
 }
 
 /// Helper function to create a test context with special characters
+#[allow(dead_code)] // Utility function for potential future tests
 pub fn create_context_with_special_chars() -> WorkflowTemplateContext {
     let mut vars = HashMap::new();
     vars.insert(

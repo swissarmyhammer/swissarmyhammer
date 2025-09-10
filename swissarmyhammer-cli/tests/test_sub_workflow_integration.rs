@@ -5,9 +5,8 @@
 
 use anyhow::Result;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer::workflow::{
-    MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowStorage,
-};
+use swissarmyhammer::{StateId, WorkflowRun};
+use swissarmyhammer_workflow::{MermaidParser, WorkflowExecutor, WorkflowStorage};
 
 #[tokio::test]
 async fn test_sub_workflow_in_process_execution() -> Result<()> {

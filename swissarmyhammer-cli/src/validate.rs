@@ -6,11 +6,11 @@ use std::sync::Arc;
 use swissarmyhammer_config::TemplateContext;
 
 use swissarmyhammer::validation::{
-    Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
-    ValidationResult,
+    ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager, ValidationResult,
 };
-use swissarmyhammer::workflow::{
-    MemoryWorkflowStorage, MermaidParser, Workflow, WorkflowResolver, WorkflowStorageBackend,
+use swissarmyhammer::Validatable;
+use swissarmyhammer_workflow::{
+    MemoryWorkflowStorage, MermaidParser, Validatable as WorkflowValidatable, Workflow, WorkflowResolver, WorkflowStorageBackend,
 };
 
 use crate::cli::ValidateFormat;
@@ -284,9 +284,26 @@ impl Validator {
         }
 
         // Delegate to the workflow's self-validation
-        let issues = workflow.validate(Some(workflow_path));
+        let issues = WorkflowValidatable::validate(workflow, Some(workflow_path));
         for issue in issues {
-            result.add_issue(issue);
+            // Convert from workflow ValidationIssue to main crate ValidationIssue
+            let converted_level = match issue.level {
+                swissarmyhammer_workflow::definition::ValidationLevel::Error => swissarmyhammer::validation::ValidationLevel::Error,
+                swissarmyhammer_workflow::definition::ValidationLevel::Warning => swissarmyhammer::validation::ValidationLevel::Warning,
+            };
+            
+            let converted_issue = swissarmyhammer::validation::ValidationIssue {
+                level: converted_level,
+                file_path: issue.file_path.as_ref()
+                    .map(|p| PathBuf::from(p))
+                    .unwrap_or_else(|| workflow_path.to_path_buf()),
+                content_title: issue.content_title,
+                line: issue.line,
+                column: issue.column,
+                message: issue.message,
+                suggestion: issue.suggestion,
+            };
+            result.add_issue(converted_issue);
         }
     }
 
@@ -1579,7 +1596,7 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_empty_name() {
-        use swissarmyhammer::workflow::{StateId, WorkflowName};
+        use swissarmyhammer::{StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
         let mut result = ValidationResult::new();
@@ -1604,7 +1621,7 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_name_allowed_special_chars() {
-        use swissarmyhammer::workflow::{State, StateId, WorkflowName};
+        use swissarmyhammer::{State, StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
         let mut result = ValidationResult::new();
@@ -1620,7 +1637,7 @@ stateDiagram-v2
         let start_state = State {
             id: StateId::new("start"),
             description: "Start state".to_string(),
-            state_type: swissarmyhammer::workflow::StateType::Normal,
+            state_type: swissarmyhammer_workflow::StateType::Normal,
             is_terminal: true,
             allows_parallel: false,
             metadata: std::collections::HashMap::new(),
@@ -1640,7 +1657,7 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_security_handled_by_parsers() {
-        use swissarmyhammer::workflow::{State, StateId, WorkflowName};
+        use swissarmyhammer::{State, StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
 
@@ -1666,7 +1683,7 @@ stateDiagram-v2
             let start_state = State {
                 id: StateId::new("start"),
                 description: "Start state".to_string(),
-                state_type: swissarmyhammer::workflow::StateType::Normal,
+                state_type: swissarmyhammer_workflow::StateType::Normal,
                 is_terminal: true,
                 allows_parallel: false,
                 metadata: std::collections::HashMap::new(),

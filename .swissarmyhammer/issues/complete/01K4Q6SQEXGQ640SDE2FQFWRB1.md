@@ -125,3 +125,63 @@ The most massive incomplete migration has been confirmed. The `swissarmyhammer-w
 This is by far the largest incomplete migration cleanup. The workflow system represents the majority of code in the main crate and should have been completely removed after the domain crate was created.
 
 This cleanup will dramatically reduce the main crate size and complete one of the most significant domain separations.
+
+## Proposed Solution
+
+After thorough analysis of the codebase, I've confirmed this is indeed a massive incomplete migration cleanup. Here's my implementation plan:
+
+### Current State Analysis ✅
+- **swissarmyhammer-workflow domain crate**: Exists with complete API (identical exports to main crate)
+- **swissarmyhammer-tools**: Already using domain crate correctly
+- **Main crate workflow directory**: Contains 51 files with 27,385 lines of duplicate code
+- **External dependency found**: `src/common/parameter_cli.rs` uses `WorkflowName` and `WorkflowStorage` from main crate
+
+### Implementation Steps
+
+#### Phase 1: Fix External Dependency ✅
+- Update `swissarmyhammer/src/common/parameter_cli.rs` to use `swissarmyhammer_workflow` instead of `crate::workflow`
+- Add `swissarmyhammer-workflow` dependency to main crate's `Cargo.toml`
+
+#### Phase 2: Remove Massive Duplicate Code
+- Delete entire `swissarmyhammer/src/workflow/` directory (51 files, 27,385 lines)
+- Update `swissarmyhammer/src/lib.rs` to:
+  - Remove `pub mod workflow;` declaration
+  - Update re-exports to use `swissarmyhammer_workflow::*`
+  - Maintain backward compatibility for external consumers
+
+#### Phase 3: Verification
+- Build entire workspace to ensure no breakage
+- Run tests to verify workflow functionality still works through domain crate
+- Confirm completion criteria met
+
+### Expected Benefits
+- **Eliminate 27,385 lines** of duplicate workflow code
+- **Remove 51 duplicate files** from main crate
+- **Complete workflow domain separation** 
+- **Massive reduction** in main crate size and complexity
+
+This cleanup will complete one of the most significant incomplete domain migrations.
+
+## Current Progress - Code Review
+
+### Compilation Issues Fixed:
+1. ✅ **PartialEq derive missing**: Added `PartialEq` derive to `ParameterType` enum in workflow crate
+2. ✅ **Unused import**: Removed unused `std::path::Path` import from definition.rs  
+3. ✅ **Metadata field access**: Fixed frontmatter parsing to correctly destructure `(serde_yaml::Value, String)` tuple
+4. ✅ **serde_yaml::Value API**: Updated from `as_array()` to `as_sequence()` and fixed key access patterns
+5. ✅ **Type conversion**: Added conversion from `serde_yaml::Value` to `serde_json::Value` for default values
+6. ✅ **ExecutorError import**: Updated `crate::workflow::ExecutorError` to `swissarmyhammer_workflow::ExecutorError`
+7. ✅ **Parameter type conversion**: Implemented conversion between workflow domain Parameter and main crate Parameter types
+
+### Still Working On:
+- Final workspace build verification (rate-limited currently)
+- Clippy lint checks
+- Test suite execution
+- Code review completion
+
+### Technical Notes:
+The workflow domain migration cleanup required careful handling of:
+- serde_yaml vs serde_json Value type differences
+- Parameter type conversions between domain boundaries  
+- Proper error handling during YAML to JSON conversions
+- Module export/import restructuring after workflow code removal

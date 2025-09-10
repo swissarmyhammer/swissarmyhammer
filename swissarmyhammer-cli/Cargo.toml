@@ -28,6 +28,7 @@ swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 

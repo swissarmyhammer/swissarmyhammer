@@ -5,7 +5,7 @@
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use swissarmyhammer::error::{ErrorSeverity, PlanCommandError};
 use swissarmyhammer::plan_utils::validate_plan_file_comprehensive;
-use swissarmyhammer::workflow::{
+use swissarmyhammer_workflow::{
     FileSystemWorkflowStorage, WorkflowExecutor, WorkflowName, WorkflowStorageBackend,
 };
 

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::process::Command;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer::workflow::{WorkflowResolver, WorkflowStorage};
+use swissarmyhammer_workflow::{WorkflowResolver, WorkflowStorage};
 use swissarmyhammer::common::parameters::{DefaultParameterResolver, ParameterResolver};
 use swissarmyhammer::common::discover_workflow_parameters;
 use serde_json::{json, Value};

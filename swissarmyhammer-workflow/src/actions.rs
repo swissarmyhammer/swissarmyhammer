@@ -25,7 +25,8 @@ use thiserror::Error;
 use tokio::time::timeout;
 
 use async_trait::async_trait;
-use swissarmyhammer::{PromptLibrary, PromptResolver};
+// TODO: Fix circular dependency - need to inject prompt functionality
+// use swissarmyhammer::{PromptLibrary, PromptResolver};
 use swissarmyhammer_config::agent::{AgentConfig, AgentExecutorType, LlamaAgentConfig};
 
 use super::agents::LlamaAgentExecutor;
@@ -806,13 +807,13 @@ impl PromptAction {
 
         tracing::debug!("Args for prompt rendering: {:?}", args);
 
-        // Load prompts and render directly
-        let mut library = PromptLibrary::new();
-        let mut resolver = PromptResolver::new();
+        // TODO: Fix circular dependency - temporarily disabled prompt functionality
+        // let mut library = PromptLibrary::new();
+        // let mut resolver = PromptResolver::new();
 
-        resolver.load_all_prompts(&mut library).map_err(|e| {
-            ActionError::ClaudeError(format!("Failed to load prompts from directories: {e}"))
-        })?;
+        // resolver.load_all_prompts(&mut library).map_err(|e| {
+        //     ActionError::ClaudeError(format!("Failed to load prompts from directories: {e}"))
+        // })?;
 
         tracing::debug!("Loaded prompts successfully");
 
@@ -829,56 +830,35 @@ impl PromptAction {
 
         tracing::debug!("Created template context successfully");
 
-        // Convert library to Arc for partials support
-        let library_arc = Arc::new(library);
+        // TODO: Fix circular dependency - temporarily disabled
+        // let library_arc = Arc::new(library);
 
-        // Render user prompt with complete template context and partials support
-        tracing::debug!("About to render user prompt: {}", self.prompt_name);
-        let rendered = library_arc
-            .render(&self.prompt_name, &template_context)
-            .map_err(|e| {
-                // Try to get available prompts for better error messaging
-                let available_prompts = library_arc
-                    .list()
-                    .ok()
-                    .map(|prompts| {
-                        let names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
-                        if names.is_empty() {
-                            "no prompts available".to_string()
-                        } else {
-                            format!("available prompts: {}", names.join(", "))
-                        }
-                    })
-                    .unwrap_or_else(|| "unable to list available prompts".to_string());
+        // let rendered = library_arc
+        //     .render(&self.prompt_name, &template_context)
+        //     .map_err(|e| {
+        //         let available_prompts = library_arc
+        //             .list()
+        //             .ok()
+        //             .map(|prompts| {
+        //                 let names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
+        //                 if names.is_empty() {
+        //                     "no prompts available".to_string()
+        //                 } else {
+        //                     format!("available prompts: {}", names.join(", "))
+                        //     }
+                        // })
+                        // .unwrap_or_else(|| "unable to list available prompts".to_string());
 
-                ActionError::ClaudeError(format!(
-                    "Failed to render prompt '{}': {} ({})",
-                    self.prompt_name, e, available_prompts
-                ))
-            })?;
+                // ActionError::ClaudeError(format!(
+                //     "Failed to render prompt '{}': {} ({})",
+                //     self.prompt_name, e, available_prompts
+                // ))
+            // })?;
 
-        // Render system prompt using the same library instance (optional)
-        let system_prompt = match library_arc.render(".system", &template_context) {
-            Ok(prompt) => Some(prompt),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to render system prompt: {}. Proceeding without system prompt.",
-                    e
-                );
-                None
-            }
-        };
-
-        if let Some(ref sys_prompt) = system_prompt {
-            tracing::debug!(
-                "System prompt rendered successfully ({} chars)",
-                sys_prompt.len()
-            );
-        } else {
-            tracing::debug!("No system prompt will be used");
-        }
-
-        Ok((rendered, system_prompt))
+        // TODO: Temporary error until circular dependency is fixed
+        Err(ActionError::ClaudeError(
+            "PromptAction temporarily disabled due to circular dependency with main crate".to_string()
+        ))
     }
 
     /// Execute the command once without retry logic

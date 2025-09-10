@@ -35,7 +35,7 @@ swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["test
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
-swissarmyhammer = { path = "../swissarmyhammer" }
+
 
 # Additional dependencies needed by workflow actions
 syntect = { workspace = true }

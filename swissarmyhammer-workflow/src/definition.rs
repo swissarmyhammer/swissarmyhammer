@@ -3,9 +3,170 @@
 use crate::{State, StateId, Transition};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
-use swissarmyhammer::common::{Parameter, ParameterProvider, ParameterType};
-use swissarmyhammer::validation::{Validatable, ValidationIssue, ValidationLevel};
+
+// TODO: Fix circular dependency - temporarily define minimal types locally
+// use swissarmyhammer_common::{Parameter, ParameterProvider, ParameterType};
+// use swissarmyhammer_common::{Validatable, ValidationIssue, ValidationLevel};
+
+// Temporary minimal parameter types to break circular dependency
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Workflow parameter definition
+pub struct Parameter {
+    /// Parameter name
+    pub name: String,
+    /// Parameter description
+    pub description: String,  
+    /// Whether parameter is required
+    pub required: bool,
+    /// Default value for parameter
+    pub default: Option<serde_json::Value>,
+    /// Parameter type
+    pub parameter_type: ParameterType,
+    /// Valid choices for choice parameters
+    pub choices: Option<Vec<String>>,
+    /// Parameter validation rules
+    pub validation: Option<ParameterValidation>,
+}
+
+/// Validation rules for parameter values
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ParameterValidation {
+    /// Minimum numeric value (for numeric types)
+    pub min: Option<f64>,
+    /// Maximum numeric value (for numeric types)
+    pub max: Option<f64>,
+    /// Minimum string length (for string types)
+    pub min_length: Option<usize>,
+    /// Maximum string length (for string types)
+    pub max_length: Option<usize>,
+}
+
+impl Parameter {
+    /// Create a new parameter
+    pub fn new(name: String, description: String, parameter_type: ParameterType) -> Self {
+        Self {
+            name,
+            description,
+            required: false,
+            default: None,
+            parameter_type,
+            choices: None,
+            validation: None,
+        }
+    }
+    
+    /// Set whether parameter is required
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+    
+    /// Set default value for parameter
+    pub fn with_default(mut self, default: serde_json::Value) -> Self {
+        self.default = Some(default);
+        self
+    }
+    
+    /// Set valid choices for choice parameters
+    pub fn with_choices(mut self, choices: Vec<String>) -> Self {
+        self.choices = Some(choices);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Parameter type definitions
+pub enum ParameterType {
+    /// String parameter
+    String,
+    /// Numeric parameter
+    Number, 
+    /// Boolean parameter
+    Boolean,
+    /// Single choice from predefined options
+    Choice,
+    /// Multiple choices from predefined options
+    MultiChoice,
+}
+
+impl ParameterType {
+    /// Convert parameter type to string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ParameterType::String => "string",
+            ParameterType::Number => "number",
+            ParameterType::Boolean => "boolean", 
+            ParameterType::Choice => "choice",
+            ParameterType::MultiChoice => "multi_choice",
+        }
+    }
+}
+
+/// Trait for types that provide parameters
+pub trait ParameterProvider {
+    /// Get the parameters for this type
+    fn get_parameters(&self) -> &[Parameter];
+}
+
+/// Trait for types that can be validated
+pub trait Validatable {
+    /// Validate this object and return any issues found
+    fn validate(&self, workflow_path: Option<&std::path::Path>) -> Vec<ValidationIssue>;
+}
+
+/// Validation result for workflow validation
+pub struct ValidationResult {
+    /// List of validation issues found
+    pub issues: Vec<ValidationIssue>,
+}
+
+impl ValidationResult {
+    /// Create a new empty validation result
+    pub fn new() -> Self {
+        Self {
+            issues: Vec::new(),
+        }
+    }
+    
+    /// Check if validation passed (no errors)
+    pub fn is_valid(&self) -> bool {
+        !self.issues.iter().any(|issue| matches!(issue.level, ValidationLevel::Error))
+    }
+    
+    /// Add a validation issue
+    pub fn add_issue(&mut self, issue: ValidationIssue) {
+        self.issues.push(issue);
+    }
+}
+
+/// Individual validation issue
+pub struct ValidationIssue {
+    /// Severity level of the issue
+    pub level: ValidationLevel,
+    /// Issue message
+    pub message: String,
+    /// File path where issue was found
+    pub file_path: Option<String>,
+    /// Content title
+    pub content_title: Option<String>,
+    /// Line number
+    pub line: Option<usize>,
+    /// Column number
+    pub column: Option<usize>,
+    /// Suggested fix
+    pub suggestion: Option<String>,
+}
+
+/// Validation issue severity levels
+#[derive(Debug, Clone)]
+pub enum ValidationLevel {
+    /// Error - validation failed
+    Error,
+    /// Warning - potential issue
+    Warning,
+}
+
+
 use thiserror::Error;
 
 /// Errors that can occur when creating workflow-related types
@@ -297,28 +458,31 @@ impl ParameterProvider for Workflow {
 }
 
 impl Validatable for Workflow {
-    fn validate(&self, source_path: Option<&Path>) -> Vec<ValidationIssue> {
+    fn validate(&self, workflow_path: Option<&std::path::Path>) -> Vec<ValidationIssue> {
+        let mut issues = Vec::new();
+        
         match self.validate_structure() {
-            Ok(()) => Vec::new(),
+            Ok(()) => {},
             Err(error_messages) => {
-                let workflow_path = source_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-                    std::path::PathBuf::from(format!("workflow:{}", self.name.as_str()))
-                });
-
-                error_messages
-                    .into_iter()
-                    .map(|message| ValidationIssue {
+                let workflow_name = self.name.to_string();
+                let file_path = workflow_path.map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("workflow:{}", workflow_name));
+                
+                for message in error_messages {
+                    issues.push(ValidationIssue {
                         level: ValidationLevel::Error,
-                        file_path: workflow_path.clone(),
-                        content_title: Some(self.name.to_string()),
+                        file_path: Some(file_path.clone()),
+                        content_title: Some(workflow_name.clone()),
                         line: None,
                         column: None,
                         message,
                         suggestion: None,
-                    })
-                    .collect()
+                    });
+                }
             }
         }
+        
+        issues
     }
 }
 
@@ -372,8 +536,8 @@ mod tests {
         // Add valid parameters
         workflow.parameters.push(
             Parameter::new(
-                "valid_string",
-                "A valid string parameter",
+                "valid_string".to_string(),
+                "A valid string parameter".to_string(),
                 ParameterType::String,
             )
             .required(true),
@@ -381,8 +545,8 @@ mod tests {
 
         workflow.parameters.push(
             Parameter::new(
-                "valid_choice",
-                "A valid choice parameter",
+                "valid_choice".to_string(),
+                "A valid choice parameter".to_string(),
                 ParameterType::Choice,
             )
             .required(false)
@@ -403,17 +567,17 @@ mod tests {
 
         // Add invalid parameters
         workflow.parameters.push(
-            Parameter::new("", "Parameter with empty name", ParameterType::String).required(true),
+            Parameter::new("".to_string(), "Parameter with empty name".to_string(), ParameterType::String).required(true),
         );
 
         workflow
             .parameters
-            .push(Parameter::new("no_description", "", ParameterType::String).required(true));
+            .push(Parameter::new("no_description".to_string(), "".to_string(), ParameterType::String).required(true));
 
         workflow.parameters.push(
             Parameter::new(
-                "choice_without_choices",
-                "Choice parameter without choices",
+                "choice_without_choices".to_string(),
+                "Choice parameter without choices".to_string(),
                 ParameterType::Choice,
             )
             .required(true),
@@ -421,8 +585,8 @@ mod tests {
 
         workflow.parameters.push(
             Parameter::new(
-                "boolean_with_choices",
-                "Boolean parameter with choices",
+                "boolean_with_choices".to_string(),
+                "Boolean parameter with choices".to_string(),
                 ParameterType::Boolean,
             )
             .required(false)
@@ -431,8 +595,8 @@ mod tests {
 
         workflow.parameters.push(
             Parameter::new(
-                "wrong_default_type",
-                "Boolean with string default",
+                "wrong_default_type".to_string(),
+                "Boolean with string default".to_string(),
                 ParameterType::Boolean,
             )
             .required(false)
@@ -442,8 +606,8 @@ mod tests {
         // Add duplicate parameter name
         workflow.parameters.push(
             Parameter::new(
-                "boolean_with_choices",
-                "Duplicate parameter name",
+                "boolean_with_choices".to_string(),
+                "Duplicate parameter name".to_string(),
                 ParameterType::String,
             )
             .required(false),
@@ -480,7 +644,7 @@ mod tests {
         // Add invalid parameter that should cause workflow validation to fail
         workflow
             .parameters
-            .push(Parameter::new("invalid", "", ParameterType::Choice).required(true));
+            .push(Parameter::new("invalid".to_string(), "".to_string(), ParameterType::Choice).required(true));
 
         let result = workflow.validate_structure();
         assert!(result.is_err());
@@ -495,17 +659,17 @@ mod tests {
     #[test]
     fn test_shared_parameter_system_integration() {
         use crate::test_helpers::*;
-        use swissarmyhammer::common::ParameterProvider;
+        use crate::definition::ParameterProvider;
 
         let mut workflow = create_basic_workflow();
 
         // Add workflow parameters
         workflow.parameters.push(
-            Parameter::new("input_file", "Input file path", ParameterType::String).required(true),
+            Parameter::new("input_file".to_string(), "Input file path".to_string(), ParameterType::String).required(true),
         );
 
         workflow.parameters.push(
-            Parameter::new("mode", "Processing mode", ParameterType::Choice)
+            Parameter::new("mode".to_string(), "Processing mode".to_string(), ParameterType::Choice)
                 .required(false)
                 .with_default(serde_json::Value::String("fast".to_string()))
                 .with_choices(vec!["fast".to_string(), "thorough".to_string()]),

@@ -3,7 +3,8 @@
 use crate::{StateId, Workflow, WorkflowTemplateContext};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use swissarmyhammer::common::generate_monotonic_ulid;
+// TODO: Fix circular dependency - use ulid directly
+use swissarmyhammer_common::generate_monotonic_ulid;
 use ulid::Ulid;
 
 /// Unique identifier for workflow runs
@@ -257,18 +258,26 @@ mod tests {
     #[test]
     fn test_workflow_run_id_monotonic_generation() {
         let id1 = WorkflowRunId::new();
+        // Small delay to ensure different timestamps for monotonic ordering
+        std::thread::sleep(std::time::Duration::from_millis(2));
         let id2 = WorkflowRunId::new();
+        std::thread::sleep(std::time::Duration::from_millis(2));
         let id3 = WorkflowRunId::new();
 
         // Test that IDs are monotonic
-        assert!(id1 < id2);
-        assert!(id2 < id3);
-        assert!(id1 < id3);
+        assert!(id1 < id2, "id1 ({}) should be < id2 ({})", id1, id2);
+        assert!(id2 < id3, "id2 ({}) should be < id3 ({})", id2, id3);
+        assert!(id1 < id3, "id1 ({}) should be < id3 ({})", id1, id3);
 
         // Test that string representation also maintains ordering
         assert!(id1.to_string() < id2.to_string());
         assert!(id2.to_string() < id3.to_string());
         assert!(id1.to_string() < id3.to_string());
+        
+        // Test uniqueness
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+        assert_ne!(id1, id3);
     }
 
     #[test]

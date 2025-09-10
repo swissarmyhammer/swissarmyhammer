@@ -4,7 +4,7 @@
 //! and CLI argument name conversion.
 
 use crate::common::{Parameter, ParameterType};
-use crate::workflow::{WorkflowName, WorkflowStorage};
+use swissarmyhammer_workflow::{WorkflowName, WorkflowStorage};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -128,9 +128,32 @@ pub fn discover_workflow_parameters(workflow_name: &str) -> crate::Result<Vec<Pa
     }
 
     let storage = WorkflowStorage::file_system()?;
-    let name = WorkflowName::new(workflow_name.to_string());
+    let name = WorkflowName::from(workflow_name);
     let workflow = storage.get_workflow(&name)?;
-    Ok(workflow.parameters)
+    
+    // Convert workflow domain parameters to main crate parameters
+    let converted_parameters = workflow.parameters.into_iter()
+        .map(|wp| -> crate::Result<Parameter> {
+            // Serialize the workflow parameter type to JSON and deserialize as main crate type
+            let parameter_type_json = serde_json::to_value(&wp.parameter_type)
+                .map_err(crate::SwissArmyHammerError::Json)?;
+            let parameter_type: ParameterType = serde_json::from_value(parameter_type_json)
+                .map_err(crate::SwissArmyHammerError::Json)?;
+            
+            Ok(Parameter {
+                name: wp.name,
+                description: wp.description,
+                required: wp.required,
+                parameter_type,
+                default: wp.default,
+                choices: wp.choices,
+                validation: None,
+                condition: None,
+            })
+        })
+        .collect::<crate::Result<Vec<Parameter>>>()?;
+    
+    Ok(converted_parameters)
 }
 
 /// Resolve parameter values from --var arguments and defaults
