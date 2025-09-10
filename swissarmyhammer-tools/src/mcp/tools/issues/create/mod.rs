@@ -96,7 +96,7 @@ impl McpTool for CreateIssueTool {
                         Ok(create_issue_response(&issue_info))
                     }
                     Err(e) => Err(McpErrorHandler::handle_error(
-                        swissarmyhammer::error::CommonError::Other {
+                        swissarmyhammer_common::SwissArmyHammerError::Other {
                             message: e.to_string(),
                         },
                         "get created issue info",
@@ -104,7 +104,7 @@ impl McpTool for CreateIssueTool {
                 }
             }
             Err(e) => Err(McpErrorHandler::handle_error(
-                swissarmyhammer::error::CommonError::Other {
+                swissarmyhammer_common::SwissArmyHammerError::Other {
                     message: e.to_string(),
                 },
                 "create issue",

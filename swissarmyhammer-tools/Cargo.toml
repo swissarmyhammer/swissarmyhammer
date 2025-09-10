@@ -14,8 +14,7 @@ keywords = ["mcp", "tools", "ai", "assistant", "protocol"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-# Core library dependency
-swissarmyhammer = { path = "../swissarmyhammer" }
+# Core library dependency removed - now uses domain crates only
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }

@@ -6772,7 +6772,6 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
- "swissarmyhammer",
  "swissarmyhammer-common",
  "swissarmyhammer-config",
  "swissarmyhammer-git",
