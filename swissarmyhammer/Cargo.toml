@@ -39,7 +39,7 @@ liquid-core = { workspace = true }
 
 # File system
 walkdir = { workspace = true }
-notify = { workspace = true }
+
 glob = { workspace = true }
 ignore = { workspace = true }
 tempfile = { workspace = true }
@@ -51,30 +51,22 @@ chrono = { workspace = true }
 ulid = { workspace = true }
 toml = { workspace = true }
 
-# Search functionality
-tantivy = { workspace = true }
-fuzzy-matcher = { workspace = true }
 
-# Semantic search dependencies
-# mistralrs = { workspace = true } # Disabled - doesn't support embeddings
-ort = { workspace = true }
-tokenizers = { workspace = true }
-hf-hub = { workspace = true }
-ndarray = { workspace = true }
-fastembed = { workspace = true }
-duckdb = { workspace = true }
+
+
+
+# MCP support
+rmcp = { workspace = true }
+schemars = { workspace = true }
+dirs = { workspace = true }
+
+# Tree-sitter for outline generation (only needed for outline module)
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-javascript = { workspace = true }
 tree-sitter-dart = { workspace = true }
-md5 = { workspace = true }
-
-# MCP support
-rmcp = { workspace = true }
-schemars = { workspace = true }
-dirs = { workspace = true }
 
 # Mermaid parsing
 mermaid-parser = { git = "https://github.com/wballard/mermaid_parser" }

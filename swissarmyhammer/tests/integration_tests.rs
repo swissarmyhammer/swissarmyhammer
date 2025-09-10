@@ -230,13 +230,7 @@ This is test prompt {i}!"#
     }
 }
 
-#[test]
-#[ignore] // Disabled: SearchEngine has been replaced with SemanticSearcher which requires vector embeddings and a more complex setup
-fn test_search_engine() {
-    // This test is disabled as SearchEngine has been replaced with SemanticSearcher
-    // which requires vector embeddings and a more complex setup
-    panic!("This test is disabled - SearchEngine no longer exists");
-}
+
 
 // Example usage for documentation
 #[test]

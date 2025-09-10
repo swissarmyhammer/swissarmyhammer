@@ -64,9 +64,6 @@ impl Doctor {
 
     /// Run diagnostic checks with specific options
     ///
-    /// # Arguments
-    ///
-    ///
     /// # Returns
     ///
     /// Returns an exit code:

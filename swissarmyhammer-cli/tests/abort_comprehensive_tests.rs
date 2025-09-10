@@ -68,7 +68,7 @@ fn assert_abort_error_handling(result: &in_process_test_utils::CapturedOutput) {
 }
 
 #[tokio::test]
-#[ignore = "Workflow execution test - expensive CLI integration"]
+
 async fn test_workflow_execution_with_abort_file_present() -> Result<()> {
     cleanup_abort_file();
 
@@ -115,7 +115,7 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "Multiple CLI executions - expensive integration test"]
+
 async fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -145,7 +145,7 @@ async fn test_multiple_cli_commands_ignore_stale_abort_file() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Multiple CLI runs - expensive integration test"]
+
 async fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
     // Force cleanup multiple times to handle race conditions from parallel tests
     for _ in 0..3 {
@@ -208,7 +208,7 @@ async fn test_abort_file_cleanup_between_command_runs() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Large file I/O test - expensive CLI integration"]
+
 async fn test_abort_file_with_large_reason() -> Result<()> {
     cleanup_abort_file();
 
@@ -249,7 +249,7 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "File I/O with newlines - expensive CLI integration"]
+
 async fn test_abort_file_with_newlines() -> Result<()> {
     cleanup_abort_file();
 
@@ -290,7 +290,7 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "Empty file test - expensive CLI integration"]
+
 async fn test_empty_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -331,7 +331,7 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "Normal workflow test - expensive CLI integration"]
+
 async fn test_normal_workflow_execution_without_abort_file() -> Result<()> {
     cleanup_abort_file();
 
@@ -383,7 +383,7 @@ transitions:
 }
 
 #[tokio::test]
-#[ignore = "Concurrent CLI execution - very expensive test"]
+
 async fn test_concurrent_cli_commands_with_abort_file() -> Result<()> {
     cleanup_abort_file();
 

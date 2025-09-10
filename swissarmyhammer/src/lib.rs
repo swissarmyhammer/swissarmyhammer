@@ -25,12 +25,11 @@
 //!     library.add_directory("./.swissarmyhammer/prompts")?;
 //! }
 //!
-//! // Get a prompt and render it
-//! let prompt = library.get("code-review")?;
-//! let mut args = HashMap::new();
-//! args.insert("language".to_string(), "rust".to_string());
-//! args.insert("file".to_string(), "main.rs".to_string());
-//! let rendered = prompt.render(&args)?;
+//! // Render a prompt
+//! let mut context = swissarmyhammer::TemplateContext::new();
+//! context.insert("language".to_string(), "rust".into());
+//! context.insert("file".to_string(), "main.rs".into());
+//! let rendered = library.render("code-review", &context)?;
 //!
 //! println!("{}", rendered);
 //! # Ok(())
@@ -48,8 +47,7 @@ pub mod prompt_filter;
 /// Prompt loading and resolution
 pub mod prompt_resolver;
 
-/// Template engine and rendering (legacy - being migrated to swissarmyhammer-templating)
-pub mod template;
+
 
 /// Adapter to make PromptLibrary work with new templating domain crate
 pub mod prompt_partial_adapter;
@@ -57,11 +55,9 @@ pub mod prompt_partial_adapter;
 /// Storage abstractions and implementations
 pub mod storage;
 
-/// Semantic search functionality with vector embeddings
-pub mod search;
 
-/// Outline generation functionality for Tree-sitter based code analysis
-pub mod outline;
+
+
 
 /// Plugin system for extensibility
 pub mod plugins;
@@ -75,11 +71,7 @@ pub mod frontmatter;
 /// Security utilities for path validation and resource limits
 pub mod security;
 
-/// File watching functionality for prompt directories
-pub mod file_watcher;
 
-/// Virtual file system for unified file loading
-pub mod file_loader;
 
 /// Unified file system utilities for better error handling and testing
 pub mod fs_utils;
@@ -90,7 +82,7 @@ pub mod validation;
 // Re-export core types
 
 /// File source for loading prompts from various sources
-pub use file_loader::FileSource;
+pub use swissarmyhammer_common::file_loader::FileSource;
 
 /// File system utilities and abstractions
 pub use fs_utils::{FilePermissions, FileSystem, FileSystemUtils};
@@ -108,7 +100,7 @@ pub use prompt_filter::PromptFilter;
 pub use prompt_resolver::PromptResolver;
 
 /// Backward compatibility alias for FileSource
-pub use file_loader::FileSource as PromptSource;
+pub use swissarmyhammer_common::file_loader::FileSource as PromptSource;
 
 /// Core prompt management types and functionality
 pub use prompts::{Prompt, PromptLibrary, PromptLoader};
@@ -117,7 +109,7 @@ pub use prompts::{Prompt, PromptLibrary, PromptLoader};
 pub use storage::{PromptStorage, StorageBackend};
 
 /// Template engine and rendering functionality (re-exported from swissarmyhammer-templating)
-pub use template::{Template, TemplateEngine};
+pub use swissarmyhammer_templating::{Template, TemplateEngine};
 
 /// Workflow system for state-based execution
 pub use workflow::{
@@ -156,16 +148,9 @@ pub mod prelude {
         WorkflowRunStatus,
     };
 
-    // Semantic search types for convenient access
-    pub use crate::search::{
-        CodeChunk, EmbeddingEngine, FileIndexer, IndexingOptions, IndexingStats, Language,
-        SemanticConfig, SemanticSearcher, SemanticUtils, VectorStorage,
-    };
 
-    // Outline generation types for convenient access
-    pub use crate::outline::{
-        DiscoveredFile, FileDiscovery, FileDiscoveryConfig, FileDiscoveryReport, OutlineError,
-    };
+
+
 
     // sah.toml configuration types removed (migrated to swissarmyhammer-config)
     // All TOML configuration functionality now provided by swissarmyhammer-config crate using figment

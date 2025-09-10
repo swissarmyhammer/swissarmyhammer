@@ -106,13 +106,22 @@ async fn handle_http_serve(matches: &clap::ArgMatches) -> i32 {
 async fn handle_stdio_serve() -> i32 {
     use rmcp::serve_server;
     use rmcp::transport::io::stdio;
-    use swissarmyhammer::PromptLibrary;
+    use swissarmyhammer::{PromptLibrary, PromptResolver};
     use swissarmyhammer_tools::McpServer;
 
     tracing::debug!("Starting MCP server in stdio mode");
 
-    // Create library and server
-    let library = PromptLibrary::new();
+    // Create library and load prompts
+    let mut library = PromptLibrary::new();
+    let mut resolver = PromptResolver::new();
+    if let Err(e) = resolver.load_all_prompts(&mut library) {
+        tracing::error!("Failed to load prompts: {}", e);
+        eprintln!("Failed to load prompts: {}", e);
+        return EXIT_ERROR;
+    }
+
+    tracing::debug!("Loaded {} prompts for MCP server", library.list().map(|p| p.len()).unwrap_or(0));
+
     let server = match McpServer::new(library).await {
         Ok(server) => server,
         Err(e) => {

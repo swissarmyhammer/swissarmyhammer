@@ -369,7 +369,7 @@ impl McpServer {
     /// # Returns
     ///
     /// * `bool` - True if the prompt is a partial template
-    fn is_partial_template(prompt: &swissarmyhammer::prompts::Prompt) -> bool {
+    fn is_partial_template(prompt: &swissarmyhammer::Prompt) -> bool {
         // Check if the template starts with the partial marker
         if prompt.template.trim().starts_with("{% partial %}") {
             return true;
@@ -449,34 +449,6 @@ impl McpServer {
             })
             .join(".swissarmyhammer")
             .join("workflow-runs")
-    }
-
-    /// Convert internal prompt arguments to MCP PromptArgument structures.
-    ///
-    /// # Arguments
-    ///
-    /// * `args` - The internal argument specifications
-    ///
-    /// # Returns
-    ///
-    /// * `Option<Vec<PromptArgument>>` - The converted MCP arguments or None if empty
-    fn convert_prompt_arguments(
-        params: &[swissarmyhammer::common::Parameter],
-    ) -> Option<Vec<PromptArgument>> {
-        if params.is_empty() {
-            None
-        } else {
-            Some(
-                params
-                    .iter()
-                    .map(|param| PromptArgument {
-                        name: param.name.clone(),
-                        description: Some(param.description.clone()),
-                        required: Some(param.required),
-                    })
-                    .collect(),
-            )
-        }
     }
 
     /// Convert serde_json::Map to HashMap<String, String> for template rendering.
@@ -742,7 +714,8 @@ impl ServerHandler for McpServer {
                     .iter()
                     .filter(|p| !Self::is_partial_template(p)) // Filter out partial templates
                     .map(|p| {
-                        let arguments = Self::convert_prompt_arguments(&p.parameters);
+                        // Domain prompts don't have parameters yet - using empty list for now
+                        let arguments = None;
 
                         Prompt {
                             name: p.name.clone(),
@@ -815,7 +788,7 @@ impl ServerHandler for McpServer {
                 };
 
                 Ok(GetPromptResult {
-                    description: prompt.description,
+                    description: prompt.description.clone(),
                     messages: vec![PromptMessage {
                         role: PromptMessageRole::User,
                         content: PromptMessageContent::Text { text: content },

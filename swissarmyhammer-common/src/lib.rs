@@ -25,6 +25,7 @@ pub mod abort_utils;
 pub mod constants;
 pub mod env_loader;
 pub mod error;
+pub mod file_loader;
 pub mod rate_limiter;
 /// Test utilities for creating isolated test environments
 #[cfg(any(test, feature = "testing"))]
@@ -38,6 +39,9 @@ pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;
 
 // Re-export commonly used ULID functions for convenience
 pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};
+
+// Re-export file_loader for convenience
+pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
 
 // Re-export commonly used directory functions for convenience
 pub use utils::{

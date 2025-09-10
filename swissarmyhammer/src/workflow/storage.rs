@@ -1,6 +1,6 @@
 //! Storage abstractions and implementations for workflows and workflow runs
 
-use crate::file_loader::{FileSource, VirtualFileSystem};
+use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 use crate::workflow::{MermaidParser, Workflow, WorkflowName, WorkflowRun, WorkflowRunId};
 use crate::{Result, SwissArmyHammerError};
 use base64::{engine::general_purpose, Engine as _};
@@ -31,7 +31,7 @@ impl WorkflowResolver {
     /// Get all directories that workflows are loaded from
     /// Returns paths in the same order as loading precedence
     pub fn get_workflow_directories(&self) -> Result<Vec<PathBuf>> {
-        self.vfs.get_directories()
+        self.vfs.get_directories().map_err(|e| crate::error::SwissArmyHammerError::Common(swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("File loader error: {}", e) }))
     }
 
     /// Load all workflows following the correct precedence:
@@ -43,7 +43,7 @@ impl WorkflowResolver {
         self.load_builtin_workflows()?;
 
         // Load all files from directories using VFS
-        self.vfs.load_all()?;
+        self.vfs.load_all().map_err(|e| crate::error::SwissArmyHammerError::Common(swissarmyhammer_common::SwissArmyHammerError::Other { message: format!("File loader error: {}", e) }))?;
 
         // Process all loaded files into workflows
         for file in self.vfs.list() {

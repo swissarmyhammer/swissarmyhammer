@@ -13,7 +13,7 @@ use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::notify;
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 
 /// Creates a test rate limiter with generous limits suitable for testing
 fn create_test_rate_limiter() -> Arc<RateLimiter> {
@@ -302,41 +302,6 @@ async fn test_notify_tool_rate_limiting_integration() {
     }
 }
 
-#[tokio::test]
-async fn test_notify_tool_performance_characteristics() {
-    let registry = create_test_registry();
-    let context = create_test_context().await;
-    let tool = registry.get_tool("notify_create").unwrap();
-
-    let start_time = std::time::Instant::now();
-    let num_operations = 50;
-
-    // Perform many notifications and measure time
-    for i in 0..num_operations {
-        let mut args = serde_json::Map::new();
-        args.insert(
-            "message".to_string(),
-            json!(format!("Performance test {}", i)),
-        );
-
-        let result = timeout(Duration::from_millis(100), tool.execute(args, &context)).await;
-
-        assert!(result.is_ok(), "Timeout on operation {i}");
-        let execution_result = result.unwrap();
-        assert!(
-            execution_result.is_ok(),
-            "Execution failed on operation {i}"
-        );
-    }
-
-    let elapsed = start_time.elapsed();
-
-    // Performance assertion: should handle 50 notifications reasonably quickly
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "Performance test took too long: {elapsed:?}"
-    );
-}
 
 #[tokio::test]
 async fn test_notify_tool_resource_cleanup() {

@@ -1,12 +1,13 @@
 //! File watching functionality for MCP server
 
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use async_watcher::{notify::RecursiveMode, AsyncDebouncer, DebouncedEvent};
 use rmcp::RoleServer;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use swissarmyhammer::PromptResolver;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::Mutex;
 
 /// Common prompt file extensions
 const PROMPT_EXTENSIONS: &[&str] = &["md", "yaml", "yml", "markdown"];
@@ -54,10 +55,12 @@ pub trait FileWatcherCallback: Send + Sync + 'static {
 
 /// File watcher for monitoring prompt directories
 pub struct FileWatcher {
-    /// Handle to the background watcher task
-    watcher_handle: Option<tokio::task::JoinHandle<()>>,
-    /// Shutdown sender to gracefully stop the watcher
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The async debouncer instance
+    debouncer: Option<AsyncDebouncer<async_watcher::notify::RecommendedWatcher>>,
+    /// Channel receiver for debounced events
+    event_rx: Option<tokio::sync::mpsc::Receiver<std::result::Result<Vec<DebouncedEvent>, Vec<async_watcher::notify::Error>>>>,
+    /// Handle to the background event processing task
+    event_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl FileWatcher {
@@ -74,8 +77,9 @@ impl FileWatcher {
     /// ```
     pub fn new() -> Self {
         Self {
-            watcher_handle: None,
-            shutdown_tx: None,
+            debouncer: None,
+            event_rx: None,
+            event_handle: None,
         }
     }
 
@@ -110,28 +114,17 @@ impl FileWatcher {
             return Ok(());
         }
 
-        // Create shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
-
-        // Create the file watcher
-        let (tx, mut rx) = mpsc::channel(100);
-        let mut watcher = RecommendedWatcher::new(
-            move |result: std::result::Result<Event, notify::Error>| {
-                if let Ok(event) = result {
-                    if let Err(e) = tx.blocking_send(event) {
-                        tracing::error!("Failed to send file watch event: {}", e);
-                    }
-                }
-            },
-            notify::Config::default(),
-        )
-        .map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to create file watcher: {}", e),
+        // Create async debouncer with 500ms timeout and channel for events
+        let (mut debouncer, event_rx) = AsyncDebouncer::new_with_channel(
+            Duration::from_millis(500), 
+            None // Use default tick rate
+        ).await.map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to create async debouncer: {}", e),
         })?;
 
         // Watch all directories
         for path in &watch_paths {
-            watcher.watch(path, RecursiveMode::Recursive).map_err(|e| {
+            debouncer.watcher().watch(path, RecursiveMode::Recursive).map_err(|e| {
                 SwissArmyHammerError::Other {
                     message: format!("Failed to watch directory {path:?}: {}", e),
                 }
@@ -139,82 +132,67 @@ impl FileWatcher {
             tracing::info!("Watching directory: {:?}", path);
         }
 
-        // Spawn the event handler task
+        // Spawn task to process events from async-watcher
+        let mut event_rx_clone = event_rx;
         let handle = tokio::spawn(async move {
-            // Keep the watcher alive for the duration of this task
-            let _watcher = watcher;
+            while let Some(events_result) = event_rx_clone.recv().await {
+                match events_result {
+                    Ok(events) => {
+                        tracing::debug!("📁 Debounced file system events: {:?}", events);
 
-            loop {
-                tokio::select! {
-                    // Handle file system events
-                    event = rx.recv() => {
-                        match event {
-                            Some(event) => {
-                                tracing::debug!("📁 File system event: {:?}", event);
+                        // Filter for prompt files and collect all relevant paths
+                        let relevant_paths: Vec<std::path::PathBuf> = events
+                            .into_iter()
+                            .flat_map(|event| event.event.paths)
+                            .filter(|p| is_any_prompt_file(p))
+                            .collect();
 
-                                // Check if this is a relevant event
-                                match event.kind {
-                                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
-                                        // Check if it's a prompt file
-                                        let relevant_paths: Vec<std::path::PathBuf> = event
-                                            .paths
-                                            .iter()
-                                            .filter(|p| is_any_prompt_file(p))
-                                            .cloned()
-                                            .collect();
+                        if !relevant_paths.is_empty() {
+                            tracing::info!("📄 Prompt file changed: {:?}", relevant_paths);
 
-                                        if !relevant_paths.is_empty() {
-                                            tracing::info!("📄 Prompt file changed: {:?}", relevant_paths);
-
-                                            // Notify callback about the change
-                                            if let Err(e) = callback.on_file_changed(relevant_paths).await {
-                                                tracing::error!("❌ File watcher callback failed: {}", e);
-                                                callback.on_error(format!("Callback failed: {e}")).await;
-                                            }
-                                        } else {
-                                            tracing::debug!("🚫 Ignoring non-prompt file: {:?}", event.paths);
-                                        }
-                                    }
-                                    _ => {
-                                        tracing::debug!("🚫 Ignoring event type: {:?}", event.kind);
-                                    }
-                                }
+                            // Notify callback about the change
+                            if let Err(e) = callback.on_file_changed(relevant_paths).await {
+                                tracing::error!("❌ File watcher callback failed: {}", e);
+                                callback.on_error(format!("Callback failed: {e}")).await;
                             }
-                            None => {
-                                // Channel closed, exit loop
-                                tracing::debug!("📁 File watch channel closed, stopping watcher");
-                                break;
-                            }
+                        } else {
+                            tracing::debug!("🚫 Ignoring non-prompt files in batch");
                         }
                     }
-                    // Handle shutdown signal
-                    _ = &mut shutdown_rx => {
-                        tracing::debug!("📁 Received shutdown signal, stopping file watcher");
-                        break;
+                    Err(errors) => {
+                        for error in errors {
+                            tracing::error!("❌ File watcher error: {}", error);
+                            callback.on_error(format!("File watcher error: {error}")).await;
+                        }
                     }
                 }
             }
             tracing::debug!("📁 File watcher task exiting");
         });
 
-        // Store the handle and shutdown sender
-        self.watcher_handle = Some(handle);
-        self.shutdown_tx = Some(shutdown_tx);
+        // Store the debouncer and event handler
+        self.debouncer = Some(debouncer);
+        self.event_handle = Some(handle);
 
         Ok(())
     }
 
     /// Stop file watching
     pub fn stop_watching(&mut self) {
-        // Send shutdown signal if available
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(()); // Ignore error if receiver is dropped
+        // Drop the debouncer (which stops watching automatically)
+        if let Some(_debouncer) = self.debouncer.take() {
+            tracing::debug!("📁 Async debouncer stopped");
         }
 
-        // Wait for the task to complete
-        if let Some(handle) = self.watcher_handle.take() {
+        // Close the event channel
+        if let Some(_event_rx) = self.event_rx.take() {
+            // Dropping the receiver will cause the sender to fail and the task to exit
+        }
+
+        // Abort the event processing task
+        if let Some(handle) = self.event_handle.take() {
             handle.abort();
-            tracing::debug!("📁 File watcher task aborted");
+            tracing::debug!("📁 File watcher event task aborted");
         }
     }
 }

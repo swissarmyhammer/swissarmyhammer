@@ -57,6 +57,7 @@ ignore = { workspace = true }
 
 # File watching
 notify = { workspace = true }
+async-watcher = { workspace = true }
 
 # File editing enhanced dependencies
 encoding_rs = { workspace = true }

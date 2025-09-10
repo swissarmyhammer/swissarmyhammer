@@ -2,6 +2,8 @@
 //!
 //! This module extends the test utilities from the main crate with CLI-specific helpers.
 
+#![allow(dead_code)]
+
 use anyhow::Result;
 
 use std::path::{Path, PathBuf};
@@ -25,54 +27,35 @@ pub use swissarmyhammer::test_utils::{
 
 
 
-/// Guard that manages test environment variables for semantic search tests
+
+
+/// Create a temporary directory for testing
 ///
-/// This sets up a controlled API key environment for testing semantic search
-/// functionality without requiring real API credentials.
-pub struct SemanticTestGuard {
-    _home_guard: TestHomeGuard,
-    _temp_dir: TempDir,
-    original_api_key: Option<String>,
-    original_db_path: Option<String>,
-    test_db_path: std::path::PathBuf,
-    _lock_guard: std::sync::MutexGuard<'static, ()>,
+/// Returns a TempDir that will be automatically cleaned up when dropped.
+#[allow(dead_code)]
+pub fn create_temp_dir() -> Result<TempDir> {
+    TempDir::new().map_err(|e| anyhow::anyhow!("Failed to create temporary directory: {}", e))
 }
 
-impl SemanticTestGuard {
-    /// Create a new semantic test guard with isolated environment
-    pub fn new() -> Self {
-        // Acquire the global semantic DB environment lock to prevent race conditions
-        let lock_guard = swissarmyhammer::test_utils::acquire_semantic_db_lock();
-
-        let home_guard = create_test_home_guard();
-        let temp_dir =
-            TempDir::new().expect("Failed to create temporary directory for semantic test");
-
-        let original_api_key = std::env::var("NOMIC_API_KEY").ok();
-        let original_db_path = std::env::var("SWISSARMYHAMMER_SEMANTIC_DB_PATH").ok();
-
-        // Create a unique database path for this test instance
-        let test_db_path = tempfile::NamedTempFile::new()
-            .expect("Failed to create temp database file")
-            .path()
-            .with_extension("db")
-            .to_path_buf();
-
-        // Set a test API key that allows the command to start but will fail gracefully
-        std::env::set_var("NOMIC_API_KEY", "test-key-for-cli-integration-testing");
-
-        // Set isolated database path for this test
-        std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", &test_db_path);
-
-        Self {
-            _home_guard: home_guard,
-            _temp_dir: temp_dir,
-            original_api_key,
-            original_db_path,
-            test_db_path,
-            _lock_guard: lock_guard,
-        }
+/// Create test prompt files in a directory
+///
+/// Creates YAML files for each test prompt in the specified directory.
+#[allow(dead_code)]
+pub fn create_test_prompt_files(dir: &Path) -> Result<()> {
+    let prompts = create_test_prompts();
+    for prompt in prompts {
+        let file_path = dir.join(format!("{}.yaml", prompt.name));
+        let content = serde_yaml::to_string(&prompt)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize prompt: {}", e))?;
+        std::fs::write(&file_path, content)?;
     }
+    Ok(())
+}
+
+/// Semantic test guard for isolating search database during tests
+#[allow(dead_code)]
+pub struct SemanticTestGuard {
+    _database_file: Option<tempfile::NamedTempFile>,
 }
 
 impl Default for SemanticTestGuard {
@@ -81,41 +64,55 @@ impl Default for SemanticTestGuard {
     }
 }
 
-impl Drop for SemanticTestGuard {
-    fn drop(&mut self) {
-        // Restore original API key environment variable
-        match &self.original_api_key {
-            Some(key) => std::env::set_var("NOMIC_API_KEY", key),
-            None => std::env::remove_var("NOMIC_API_KEY"),
-        }
+impl SemanticTestGuard {
+    /// Create a new semantic test guard with isolated environment
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        // Create a temporary database file for semantic search testing
+        let database_file = tempfile::NamedTempFile::new()
+            .expect("Failed to create temporary database file for semantic testing");
 
-        // Restore original database path environment variable
-        match &self.original_db_path {
-            Some(path) => std::env::set_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH", path),
-            None => std::env::remove_var("SWISSARMYHAMMER_SEMANTIC_DB_PATH"),
-        }
-
-        // Clean up test database file
-        if self.test_db_path.exists() {
-            if let Err(e) = std::fs::remove_file(&self.test_db_path) {
-                eprintln!("Warning: Failed to clean up test database file: {e}");
-            }
+        Self {
+            _database_file: Some(database_file),
         }
     }
 }
 
-/// Create a semantic test environment guard
+impl Drop for SemanticTestGuard {
+    fn drop(&mut self) {
+        // Clean up is automatic via NamedTempFile drop
+    }
+}
+
+/// Create a semantic test guard for isolated testing
 ///
-/// This provides isolated environment setup for semantic search tests
-/// with proper cleanup and restoration of environment variables.
+/// Returns a guard that automatically cleans up semantic search database files
+/// when dropped, ensuring tests don't interfere with each other.
+#[allow(dead_code)]
 pub fn create_semantic_test_guard() -> SemanticTestGuard {
     SemanticTestGuard::new()
+}
+
+/// Create a test environment with temp directory and prompts directory
+///
+/// Returns a tuple of (temp_dir, prompts_dir) for testing CLI functionality.
+#[allow(dead_code)]
+pub fn create_test_environment() -> Result<(TempDir, PathBuf)> {
+    let temp_dir = create_temp_dir()?;
+    let prompts_dir = temp_dir.path().join("prompts");
+    std::fs::create_dir_all(&prompts_dir)?;
+    
+    // Create test prompt files in the directory
+    create_test_prompt_files(&prompts_dir)?;
+    
+    Ok((temp_dir, prompts_dir))
 }
 
 /// Setup a git repository in the given directory using libgit2
 ///
 /// Creates a basic git repository with initial commit for testing
 /// git-related CLI functionality.
+#[allow(dead_code)]
 pub fn setup_git_repo(dir: &Path) -> Result<()> {
     use git2::{Repository, Signature};
 

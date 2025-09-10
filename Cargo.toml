@@ -19,6 +19,7 @@ members = [
     "swissarmyhammer-outline",
     "swissarmyhammer-templating",
     "swissarmyhammer-workflow",
+    "swissarmyhammer-prompts",
 ]
 resolver = "2"
 
@@ -52,6 +53,7 @@ tantivy = "0.24"
 fuzzy-matcher = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 notify = "6"
+async-watcher = "0.3"
 glob = "0.3"
 ignore = "0.4"
 ulid = { version = "1.2.1", features = ["serde"] }

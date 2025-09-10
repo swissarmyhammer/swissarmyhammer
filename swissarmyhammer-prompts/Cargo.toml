@@ -1,0 +1,59 @@
+[package]
+name = "swissarmyhammer-prompts"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Prompt management domain crate for SwissArmyHammer with template integration"
+documentation = "https://docs.rs/swissarmyhammer-prompts"
+readme = "../README.md"
+keywords = ["prompt", "template", "ai", "assistant", "domain"]
+categories = ["template-engine", "development-tools"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Core dependencies
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+# SwissArmyHammer domain dependencies
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+
+# File system and utilities
+walkdir = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+glob = { workspace = true }
+ignore = { workspace = true }
+fuzzy-matcher = { workspace = true }
+dirs = "5.0"
+
+# Data structures
+dashmap = { workspace = true }
+lru = "0.12"
+
+# Template engine
+liquid = "0.26"
+
+# Include functionality for builtin prompts
+include_dir = "0.7"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio-test = "0.4"
+serial_test = "3.1"
+
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!

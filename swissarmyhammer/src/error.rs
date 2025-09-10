@@ -212,7 +212,7 @@ pub enum SwissArmyHammerError {
 
     /// Semantic search error
     #[error("Semantic search error: {0}")]
-    Semantic(#[from] crate::search::SemanticError),
+    Semantic(#[from] swissarmyhammer_search::SearchError),
 
     /// Workflow executor error
     #[error("Workflow executor error: {0}")]

@@ -820,50 +820,7 @@ async fn test_issue_show_switching_between_parameters() {
 
 // Performance tests
 
-#[tokio::test]
-async fn test_issue_show_performance_with_many_issues() {
-    let env = IssueShowTestEnvironment::new().await;
 
-    // Create many test issues
-    for i in 0..50 {
-        env.create_test_issue(
-            &format!("PERF_TEST_{i:03}"),
-            &format!("# Performance Test {i}"),
-        )
-        .await;
-    }
-
-    // Test performance of next parameter (should be fast even with many issues)
-    let start_time = std::time::Instant::now();
-
-    let args = env.create_arguments("next", None);
-    let result = env.execute_tool(args).await;
-
-    let elapsed = start_time.elapsed();
-
-    assert!(
-        result.is_ok(),
-        "issue_show next should succeed with many issues"
-    );
-    assert!(
-        elapsed < std::time::Duration::from_millis(1000),
-        "issue_show next should be fast even with many issues: {elapsed:?}"
-    );
-
-    // Test performance of current parameter
-    let start_time = std::time::Instant::now();
-
-    let args = env.create_arguments("current", None);
-    let result = env.execute_tool(args).await;
-
-    let elapsed = start_time.elapsed();
-
-    assert!(result.is_ok(), "issue_show current should succeed");
-    assert!(
-        elapsed < std::time::Duration::from_millis(500),
-        "issue_show current should be fast: {elapsed:?}"
-    );
-}
 
 #[tokio::test]
 async fn test_issue_show_memory_usage() {

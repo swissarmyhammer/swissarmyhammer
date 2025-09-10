@@ -5,7 +5,7 @@ use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use swissarmyhammer::file_loader::{FileSource, VirtualFileSystem};
+use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 
 // Include the generated builtin workflows
