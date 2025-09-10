@@ -220,6 +220,95 @@ impl Drop for IsolatedTestHome {
     }
 }
 
+/// RAII helper that isolates HOME directory for tests without changing the working directory
+/// This prevents test pollution while allowing parallel test execution
+pub struct IsolatedTestEnvironment {
+    _home_guard: IsolatedTestHome,
+    _temp_dir: TempDir,
+}
+
+impl IsolatedTestEnvironment {
+    /// Creates a new isolated test environment with temporary HOME directory only.
+    ///
+    /// This creates:
+    /// - A temporary home directory with mock .swissarmyhammer structure
+    /// - A temporary directory that can be used as working directory if needed
+    /// - Does NOT change the current working directory to allow parallel test execution
+    pub fn new() -> std::io::Result<Self> {
+        // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
+        for attempt in 1..=3 {
+            match Self::try_create() {
+                Ok(env) => return Ok(env),
+                Err(_e) if attempt < 3 => {
+                    // Add small delay before retry to reduce contention
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
+    }
+
+    /// Try to create an isolated test environment (single attempt)
+    fn try_create() -> std::io::Result<Self> {
+        let home_guard = IsolatedTestHome::new();
+        let temp_dir = TempDir::new()?;
+
+        // Ensure the temporary directory exists and is accessible
+        let temp_path = temp_dir.path();
+        if !temp_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Temporary directory does not exist: {:?}", temp_path),
+            ));
+        }
+
+        // Verify we can access the directory
+        match std::fs::read_dir(temp_path) {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Cannot access temporary directory {:?}: {}", temp_path, e),
+                ));
+            }
+        }
+
+        // NOTE: We do NOT change the current working directory to allow parallel test execution
+
+        Ok(Self {
+            _home_guard: home_guard,
+            _temp_dir: temp_dir,
+        })
+    }
+
+    /// Get the path to the isolated home directory
+    pub fn home_path(&self) -> PathBuf {
+        self._home_guard.home_path()
+    }
+
+    /// Get the path to the .swissarmyhammer directory in the isolated home
+    pub fn swissarmyhammer_dir(&self) -> PathBuf {
+        self._home_guard.swissarmyhammer_dir()
+    }
+
+    /// Get the path to the temporary working directory
+    pub fn temp_dir(&self) -> PathBuf {
+        self._temp_dir.path().to_path_buf()
+    }
+
+    /// Get the path to the issues directory in the isolated home
+    pub fn issues_dir(&self) -> PathBuf {
+        self.swissarmyhammer_dir().join("issues")
+    }
+
+    /// Get the path to the completed issues directory in the isolated home
+    pub fn complete_dir(&self) -> PathBuf {
+        self.issues_dir().join("complete")
+    }
+}
+
 /// Create a temporary directory for testing
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides

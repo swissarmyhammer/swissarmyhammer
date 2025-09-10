@@ -15,7 +15,7 @@ categories = ["config", "development-tools"]
 workspace = true
 
 [dependencies]
-# Configuration management
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 figment = { version = "0.10", features = ["toml", "yaml", "json", "env"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -41,7 +41,7 @@ liquid = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = "3.1"
-swissarmyhammer = { path = "../swissarmyhammer" }
+
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

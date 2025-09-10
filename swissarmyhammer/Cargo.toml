@@ -32,6 +32,8 @@ async-trait = { workspace = true }
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 
 # Template engine (legacy - being phased out)
 liquid = { workspace = true }
@@ -149,25 +151,3 @@ swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 [lib]
 name = "swissarmyhammer"
 path = "src/lib.rs"
-
-# Benchmark configuration
-# Note: These benchmarks don't exist yet, commenting out until they're created
-# [[bench]]
-# name = "benchmarks"
-# harness = false
-# path = "../benches/benchmarks.rs"
-# 
-# [[bench]]
-# name = "issue_performance"
-# harness = false
-# path = "../benches/issue_performance.rs"
-# 
-# [[bench]]
-# name = "memo_benchmarks"
-# harness = false
-# path = "../benches/memo_benchmarks.rs"
-# 
-# [[bench]]
-# name = "executor_performance"
-# harness = false
-# path = "../benches/executor_performance.rs"

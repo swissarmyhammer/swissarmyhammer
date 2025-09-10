@@ -15,7 +15,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 # Core library dependency removed - now uses domain crates only
-swissarmyhammer = { path = "../swissarmyhammer" }
+
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
@@ -27,6 +27,7 @@ swissarmyhammer-todo = { path = "../swissarmyhammer-todo" }
 swissarmyhammer-search = { path = "../swissarmyhammer-search" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-outline = { path = "../swissarmyhammer-outline" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 
 # Async and JSON processing
 tokio = { workspace = true }
@@ -96,4 +97,3 @@ futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 proptest = "1.4"
 git2 = { workspace = true }
-swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }

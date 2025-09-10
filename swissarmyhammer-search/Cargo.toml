@@ -51,5 +51,5 @@ swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-test = "0.4"
-swissarmyhammer = { path = "../swissarmyhammer" }
+
 futures-util.workspace = true

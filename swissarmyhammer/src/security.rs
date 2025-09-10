@@ -4,7 +4,6 @@
 //! potential security vulnerabilities like path traversal attacks and denial
 //! of service through excessive resource consumption.
 
-use crate::common::mcp_errors::ToSwissArmyHammerError;
 use crate::{Result, SwissArmyHammerError};
 use std::path::{Path, PathBuf};
 
@@ -350,8 +349,8 @@ mod tests {
             Err(e) => {
                 let error_str = e.to_string();
                 // Absolute paths are rejected early in the validation
-                assert!(error_str.contains("absolute root reference") || 
-                        error_str.contains("outside allowed directory"), 
+                assert!(error_str.contains("absolute root reference") ||
+                        error_str.contains("outside allowed directory"),
                     "Expected 'absolute root reference' or 'outside allowed directory' in error, got: {error_str}");
             }
         }

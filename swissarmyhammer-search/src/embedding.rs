@@ -17,7 +17,7 @@ pub struct EmbeddingConfig {
     pub model_id: String,
     /// The fastembed EmbeddingModel to use
     pub embedding_model: EmbeddingModel,
-    /// Number of texts to process in a single batch  
+    /// Number of texts to process in a single batch
     pub batch_size: usize,
     /// Maximum text length in characters before truncation
     pub max_text_length: usize,
@@ -423,9 +423,9 @@ impl EmbeddingEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::IsolatedTestHome;
     use crate::types::{ChunkType, ContentHash, Language};
     use std::path::PathBuf;
+    use swissarmyhammer_common::IsolatedTestHome;
 
     #[tokio::test]
     async fn test_embedding_engine_creation() {

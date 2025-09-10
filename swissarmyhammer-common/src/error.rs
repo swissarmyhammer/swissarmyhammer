@@ -24,9 +24,21 @@ pub enum SwissArmyHammerError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    /// Serialization/deserialization error  
+    /// Serialization/deserialization error
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_yaml::Error),
+
+    /// Workflow not found
+    #[error("Workflow not found: {0}")]
+    WorkflowNotFound(String),
+
+    /// Workflow run not found
+    #[error("Workflow run not found: {0}")]
+    WorkflowRunNotFound(String),
+
+    /// Storage backend error
+    #[error("Storage error: {0}")]
+    Storage(String),
 
     /// JSON serialization/deserialization error
     #[error("JSON error: {0}")]

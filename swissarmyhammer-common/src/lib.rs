@@ -7,7 +7,7 @@
 //! ## Modules
 //!
 //! - [`constants`] - Shared constants used throughout the ecosystem
-//! - [`traits`] - Common trait definitions for shared behaviors  
+//! - [`traits`] - Common trait definitions for shared behaviors
 //! - [`types`] - Core type definitions and newtypes for domain safety
 //! - [`utils`] - Utility functions and helpers
 //!
@@ -19,23 +19,31 @@
 //! - Serialization support for all public types
 //! - Documentation-driven development with clear API contracts
 
-#![warn(missing_docs)]
-
 pub mod abort_utils;
 pub mod constants;
 pub mod env_loader;
 pub mod error;
+pub mod error_context;
 pub mod file_loader;
+pub mod frontmatter;
+pub mod fs_utils;
+pub mod interactive_prompts;
+pub mod parameter_conditions;
+pub mod parameters;
 pub mod rate_limiter;
-/// Test utilities for creating isolated test environments
-#[cfg(any(test, feature = "testing"))]
+pub mod test_organization;
 pub mod test_utils;
 pub mod traits;
 pub mod types;
+pub mod ulid_generator;
 pub mod utils;
+pub mod validation;
 
 // Re-export commonly used constants for convenience
 pub use constants::DEFAULT_TEST_EMBEDDING_MODEL;
+pub use parameters::*;
+pub use test_utils::*;
+pub use validation::*;
 
 // Re-export commonly used ULID functions for convenience
 pub use utils::{generate_monotonic_ulid, generate_monotonic_ulid_string};
@@ -69,7 +77,6 @@ pub use abort_utils::{
 };
 
 // Re-export test utilities for convenience (when testing)
-#[cfg(any(test, feature = "testing"))]
 pub use test_utils::{
     acquire_semantic_db_lock, create_isolated_test_home, create_temp_dir, IsolatedTestHome,
     ProcessGuard,

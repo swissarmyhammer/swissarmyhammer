@@ -73,7 +73,7 @@ libc = { workspace = true }
 git2 = { workspace = true }
 
 [dev-dependencies]
-swissarmyhammer = { path = "../swissarmyhammer" }
+
 predicates = { workspace = true }
 tempfile = { workspace = true }
 serial_test = "3.1"

@@ -5,7 +5,7 @@ use std::path::Path;
 
 fn main() {
     // Tell Cargo to re-run this build script if the prompts directory changes
-    println!("cargo:rerun-if-changed=../builtin/prompts");
+    println!("cargo:rerun-if-changed=../builtin");
 
     let out_dir = env::var("OUT_DIR").unwrap();
 

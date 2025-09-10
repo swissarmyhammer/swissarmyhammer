@@ -3,9 +3,98 @@
 //! This module provides specialized utilities for the plan command including
 //! comprehensive file validation with enhanced error handling and user guidance.
 
-use crate::error::PlanCommandError;
 use crate::fs_utils::{FileSystem, FileSystemUtils};
 use std::path::{Path, PathBuf};
+use thiserror::Error as ThisError;
+
+/// Plan command specific errors
+#[derive(Debug, ThisError)]
+#[non_exhaustive]
+pub enum PlanCommandError {
+    /// Plan file not found
+    #[error("Plan file not found: {path}")]
+    FileNotFound {
+        /// The file path that was not found
+        path: String,
+        #[source]
+        /// The underlying IO error
+        source: std::io::Error,
+    },
+
+    /// Permission denied accessing plan file
+    #[error("Permission denied accessing plan file: {path}")]
+    PermissionDenied {
+        /// The file path that could not be accessed
+        path: String,
+        #[source]
+        /// The underlying IO error
+        source: std::io::Error,
+    },
+
+    /// Invalid plan file format
+    #[error("Invalid plan file format: {path}\nReason: {reason}")]
+    InvalidFileFormat {
+        /// The file path with invalid format
+        path: String,
+        /// The reason why the file format is invalid
+        reason: String,
+    },
+
+    /// Workflow execution failed for plan
+    #[error("Workflow execution failed for plan: {plan_filename}")]
+    WorkflowExecutionFailed {
+        /// The plan filename that failed workflow execution
+        plan_filename: String,
+        #[source]
+        /// The underlying workflow error
+        source: WorkflowError,
+    },
+
+    /// Issue creation failed during planning
+    #[error("Issue creation failed during planning")]
+    IssueCreationFailed {
+        /// The plan filename during which issue creation failed
+        plan_filename: String,
+        #[source]
+        /// The underlying error that caused issue creation to fail
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Plan file is empty or contains no valid content
+    #[error("Plan file is empty or contains no valid content: {path}")]
+    EmptyPlanFile {
+        /// The path of the empty plan file
+        path: String,
+    },
+
+    /// Plan file too large to process
+    #[error("Plan file too large to process: {path} ({size} bytes)")]
+    FileTooLarge {
+        /// The path of the oversized file
+        path: String,
+        /// The size of the file in bytes
+        size: u64,
+    },
+
+    /// Issues directory is not writable
+    #[error("Issues directory is not writable")]
+    IssuesDirectoryNotWritable {
+        /// The path of the issues directory
+        path: String,
+        #[source]
+        /// The underlying IO error
+        source: std::io::Error,
+    },
+
+    /// Specification file has insufficient content
+    #[error("Specification file has insufficient content: {path} ({length} characters)")]
+    InsufficientContent {
+        /// The path of the specification file
+        path: String,
+        /// The length of the content in characters
+        length: usize,
+    },
+}
 
 /// Configuration for plan file validation
 #[derive(Debug)]

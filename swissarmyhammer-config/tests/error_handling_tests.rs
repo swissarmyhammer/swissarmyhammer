@@ -7,7 +7,7 @@ use serde_json::json;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::IsolatedTestEnvironment;
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 

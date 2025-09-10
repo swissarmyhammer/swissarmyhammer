@@ -13,6 +13,3 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .expect("Failed to acquire semantic database lock")
 }
-
-/// Re-export IsolatedTestHome from the main swissarmyhammer crate
-pub use swissarmyhammer::test_utils::IsolatedTestHome;
