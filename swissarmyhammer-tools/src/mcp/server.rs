@@ -13,13 +13,13 @@ use swissarmyhammer::workflow::{
     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
     WorkflowStorage, WorkflowStorageBackend,
 };
-use swissarmyhammer::{PromptLibrary, PromptResolver};
 use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::TemplateContext;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
+use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
@@ -369,7 +369,7 @@ impl McpServer {
     /// # Returns
     ///
     /// * `bool` - True if the prompt is a partial template
-    fn is_partial_template(prompt: &swissarmyhammer::Prompt) -> bool {
+    fn is_partial_template(prompt: &swissarmyhammer_prompts::Prompt) -> bool {
         // Check if the template starts with the partial marker
         if prompt.template.trim().starts_with("{% partial %}") {
             return true;

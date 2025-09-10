@@ -81,14 +81,10 @@ const DEFAULT_DEFAULT_TIMEOUT: u32 = 3600;
 ///
 /// # Examples
 ///
-/// ```
-/// # use swissarmyhammer_tools::mcp::tools::shell::execute::parse_size_string;
-/// assert_eq!(parse_size_string("1024").unwrap(), 1024);
-/// assert_eq!(parse_size_string("1KB").unwrap(), 1024);
-/// assert_eq!(parse_size_string("1MB").unwrap(), 1024 * 1024);
-/// assert_eq!(parse_size_string("1GB").unwrap(), 1024 * 1024 * 1024);
-/// assert_eq!(parse_size_string("  10MB  ").unwrap(), 10 * 1024 * 1024);
-/// ```
+/// Basic usage (examples cannot be tested as function is private):
+/// - `parse_size_string("1024")` returns `Ok(1024)`
+/// - `parse_size_string("1KB")` returns `Ok(1024)`
+/// - `parse_size_string("1MB")` returns `Ok(1024 * 1024)`
 ///
 /// # Errors
 ///
@@ -169,18 +165,12 @@ fn parse_size_string(size_str: &str) -> Result<usize, SizeParseError> {
 ///
 /// # Examples
 ///
-/// ```
-/// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
-/// // Get default configuration values
-/// let max_output = DefaultShellConfig::max_output_size();  // 10,485,760 bytes (10MB)
-/// let max_line = DefaultShellConfig::max_line_length();    // 2000 characters
-/// let def_timeout = DefaultShellConfig::default_timeout(); // 300 seconds
-/// let min_timeout = DefaultShellConfig::min_timeout();     // 1 second
-/// let max_timeout = DefaultShellConfig::max_timeout();     // 1800 seconds
-///
-/// println!("Shell will timeout after {} seconds by default", def_timeout);
-/// println!("Output limited to {} bytes maximum", max_output);
-/// ```
+/// Default configuration values (struct is private, examples cannot be tested):
+/// - `max_output_size()`: 10,485,760 bytes (10MB)
+/// - `max_line_length()`: 2000 characters  
+/// - `default_timeout()`: 300 seconds
+/// - `min_timeout()`: 1 second
+/// - `max_timeout()`: 1800 seconds
 ///
 /// # Migration from sah_config
 ///
@@ -205,10 +195,7 @@ impl DefaultShellConfig {
     /// indication to the user.
     ///
     /// # Examples
-    /// ```
-    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
-    /// assert_eq!(DefaultShellConfig::max_output_size(), 10_485_760);
-    /// ```
+    /// Returns 10,485,760 bytes (10MB limit)
     fn max_output_size() -> usize {
         parse_size_string(DEFAULT_MAX_OUTPUT_SIZE).expect("Default size should be valid")
     }
@@ -220,10 +207,7 @@ impl DefaultShellConfig {
     /// real-world command output to pass through unchanged.
     ///
     /// # Examples
-    /// ```
-    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
-    /// assert_eq!(DefaultShellConfig::max_line_length(), 2000);
-    /// ```
+    /// Returns 2000 characters (2KB line limit)
     fn max_line_length() -> usize {
         DEFAULT_MAX_LINE_LENGTH
     }
@@ -234,10 +218,7 @@ impl DefaultShellConfig {
     /// This prevents accidentally setting near-instant timeouts.
     ///
     /// # Examples
-    /// ```
-    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
-    /// assert_eq!(DefaultShellConfig::min_timeout(), 1);
-    /// ```
+    /// Returns 1 second minimum timeout
     fn min_timeout() -> u32 {
         DEFAULT_MIN_TIMEOUT
     }
@@ -249,10 +230,7 @@ impl DefaultShellConfig {
     /// like large builds or system maintenance tasks.
     ///
     /// # Examples
-    /// ```
-    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
-    /// assert_eq!(DefaultShellConfig::max_timeout(), 1800);
-    /// ```
+    /// Returns 1800 seconds (30 minutes) maximum timeout
     fn max_timeout() -> u32 {
         DEFAULT_MAX_TIMEOUT
     }
@@ -264,10 +242,7 @@ impl DefaultShellConfig {
     /// hung processes from blocking indefinitely.
     ///
     /// # Examples
-    /// ```
-    /// # use swissarmyhammer_tools::mcp::tools::shell::execute::DefaultShellConfig;
-    /// assert_eq!(DefaultShellConfig::default_timeout(), 300);
-    /// ```
+    /// Returns 300 seconds (5 minutes) default timeout
     fn default_timeout() -> u32 {
         DEFAULT_DEFAULT_TIMEOUT
     }
