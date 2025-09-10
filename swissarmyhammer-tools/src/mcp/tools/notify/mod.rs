@@ -48,6 +48,7 @@
 //! - **create**: Send notification messages to users through the logging system
 
 pub mod create;
+pub mod types;
 
 use crate::mcp::tool_registry::ToolRegistry;
 

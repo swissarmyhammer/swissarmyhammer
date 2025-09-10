@@ -5,6 +5,7 @@
 
 pub mod index;
 pub mod query;
+pub mod types;
 
 use crate::mcp::tool_registry::ToolRegistry;
 

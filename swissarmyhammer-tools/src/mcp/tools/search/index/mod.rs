@@ -2,7 +2,7 @@
 //!
 //! This module provides the SearchIndexTool for indexing files for semantic search through the MCP protocol.
 
-use crate::mcp::search_types::{SearchIndexRequest, SearchIndexResponse};
+use super::types::{SearchIndexRequest, SearchIndexResponse};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;

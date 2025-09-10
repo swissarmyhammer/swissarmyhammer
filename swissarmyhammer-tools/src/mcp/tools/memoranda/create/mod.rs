@@ -2,7 +2,7 @@
 //!
 //! This module provides the CreateMemoTool for creating new memos through the MCP protocol.
 
-use crate::mcp::memo_types::CreateMemoRequest;
+use super::types::CreateMemoRequest;
 use crate::mcp::shared_utils::McpErrorHandler;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;

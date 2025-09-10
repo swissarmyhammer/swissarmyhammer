@@ -137,3 +137,72 @@ src/mcp/
 This follows standard Rust module organization principles where types should be co-located with the functionality that uses them. Currently, tool-specific types are scattered at the root level, making it unclear which types belong to which tools.
 
 Moving types to tool-specific locations makes the codebase more organized and easier to navigate.
+
+## Proposed Solution
+
+I will implement this reorganization using Test Driven Development by:
+
+1. **Phase 1: Move memo_types.rs to memoranda/types.rs**
+   - Read current memo_types.rs content
+   - Create memoranda/types.rs with the content
+   - Update memoranda/mod.rs to export types module
+   - Find all imports of memo_types and update them
+   - Delete memo_types.rs
+   - Test compilation
+
+2. **Phase 2: Move search_types.rs to search/types.rs** 
+   - Read current search_types.rs content
+   - Create search/types.rs with the content
+   - Update search/mod.rs to export types module
+   - Find all imports of search_types and update them
+   - Delete search_types.rs
+   - Test compilation
+
+3. **Phase 3: Move notify_types.rs to notify/types.rs**
+   - Read current notify_types.rs content
+   - Create notify/types.rs with the content
+   - Update notify/mod.rs to export types module
+   - Find all imports of notify_types and update them
+   - Delete notify_types.rs
+   - Test compilation
+
+4. **Phase 4: Final verification**
+   - Build the entire crate
+   - Run all tests
+   - Verify completion criteria are met
+
+The approach will be to move one type file at a time, update imports, and ensure compilation succeeds before moving to the next one.
+## Implementation Progress
+
+### Phase 1: Move memo_types.rs to memoranda/types.rs ✅ COMPLETED
+- ✅ Created `src/mcp/tools/memoranda/types.rs` with memo types content
+- ✅ Updated `src/mcp/tools/memoranda/mod.rs` to export types module
+- ✅ Updated all imports in memoranda tools to use `super::types::*`
+- ✅ Updated tool_handlers.rs to import from `super::tools::memoranda::types::*`
+- ✅ Removed `src/mcp/memo_types.rs`
+- ✅ Removed memo_types module from main mod.rs
+- ✅ Tested compilation - SUCCESS
+
+### Phase 2: Move search_types.rs to search/types.rs ✅ COMPLETED
+- ✅ Created `src/mcp/tools/search/types.rs` with search types content
+- ✅ Updated `src/mcp/tools/search/mod.rs` to export types module
+- ✅ Updated all imports in search tools to use `super::types::*`
+- ✅ Removed `src/mcp/search_types.rs`
+- ✅ Removed search_types module from main mod.rs
+- ✅ Tested compilation - SUCCESS
+
+### Phase 3: Move notify_types.rs to notify/types.rs ✅ COMPLETED
+- ✅ Created `src/mcp/tools/notify/types.rs` with notify types content
+- ✅ Updated `src/mcp/tools/notify/mod.rs` to export types module
+- ✅ Updated all imports in notify tools to use `super::types::*`
+- ✅ Removed `src/mcp/notify_types.rs`
+- ✅ Removed notify_types module from main mod.rs
+- ✅ Final compilation test - SUCCESS
+
+### Results
+All three type files have been successfully moved to their respective tool directories:
+- `memo_types.rs` → `memoranda/types.rs`
+- `search_types.rs` → `search/types.rs`
+- `notify_types.rs` → `notify/types.rs`
+
+All imports have been updated and the codebase compiles successfully. The reorganization follows proper Rust module organization principles with types co-located with their respective tools.

@@ -2,7 +2,7 @@
 //!
 //! This module provides the ListMemoTool for listing all memos through the MCP protocol.
 
-use crate::mcp::memo_types::ListMemosRequest;
+use super::types::ListMemosRequest;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;

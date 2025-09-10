@@ -47,6 +47,7 @@ pub mod create;
 pub mod get;
 pub mod get_all_context;
 pub mod list;
+pub mod types;
 
 use crate::mcp::tool_registry::ToolRegistry;
 

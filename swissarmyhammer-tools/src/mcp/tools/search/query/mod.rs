@@ -2,7 +2,7 @@
 //!
 //! This module provides the SearchQueryTool for performing semantic search queries through the MCP protocol.
 
-use crate::mcp::search_types::{SearchQueryRequest, SearchQueryResponse, SearchResult};
+use super::types::{SearchQueryRequest, SearchQueryResponse, SearchResult};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;

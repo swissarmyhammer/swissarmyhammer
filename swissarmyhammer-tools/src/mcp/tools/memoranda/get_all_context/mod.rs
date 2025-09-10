@@ -2,7 +2,7 @@
 //!
 //! This module provides the GetAllContextMemoTool for retrieving all memo content formatted for AI context consumption.
 
-use crate::mcp::memo_types::GetAllContextRequest;
+use super::types::GetAllContextRequest;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;

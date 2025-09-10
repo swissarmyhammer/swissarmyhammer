@@ -36,14 +36,7 @@ pub mod frontmatter {
         }
         (None, input.to_string())
     }
-    
-    pub fn parse_frontmatter(input: &str) -> Result<(serde_yaml::Value, String), String> {
-        let (frontmatter, content) = extract_frontmatter_and_content(input);
-        match frontmatter {
-            Some(yaml) => Ok((yaml, content)),
-            None => Err("No frontmatter found".to_string()),
-        }
-    }
+
 }
 use thiserror::Error;
 

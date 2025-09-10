@@ -2,7 +2,7 @@
 //!
 //! This module provides the GetMemoTool for retrieving a memo by its title through the MCP protocol.
 
-use crate::mcp::memo_types::GetMemoRequest;
+use super::types::GetMemoRequest;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;

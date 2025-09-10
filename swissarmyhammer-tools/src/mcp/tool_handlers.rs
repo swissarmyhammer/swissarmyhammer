@@ -1,6 +1,6 @@
 //! Tool handlers for MCP operations
 
-use super::memo_types::*;
+use super::tools::memoranda::types::*;
 use super::responses::create_success_response;
 use super::shared_utils::{McpErrorHandler, McpFormatter, McpValidation};
 use rmcp::model::*;
