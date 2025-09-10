@@ -47,30 +47,20 @@ pub mod prompt_filter;
 /// Prompt loading and resolution
 pub mod prompt_resolver;
 
-
-
 /// Adapter to make PromptLibrary work with new templating domain crate
 pub mod prompt_partial_adapter;
 
 /// Storage abstractions and implementations
 pub mod storage;
 
-
-
-
-
 /// Plugin system for extensibility
 pub mod plugins;
-
-
 
 /// Shared frontmatter parsing functionality
 pub mod frontmatter;
 
 /// Security utilities for path validation and resource limits
 pub mod security;
-
-
 
 /// Unified file system utilities for better error handling and testing
 pub mod fs_utils;
@@ -159,8 +149,6 @@ pub mod prelude {
         validation_builders::{quick, ValidationChain, ValidationErrorBuilder},
     };
 }
-
-
 
 /// Test organization utilities for improved test management
 pub mod test_organization;

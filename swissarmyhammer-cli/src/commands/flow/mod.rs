@@ -14,13 +14,13 @@ use std::future;
 use std::io::{self, Write};
 use std::time::Duration;
 use swissarmyhammer::common::mcp_errors::ToSwissArmyHammerError;
-use swissarmyhammer_workflow::{
-    ExecutionVisualizer, ExecutorError, FileSystemWorkflowRunStorage, MemoryWorkflowStorage, Workflow, WorkflowExecutor,
-    WorkflowName, WorkflowResolver, WorkflowRun, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend,
-    WorkflowStorage, WorkflowStorageBackend,
-};
 use swissarmyhammer::{Result, SwissArmyHammerError};
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
+use swissarmyhammer_workflow::{
+    ExecutionVisualizer, ExecutorError, FileSystemWorkflowRunStorage, MemoryWorkflowStorage,
+    Workflow, WorkflowExecutor, WorkflowName, WorkflowResolver, WorkflowRun, WorkflowRunId,
+    WorkflowRunStatus, WorkflowRunStorageBackend, WorkflowStorage, WorkflowStorageBackend,
+};
 use tokio::signal;
 use tokio::time::timeout;
 
@@ -227,9 +227,9 @@ pub async fn run_workflow_command(
     {
         // Clean up the abort file after detection
         let _ = remove_abort_file(".").map_err(|e| SwissArmyHammerError::Other(e.to_string()));
-        return Err(SwissArmyHammerError::ExecutorError(
-            ExecutorError::Abort(abort_reason),
-        ));
+        return Err(SwissArmyHammerError::ExecutorError(ExecutorError::Abort(
+            abort_reason,
+        )));
     }
 
     // Create executor
@@ -780,10 +780,7 @@ async fn execute_workflow_with_progress(
 }
 
 /// Print run status
-fn print_run_status(
-    run: &WorkflowRun,
-    format: &OutputFormat,
-) -> Result<()> {
+fn print_run_status(run: &WorkflowRun, format: &OutputFormat) -> Result<()> {
     match format {
         OutputFormat::Table => {
             println!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
@@ -817,11 +814,7 @@ fn print_run_status(
 }
 
 /// Print run logs
-fn print_run_logs(
-    run: &WorkflowRun,
-    tail: Option<usize>,
-    _level: &Option<String>,
-) -> Result<()> {
+fn print_run_logs(run: &WorkflowRun, tail: Option<usize>, _level: &Option<String>) -> Result<()> {
     println!("📄 Logs for run {}", workflow_run_id_to_string(&run.id));
     println!("📋 Workflow: {}", run.workflow.name);
     println!();
@@ -1145,10 +1138,9 @@ fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBacke
         ))
     })?;
 
-    let run_storage = FileSystemWorkflowRunStorage::new(&local_dir)
-        .map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
-        })?;
+    let run_storage = FileSystemWorkflowRunStorage::new(&local_dir).map_err(|e| {
+        SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
+    })?;
 
     Ok(Box::new(run_storage))
 }
@@ -1233,10 +1225,7 @@ mod tests {
 
         // This should work with plan_filename - testing new functionality
         assert_eq!(run.workflow.name.as_str(), "plan");
-        assert_eq!(
-            run.status,
-            swissarmyhammer::WorkflowRunStatus::Running
-        );
+        assert_eq!(run.status, swissarmyhammer::WorkflowRunStatus::Running);
         assert!(run.context.contains_key("plan_filename"));
         assert_eq!(
             run.context.get("plan_filename").unwrap(),

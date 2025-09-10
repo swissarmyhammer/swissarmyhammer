@@ -28,7 +28,7 @@ impl ParameterType {
     pub fn as_str(&self) -> &'static str {
         match self {
             ParameterType::String => "string",
-            ParameterType::Integer => "integer", 
+            ParameterType::Integer => "integer",
             ParameterType::Boolean => "boolean",
             ParameterType::File => "file",
             ParameterType::Directory => "directory",
@@ -51,8 +51,6 @@ impl FromStr for ParameterType {
     }
 }
 
-
-
 /// Represents a parameter specification for a prompt template
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
@@ -74,7 +72,11 @@ pub struct Parameter {
 
 impl Parameter {
     /// Create a new parameter with name, description, and type
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameter_type: ParameterType) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameter_type: ParameterType,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -117,9 +119,12 @@ pub trait ParameterProvider {
     fn get_parameters(&self) -> &[Parameter];
 
     /// Check if all required parameters are provided
-    fn validate_parameters(&self, args: &std::collections::HashMap<String, String>) -> Result<(), Vec<String>> {
+    fn validate_parameters(
+        &self,
+        args: &std::collections::HashMap<String, String>,
+    ) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        
+
         for param in self.get_parameters() {
             if param.required && !args.contains_key(&param.name) {
                 errors.push(format!("Required parameter '{}' is missing", param.name));
@@ -140,11 +145,26 @@ mod tests {
 
     #[test]
     fn test_parameter_type_from_str() {
-        assert_eq!("string".parse::<ParameterType>().unwrap(), ParameterType::String);
-        assert_eq!("integer".parse::<ParameterType>().unwrap(), ParameterType::Integer);
-        assert_eq!("boolean".parse::<ParameterType>().unwrap(), ParameterType::Boolean);
-        assert_eq!("file".parse::<ParameterType>().unwrap(), ParameterType::File);
-        assert_eq!("directory".parse::<ParameterType>().unwrap(), ParameterType::Directory);
+        assert_eq!(
+            "string".parse::<ParameterType>().unwrap(),
+            ParameterType::String
+        );
+        assert_eq!(
+            "integer".parse::<ParameterType>().unwrap(),
+            ParameterType::Integer
+        );
+        assert_eq!(
+            "boolean".parse::<ParameterType>().unwrap(),
+            ParameterType::Boolean
+        );
+        assert_eq!(
+            "file".parse::<ParameterType>().unwrap(),
+            ParameterType::File
+        );
+        assert_eq!(
+            "directory".parse::<ParameterType>().unwrap(),
+            ParameterType::Directory
+        );
     }
 
     #[test]
@@ -167,7 +187,10 @@ mod tests {
         assert_eq!(param.description, "User name");
         assert_eq!(param.parameter_type, ParameterType::String);
         assert!(param.required);
-        assert_eq!(param.default, Some(serde_json::Value::String("Anonymous".to_string())));
+        assert_eq!(
+            param.default,
+            Some(serde_json::Value::String("Anonymous".to_string()))
+        );
         assert_eq!(param.example, Some("john_doe".to_string()));
     }
 }

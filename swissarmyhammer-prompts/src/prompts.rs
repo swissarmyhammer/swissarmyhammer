@@ -26,14 +26,12 @@
 
 use swissarmyhammer_common::SwissArmyHammerError;
 
-use swissarmyhammer_config::TemplateContext;
-use crate::{Result, ValidationIssue, ValidationLevel, Validatable};
+use crate::{Result, Validatable, ValidationIssue, ValidationLevel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-
+use swissarmyhammer_config::TemplateContext;
 
 // Temporary re-exports until Parameter types are moved to swissarmyhammer-common
 // TODO: Move these types to swissarmyhammer-common
@@ -689,9 +687,11 @@ impl PromptLibrary {
     /// assert_eq!(retrieved.name, "test");
     /// ```
     pub fn get(&self, name: &str) -> Result<Prompt> {
-        self.storage.get(name)?.ok_or_else(|| SwissArmyHammerError::Other {
-            message: format!("Prompt '{}' not found", name)
-        })
+        self.storage
+            .get(name)?
+            .ok_or_else(|| SwissArmyHammerError::Other {
+                message: format!("Prompt '{}' not found", name),
+            })
     }
 
     /// Lists all prompts in the library.
@@ -842,19 +842,15 @@ impl PromptLibrary {
             crate::prompt_partial_adapter::PromptPartialAdapter::new(Arc::new(full_library));
         let template_with_partials =
             swissarmyhammer_templating::Template::with_partials(&prompt.template, partial_adapter)
-                .map_err(|e| {
-                    SwissArmyHammerError::Other {
-                        message: format!("Failed to create template with partials: {e}")
-                    }
+                .map_err(|e| SwissArmyHammerError::Other {
+                    message: format!("Failed to create template with partials: {e}"),
                 })?;
 
         // Render with template context
         template_with_partials
             .render_with_context(&enhanced_context)
-            .map_err(|e| {
-                SwissArmyHammerError::Other {
-                    message: format!("Failed to render template '{}': {e}", name)
-                }
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to render template '{}': {e}", name),
             })
     }
 
@@ -1382,8 +1378,6 @@ impl Default for PromptLoader {
         Self::new()
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

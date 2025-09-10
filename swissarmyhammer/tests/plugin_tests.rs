@@ -240,7 +240,7 @@ fn test_template_engine_plugin_registry_access() {
     let engine = swissarmyhammer::TemplateEngine::with_plugins(registry);
 
     // Test that the engine was created successfully
-    // Note: Plugin functionality is managed by the main crate, 
+    // Note: Plugin functionality is managed by the main crate,
     // the domain crate provides a simplified interface
     let _plugin_registry = engine.plugin_registry();
     // The domain crate returns None for plugin registry - plugins are managed at main crate level

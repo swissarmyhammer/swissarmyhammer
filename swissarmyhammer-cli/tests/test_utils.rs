@@ -19,17 +19,6 @@ pub use swissarmyhammer_common::test_utils::{
     create_isolated_test_home, create_temp_dir, IsolatedTestEnvironment, IsolatedTestHome,
 };
 
-
-
-
-
-
-
-
-
-
-
-
 /// Create test prompt files in a directory
 ///
 /// Simple test prompt structure for testing
@@ -149,10 +138,10 @@ pub fn create_test_environment() -> Result<(TempDir, PathBuf)> {
     let temp_dir = create_temp_dir();
     let prompts_dir = temp_dir.path().join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
-    
+
     // Create test prompt files in the directory
     create_test_prompt_files(&prompts_dir)?;
-    
+
     Ok((temp_dir, prompts_dir))
 }
 

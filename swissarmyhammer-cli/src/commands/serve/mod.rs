@@ -120,7 +120,10 @@ async fn handle_stdio_serve() -> i32 {
         return EXIT_ERROR;
     }
 
-    tracing::debug!("Loaded {} prompts for MCP server", library.list().map(|p| p.len()).unwrap_or(0));
+    tracing::debug!(
+        "Loaded {} prompts for MCP server",
+        library.list().map(|p| p.len()).unwrap_or(0)
+    );
 
     let server = match McpServer::new(library).await {
         Ok(server) => server,

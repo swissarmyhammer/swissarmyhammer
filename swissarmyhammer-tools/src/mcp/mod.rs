@@ -8,7 +8,6 @@ pub mod error_handling;
 pub mod file_watcher;
 pub mod http_server;
 
-
 pub mod responses;
 
 pub mod server;

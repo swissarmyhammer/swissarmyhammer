@@ -273,7 +273,7 @@ mod tests {
         assert!(id1.to_string() < id2.to_string());
         assert!(id2.to_string() < id3.to_string());
         assert!(id1.to_string() < id3.to_string());
-        
+
         // Test uniqueness
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);

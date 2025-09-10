@@ -3,8 +3,8 @@
 //! This module provides the validation framework used to check prompts
 //! for correctness, completeness, and best practices.
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Validation severity level
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,7 +22,7 @@ impl ValidationLevel {
     pub fn as_str(&self) -> &'static str {
         match self {
             ValidationLevel::Error => "error",
-            ValidationLevel::Warning => "warning", 
+            ValidationLevel::Warning => "warning",
             ValidationLevel::Info => "info",
         }
     }
@@ -64,11 +64,7 @@ pub struct ValidationIssue {
 
 impl ValidationIssue {
     /// Create a new validation issue
-    pub fn new(
-        level: ValidationLevel,
-        file_path: PathBuf,
-        message: String,
-    ) -> Self {
+    pub fn new(level: ValidationLevel, file_path: PathBuf, message: String) -> Self {
         Self {
             level,
             file_path,
@@ -131,7 +127,7 @@ impl ValidationIssue {
         };
 
         let mut result = format!("{}: {} - {}", level, location, self.message);
-        
+
         if let Some(title) = &self.content_title {
             result = format!("{} (in {})", result, title);
         }
@@ -208,12 +204,18 @@ impl ValidationResult {
 
     /// Get all error issues
     pub fn errors(&self) -> Vec<&ValidationIssue> {
-        self.issues.iter().filter(|issue| issue.level.is_error()).collect()
+        self.issues
+            .iter()
+            .filter(|issue| issue.level.is_error())
+            .collect()
     }
 
     /// Get all warning issues
     pub fn warnings(&self) -> Vec<&ValidationIssue> {
-        self.issues.iter().filter(|issue| issue.level.is_warning()).collect()
+        self.issues
+            .iter()
+            .filter(|issue| issue.level.is_warning())
+            .collect()
     }
 
     /// Get total number of issues
@@ -279,14 +281,10 @@ mod tests {
         assert!(!result.has_warnings());
         assert_eq!(result.issue_count(), 0);
 
-        let error_issue = ValidationIssue::error(
-            PathBuf::from("test.md"),
-            "Error message".to_string(),
-        );
-        let warning_issue = ValidationIssue::warning(
-            PathBuf::from("test.md"),
-            "Warning message".to_string(),
-        );
+        let error_issue =
+            ValidationIssue::error(PathBuf::from("test.md"), "Error message".to_string());
+        let warning_issue =
+            ValidationIssue::warning(PathBuf::from("test.md"), "Warning message".to_string());
 
         result.add_issue(error_issue);
         result.add_issue(warning_issue);

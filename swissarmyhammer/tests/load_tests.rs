@@ -4,8 +4,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutorFactory, WorkflowTemplateContext};
 use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
+use swissarmyhammer_workflow::{
+    AgentExecutionContext, AgentExecutorFactory, WorkflowTemplateContext,
+};
 use tokio::time::{timeout, Duration, Instant};
 
 #[tokio::test]

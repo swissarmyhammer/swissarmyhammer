@@ -10,7 +10,8 @@ use swissarmyhammer::validation::{
 };
 use swissarmyhammer::Validatable;
 use swissarmyhammer_workflow::{
-    MemoryWorkflowStorage, MermaidParser, Validatable as WorkflowValidatable, Workflow, WorkflowResolver, WorkflowStorageBackend,
+    MemoryWorkflowStorage, MermaidParser, Validatable as WorkflowValidatable, Workflow,
+    WorkflowResolver, WorkflowStorageBackend,
 };
 
 use crate::cli::ValidateFormat;
@@ -288,14 +289,20 @@ impl Validator {
         for issue in issues {
             // Convert from workflow ValidationIssue to main crate ValidationIssue
             let converted_level = match issue.level {
-                swissarmyhammer_workflow::definition::ValidationLevel::Error => swissarmyhammer::validation::ValidationLevel::Error,
-                swissarmyhammer_workflow::definition::ValidationLevel::Warning => swissarmyhammer::validation::ValidationLevel::Warning,
+                swissarmyhammer_workflow::definition::ValidationLevel::Error => {
+                    swissarmyhammer::validation::ValidationLevel::Error
+                }
+                swissarmyhammer_workflow::definition::ValidationLevel::Warning => {
+                    swissarmyhammer::validation::ValidationLevel::Warning
+                }
             };
-            
+
             let converted_issue = swissarmyhammer::validation::ValidationIssue {
                 level: converted_level,
-                file_path: issue.file_path.as_ref()
-                    .map(|p| PathBuf::from(p))
+                file_path: issue
+                    .file_path
+                    .as_ref()
+                    .map(PathBuf::from)
                     .unwrap_or_else(|| workflow_path.to_path_buf()),
                 content_title: issue.content_title,
                 line: issue.line,

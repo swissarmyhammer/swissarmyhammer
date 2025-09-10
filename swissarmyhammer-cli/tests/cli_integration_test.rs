@@ -244,9 +244,13 @@ async fn test_flow_test_nonexistent_workflow() -> Result<()> {
 
 async fn test_flow_test_with_timeout() -> Result<()> {
     let result =
-        run_sah_command_in_process(&["flow", "run", "hello-world", "--timeout", "5s", "--dry-run"]).await?;
+        run_sah_command_in_process(&["flow", "run", "hello-world", "--timeout", "5s", "--dry-run"])
+            .await?;
 
-    assert_eq!(result.exit_code, 0, "flow run with timeout and dry-run should succeed");
+    assert_eq!(
+        result.exit_code, 0,
+        "flow run with timeout and dry-run should succeed"
+    );
 
     assert!(
         result.stdout.contains("Timeout: 5s"),

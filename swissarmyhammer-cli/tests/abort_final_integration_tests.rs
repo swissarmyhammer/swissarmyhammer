@@ -73,7 +73,7 @@ impl TestEnvironment {
         let workflow_name = name.replace(' ', "_").to_lowercase();
         let workflow_file = format!("{}.md", workflow_name);
         let workflow_content = format!(
-r#"---
+            r#"---
 name: {workflow_name}
 title: {name}
 description: Test workflow for {name}
@@ -101,12 +101,13 @@ stateDiagram-v2
     Complete: Complete state
     Complete: terminal: true
 ```
-"#);
-        
+"#
+        );
+
         // Create .swissarmyhammer/workflows directory
         let workflows_dir = self.temp_path.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&workflows_dir)?;
-        
+
         // Write workflow to the workflows directory
         let workflow_path = workflows_dir.join(&workflow_file);
         fs::write(&workflow_path, workflow_content)?;
@@ -128,7 +129,7 @@ async fn test_abort_performance_impact_baseline() -> Result<()> {
     // Baseline measurement without abort file
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     let baseline_duration = start_time.elapsed();
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
@@ -583,7 +584,7 @@ async fn test_regression_normal_workflow_execution() -> Result<()> {
     env.verify_no_abort_file();
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should complete successfully without abort

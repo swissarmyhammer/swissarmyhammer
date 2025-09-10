@@ -270,8 +270,6 @@ impl McpTool for OutlineGenerateTool {
     }
 }
 
-
-
 /// Convert internal OutlineNode to MCP tool OutlineNode with children support
 fn convert_outline_node_with_children(
     internal_node: swissarmyhammer_outline::OutlineNode,

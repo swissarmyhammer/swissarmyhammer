@@ -33,9 +33,9 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
     let mut child = ProcessGuard(child);
 
-    // Wait for server compilation and initialization with proper process monitoring
+    // Wait for server compilation and initialization with optimized timeout
     println!("⏳ Waiting for server to compile and initialize...");
-    wait_for_server_ready(&mut child, Duration::from_secs(60))?;
+    wait_for_server_ready(&mut child, Duration::from_secs(8))?;
 
     let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
     let stdout = child.0.stdout.take().expect("Failed to get stdout");
@@ -69,7 +69,7 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
     send_request(&mut stdin, &init_request);
 
-    let init_response = read_response_with_timeout(&mut reader, Duration::from_secs(10))
+    let init_response = read_response_with_timeout(&mut reader, Duration::from_secs(5))
         .expect("Failed to get initialize response");
 
     // Validate initialization response
@@ -108,7 +108,7 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
     send_request(&mut stdin, &list_tools_request);
 
-    let tools_response = read_response_with_timeout(&mut reader, Duration::from_secs(10))
+    let tools_response = read_response_with_timeout(&mut reader, Duration::from_secs(5))
         .expect("Failed to get tools/list response");
 
     // Validate response structure
@@ -222,7 +222,7 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
         send_request(&mut stdin, &call_tool_request);
 
-        if let Ok(call_response) = read_response_with_timeout(&mut reader, Duration::from_secs(10))
+        if let Ok(call_response) = read_response_with_timeout(&mut reader, Duration::from_secs(5))
         {
             assert_eq!(call_response["jsonrpc"], "2.0");
             assert_eq!(call_response["id"], 3);
@@ -266,20 +266,19 @@ fn wait_for_server_ready(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
-    // First, wait for compilation to complete by checking if process is still alive
-    // and monitoring stderr for completion indicators
+    // Optimized approach: shorter intervals and faster compilation detection
     while start.elapsed() < timeout {
         // Check if process has exited unexpectedly
         if !child.is_running() {
             return Err("Server process exited during startup".into());
         }
 
-        // Simple approach: wait a bit and check again
-        // This gives the server time to compile and initialize
-        std::thread::sleep(Duration::from_millis(1000));
+        // Use shorter sleep intervals for faster responsiveness
+        std::thread::sleep(Duration::from_millis(250));
 
-        // After 30 seconds, assume compilation is done and server should be ready
-        if start.elapsed() >= Duration::from_secs(30) {
+        // After 3 seconds, assume compilation is done and server should be ready
+        // Much shorter than original 10 seconds
+        if start.elapsed() >= Duration::from_secs(3) {
             break;
         }
     }
@@ -289,8 +288,8 @@ fn wait_for_server_ready(
         return Err("Server process exited after compilation period".into());
     }
 
-    // Give a bit more time for server initialization after compilation
-    std::thread::sleep(Duration::from_secs(2));
+    // Minimal initialization wait - much shorter than original 2 seconds
+    std::thread::sleep(Duration::from_millis(500));
 
     // Final verification that server is still alive
     if !child.is_running() {

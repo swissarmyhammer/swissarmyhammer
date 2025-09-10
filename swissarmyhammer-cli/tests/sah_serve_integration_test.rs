@@ -56,8 +56,8 @@ async fn test_sah_serve_tools_integration() -> Result<(), Box<dyn std::error::Er
 
     let mut child = ProcessGuard(child);
 
-    // Wait for server compilation and initialization with proper process monitoring
-    wait_for_server_ready(&mut child, Duration::from_secs(60))?;
+    // Wait for server compilation and initialization with optimized timeout
+    wait_for_server_ready(&mut child, Duration::from_secs(8))?;
 
     let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
     let stdout = child.0.stdout.take().expect("Failed to get stdout");
@@ -112,7 +112,7 @@ async fn initialize_mcp_connection(
 
     send_mcp_request(stdin, &init_request)?;
 
-    let response = timeout(Duration::from_secs(10), async { read_mcp_response(reader) })
+    let response = timeout(Duration::from_secs(5), async { read_mcp_response(reader) })
         .await
         .map_err(|_| "Timeout waiting for initialize response")?
         .map_err(|e| format!("Failed to read initialize response: {}", e))?;
@@ -178,7 +178,7 @@ async fn list_and_validate_tools(
 
     send_mcp_request(stdin, &list_tools_request)?;
 
-    let response = timeout(Duration::from_secs(10), async { read_mcp_response(reader) })
+    let response = timeout(Duration::from_secs(5), async { read_mcp_response(reader) })
         .await
         .expect("Timeout waiting for tools/list response")
         .expect("Failed to read tools/list response");
@@ -326,7 +326,7 @@ async fn test_single_tool_execution(
 
     send_mcp_request(stdin, &call_tool_request)?;
 
-    let response = timeout(Duration::from_secs(15), async { read_mcp_response(reader) })
+    let response = timeout(Duration::from_secs(8), async { read_mcp_response(reader) })
         .await
         .unwrap_or_else(|_| panic!("Timeout waiting for {} execution response", tool_name))
         .unwrap_or_else(|_| panic!("Failed to read {} execution response", tool_name));
@@ -388,20 +388,19 @@ fn wait_for_server_ready(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
-    // First, wait for compilation to complete by checking if process is still alive
-    // and monitoring stderr for completion indicators
+    // Optimized startup wait - much shorter timeout for faster tests
     while start.elapsed() < timeout {
         // Check if process has exited unexpectedly
         if !child.is_running() {
             return Err("Server process exited during startup".into());
         }
 
-        // Simple approach: wait a bit and check again
-        // This gives the server time to compile and initialize
-        std::thread::sleep(Duration::from_millis(1000));
+        // Use shorter sleep intervals for faster responsiveness
+        std::thread::sleep(Duration::from_millis(200));
 
-        // After 30 seconds, assume compilation is done and server should be ready
-        if start.elapsed() >= Duration::from_secs(30) {
+        // After 3 seconds, assume compilation is done and server should be ready
+        // This is much faster than the original 10 seconds
+        if start.elapsed() >= Duration::from_secs(3) {
             break;
         }
     }
@@ -411,8 +410,8 @@ fn wait_for_server_ready(
         return Err("Server process exited after compilation period".into());
     }
 
-    // Give a bit more time for server initialization after compilation
-    std::thread::sleep(Duration::from_secs(2));
+    // Minimal initialization wait - much shorter than original 2 seconds
+    std::thread::sleep(Duration::from_millis(500));
 
     // Final verification that server is still alive
     if !child.is_running() {
@@ -470,9 +469,9 @@ async fn test_sah_serve_shutdown() {
     // Try to terminate gracefully
     drop(child.0.stdin.take()); // Close stdin to signal shutdown
 
-    // Server should shutdown within reasonable time
+    // Server should shutdown within reasonable time - reduced for faster tests
     let start_time = std::time::Instant::now();
-    while start_time.elapsed() < Duration::from_secs(5) {
+    while start_time.elapsed() < Duration::from_secs(3) {
         match child.0.try_wait() {
             Ok(Some(_)) => {
                 println!("✅ Server shut down gracefully");
@@ -539,7 +538,7 @@ async fn test_sah_serve_concurrent_requests() {
 
         let _ = send_mcp_request(&mut stdin, &request);
 
-        let response = timeout(Duration::from_secs(5), async {
+        let response = timeout(Duration::from_secs(3), async {
             read_mcp_response(&mut reader)
         })
         .await

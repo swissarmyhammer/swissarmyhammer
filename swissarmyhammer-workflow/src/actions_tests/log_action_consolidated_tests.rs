@@ -6,7 +6,7 @@
 use crate::actions::*;
 use crate::template_context::WorkflowTemplateContext;
 use serde_json::Value;
-// TODO: Fix circular dependency  
+// TODO: Fix circular dependency
 // TODO: Fix circular dependency - can't import from main crate
 // use swissarmyhammer::test_organization::{PropertyTestGenerator, TestMatrix};
 
@@ -20,7 +20,7 @@ struct LogActionCreationTestCase {
 }
 
 #[test]
-#[ignore = "TODO: Fix TestMatrix dependency"]  
+#[ignore = "TODO: Fix TestMatrix dependency"]
 fn test_log_action_creation_consolidated() {
     // TODO: Restore this test once TestMatrix dependency is resolved
     /*
@@ -241,8 +241,8 @@ mod consolidation_metrics {
         let consolidated_test_count = 3;
         let creation_test_cases = 4; // Basic + 3 convenience methods
         let execution_test_cases = 5; // 3 basic + variable sub + special chars
-        // TODO: Restore PropertyTestGenerator dependency
-        // let property_test_cases = PropertyTestGenerator::string_parsing_cases().len();
+                                      // TODO: Restore PropertyTestGenerator dependency
+                                      // let property_test_cases = PropertyTestGenerator::string_parsing_cases().len();
         let property_test_cases = 15; // Placeholder
 
         assert_eq!(

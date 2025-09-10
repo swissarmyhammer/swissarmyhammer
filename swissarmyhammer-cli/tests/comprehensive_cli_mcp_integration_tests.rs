@@ -5,8 +5,8 @@
 
 use anyhow::Result;
 use serde_json::json;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 mod test_utils;
 use test_utils::create_semantic_test_guard;
@@ -570,7 +570,6 @@ async fn test_tool_context_configurations() -> Result<()> {
 
     Ok(())
 }
-
 
 /// Test MCP tool state consistency across operations
 #[tokio::test]

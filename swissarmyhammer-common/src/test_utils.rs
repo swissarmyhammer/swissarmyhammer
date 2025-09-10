@@ -34,7 +34,7 @@ use tempfile::TempDir;
 ///
 /// This function provides a standard RateLimiter configuration for use in tests
 /// across all SwissArmyHammer crates. The configuration uses very high limits
-/// to prevent rate limiting during tests while still testing the actual rate 
+/// to prevent rate limiting during tests while still testing the actual rate
 /// limiting implementation.
 ///
 /// # Returns
@@ -50,7 +50,7 @@ use tempfile::TempDir;
 /// ```no_run
 /// use swissarmyhammer_common::test_utils::create_test_rate_limiter;
 ///
-/// #[test] 
+/// #[test]
 /// fn test_rate_limited_operation() {
 ///     let rate_limiter = create_test_rate_limiter();
 ///     // Use rate_limiter in tests

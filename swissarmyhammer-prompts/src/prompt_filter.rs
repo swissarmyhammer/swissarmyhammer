@@ -5,8 +5,8 @@
 
 use crate::prompts::Prompt;
 use crate::PromptSource;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Filter criteria for selecting prompts
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -92,7 +92,11 @@ impl PromptFilter {
     }
 
     /// Apply the filter to a list of prompts
-    pub fn apply(&self, prompts: Vec<&Prompt>, sources: &HashMap<String, PromptSource>) -> Vec<Prompt> {
+    pub fn apply(
+        &self,
+        prompts: Vec<&Prompt>,
+        sources: &HashMap<String, PromptSource>,
+    ) -> Vec<Prompt> {
         prompts
             .into_iter()
             .filter(|prompt| self.matches(prompt, sources))
@@ -112,7 +116,7 @@ impl PromptFilter {
         // Check category
         if let Some(category) = &self.category {
             match &prompt.category {
-                Some(prompt_category) if prompt_category == category => {},
+                Some(prompt_category) if prompt_category == category => {}
                 _ => return false,
             }
         }
@@ -120,7 +124,10 @@ impl PromptFilter {
         // Check tags (any match)
         if !self.tags.is_empty() {
             let has_matching_tag = self.tags.iter().any(|filter_tag| {
-                prompt.tags.iter().any(|prompt_tag| prompt_tag == filter_tag)
+                prompt
+                    .tags
+                    .iter()
+                    .any(|prompt_tag| prompt_tag == filter_tag)
             });
             if !has_matching_tag {
                 return false;
@@ -149,7 +156,8 @@ impl PromptFilter {
 
     /// Check if a prompt is a partial template
     fn is_partial(&self, prompt: &Prompt) -> bool {
-        prompt.description
+        prompt
+            .description
             .as_ref()
             .map(|desc| desc == "Partial template for reuse in other prompts")
             .unwrap_or(false)
@@ -188,7 +196,6 @@ impl PromptFilter {
 mod tests {
     use super::*;
 
-
     fn create_test_prompt(name: &str, category: Option<&str>, tags: Vec<&str>) -> Prompt {
         let mut prompt = Prompt::new(name, "Template content");
         if let Some(cat) = category {
@@ -203,7 +210,7 @@ mod tests {
         let filter = PromptFilter::new();
         let prompt = create_test_prompt("test", None, vec![]);
         let sources = HashMap::new();
-        
+
         assert!(filter.matches(&prompt, &sources));
         assert!(filter.is_empty());
     }

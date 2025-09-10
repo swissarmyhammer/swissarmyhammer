@@ -3,8 +3,10 @@
 use serde_json::json;
 use std::collections::HashMap;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutorFactory, WorkflowTemplateContext};
 use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
+use swissarmyhammer_workflow::{
+    AgentExecutionContext, AgentExecutorFactory, WorkflowTemplateContext,
+};
 
 #[tokio::test]
 async fn test_multi_step_workflow_simulation() {

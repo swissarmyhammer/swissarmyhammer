@@ -4,9 +4,9 @@
 //! logging system. The tool enables LLMs to communicate important information, status updates,
 //! and contextual feedback during workflow execution.
 
-use crate::mcp::tools::notify::types::NotifyRequest;
 use crate::mcp::shared_utils::{McpErrorHandler, McpValidation};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tools::notify::types::NotifyRequest;
 use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
@@ -135,8 +135,8 @@ impl McpTool for NotifyTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::tools::notify::types::NotifyRequest;
     use crate::mcp::tool_registry::{BaseToolImpl, ToolRegistry};
+    use crate::mcp::tools::notify::types::NotifyRequest;
     use serde_json::json;
 
     #[test]

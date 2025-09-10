@@ -243,8 +243,6 @@ async fn test_shell_action_mixed_with_other_action_types() {
         .contains("Completed at timestamp:"));
 }
 
-
-
 #[tokio::test]
 async fn test_shell_action_result_variable_chaining() {
     // Test that result variables from one shell action can be used in subsequent actions

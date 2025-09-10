@@ -18,17 +18,17 @@ use std::collections::HashMap;
 
 use crate::definition::{Parameter, ParameterType};
 
-// Minimal frontmatter parsing to break circular dependency  
+// Minimal frontmatter parsing to break circular dependency
 pub mod frontmatter {
     use serde_yaml;
-    
+
     pub fn extract_frontmatter_and_content(input: &str) -> (Option<serde_yaml::Value>, String) {
         // Simple frontmatter extraction - look for YAML frontmatter between ---
         if let Some(content) = input.strip_prefix("---\n") {
             if let Some(end_pos) = content.find("\n---\n") {
                 let frontmatter = &content[..end_pos];
                 let body = &content[end_pos + 5..];
-                
+
                 if let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(frontmatter) {
                     return (Some(yaml), body.to_string());
                 }
@@ -36,7 +36,6 @@ pub mod frontmatter {
         }
         (None, input.to_string())
     }
-
 }
 use thiserror::Error;
 
@@ -226,7 +225,7 @@ impl MermaidParser {
 
         // Use shared frontmatter parsing - handle case where no frontmatter exists
         let (frontmatter_option, _content) = frontmatter::extract_frontmatter_and_content(input);
-        
+
         let frontmatter_value = match frontmatter_option {
             Some(yaml) => yaml,
             None => return Ok(parameters), // No frontmatter = no parameters, which is OK
@@ -238,25 +237,25 @@ impl MermaidParser {
                 for param_value in params_array {
                     if let Some(param_obj) = param_value.as_mapping() {
                         let name = param_obj
-                            .get(&serde_yaml::Value::String("name".to_string()))
+                            .get(serde_yaml::Value::String("name".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let description = param_obj
-                            .get(&serde_yaml::Value::String("description".to_string()))
+                            .get(serde_yaml::Value::String("description".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         let required = param_obj
-                            .get(&serde_yaml::Value::String("required".to_string()))
+                            .get(serde_yaml::Value::String("required".to_string()))
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
 
                         // Parse parameter type
                         let type_str = param_obj
-                            .get(&serde_yaml::Value::String("type".to_string()))
+                            .get(serde_yaml::Value::String("type".to_string()))
                             .and_then(|v| v.as_str())
                             .unwrap_or("string");
 
@@ -274,28 +273,31 @@ impl MermaidParser {
                         };
 
                         // Parse default value
-                        let default = param_obj.get(&serde_yaml::Value::String("default".to_string())).cloned();
+                        let default = param_obj
+                            .get(serde_yaml::Value::String("default".to_string()))
+                            .cloned();
 
                         // Parse choices if present
-                        let choices =
-                            param_obj
-                                .get(&serde_yaml::Value::String("choices".to_string()))
-                                .and_then(|v| v.as_sequence())
-                                .map(|seq| {
-                                    seq.iter()
-                                        .filter_map(|choice| choice.as_str())
-                                        .map(String::from)
-                                        .collect::<Vec<String>>()
-                                });
+                        let choices = param_obj
+                            .get(serde_yaml::Value::String("choices".to_string()))
+                            .and_then(|v| v.as_sequence())
+                            .map(|seq| {
+                                seq.iter()
+                                    .filter_map(|choice| choice.as_str())
+                                    .map(String::from)
+                                    .collect::<Vec<String>>()
+                            });
 
                         let mut param =
                             Parameter::new(name, description, parameter_type).required(required);
 
                         if let Some(default_value) = default {
                             // Convert serde_yaml::Value to serde_json::Value
-                            let json_default = serde_json::to_value(&default_value)
-                                .map_err(|e| ParseError::InvalidStructure {
-                                    message: format!("Failed to convert default value: {}", e),
+                            let json_default =
+                                serde_json::to_value(&default_value).map_err(|e| {
+                                    ParseError::InvalidStructure {
+                                        message: format!("Failed to convert default value: {}", e),
+                                    }
                                 })?;
                             param = param.with_default(json_default);
                         }

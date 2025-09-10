@@ -1779,8 +1779,6 @@ async fn test_abort_file_detection_with_newlines() {
     }
 }
 
-
-
 #[tokio::test]
 async fn test_abort_file_detection_zero_transitions_limit() {
     let test_env = IsolatedTestEnvironment::new().expect("Failed to create test environment");

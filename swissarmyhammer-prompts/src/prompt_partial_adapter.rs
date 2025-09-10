@@ -4,8 +4,8 @@
 //! the Liquid template engine's partial system.
 
 use crate::prompts::PromptLibrary;
-use std::sync::Arc;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 /// Adapter that allows prompts to be used as Liquid template partials
 #[derive(Debug)]
@@ -60,16 +60,11 @@ impl liquid::partials::PartialSource for PromptPartialAdapter {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::prompts::{Prompt, PromptLibrary};
     use swissarmyhammer_templating::PartialLoader;
-
-
-
 
     #[test]
     fn test_prompt_partial_adapter() {

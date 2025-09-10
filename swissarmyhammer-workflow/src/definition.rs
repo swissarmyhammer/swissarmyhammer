@@ -15,7 +15,7 @@ pub struct Parameter {
     /// Parameter name
     pub name: String,
     /// Parameter description
-    pub description: String,  
+    pub description: String,
     /// Whether parameter is required
     pub required: bool,
     /// Default value for parameter
@@ -54,19 +54,19 @@ impl Parameter {
             validation: None,
         }
     }
-    
+
     /// Set whether parameter is required
     pub fn required(mut self, required: bool) -> Self {
         self.required = required;
         self
     }
-    
+
     /// Set default value for parameter
     pub fn with_default(mut self, default: serde_json::Value) -> Self {
         self.default = Some(default);
         self
     }
-    
+
     /// Set valid choices for choice parameters
     pub fn with_choices(mut self, choices: Vec<String>) -> Self {
         self.choices = Some(choices);
@@ -80,7 +80,7 @@ pub enum ParameterType {
     /// String parameter
     String,
     /// Numeric parameter
-    Number, 
+    Number,
     /// Boolean parameter
     Boolean,
     /// Single choice from predefined options
@@ -95,7 +95,7 @@ impl ParameterType {
         match self {
             ParameterType::String => "string",
             ParameterType::Number => "number",
-            ParameterType::Boolean => "boolean", 
+            ParameterType::Boolean => "boolean",
             ParameterType::Choice => "choice",
             ParameterType::MultiChoice => "multi_choice",
         }
@@ -123,16 +123,25 @@ pub struct ValidationResult {
 impl ValidationResult {
     /// Create a new empty validation result
     pub fn new() -> Self {
-        Self {
-            issues: Vec::new(),
-        }
+        Self { issues: Vec::new() }
     }
-    
+}
+
+impl Default for ValidationResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ValidationResult {
     /// Check if validation passed (no errors)
     pub fn is_valid(&self) -> bool {
-        !self.issues.iter().any(|issue| matches!(issue.level, ValidationLevel::Error))
+        !self
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.level, ValidationLevel::Error))
     }
-    
+
     /// Add a validation issue
     pub fn add_issue(&mut self, issue: ValidationIssue) {
         self.issues.push(issue);
@@ -165,7 +174,6 @@ pub enum ValidationLevel {
     /// Warning - potential issue
     Warning,
 }
-
 
 use thiserror::Error;
 
@@ -460,14 +468,15 @@ impl ParameterProvider for Workflow {
 impl Validatable for Workflow {
     fn validate(&self, workflow_path: Option<&std::path::Path>) -> Vec<ValidationIssue> {
         let mut issues = Vec::new();
-        
+
         match self.validate_structure() {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(error_messages) => {
                 let workflow_name = self.name.to_string();
-                let file_path = workflow_path.map(|p| p.to_string_lossy().to_string())
+                let file_path = workflow_path
+                    .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| format!("workflow:{}", workflow_name));
-                
+
                 for message in error_messages {
                     issues.push(ValidationIssue {
                         level: ValidationLevel::Error,
@@ -481,7 +490,7 @@ impl Validatable for Workflow {
                 }
             }
         }
-        
+
         issues
     }
 }
@@ -567,12 +576,22 @@ mod tests {
 
         // Add invalid parameters
         workflow.parameters.push(
-            Parameter::new("".to_string(), "Parameter with empty name".to_string(), ParameterType::String).required(true),
+            Parameter::new(
+                "".to_string(),
+                "Parameter with empty name".to_string(),
+                ParameterType::String,
+            )
+            .required(true),
         );
 
-        workflow
-            .parameters
-            .push(Parameter::new("no_description".to_string(), "".to_string(), ParameterType::String).required(true));
+        workflow.parameters.push(
+            Parameter::new(
+                "no_description".to_string(),
+                "".to_string(),
+                ParameterType::String,
+            )
+            .required(true),
+        );
 
         workflow.parameters.push(
             Parameter::new(
@@ -642,9 +661,10 @@ mod tests {
         let mut workflow = create_basic_workflow();
 
         // Add invalid parameter that should cause workflow validation to fail
-        workflow
-            .parameters
-            .push(Parameter::new("invalid".to_string(), "".to_string(), ParameterType::Choice).required(true));
+        workflow.parameters.push(
+            Parameter::new("invalid".to_string(), "".to_string(), ParameterType::Choice)
+                .required(true),
+        );
 
         let result = workflow.validate_structure();
         assert!(result.is_err());
@@ -658,21 +678,30 @@ mod tests {
 
     #[test]
     fn test_shared_parameter_system_integration() {
-        use crate::test_helpers::*;
         use crate::definition::ParameterProvider;
+        use crate::test_helpers::*;
 
         let mut workflow = create_basic_workflow();
 
         // Add workflow parameters
         workflow.parameters.push(
-            Parameter::new("input_file".to_string(), "Input file path".to_string(), ParameterType::String).required(true),
+            Parameter::new(
+                "input_file".to_string(),
+                "Input file path".to_string(),
+                ParameterType::String,
+            )
+            .required(true),
         );
 
         workflow.parameters.push(
-            Parameter::new("mode".to_string(), "Processing mode".to_string(), ParameterType::Choice)
-                .required(false)
-                .with_default(serde_json::Value::String("fast".to_string()))
-                .with_choices(vec!["fast".to_string(), "thorough".to_string()]),
+            Parameter::new(
+                "mode".to_string(),
+                "Processing mode".to_string(),
+                ParameterType::Choice,
+            )
+            .required(false)
+            .with_default(serde_json::Value::String("fast".to_string()))
+            .with_choices(vec!["fast".to_string(), "thorough".to_string()]),
         );
 
         // Test that ParameterProvider trait works

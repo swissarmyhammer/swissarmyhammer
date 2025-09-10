@@ -230,8 +230,6 @@ This is test prompt {i}!"#
     }
 }
 
-
-
 // Example usage for documentation
 #[test]
 fn test_example_usage() {

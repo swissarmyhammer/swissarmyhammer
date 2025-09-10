@@ -845,19 +845,20 @@ impl PromptAction {
         //                     "no prompts available".to_string()
         //                 } else {
         //                     format!("available prompts: {}", names.join(", "))
-                        //     }
-                        // })
-                        // .unwrap_or_else(|| "unable to list available prompts".to_string());
+        //     }
+        // })
+        // .unwrap_or_else(|| "unable to list available prompts".to_string());
 
-                // ActionError::ClaudeError(format!(
-                //     "Failed to render prompt '{}': {} ({})",
-                //     self.prompt_name, e, available_prompts
-                // ))
-            // })?;
+        // ActionError::ClaudeError(format!(
+        //     "Failed to render prompt '{}': {} ({})",
+        //     self.prompt_name, e, available_prompts
+        // ))
+        // })?;
 
         // TODO: Temporary error until circular dependency is fixed
         Err(ActionError::ClaudeError(
-            "PromptAction temporarily disabled due to circular dependency with main crate".to_string()
+            "PromptAction temporarily disabled due to circular dependency with main crate"
+                .to_string(),
         ))
     }
 

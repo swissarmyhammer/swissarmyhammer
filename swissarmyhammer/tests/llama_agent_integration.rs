@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_workflow::{AgentExecutionContext, AgentExecutorFactory, WorkflowTemplateContext};
 use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};
+use swissarmyhammer_workflow::{
+    AgentExecutionContext, AgentExecutorFactory, WorkflowTemplateContext,
+};
 use tokio::time::timeout;
 
 #[tokio::test]
