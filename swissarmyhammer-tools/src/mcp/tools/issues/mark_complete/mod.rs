@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::SwissArmyHammerError;
-use swissarmyhammer_issues_config::Config;
+use swissarmyhammer_issues::Config;
 
 /// Tool for marking issues as complete
 #[derive(Default)]

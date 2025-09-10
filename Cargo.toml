@@ -8,7 +8,6 @@ members = [
     "swissarmyhammer-cli",
     "swissarmyhammer-tools",
     "swissarmyhammer-config",
-    "swissarmyhammer-issues-config",
     "swissarmyhammer-issues",
     "swissarmyhammer-common",
     "swissarmyhammer-memoranda",

@@ -133,3 +133,73 @@ Looking at the codebase:
 This follows the principle of **cohesive domain boundaries**. Configuration for a domain should be part of that domain, not a separate crate. This simplifies the dependency graph and makes the issues domain more self-contained.
 
 Other domains (search, workflow, etc.) manage their configuration internally rather than having separate config crates. Issues should follow the same pattern for consistency and simplicity.
+
+## Implementation Progress
+
+### ✅ Migration Successfully Completed
+
+**Date**: 2025-09-10
+**Status**: All tasks from code review completed successfully
+
+#### Tasks Completed:
+1. **Config Module Integration**: Added `pub mod config;` and `pub use config::Config;` to `swissarmyhammer-issues/src/lib.rs` for backward compatibility
+2. **Dependency Updates**: Removed `swissarmyhammer-issues-config` dependency from issues crate Cargo.toml (swissarmyhammer-common was already present)
+3. **Consumer Updates**: Updated 4 import statements in swissarmyhammer-tools from `swissarmyhammer_issues_config::Config` to `swissarmyhammer_issues::Config`
+4. **Cargo.toml Updates**: Removed `swissarmyhammer-issues-config` dependency from:
+   - `swissarmyhammer-tools/Cargo.toml`
+   - `swissarmyhammer/Cargo.toml`
+   - Workspace `Cargo.toml` members list
+5. **Internal Import Fix**: Updated `swissarmyhammer-issues/src/types.rs` to use `use crate::config::Config` instead of external import
+6. **Directory Cleanup**: Removed entire `swissarmyhammer-issues-config/` directory
+7. **Git Tracking**: Added `swissarmyhammer-issues/src/config.rs` to git
+
+#### Verification Results:
+- **Build**: `cargo build --all-features` ✅ Success
+- **Tests**: `cargo nextest run` ✅ All 35 tests pass in issues crate, 371 tests pass in tools crate  
+- **Config Functionality**: All config tests passing, environment variable loading works correctly
+- **Backward Compatibility**: Import `use swissarmyhammer_issues::Config;` works identically to old separate crate
+
+#### Files Modified:
+- **Created**: `swissarmyhammer-issues/src/config.rs` (moved from separate crate)
+- **Updated**: 
+  - `swissarmyhammer-issues/src/lib.rs` (added module and re-exports)
+  - `swissarmyhammer-issues/src/types.rs` (fixed internal import)
+  - `swissarmyhammer-issues/Cargo.toml` (removed config dependency)
+  - `swissarmyhammer-tools/Cargo.toml` (removed config dependency)
+  - `swissarmyhammer/Cargo.toml` (removed config dependency)
+  - `Cargo.toml` (removed from workspace members)
+  - 4 files in swissarmyhammer-tools (updated imports)
+- **Removed**: Entire `swissarmyhammer-issues-config/` directory
+
+#### Outcome:
+The migration is **complete**. The `swissarmyhammer-issues-config` crate has been successfully merged into `swissarmyhammer-issues` with full backward compatibility. All configuration functionality is preserved, all tests pass, and the dependency graph is simplified as intended.
+
+## Proposed Solution
+
+Based on my analysis, I will merge `swissarmyhammer-issues-config` into `swissarmyhammer-issues` by:
+
+### Current Usage Analysis:
+- **Dependencies**: 4 crates depend on issues-config: `swissarmyhammer-issues`, `swissarmyhammer-tools`, `swissarmyhammer` (main), and workspace
+- **Import locations**: 6 files import the config:
+  - `swissarmyhammer-issues/src/types.rs`
+  - `swissarmyhammer-tools/src/mcp/utils.rs`
+  - `swissarmyhammer-tools/src/mcp/tools/issues/show/mod.rs`
+  - `swissarmyhammer-tools/src/mcp/tools/issues/mark_complete/mod.rs`
+  - `swissarmyhammer-tools/tests/test_issue_show_enhanced.rs`
+
+### Implementation Steps:
+1. **Move config code**: Copy `lib.rs` content to `swissarmyhammer-issues/src/config.rs`
+2. **Update issues crate**: Add config module and re-export types
+3. **Copy dependencies**: Move `swissarmyhammer-common` dependency to issues crate
+4. **Update all consumers**: Change imports from `swissarmyhammer_issues_config` to `swissarmyhammer_issues`
+5. **Remove config crate**: Delete directory and update workspace
+6. **Test**: Ensure everything builds and tests pass
+
+### Files to modify:
+- Create: `swissarmyhammer-issues/src/config.rs`
+- Update: `swissarmyhammer-issues/src/lib.rs` (add config module)
+- Update: `swissarmyhammer-issues/Cargo.toml` (remove config dependency)
+- Update: 6 files with import changes
+- Update: 3 Cargo.toml files (remove config dependency)
+- Remove: `swissarmyhammer-issues-config/` directory
+- Update: workspace `Cargo.toml`

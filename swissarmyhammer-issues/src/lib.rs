@@ -68,6 +68,7 @@
 //! # }
 //! ```
 
+pub mod config;
 pub mod error;
 pub mod metrics;
 pub mod storage;
@@ -75,6 +76,7 @@ pub mod types;
 pub mod utils;
 
 // Re-export main types for convenience
+pub use config::Config;
 pub use error::{Error, Result};
 pub use metrics::{MetricsSnapshot, Operation, PerformanceMetrics};
 pub use storage::{FileSystemIssueStorage, IssueStorage};

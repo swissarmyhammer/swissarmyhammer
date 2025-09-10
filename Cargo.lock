@@ -6419,7 +6419,6 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-issues",
- "swissarmyhammer-issues-config",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
@@ -6559,20 +6558,12 @@ dependencies = [
  "serde_yaml",
  "swissarmyhammer-common",
  "swissarmyhammer-git",
- "swissarmyhammer-issues-config",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
  "tracing",
  "ulid",
-]
-
-[[package]]
-name = "swissarmyhammer-issues-config"
-version = "0.1.0"
-dependencies = [
- "swissarmyhammer-common",
 ]
 
 [[package]]
@@ -6780,7 +6771,6 @@ dependencies = [
  "swissarmyhammer-config",
  "swissarmyhammer-git",
  "swissarmyhammer-issues",
- "swissarmyhammer-issues-config",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-outline",
  "swissarmyhammer-search",

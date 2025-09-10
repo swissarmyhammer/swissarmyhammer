@@ -18,7 +18,6 @@ categories = ["command-line-utilities", "development-tools"]
 swissarmyhammer = { path = "../swissarmyhammer" }
 swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
-swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }

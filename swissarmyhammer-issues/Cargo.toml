@@ -11,7 +11,6 @@ description = "Issue management and tracking system for SwissArmyHammer"
 # Workspace dependencies
 swissarmyhammer-common = { path = "../swissarmyhammer-common" }
 swissarmyhammer-git = { path = "../swissarmyhammer-git" }
-swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
 
 # Core async and serialization
 tokio = { workspace = true }

@@ -1,10 +1,10 @@
 //! Core types for issue management
 
+use crate::config::Config;
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use swissarmyhammer_issues_config::Config;
 
 /// A wrapper type for issue names to prevent mixing up different string types
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
