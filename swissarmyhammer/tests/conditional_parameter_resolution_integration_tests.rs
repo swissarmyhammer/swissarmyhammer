@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use swissarmyhammer::common::parameters::{
+use swissarmyhammer_common::parameters::{
     DefaultParameterResolver, Parameter, ParameterError, ParameterResolver, ParameterType,
 };
 

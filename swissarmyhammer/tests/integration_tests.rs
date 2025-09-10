@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
-use swissarmyhammer::common::{Parameter, ParameterType};
-use swissarmyhammer::prelude::*;
+use swissarmyhammer::*;
+use swissarmyhammer_common::{Parameter, ParameterType};
 use swissarmyhammer_config::TemplateContext;
 use tempfile::TempDir;
 
@@ -229,8 +229,6 @@ This is test prompt {i}!"#
         assert_eq!(prompt.category, Some("test".to_string()));
     }
 }
-
-
 
 // Example usage for documentation
 #[test]

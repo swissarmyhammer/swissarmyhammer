@@ -61,7 +61,7 @@ fn test_home_directory_override_works() {
 
 #[test]
 fn test_prompt_loading_with_test_home() {
-    use swissarmyhammer::prompts::PromptLoader;
+    use swissarmyhammer_prompts::PromptLoader;
 
     let guard = IsolatedTestHome::new();
 

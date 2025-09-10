@@ -8,6 +8,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use swissarmyhammer_workflow::{
+    FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
+    WorkflowStorage, WorkflowStorageBackend,
+};
 
 use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
@@ -16,10 +20,11 @@ use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
-use swissarmyhammer_workflow::{
-    FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
-    WorkflowStorage, WorkflowStorageBackend,
-};
+// TODO: Re-enable when workflow functionality is available
+// use swissarmyhammer_workflow::{
+//     FileSystemWorkflowRunStorage, FileSystemWorkflowStorage, WorkflowRunStorageBackend,
+//     WorkflowStorage, WorkflowStorageBackend,
+// };
 use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
@@ -37,7 +42,6 @@ pub struct McpServer {
     workflow_storage: Arc<RwLock<WorkflowStorage>>,
     file_watcher: Arc<Mutex<FileWatcher>>,
     tool_registry: Arc<ToolRegistry>,
-    /// Tool context containing shared state for tool execution
     pub tool_context: Arc<ToolContext>,
 }
 

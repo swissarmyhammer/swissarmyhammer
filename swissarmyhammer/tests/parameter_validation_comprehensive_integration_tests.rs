@@ -9,7 +9,7 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use swissarmyhammer::common::parameters::{
+use swissarmyhammer_common::parameters::{
     CommonPatterns, Parameter, ParameterError, ParameterResult, ParameterType, ParameterValidator,
 };
 
@@ -1039,17 +1039,25 @@ mod parameter_validation_integration_tests {
     }
 }
 
-// SPECIFICATION COMPLIANCE TESTS
-// These tests validate all success criteria from the workflow parameters specification
-
 #[cfg(test)]
 mod specification_compliance_tests {
     use serde_json::json;
     use std::collections::HashMap;
-    use swissarmyhammer::common::ParameterType;
-    use swissarmyhammer::common::{
-        discover_workflow_parameters, DefaultParameterResolver, ParameterResolver,
-    };
+    use swissarmyhammer::Parameter;
+    use swissarmyhammer_common::{DefaultParameterResolver, ParameterResolver};
+    use swissarmyhammer_common::{ParameterType, Result};
+    use swissarmyhammer_workflow::{WorkflowName, WorkflowStorage};
+
+    /// Discover workflow parameters for CLI argument generation
+    ///
+    /// This function loads a workflow by name and returns its parameter definitions
+    /// for use in dynamic CLI argument generation.
+    fn discover_workflow_parameters(workflow_name: &str) -> Result<Vec<Parameter>> {
+        let storage = WorkflowStorage::file_system()?;
+        let name = WorkflowName::new(workflow_name.to_string());
+        let workflow = storage.get_workflow(&name)?;
+        Ok(workflow.parameters)
+    }
 
     /// Test that workflow parameters are defined in frontmatter like prompts
     #[tokio::test]

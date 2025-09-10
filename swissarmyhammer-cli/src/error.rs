@@ -162,9 +162,9 @@ pub fn format_component_specific_git_error(component: &str, explanation: &str) -
 }
 
 /// Convert parameter errors to CLI errors with enhanced context
-impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
-    fn from(error: swissarmyhammer::common::parameters::ParameterError) -> Self {
-        use swissarmyhammer::common::parameters::ErrorMessageEnhancer;
+impl From<swissarmyhammer_common::ParameterError> for CliError {
+    fn from(error: swissarmyhammer_common::ParameterError) -> Self {
+        use swissarmyhammer_common::ErrorMessageEnhancer;
 
         let enhancer = ErrorMessageEnhancer::new();
         let enhanced_error = enhancer.enhance_parameter_error(&error);
@@ -178,10 +178,8 @@ impl From<swissarmyhammer::common::parameters::ParameterError> for CliError {
 }
 
 /// Format enhanced parameter errors for CLI display
-fn format_enhanced_parameter_error(
-    error: &swissarmyhammer::common::parameters::ParameterError,
-) -> String {
-    use swissarmyhammer::common::parameters::ParameterError;
+fn format_enhanced_parameter_error(error: &swissarmyhammer_common::ParameterError) -> String {
+    use swissarmyhammer_common::ParameterError;
 
     match error {
         ParameterError::ValidationFailedWithContext {

@@ -5,6 +5,7 @@
 
 use crate::fs_utils::{FileSystem, FileSystemUtils};
 use std::path::{Path, PathBuf};
+use swissarmyhammer_common::SwissArmyHammerError;
 use thiserror::Error as ThisError;
 
 /// Plan command specific errors
@@ -47,7 +48,7 @@ pub enum PlanCommandError {
         plan_filename: String,
         #[source]
         /// The underlying workflow error
-        source: WorkflowError,
+        source: SwissArmyHammerError,
     },
 
     /// Issue creation failed during planning
@@ -206,7 +207,7 @@ fn validate_plan_file_with_fs(
         Ok(content) => content,
         Err(e) => {
             match e {
-                crate::error::SwissArmyHammerError::Io(io_err) => {
+                swissarmyhammer_common::SwissArmyHammerError::Io(io_err) => {
                     // Check both the error kind and the message for permission denied
                     // Since with_io_context wraps errors with ErrorKind::Other, we need
                     // to also check the error message content
@@ -292,8 +293,8 @@ fn validate_plan_file_with_fs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs_utils::tests::MockFileSystem;
     use std::sync::Arc;
+    use swissarmyhammer_common::fs_utils::MockFileSystem;
 
     #[test]
     fn test_validate_plan_file_success() {

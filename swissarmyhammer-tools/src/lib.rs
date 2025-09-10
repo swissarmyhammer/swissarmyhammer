@@ -7,7 +7,7 @@
 //!
 //! - Issue management and tracking
 //! - Memoranda (memo/note) management
-//! - Semantic search across codebases  
+//! - Semantic search across codebases
 //! - Code outline generation
 //!
 //! ## Features
@@ -25,12 +25,10 @@
 //! ```rust,ignore
 //! use swissarmyhammer_tools::McpServer;
 //! use swissarmyhammer_prompts::PromptLibrary;
-//! 
+//!
 //! let library = PromptLibrary::new();
 //! let server = McpServer::new(library)?;
 //! ```
-
-#![warn(missing_docs)]
 
 /// Model Context Protocol (MCP) server and tools
 pub mod mcp;

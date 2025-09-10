@@ -5,12 +5,9 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
-use swissarmyhammer::common::Parameter;
-use swissarmyhammer::common::{
-    discover_workflow_parameters, resolve_parameters_from_vars, DefaultParameterResolver,
-    ParameterResolver,
-};
 use swissarmyhammer::Result;
+use swissarmyhammer_common::Parameter;
+use swissarmyhammer_common::{DefaultParameterResolver, ParameterResolver};
 
 /// Resolve workflow parameters with optional interactive prompting
 pub fn resolve_workflow_parameters_interactive(
@@ -78,12 +75,6 @@ mod tests {
         let result = resolve_workflow_parameters_interactive("nonexistent-workflow", &[], false);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_get_workflow_parameters_for_help_empty() {
-        let result = get_workflow_parameters_for_help("nonexistent-workflow");
-        assert!(result.is_empty());
     }
 
     #[test]

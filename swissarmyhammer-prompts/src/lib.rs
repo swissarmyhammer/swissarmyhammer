@@ -16,15 +16,14 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
-mod prompts;
-mod parameter_types;
-mod storage;
-mod validation;
+mod file_loader;
 mod frontmatter;
 mod prompt_filter;
 mod prompt_partial_adapter;
 mod prompt_resolver;
-mod file_loader;
+mod prompts;
+mod storage;
+mod validation;
 
 // Re-export main types from prompts module
 pub use prompts::{Prompt, PromptLibrary, PromptLoader};
@@ -33,16 +32,16 @@ pub use prompts::{Prompt, PromptLibrary, PromptLoader};
 pub use prompt_resolver::PromptResolver;
 
 // Re-export file loader types
-pub use file_loader::{FileSource, FileEntry, VirtualFileSystem};
+pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
 
 // Re-export validation types
-pub use validation::{ValidationIssue, ValidationLevel, Validatable, ValidationResult};
+pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
 
 // Re-export parameter types
-pub use parameter_types::{Parameter, ParameterProvider, ParameterType};
+pub use swissarmyhammer_common::{Parameter, ParameterProvider, ParameterType};
 
 // Re-export storage types
-pub use storage::{StorageBackend, MemoryStorage, FileStorage};
+pub use storage::{FileStorage, MemoryStorage, StorageBackend};
 
 // Re-export frontmatter types
 pub use frontmatter::{parse_frontmatter, FrontmatterResult};
@@ -65,18 +64,10 @@ pub enum PromptSource {
     /// Built-in prompts embedded in the binary
     Builtin,
     /// User prompts from ~/.swissarmyhammer/prompts
-    User, 
+    User,
     /// Local prompts from project .swissarmyhammer directories
     Local,
 }
-
-
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -100,9 +91,9 @@ mod tests {
     fn test_prompt_library() {
         let mut library = PromptLibrary::new();
         let prompt = Prompt::new("test", "Hello {{name}}!");
-        
+
         library.add(prompt).unwrap();
-        
+
         assert!(library.get("test").is_ok());
         assert_eq!(library.list_names().unwrap().len(), 1);
         // Note: get_source is not available in this simplified API

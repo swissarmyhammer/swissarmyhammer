@@ -3,9 +3,9 @@
 //! Executes planning workflow for specific specification files
 
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
-use swissarmyhammer::error::{ErrorSeverity, PlanCommandError};
 use swissarmyhammer::plan_utils::validate_plan_file_comprehensive;
-use swissarmyhammer::workflow::{
+use swissarmyhammer::{ErrorSeverity, PlanCommandError};
+use swissarmyhammer::{
     FileSystemWorkflowStorage, WorkflowExecutor, WorkflowName, WorkflowStorageBackend,
 };
 
@@ -51,7 +51,7 @@ async fn run_plan(plan_filename: String) -> i32 {
         Err(e) => {
             let plan_error = PlanCommandError::WorkflowExecutionFailed {
                 plan_filename: plan_filename.clone(),
-                source: swissarmyhammer::error::WorkflowError::ExecutionFailed {
+                source: swissarmyhammer::WorkflowError::ExecutionFailed {
                     reason: format!("Failed to create workflow storage: {e}"),
                 },
             };
@@ -68,7 +68,7 @@ async fn run_plan(plan_filename: String) -> i32 {
         Err(e) => {
             let plan_error = PlanCommandError::WorkflowExecutionFailed {
                 plan_filename: plan_filename.clone(),
-                source: swissarmyhammer::error::WorkflowError::ExecutionFailed {
+                source: swissarmyhammer::WorkflowError::ExecutionFailed {
                     reason: format!("Failed to load workflow: {e}"),
                 },
             };
