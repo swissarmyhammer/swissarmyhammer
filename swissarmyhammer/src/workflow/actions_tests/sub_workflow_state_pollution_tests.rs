@@ -3,7 +3,7 @@
 //! This module tests that nested workflows with the same state names
 //! don't interfere with each other during execution.
 
-use crate::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use crate::workflow::actions::{clear_test_storage, set_test_storage};
 use crate::workflow::storage::{
     MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowStorageBackend,

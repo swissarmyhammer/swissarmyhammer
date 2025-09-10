@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use swissarmyhammer::test_utils::{IsolatedTestEnvironment, TestFileSystem};
+use swissarmyhammer_common::test_utils::{IsolatedTestEnvironment, TestFileSystem};
 use swissarmyhammer::common::parameters::{
     DefaultParameterResolver, Parameter, ParameterResolver, ParameterType,
     ParameterGroup,

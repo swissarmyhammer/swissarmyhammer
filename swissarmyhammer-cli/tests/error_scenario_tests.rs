@@ -4,7 +4,7 @@
 //! proper error handling, user-friendly messages, and correct exit codes.
 
 use anyhow::Result;
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
 use tempfile::TempDir;
 
 mod in_process_test_utils;

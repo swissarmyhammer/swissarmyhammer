@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::workflow::actions::{AgentExecutionContext, AgentExecutorFactory};
 use swissarmyhammer::workflow::template_context::WorkflowTemplateContext;
 use swissarmyhammer_config::agent::{AgentConfig, LlamaAgentConfig};

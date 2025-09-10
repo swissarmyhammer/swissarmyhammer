@@ -11,13 +11,12 @@ use tempfile::TempDir;
 
 // Re-export the ProcessGuard from the main crate's test_utils
 #[allow(unused_imports)]
-pub use swissarmyhammer::test_utils::ProcessGuard;
+pub use swissarmyhammer_common::test_utils::ProcessGuard;
 
 // Re-export commonly used test utilities from the main crate
 #[allow(unused_imports)]
-pub use swissarmyhammer::test_utils::{
-    create_simple_test_prompt, create_test_home_guard, create_test_prompt_library,
-    create_test_prompts, get_test_home, get_test_swissarmyhammer_dir, TestHomeGuard,
+pub use swissarmyhammer_common::test_utils::{
+    create_isolated_test_home, create_temp_dir, IsolatedTestEnvironment, IsolatedTestHome,
 };
 
 
@@ -29,16 +28,65 @@ pub use swissarmyhammer::test_utils::{
 
 
 
-/// Create a temporary directory for testing
-///
-/// Returns a TempDir that will be automatically cleaned up when dropped.
-#[allow(dead_code)]
-pub fn create_temp_dir() -> Result<TempDir> {
-    TempDir::new().map_err(|e| anyhow::anyhow!("Failed to create temporary directory: {}", e))
-}
+
 
 /// Create test prompt files in a directory
 ///
+/// Simple test prompt structure for testing
+#[derive(serde::Serialize)]
+struct TestPrompt {
+    name: String,
+    template: String,
+    description: Option<String>,
+    category: Option<String>,
+    tags: Vec<String>,
+}
+
+impl TestPrompt {
+    fn new(name: &str, template: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            template: template.to_string(),
+            description: None,
+            category: None,
+            tags: Vec::new(),
+        }
+    }
+
+    fn with_description(mut self, desc: &str) -> Self {
+        self.description = Some(desc.to_string());
+        self
+    }
+
+    fn with_category(mut self, cat: &str) -> Self {
+        self.category = Some(cat.to_string());
+        self
+    }
+
+    fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+}
+
+/// Create a set of standard test prompts for testing
+fn create_test_prompts() -> Vec<TestPrompt> {
+    vec![
+        TestPrompt::new("code-review", "Review this code: {{ code }}")
+            .with_description("A prompt for reviewing code")
+            .with_category("development")
+            .with_tags(vec!["code".to_string(), "review".to_string()]),
+        TestPrompt::new("bug-fix", "Fix this bug: {{ error }}")
+            .with_description("A prompt for fixing bugs")
+            .with_category("debugging")
+            .with_tags(vec!["bug".to_string(), "fix".to_string()]),
+        TestPrompt::new("test-generation", "Generate tests for: {{ function }}")
+            .with_description("A prompt for generating tests")
+            .with_category("testing")
+            .with_tags(vec!["test".to_string(), "generation".to_string()]),
+    ]
+}
+
 /// Creates YAML files for each test prompt in the specified directory.
 #[allow(dead_code)]
 pub fn create_test_prompt_files(dir: &Path) -> Result<()> {
@@ -98,7 +146,7 @@ pub fn create_semantic_test_guard() -> SemanticTestGuard {
 /// Returns a tuple of (temp_dir, prompts_dir) for testing CLI functionality.
 #[allow(dead_code)]
 pub fn create_test_environment() -> Result<(TempDir, PathBuf)> {
-    let temp_dir = create_temp_dir()?;
+    let temp_dir = create_temp_dir();
     let prompts_dir = temp_dir.path().join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
     

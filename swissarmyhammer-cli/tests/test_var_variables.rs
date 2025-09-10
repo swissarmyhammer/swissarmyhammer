@@ -3,7 +3,7 @@
 use anyhow::Result;
 use predicates::prelude::*;
 use std::fs;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 // Imports cleaned up - FlowSubcommand and run_flow_command not used in this test file
 
 mod in_process_test_utils;

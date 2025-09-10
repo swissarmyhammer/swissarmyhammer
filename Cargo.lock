@@ -6521,6 +6521,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "swissarmyhammer",
+ "swissarmyhammer-common",
  "tempfile",
  "thiserror 1.0.69",
  "tracing",

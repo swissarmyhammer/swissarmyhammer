@@ -53,3 +53,4 @@ tokio = { workspace = true, features = ["test-util"] }
 tokio-test = "0.4"
 swissarmyhammer = { path = "../swissarmyhammer" }
 futures-util.workspace = true
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }

@@ -2256,7 +2256,7 @@ pub fn parse_action_from_description(description: &str) -> ActionResult<Option<B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::IsolatedTestEnvironment;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
     use crate::workflow::action_parser::ActionParser;
     use crate::workflow::executor_utils;
     use serial_test::serial;

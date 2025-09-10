@@ -2279,7 +2279,7 @@ mod tests {
     use crate::action_parser::ActionParser;
     use crate::executor_utils;
     use serial_test::serial;
-    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
     #[test]
     fn test_variable_substitution() {

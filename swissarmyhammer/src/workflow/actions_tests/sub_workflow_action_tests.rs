@@ -1,6 +1,6 @@
 //! Tests for SubWorkflowAction
 
-use crate::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use crate::workflow::actions::*;
 use crate::workflow::WorkflowTemplateContext;
 use serde_json::Value;

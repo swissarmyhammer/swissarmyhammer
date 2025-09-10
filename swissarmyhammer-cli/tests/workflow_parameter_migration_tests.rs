@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::{cli::FlowSubcommand, commands::flow::run_flow_command};
 
 mod in_process_test_utils;

@@ -24,7 +24,7 @@
 ///     // with mock .swissarmyhammer structure
 /// }
 /// ```
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tempfile::TempDir;
 
@@ -220,6 +220,112 @@ impl Drop for IsolatedTestHome {
     }
 }
 
+/// Isolated test environment that combines HOME isolation with a working directory
+///
+/// This provides a complete isolated environment for tests that need both:
+/// - Isolated HOME directory (via IsolatedTestHome)
+/// - Temporary working directory for test operations
+/// - Access to issues and workflow directories
+///
+/// # Usage
+///
+/// ```no_run
+/// use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
+///
+/// #[test]
+/// fn test_something() -> std::io::Result<()> {
+///     let env = IsolatedTestEnvironment::new()?;
+///     // HOME is isolated, temp_dir available for operations
+///     Ok(())
+/// }
+/// ```
+pub struct IsolatedTestEnvironment {
+    _home_guard: IsolatedTestHome,
+    _temp_dir: TempDir,
+}
+
+impl IsolatedTestEnvironment {
+    /// Creates a new isolated test environment with temporary HOME directory only.
+    ///
+    /// This creates:
+    /// - A temporary home directory with mock .swissarmyhammer structure
+    /// - A temporary directory that can be used as working directory if needed
+    /// - Does NOT change the current working directory to allow parallel test execution
+    pub fn new() -> std::io::Result<Self> {
+        // Retry up to 3 times in case of temporary filesystem issues during parallel test execution
+        for attempt in 1..=3 {
+            match Self::try_create() {
+                Ok(env) => return Ok(env),
+                Err(_e) if attempt < 3 => {
+                    // Add small delay before retry to reduce contention
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!()
+    }
+
+    /// Try to create an isolated test environment (single attempt)
+    fn try_create() -> std::io::Result<Self> {
+        let home_guard = IsolatedTestHome::new();
+        let temp_dir = TempDir::new()?;
+
+        // Ensure the temporary directory exists and is accessible
+        let temp_path = temp_dir.path();
+        if !temp_path.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Temporary directory does not exist: {:?}", temp_path),
+            ));
+        }
+
+        // Verify we can access the directory
+        match std::fs::read_dir(temp_path) {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Cannot access temporary directory {:?}: {}", temp_path, e),
+                ));
+            }
+        }
+
+        // NOTE: We do NOT change the current working directory to allow parallel test execution
+
+        Ok(Self {
+            _home_guard: home_guard,
+            _temp_dir: temp_dir,
+        })
+    }
+
+    /// Get the path to the isolated home directory
+    pub fn home_path(&self) -> PathBuf {
+        self._home_guard.home_path()
+    }
+
+    /// Get the path to the .swissarmyhammer directory in the isolated home
+    pub fn swissarmyhammer_dir(&self) -> PathBuf {
+        self._home_guard.swissarmyhammer_dir()
+    }
+
+    /// Get the path to the temporary working directory
+    pub fn temp_dir(&self) -> PathBuf {
+        self._temp_dir.path().to_path_buf()
+    }
+
+    /// Get the path to the issues directory in the isolated home
+    pub fn issues_dir(&self) -> PathBuf {
+        self.swissarmyhammer_dir().join("issues")
+    }
+
+    /// Get the path to the completed issues directory in the isolated home
+    pub fn complete_dir(&self) -> PathBuf {
+        self.issues_dir().join("complete")
+    }
+}
+
 /// Create a temporary directory for testing
 ///
 /// This is a convenience wrapper around tempfile::TempDir::new() that provides
@@ -241,6 +347,85 @@ pub fn create_temp_dir() -> TempDir {
         }
     }
     unreachable!()
+}
+
+/// Test file system helper for creating temporary files and directories in tests
+///
+/// Provides convenient methods for creating test fixtures with proper cleanup.
+/// The temporary directory is automatically cleaned up when the TestFileSystem is dropped.
+///
+/// # Example
+///
+/// ```no_run
+/// use swissarmyhammer_common::test_utils::TestFileSystem;
+///
+/// let fs = TestFileSystem::new();
+/// let config_path = fs.create_file("config.yaml", "key: value");
+/// let data_dir = fs.create_dir("data");
+/// ```
+pub struct TestFileSystem {
+    temp_dir: TempDir,
+}
+
+impl Default for TestFileSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TestFileSystem {
+    /// Create a new test file system
+    pub fn new() -> Self {
+        Self {
+            temp_dir: create_temp_dir(),
+        }
+    }
+
+    /// Get the root path of the test file system
+    pub fn root(&self) -> &Path {
+        self.temp_dir.path()
+    }
+
+    /// Create a file with the given relative path and content
+    pub fn create_file<P: AsRef<Path>>(&self, path: P, content: &str) -> PathBuf {
+        let full_path = self.temp_dir.path().join(path);
+
+        // Ensure parent directory exists
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create parent directory");
+        }
+
+        std::fs::write(&full_path, content).expect("Failed to write test file");
+
+        full_path
+    }
+
+    /// Create a directory with the given relative path
+    pub fn create_dir<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+        let full_path = self.temp_dir.path().join(path);
+        std::fs::create_dir_all(&full_path).expect("Failed to create test directory");
+        full_path
+    }
+
+    /// Create a YAML file with the given object
+    pub fn create_yaml_file<P: AsRef<Path>, T: serde::Serialize>(
+        &self,
+        path: P,
+        data: &T,
+    ) -> PathBuf {
+        let content = serde_yaml::to_string(data).expect("Failed to serialize to YAML");
+        self.create_file(path, &content)
+    }
+
+    /// Create a JSON file with the given object
+    pub fn create_json_file<P: AsRef<Path>, T: serde::Serialize>(
+        &self,
+        path: P,
+        data: &T,
+    ) -> PathBuf {
+        let content = serde_json::to_string_pretty(data).expect("Failed to serialize to JSON");
+        self.create_file(path, &content)
+    }
 }
 
 #[cfg(test)]

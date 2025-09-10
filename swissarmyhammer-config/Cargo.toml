@@ -38,10 +38,14 @@ tracing = { workspace = true }
 # Template engine integration
 liquid = { workspace = true }
 
+# Common utilities
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 serial_test = "3.1"
 swissarmyhammer = { path = "../swissarmyhammer" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 
 # NEVER add features or feature flags to this Cargo.toml!
 # SwissArmyHammer provides ALL functionality ALL the time.

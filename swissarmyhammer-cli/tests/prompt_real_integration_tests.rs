@@ -1,5 +1,5 @@
 use anyhow::Result;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;

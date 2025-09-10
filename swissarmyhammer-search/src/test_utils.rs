@@ -15,4 +15,4 @@ pub fn acquire_semantic_db_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Re-export IsolatedTestHome from the main swissarmyhammer crate
-pub use swissarmyhammer::test_utils::IsolatedTestHome;
+pub use swissarmyhammer_common::test_utils::IsolatedTestHome;

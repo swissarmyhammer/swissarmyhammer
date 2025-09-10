@@ -1,6 +1,6 @@
 use swissarmyhammer::prompts::PromptLoader;
 
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
 
 #[test]
 fn test_comprehensive_prompt_library() {

@@ -31,7 +31,7 @@ chumsky = "0.9"
 base64 = "0.22"
 
 # SwissArmyHammer domain crates
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
@@ -53,3 +53,4 @@ cel-interpreter = "0.8"
 # Test dependencies
 tempfile = { workspace = true }
 serial_test = { workspace = true }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }

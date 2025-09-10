@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::process::Command;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::workflow::{WorkflowResolver, WorkflowStorage};
 use swissarmyhammer::common::parameters::{DefaultParameterResolver, ParameterResolver};
 use swissarmyhammer::common::discover_workflow_parameters;

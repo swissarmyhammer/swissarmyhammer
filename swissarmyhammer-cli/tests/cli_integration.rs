@@ -6,7 +6,7 @@ mod in_process_test_utils;
 
 use anyhow::Result;
 use in_process_test_utils::run_flow_test_in_process;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 /// Create a minimal test workflow for performance testing
 fn create_minimal_workflow() -> String {

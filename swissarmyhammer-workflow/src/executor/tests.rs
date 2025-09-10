@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 #[cfg(test)]
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 fn create_test_workflow() -> Workflow {
     let mut workflow = Workflow::new(

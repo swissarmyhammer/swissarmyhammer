@@ -29,7 +29,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 
 # SwissArmyHammer common functionality
-swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
 swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
 
@@ -145,6 +145,7 @@ rand = { workspace = true }
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
+swissarmyhammer-common = { path = "../swissarmyhammer-common", features = ["testing"] }
 
 [lib]
 name = "swissarmyhammer"

@@ -1,5 +1,5 @@
 /// Integration test for test home directory setup
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
 
 #[test]
 fn test_home_directory_override_works() {

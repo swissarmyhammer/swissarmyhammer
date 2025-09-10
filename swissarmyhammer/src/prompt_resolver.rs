@@ -97,12 +97,13 @@ impl Default for PromptResolver {
 mod tests {
     use super::*;
     use std::fs;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
     fn test_prompt_resolver_loads_user_prompts() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let home_dir = std::env::var("HOME").unwrap();
         let user_prompts_dir = PathBuf::from(&home_dir)
             .join(".swissarmyhammer")
@@ -212,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_get_prompt_directories() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let resolver = PromptResolver::new();
         let directories = resolver.get_prompt_directories().unwrap();
 
@@ -248,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_user_prompt_overrides_builtin_source_tracking() {
-        let _guard = crate::test_utils::IsolatedTestEnvironment::new().unwrap();
+        let _guard = IsolatedTestEnvironment::new().unwrap();
         let temp_dir = TempDir::new().unwrap();
         let user_prompts_dir = temp_dir.path().join(".swissarmyhammer").join("prompts");
         fs::create_dir_all(&user_prompts_dir).unwrap();

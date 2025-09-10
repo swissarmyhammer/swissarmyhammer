@@ -1,7 +1,7 @@
 //! Integration tests for CLI command structure and backward compatibility
 
 use anyhow::Result;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use tempfile::TempDir;
 
 mod test_utils;

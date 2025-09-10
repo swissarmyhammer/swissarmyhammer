@@ -8,7 +8,7 @@ use crate::storage::{MemoryWorkflowRunStorage, MemoryWorkflowStorage, WorkflowSt
 use crate::{MermaidParser, WorkflowExecutor, WorkflowStorage};
 use serde_json::Value;
 use serial_test::serial;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 use std::sync::Arc;
 

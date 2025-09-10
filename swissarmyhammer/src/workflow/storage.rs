@@ -884,7 +884,7 @@ impl WorkflowStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::IsolatedTestEnvironment;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
     use crate::workflow::{State, StateId, StateType};
 
     fn create_test_workflow() -> Workflow {
@@ -1045,7 +1045,7 @@ mod tests {
 
     #[test]
     fn test_workflow_resolver_user_workflows() {
-        use crate::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
         use std::fs;
 
         let _env =
@@ -1100,7 +1100,7 @@ stateDiagram-v2
 
     #[test]
     fn test_workflow_resolver_local_workflows() {
-        use crate::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
         use std::fs;
 
         let env =

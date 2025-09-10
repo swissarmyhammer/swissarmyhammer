@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use serde_json::json;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
 
 mod test_utils;

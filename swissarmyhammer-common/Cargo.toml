@@ -9,7 +9,7 @@ description = "Common types, traits, and utilities for SwissArmyHammer"
 
 [features]
 default = []
-testing = ["dep:tempfile"]
+testing = []
 
 [dependencies]
 # Core serialization and error handling
@@ -30,8 +30,8 @@ nonzero_ext.workspace = true
 walkdir.workspace = true
 dirs.workspace = true
 
-# Testing dependencies (only when testing feature is enabled)
-tempfile = { workspace = true, optional = true }
+# Testing dependencies
+tempfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

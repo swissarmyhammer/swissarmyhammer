@@ -7,7 +7,7 @@ use assert_cmd::Command;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::{
     shell_security::{CommandValidator, SecurityPolicy},
     workflow::{

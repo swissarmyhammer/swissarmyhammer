@@ -4,7 +4,7 @@
 //! shelling out to a subprocess.
 
 use anyhow::Result;
-use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 use swissarmyhammer::workflow::{
     MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowStorage,
 };

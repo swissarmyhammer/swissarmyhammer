@@ -888,7 +888,7 @@ impl WorkflowStorage {
 mod tests {
     use super::*;
     use crate::{State, StateId, StateType};
-    use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+    use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new(
@@ -1049,7 +1049,7 @@ mod tests {
     #[test]
     fn test_workflow_resolver_user_workflows() {
         use std::fs;
-        use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
         let _env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");
@@ -1104,7 +1104,7 @@ stateDiagram-v2
     #[test]
     fn test_workflow_resolver_local_workflows() {
         use std::fs;
-        use swissarmyhammer::test_utils::IsolatedTestEnvironment;
+        use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
         let env =
             IsolatedTestEnvironment::new().expect("Failed to create isolated test environment");

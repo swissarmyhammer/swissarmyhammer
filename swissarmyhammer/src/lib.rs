@@ -148,10 +148,6 @@ pub mod prelude {
         WorkflowRunStatus,
     };
 
-
-
-
-
     // sah.toml configuration types removed (migrated to swissarmyhammer-config)
     // All TOML configuration functionality now provided by swissarmyhammer-config crate using figment
 
@@ -165,8 +161,7 @@ pub mod prelude {
     };
 }
 
-/// Test utilities module for testing support
-pub mod test_utils;
+
 
 /// Test organization utilities for improved test management
 pub mod test_organization;

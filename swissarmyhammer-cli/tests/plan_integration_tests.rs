@@ -89,7 +89,7 @@ use in_process_test_utils::run_sah_command_in_process_with_dir;
 mod test_utils;
 use test_utils::{create_temp_dir, setup_git_repo};
 
-use swissarmyhammer::test_utils::IsolatedTestHome;
+use swissarmyhammer_common::test_utils::IsolatedTestHome;
 
 /// Create a simple test plan file with basic content
 fn create_test_plan_file(
@@ -269,7 +269,7 @@ This is a substantial specification that should generate many focused issues.
 
 /// Setup a complete test environment for plan command testing
 fn setup_plan_test_environment() -> Result<(TempDir, std::path::PathBuf)> {
-    let temp_dir = create_temp_dir()?;
+    let temp_dir = create_temp_dir();
     let temp_path = temp_dir.path().to_path_buf();
 
     // Create necessary directories
@@ -1022,7 +1022,7 @@ async fn test_plan_enhanced_error_exit_codes() -> Result<()> {
 async fn test_plan_enhanced_error_issues_directory() -> Result<()> {
     let _guard = IsolatedTestHome::new();
     // Create minimal test environment WITHOUT issues directory
-    let _temp_dir = create_temp_dir()?;
+    let _temp_dir = create_temp_dir();
     let temp_path = _temp_dir.path().to_path_buf();
 
     // Use explicit working directory instead of global directory change
