@@ -6773,6 +6773,7 @@ dependencies = [
  "swissarmyhammer-issues",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-outline",
+ "swissarmyhammer-prompts",
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",

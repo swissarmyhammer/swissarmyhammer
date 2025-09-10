@@ -16,6 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use swissarmyhammer_common::Result;
 use swissarmyhammer_config::McpServerConfig;
+use swissarmyhammer_prompts::PromptLibrary;
 use tokio::sync::{Mutex, RwLock};
 
 use super::server::McpServer;
@@ -88,7 +89,7 @@ pub async fn start_in_process_mcp_server(config: &McpServerConfig) -> Result<Mcp
     tracing::info!("Starting in-process MCP HTTP server on {}", bind_addr);
 
     // Create the underlying MCP server
-    let library = swissarmyhammer::PromptLibrary::new();
+    let library = PromptLibrary::new();
     let mcp_server = McpServer::new(library).await.map_err(|e| {
         swissarmyhammer_common::SwissArmyHammerError::Other {
             message: e.to_string(),
@@ -111,7 +112,7 @@ pub async fn start_http_server(bind_addr: &str) -> Result<McpServerHandle> {
     tracing::info!("Starting standalone MCP HTTP server on {}", bind_addr);
 
     // Create the underlying MCP server
-    let library = swissarmyhammer::PromptLibrary::new();
+    let library = PromptLibrary::new();
     let mcp_server = McpServer::new(library).await.map_err(|e| {
         swissarmyhammer_common::SwissArmyHammerError::Other {
             message: e.to_string(),

@@ -9,7 +9,7 @@ use super::utils::validate_issue_name;
 use crate::test_utils::TestIssueEnvironment;
 use rmcp::ServerHandler;
 use std::collections::HashMap;
-use swissarmyhammer::{Prompt, PromptLibrary, PromptResolver};
+use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptResolver};
 
 #[tokio::test]
 async fn test_mcp_server_creation() {
