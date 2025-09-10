@@ -18,7 +18,6 @@ members = [
     "swissarmyhammer-todo",
     "swissarmyhammer-outline",
     "swissarmyhammer-templating",
-    "swissarmyhammer-workflow",
     "swissarmyhammer-prompts",
 ]
 resolver = "2"

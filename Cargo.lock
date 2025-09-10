@@ -1198,16 +1198,6 @@ dependencies = [
 
 [[package]]
 name = "chumsky"
-version = "0.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eebd66744a15ded14960ab4ccdbfb51ad3b81f51f3f04a80adac98c985396c9"
-dependencies = [
- "hashbrown 0.14.5",
- "stacker",
-]
-
-[[package]]
-name = "chumsky"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14377e276b2c8300513dff55ba4cc4142b44e5d6de6d00eb5b2307d650bb4ec1"
@@ -2100,15 +2090,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "failure"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d32e9bd16cc02eae7db7ef620b392808b89f6a5e16bb3497d159c6b92a0f4f86"
-dependencies = [
- "backtrace",
-]
-
-[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2648,10 +2629,6 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash 0.8.12",
- "allocator-api2",
-]
 
 [[package]]
 name = "hashbrown"
@@ -4047,7 +4024,7 @@ name = "mermaid-parser"
 version = "0.1.0"
 source = "git+https://github.com/wballard/mermaid_parser#33b484f10b6eee6a37e0aa0c07a7185f18a663c5"
 dependencies = [
- "chumsky 0.10.1",
+ "chumsky",
 ]
 
 [[package]]
@@ -6385,7 +6362,7 @@ dependencies = [
  "base64 0.22.1",
  "cel-interpreter",
  "chrono",
- "chumsky 0.10.1",
+ "chumsky",
  "clap",
  "criterion",
  "dashmap",
@@ -6783,7 +6760,6 @@ dependencies = [
  "swissarmyhammer-search",
  "swissarmyhammer-shell",
  "swissarmyhammer-todo",
- "swissarmyhammer-workflow",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -6795,46 +6771,6 @@ dependencies = [
  "url",
  "urlencoding",
  "walkdir",
-]
-
-[[package]]
-name = "swissarmyhammer-workflow"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum 0.7.9",
- "base64 0.22.1",
- "cel-interpreter",
- "chrono",
- "chumsky 0.9.3",
- "dashmap",
- "dirs 5.0.1",
- "liquid",
- "liquid-core",
- "llama-agent",
- "mermaid-parser",
- "regex",
- "reqwest 0.12.23",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "swissarmyhammer",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-shell",
- "swissarmyhammer-templating",
- "syntect",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tracing",
- "ulid",
- "walkdir",
- "which 2.0.1",
- "zstd",
 ]
 
 [[package]]
@@ -8025,16 +7961,6 @@ name = "weezl"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a751b3277700db47d3e574514de2eced5e54dc8a5436a3bf7a0b248b2cee16f3"
-
-[[package]]
-name = "which"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b57acb10231b9493c8472b20cb57317d0679a49e0bdbee44b3b803a6473af164"
-dependencies = [
- "failure",
- "libc",
-]
 
 [[package]]
 name = "which"
