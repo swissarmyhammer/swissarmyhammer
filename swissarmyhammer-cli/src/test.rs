@@ -272,9 +272,9 @@ impl TestRunner {
                     .collect(),
             )
             .map_err(|e| {
-                swissarmyhammer::SwissArmyHammerError::Template(format!(
+                swissarmyhammer::SwissArmyHammerError::Other { message: format!(
                     "Template context error: {e}"
-                ))
+                ) }
             })?;
             Ok(self.library.render(&prompt.name, &template_context)?)
         }

@@ -11,6 +11,7 @@ mod schema_conversion;
 mod schema_validation;
 mod signal_handler;
 mod validate;
+use swissarmyhammer_cli::context::CliContext;
 use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
@@ -215,8 +216,17 @@ async fn handle_dynamic_matches(
         }
     }
 
+    // Create shared CLI context
+    let context = match CliContext::new(template_context.clone(), matches).await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("Failed to initialize CLI context: {}", e);
+            process::exit(EXIT_ERROR);
+        }
+    };
+
     // Handle subcommands
-    match matches.subcommand() {
+    match context.matches.subcommand() {
         Some(("serve", sub_matches)) => {
             commands::serve::handle_command(sub_matches, &template_context).await
         }
@@ -224,12 +234,12 @@ async fn handle_dynamic_matches(
         Some(("prompt", sub_matches)) => {
             handle_prompt_command(sub_matches, &template_context).await
         }
-        Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &template_context).await,
+        Some(("flow", _sub_matches)) => handle_flow_command(&context).await,
         Some(("validate", sub_matches)) => {
             handle_validate_command(sub_matches, &template_context).await
         }
         Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &template_context).await,
-        Some(("implement", _sub_matches)) => handle_implement_command(&template_context).await,
+        Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
             Some((tool_name, tool_matches)) => {
                 handle_dynamic_tool_command(category, tool_name, tool_matches, cli_tool_context)
@@ -453,13 +463,10 @@ async fn handle_prompt_command(
     commands::prompt::handle_command(subcommand, template_context).await
 }
 
-async fn handle_flow_command(
-    matches: &clap::ArgMatches,
-    template_context: &TemplateContext,
-) -> i32 {
+async fn handle_flow_command(context: &CliContext) -> i32 {
     use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
 
-    let subcommand = match matches.subcommand() {
+    let subcommand = match context.matches.subcommand() {
         Some(("run", sub_matches)) => {
             let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
             let vars = sub_matches
@@ -607,7 +614,7 @@ async fn handle_flow_command(
         }
     };
 
-    commands::flow::handle_command(subcommand, template_context).await
+    commands::flow::handle_command(subcommand, context).await
 }
 
 async fn handle_validate_command(
@@ -645,8 +652,8 @@ async fn handle_plan_command(
     commands::plan::handle_command(plan_filename, template_context).await
 }
 
-async fn handle_implement_command(template_context: &TemplateContext) -> i32 {
-    commands::implement::handle_command(template_context).await
+async fn handle_implement_command(context: &CliContext) -> i32 {
+    commands::implement::handle_command(context).await
 }
 
 async fn configure_logging(verbose: bool, debug: bool, quiet: bool, is_mcp_mode: bool) {

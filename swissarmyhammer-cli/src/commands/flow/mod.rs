@@ -19,7 +19,8 @@ use swissarmyhammer::{
     WorkflowRunStorageBackend, WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
-use swissarmyhammer_workflow::{ExecutorError, MemoryWorkflowStorage};
+use swissarmyhammer_workflow::{ExecutorError, MemoryWorkflowStorage, ExecutionVisualizer};
+use swissarmyhammer_cli::context::CliContext;
 use tokio::signal;
 use tokio::time::timeout;
 
@@ -29,9 +30,9 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// Handle the flow command
 pub async fn handle_command(
     subcommand: FlowSubcommand,
-    _template_context: &swissarmyhammer_config::TemplateContext,
+    context: &CliContext,
 ) -> i32 {
-    match run_flow_command(subcommand, _template_context).await {
+    match run_flow_command(subcommand, context).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
             eprintln!("Flow command failed: {}", e);
@@ -43,7 +44,7 @@ pub async fn handle_command(
 /// Main entry point for flow command
 pub async fn run_flow_command(
     subcommand: FlowSubcommand,
-    _template_context: &swissarmyhammer_config::TemplateContext,
+    context: &CliContext,
 ) -> Result<()> {
     match subcommand {
         FlowSubcommand::Run {
@@ -66,7 +67,7 @@ pub async fn run_flow_command(
                     timeout_str,
                     quiet,
                 },
-                _template_context,
+                context,
             )
             .await
         }
@@ -125,7 +126,7 @@ pub async fn run_flow_command(
                     timeout_str,
                     quiet,
                 },
-                _template_context,
+                context,
             )
             .await
         }
@@ -146,21 +147,14 @@ pub struct WorkflowCommandConfig {
 /// Execute a workflow
 pub async fn run_workflow_command(
     config: WorkflowCommandConfig,
-    _template_context: &swissarmyhammer_config::TemplateContext,
+    context: &CliContext,
 ) -> Result<()> {
-    // Use proper WorkflowStorage with embedded builtins
-    let workflow_storage = tokio::task::spawn_blocking(WorkflowStorage::file_system)
-        .await
-        .map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to create workflow storage: {e}"),
-        })??;
-
     let workflow_name_typed = WorkflowName::new(&config.workflow_name);
-    let workflow = workflow_storage.get_workflow(&workflow_name_typed)?;
+    let workflow = context.workflow_storage.get_workflow(&workflow_name_typed)?;
 
     // Resolve workflow parameters with enhanced parameter system
     let workflow_variables = parameter_cli::resolve_workflow_parameters_interactive(
-        &config.workflow_name,
+        &workflow,
         &config.vars,
         config.interactive && !config.dry_run,
     )
@@ -248,7 +242,7 @@ pub async fn run_workflow_command(
     run.context.set_workflow_vars(variables.clone());
 
     // Set agent configuration from template context
-    let agent_config = _template_context.get_agent_config(None);
+    let agent_config = context.template_context.get_agent_config(None);
     run.context.set_agent_config(agent_config);
 
     // Store variables in context for liquid template rendering - this will now include config values
@@ -906,7 +900,9 @@ fn parse_duration(s: &str) -> Result<Duration> {
 
 /// Helper to parse WorkflowRunId from string
 fn parse_workflow_run_id(s: &str) -> Result<WorkflowRunId> {
-    WorkflowRunId::parse(s).to_swiss_error_with_context(&format!("Invalid workflow run ID '{s}'"))
+    WorkflowRunId::parse(s).map_err(|e| SwissArmyHammerError::Other { 
+        message: format!("Invalid workflow run ID '{s}': {e}") 
+    })
 }
 
 /// Helper to convert WorkflowRunId to string

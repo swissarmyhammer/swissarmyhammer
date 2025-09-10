@@ -124,23 +124,7 @@ fn format_directory_access_error(details: &str) -> String {
     )
 }
 
-/// Format Git repository not found error message
-fn format_git_repository_not_found_error(path: &str) -> String {
-    format!(
-        "❌ Git repository not found\n\n\
-        No Git repository found at: {path}\n\
-        \n\
-        SwissArmyHammer requires a Git repository context for:\n\
-        • Issue tracking and branch management\n\
-        • Workflow execution and state tracking\n\
-        • File organization at repository root\n\
-        \n\
-        Solutions:\n\
-        • Navigate to an existing Git repository\n\
-        • Initialize a new Git repository: git init\n\
-        • Clone an existing repository: git clone <url>"
-    )
-}
+
 
 /// Format component-specific Git repository requirement error
 #[allow(dead_code)]
@@ -286,11 +270,6 @@ impl From<swissarmyhammer::SwissArmyHammerError> for CliError {
             },
             swissarmyhammer::SwissArmyHammerError::DirectoryAccess(ref details) => CliError {
                 message: format_directory_access_error(details),
-                source: Some(Box::new(err)),
-                exit_code: 1,
-            },
-            swissarmyhammer::SwissArmyHammerError::GitRepositoryNotFound { ref path } => CliError {
-                message: format_git_repository_not_found_error(path),
                 source: Some(Box::new(err)),
                 exit_code: 1,
             },

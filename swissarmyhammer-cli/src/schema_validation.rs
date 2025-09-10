@@ -6,7 +6,7 @@
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;
-use swissarmyhammer::ErrorSeverity;
+use swissarmyhammer_common::ErrorSeverity;
 use thiserror::Error;
 
 /// Errors that can occur during schema validation

@@ -105,7 +105,7 @@ fn run_list_command(
 
     if let Some(ref source) = source_filter {
         let lib_source: swissarmyhammer::PromptSource = source.clone().into();
-        filter = filter.with_sources(vec![lib_source]);
+        filter = filter.with_sources(vec![lib_source.into()]);
     }
 
     if let Some(ref category) = category_filter {

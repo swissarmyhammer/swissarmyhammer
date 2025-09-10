@@ -2,9 +2,9 @@
 //!
 //! Executes planning workflow for specific specification files
 
-use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
-use swissarmyhammer::plan_utils::{validate_plan_file_comprehensive, PlanCommandError};
-use swissarmyhammer::ErrorSeverity;
+use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
+use swissarmyhammer::plan_utils::validate_plan_file_comprehensive;
+
 use swissarmyhammer::{
     FileSystemWorkflowStorage, WorkflowExecutor, WorkflowName, WorkflowStorageBackend,
 };
@@ -25,19 +25,9 @@ async fn run_plan(plan_filename: String) -> i32 {
     let validated_file = match validate_plan_file_comprehensive(&plan_filename, None) {
         Ok(file) => file,
         Err(e) => {
-            // Display user-friendly error with color support
-            let use_color = crate::cli::Cli::should_use_color();
-            eprintln!("{}", e.display_to_user(use_color));
-
-            // Log the error for debugging
-            e.log_error();
-
-            // Return appropriate exit code based on severity
-            return match e.severity() {
-                ErrorSeverity::Warning => EXIT_WARNING,
-                ErrorSeverity::Error => EXIT_ERROR,
-                ErrorSeverity::Critical => EXIT_ERROR,
-            };
+            eprintln!("{}", e);
+            tracing::error!("{}", e);
+            return EXIT_ERROR;
         }
     };
 
@@ -49,15 +39,7 @@ async fn run_plan(plan_filename: String) -> i32 {
     let storage = match FileSystemWorkflowStorage::new() {
         Ok(s) => s,
         Err(e) => {
-            let plan_error = PlanCommandError::WorkflowExecutionFailed {
-                plan_filename: plan_filename.clone(),
-                source: swissarmyhammer::WorkflowError::ExecutionFailed {
-                    reason: format!("Failed to create workflow storage: {e}"),
-                },
-            };
-            let use_color = crate::cli::Cli::should_use_color();
-            eprintln!("{}", plan_error.display_to_user(use_color));
-            plan_error.log_error();
+            tracing::error!("{}", e);
             return EXIT_ERROR;
         }
     };
@@ -66,15 +48,7 @@ async fn run_plan(plan_filename: String) -> i32 {
     let workflow = match storage.get_workflow(&workflow_name) {
         Ok(w) => w,
         Err(e) => {
-            let plan_error = PlanCommandError::WorkflowExecutionFailed {
-                plan_filename: plan_filename.clone(),
-                source: swissarmyhammer::WorkflowError::ExecutionFailed {
-                    reason: format!("Failed to load workflow: {e}"),
-                },
-            };
-            let use_color = crate::cli::Cli::should_use_color();
-            eprintln!("{}", plan_error.display_to_user(use_color));
-            plan_error.log_error();
+            tracing::error!("{}", e);
             return EXIT_ERROR;
         }
     };
@@ -84,15 +58,7 @@ async fn run_plan(plan_filename: String) -> i32 {
     let mut run = match executor.start_workflow(workflow.clone()) {
         Ok(r) => r,
         Err(e) => {
-            let plan_error = PlanCommandError::WorkflowExecutionFailed {
-                plan_filename: plan_filename.clone(),
-                source: swissarmyhammer_workflow::WorkflowError::ExecutionFailed {
-                    reason: format!("Failed to start workflow: {e}"),
-                },
-            };
-            let use_color = crate::cli::Cli::should_use_color();
-            eprintln!("{}", plan_error.display_to_user(use_color));
-            plan_error.log_error();
+            tracing::error!("{}", e);
             return EXIT_ERROR;
         }
     };
@@ -123,18 +89,6 @@ async fn run_plan(plan_filename: String) -> i32 {
             "Plan workflow execution failed with exit code: {}",
             exit_code
         );
-
-        // Create and display a PlanCommandError for workflow failures
-        let plan_error = PlanCommandError::WorkflowExecutionFailed {
-            plan_filename: plan_filename.clone(),
-            source: swissarmyhammer_workflow::WorkflowError::ExecutionFailed {
-                reason: format!("Workflow execution failed with exit code {}", exit_code),
-            },
-        };
-
-        let use_color = crate::cli::Cli::should_use_color();
-        eprintln!("{}", plan_error.display_to_user(use_color));
-        plan_error.log_error();
 
         EXIT_ERROR
     }

@@ -58,6 +58,17 @@ pub enum PromptSource {
     Local,
 }
 
+impl From<swissarmyhammer_common::FileSource> for PromptSource {
+    fn from(source: swissarmyhammer_common::FileSource) -> Self {
+        match source {
+            swissarmyhammer_common::FileSource::Builtin => PromptSource::Builtin,
+            swissarmyhammer_common::FileSource::User => PromptSource::User,
+            swissarmyhammer_common::FileSource::Local => PromptSource::Local,
+            swissarmyhammer_common::FileSource::Dynamic => PromptSource::User, // Map Dynamic to User
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
