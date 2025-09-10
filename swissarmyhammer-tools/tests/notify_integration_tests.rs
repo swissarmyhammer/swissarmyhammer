@@ -6,24 +6,16 @@
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
+use swissarmyhammer_common::create_test_rate_limiter;
 use swissarmyhammer_git::GitOperations;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{ToolContext, ToolRegistry};
 use swissarmyhammer_tools::mcp::tools::notify;
-use tokio::time::Duration;
 
-/// Creates a test rate limiter with generous limits suitable for testing
-fn create_test_rate_limiter() -> Arc<RateLimiter> {
-    Arc::new(RateLimiter::with_config(RateLimiterConfig {
-        global_limit: 10000,                     // Very high global limit
-        per_client_limit: 1000,                  // High per-client limit
-        expensive_operation_limit: 500,          // High expensive operation limit
-        window_duration: Duration::from_secs(1), // Short refill window for tests
-    }))
-}
+
+
 
 /// Create a test context with mock storage backends for testing MCP tools
 async fn create_test_context() -> ToolContext {

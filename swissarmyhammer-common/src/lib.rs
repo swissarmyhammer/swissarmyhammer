@@ -28,7 +28,6 @@ pub mod error;
 pub mod file_loader;
 pub mod rate_limiter;
 /// Test utilities for creating isolated test environments
-#[cfg(any(test, feature = "testing"))]
 pub mod test_utils;
 pub mod traits;
 pub mod types;
@@ -69,8 +68,7 @@ pub use abort_utils::{
 };
 
 // Re-export test utilities for convenience (when testing)
-#[cfg(any(test, feature = "testing"))]
 pub use test_utils::{
-    acquire_semantic_db_lock, create_isolated_test_home, create_temp_dir, IsolatedTestEnvironment,
-    IsolatedTestHome, ProcessGuard, TestFileSystem,
+    acquire_semantic_db_lock, create_isolated_test_home, create_temp_dir, create_test_rate_limiter,
+    IsolatedTestEnvironment, IsolatedTestHome, ProcessGuard, TestFileSystem,
 };

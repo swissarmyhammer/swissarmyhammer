@@ -24,9 +24,46 @@
 ///     // with mock .swissarmyhammer structure
 /// }
 /// ```
+use crate::rate_limiter::{RateLimiter, RateLimiterConfig};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tempfile::TempDir;
+
+/// Creates a test rate limiter with generous limits suitable for testing
+///
+/// This function provides a standard RateLimiter configuration for use in tests
+/// across all SwissArmyHammer crates. The configuration uses very high limits
+/// to prevent rate limiting during tests while still testing the actual rate 
+/// limiting implementation.
+///
+/// # Returns
+///
+/// An Arc-wrapped RateLimiter configured with test-appropriate limits:
+/// - Global limit: 10,000 requests per window
+/// - Per-client limit: 1,000 requests per window  
+/// - Expensive operation limit: 500 requests per window
+/// - Window duration: 1 second (short refill for faster tests)
+///
+/// # Example
+///
+/// ```no_run
+/// use swissarmyhammer_common::test_utils::create_test_rate_limiter;
+///
+/// #[test] 
+/// fn test_rate_limited_operation() {
+///     let rate_limiter = create_test_rate_limiter();
+///     // Use rate_limiter in tests
+/// }
+/// ```
+pub fn create_test_rate_limiter() -> Arc<RateLimiter> {
+    Arc::new(RateLimiter::with_config(RateLimiterConfig {
+        global_limit: 10000,                     // Very high global limit
+        per_client_limit: 1000,                  // High per-client limit
+        expensive_operation_limit: 500,          // High expensive operation limit
+        window_duration: Duration::from_secs(1), // Short refill window for tests
+    }))
+}
 
 /// Helper struct to ensure process cleanup in tests
 ///
