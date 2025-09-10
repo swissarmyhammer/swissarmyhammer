@@ -5,7 +5,7 @@ use rmcp::RoleServer;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer::PromptResolver;
+use swissarmyhammer_prompts::PromptResolver;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use tokio::sync::Mutex;
 
@@ -72,6 +72,7 @@ impl FileWatcher {
     /// # Example
     ///
     /// ```
+    /// use swissarmyhammer_tools::mcp::file_watcher::FileWatcher;
     /// let mut watcher = FileWatcher::new();
     /// // watcher.start_watching(callback).await?;
     /// ```

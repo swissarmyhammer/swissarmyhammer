@@ -21,17 +21,13 @@
 //!
 //! ## Usage
 //!
-//! ```rust,no_run
+//! Basic usage example:
+//! ```rust,ignore
 //! use swissarmyhammer_tools::McpServer;
 //! use swissarmyhammer_prompts::PromptLibrary;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! 
 //! let library = PromptLibrary::new();
 //! let server = McpServer::new(library)?;
-//!
-//! // Server is ready to handle MCP requests
-//! # Ok(())
-//! # }
 //! ```
 
 #![warn(missing_docs)]

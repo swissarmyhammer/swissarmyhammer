@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use swissarmyhammer::{PromptLibrary, PromptResolver};
+use swissarmyhammer_prompts::{PromptLibrary, PromptResolver};
 use swissarmyhammer_common::get_rate_limiter;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
 use swissarmyhammer_config::TemplateContext;
@@ -369,7 +369,7 @@ impl McpServer {
     /// # Returns
     ///
     /// * `bool` - True if the prompt is a partial template
-    fn is_partial_template(prompt: &swissarmyhammer::Prompt) -> bool {
+    fn is_partial_template(prompt: &swissarmyhammer_prompts::Prompt) -> bool {
         // Check if the template starts with the partial marker
         if prompt.template.trim().starts_with("{% partial %}") {
             return true;
