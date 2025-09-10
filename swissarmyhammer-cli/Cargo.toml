@@ -30,6 +30,7 @@ swissarmyhammer-git = { path = "../swissarmyhammer-git" }
 swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
 swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
 swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-workflow = { path = "../swissarmyhammer-workflow" }
 
 # CLI dependencies
 clap = { workspace = true }

@@ -81,3 +81,5 @@ pub use test_utils::{
     acquire_semantic_db_lock, create_isolated_test_home, create_temp_dir, IsolatedTestHome,
     ProcessGuard,
 };
+
+pub use error::*;

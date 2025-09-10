@@ -9,7 +9,7 @@ use swissarmyhammer::validation::{
     Validatable, ValidationConfig, ValidationIssue, ValidationLevel, ValidationManager,
     ValidationResult,
 };
-use swissarmyhammer::workflow::{
+use swissarmyhammer_workflow::{
     MemoryWorkflowStorage, MermaidParser, Workflow, WorkflowResolver, WorkflowStorageBackend,
 };
 
@@ -930,6 +930,7 @@ mod tests {
     use super::*;
     use crate::dynamic_cli::CliValidationStats;
     use std::path::PathBuf;
+    use swissarmyhammer_common::Validatable;
     use tempfile::TempDir;
 
     /// RAII helper for CLI tests that isolates HOME directory and current working directory
@@ -1579,7 +1580,7 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_empty_name() {
-        use swissarmyhammer::workflow::{StateId, WorkflowName};
+        use swissarmyhammer_workflow::{StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
         let mut result = ValidationResult::new();
@@ -1604,7 +1605,7 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_name_allowed_special_chars() {
-        use swissarmyhammer::workflow::{State, StateId, WorkflowName};
+        use swissarmyhammer_workflow::{State, StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
         let mut result = ValidationResult::new();
@@ -1620,7 +1621,7 @@ stateDiagram-v2
         let start_state = State {
             id: StateId::new("start"),
             description: "Start state".to_string(),
-            state_type: swissarmyhammer::workflow::StateType::Normal,
+            state_type: swissarmyhammer_workflow::StateType::Normal,
             is_terminal: true,
             allows_parallel: false,
             metadata: std::collections::HashMap::new(),
@@ -1640,7 +1641,7 @@ stateDiagram-v2
 
     #[test]
     fn test_validate_workflow_security_handled_by_parsers() {
-        use swissarmyhammer::workflow::{State, StateId, WorkflowName};
+        use swissarmyhammer_workflow::{State, StateId, WorkflowName};
 
         let mut validator = Validator::new(false);
 
@@ -1666,7 +1667,7 @@ stateDiagram-v2
             let start_state = State {
                 id: StateId::new("start"),
                 description: "Start state".to_string(),
-                state_type: swissarmyhammer::workflow::StateType::Normal,
+                state_type: swissarmyhammer_workflow::StateType::Normal,
                 is_terminal: true,
                 allows_parallel: false,
                 metadata: std::collections::HashMap::new(),
@@ -1735,7 +1736,7 @@ stateDiagram-v2
     [*] --> A
     A --> B
     B --> [*]
-    
+
     C --> D
     D --> E
     E --> [*]

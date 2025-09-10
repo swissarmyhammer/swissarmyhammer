@@ -20,3 +20,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = "0.4"
+serial_test = "3.1"

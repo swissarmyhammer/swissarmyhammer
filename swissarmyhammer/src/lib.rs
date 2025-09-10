@@ -63,7 +63,11 @@ pub use swissarmyhammer_prompts::{Prompt, PromptLibrary, PromptLoader};
 pub use swissarmyhammer_templating::{Template, TemplateEngine};
 
 pub use swissarmyhammer_common::*;
-pub use swissarmyhammer_workflow::{Workflow, WorkflowError, WorkflowExecutor};
+pub use swissarmyhammer_workflow::{
+    FileSystemWorkflowStorage, Workflow, WorkflowError, WorkflowExecutor, WorkflowName,
+    WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend, WorkflowStorage,
+    WorkflowStorageBackend,
+};
 
 // sah.toml configuration types removed (migrated to swissarmyhammer-config)
 // All TOML configuration functionality now provided by swissarmyhammer-config crate using figment

@@ -13,13 +13,13 @@ use std::collections::HashMap;
 use std::future;
 use std::io::{self, Write};
 use std::time::Duration;
+use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowName};
 use swissarmyhammer::{
-    ExecutionVisualizer, ExecutorError, MemoryWorkflowStorage, Workflow, WorkflowExecutor,
-    WorkflowName, WorkflowResolver, WorkflowRunId, WorkflowRunStatus, WorkflowRunStorageBackend,
-    WorkflowStorage, WorkflowStorageBackend,
+    Workflow, WorkflowExecutor, WorkflowResolver, WorkflowRunId, WorkflowRunStatus,
+    WorkflowRunStorageBackend, WorkflowStorage, WorkflowStorageBackend,
 };
-use swissarmyhammer::{Result, SwissArmyHammerError};
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
+use swissarmyhammer_workflow::{ExecutorError, MemoryWorkflowStorage};
 use tokio::signal;
 use tokio::time::timeout;
 
@@ -151,8 +151,8 @@ pub async fn run_workflow_command(
     // Use proper WorkflowStorage with embedded builtins
     let workflow_storage = tokio::task::spawn_blocking(WorkflowStorage::file_system)
         .await
-        .map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to create workflow storage: {e}"))
+        .map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to create workflow storage: {e}"),
         })??;
 
     let workflow_name_typed = WorkflowName::new(&config.workflow_name);
@@ -178,9 +178,9 @@ pub async fn run_workflow_command(
             // Add variable, allowing later values to override earlier ones
             variables.insert(key, serde_json::Value::String(parts[1].to_string()));
         } else {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "Invalid variable format: '{var}'. Expected 'key=value' format. Example: --var input=test"
-            )));
+            ) });
         }
     }
 
@@ -221,13 +221,15 @@ pub async fn run_workflow_command(
     tracing::info!("🚀 Starting workflow: {}", workflow.name);
 
     // Check for abort file before starting workflow
-    if let Some(abort_reason) =
-        read_abort_file(".").map_err(|e| SwissArmyHammerError::Other(e.to_string()))?
-    {
+    if let Some(abort_reason) = read_abort_file(".").map_err(|e| SwissArmyHammerError::Other {
+        message: e.to_string(),
+    })? {
         // Clean up the abort file after detection
-        let _ = remove_abort_file(".").map_err(|e| SwissArmyHammerError::Other(e.to_string()));
-        return Err(SwissArmyHammerError::ExecutorError(
-            swissarmyhammer::workflow::ExecutorError::Abort(abort_reason),
+        let _ = remove_abort_file(".").map_err(|e| SwissArmyHammerError::Other {
+            message: e.to_string(),
+        });
+        return Err(SwissArmyHammerError::from(
+            swissarmyhammer_workflow::ExecutorError::Abort(abort_reason)
         ));
     }
 
@@ -235,12 +237,12 @@ pub async fn run_workflow_command(
     let mut executor = WorkflowExecutor::new();
 
     // Create workflow run
-    let mut run = executor.start_workflow(workflow.clone()).map_err(|e| {
-        SwissArmyHammerError::Other(format!(
-            "Failed to start workflow '{}': {}",
-            workflow.name, e
-        ))
-    })?;
+    let mut run =
+        executor
+            .start_workflow(workflow.clone())
+            .map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to start workflow '{}': {}", workflow.name, e),
+            })?;
 
     // Set initial variables
     run.context.set_workflow_vars(variables.clone());
@@ -721,13 +723,13 @@ async fn logs_workflow_command(
 /// Handle ExecutorError and check for abort condition
 fn handle_executor_error(executor_error: ExecutorError, _context: &str) -> SwissArmyHammerError {
     // Convert ExecutorError directly to SwissArmyHammerError using From trait
-    SwissArmyHammerError::from(executor_error)
+    swissarmyhammer_common::SwissArmyHammerError::from(executor_error)
 }
 
 /// Execute workflow with progress display
 async fn execute_workflow_with_progress(
     executor: &mut WorkflowExecutor,
-    run: &mut swissarmyhammer::workflow::WorkflowRun,
+    run: &mut swissarmyhammer_workflow::WorkflowRun,
     interactive: bool,
 ) -> Result<()> {
     if interactive {
@@ -780,7 +782,7 @@ async fn execute_workflow_with_progress(
 
 /// Print run status
 fn print_run_status(
-    run: &swissarmyhammer::workflow::WorkflowRun,
+    run: &swissarmyhammer_workflow::WorkflowRun,
     format: &OutputFormat,
 ) -> Result<()> {
     match format {
@@ -817,7 +819,7 @@ fn print_run_status(
 
 /// Print run logs
 fn print_run_logs(
-    run: &swissarmyhammer::workflow::WorkflowRun,
+    run: &swissarmyhammer_workflow::WorkflowRun,
     tail: Option<usize>,
     _level: &Option<String>,
 ) -> Result<()> {
@@ -867,9 +869,9 @@ fn print_run_logs(
 fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
     if s.is_empty() {
-        return Err(SwissArmyHammerError::Other(
-            "Empty duration string. Expected format: 30s, 5m, or 1h".to_string(),
-        ));
+        return Err(SwissArmyHammerError::Other {
+            message: "Empty duration string. Expected format: 30s, 5m, or 1h".to_string(),
+        });
     }
 
     let (value_str, unit) = if let Some(stripped) = s.strip_suffix('s') {
@@ -882,10 +884,8 @@ fn parse_duration(s: &str) -> Result<Duration> {
         (s, "s") // Default to seconds
     };
 
-    let value: u64 = value_str.parse().map_err(|_| {
-        SwissArmyHammerError::Other(format!(
-            "Invalid duration value: '{value_str}'. Expected a positive number"
-        ))
+    let value: u64 = value_str.parse().map_err(|_| SwissArmyHammerError::Other {
+        message: format!("Invalid duration value: '{value_str}'. Expected a positive number"),
     })?;
 
     let duration = match unit {
@@ -893,9 +893,11 @@ fn parse_duration(s: &str) -> Result<Duration> {
         "m" => Duration::from_secs(value * 60),
         "h" => Duration::from_secs(value * 3600),
         _ => {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other {
+                message: format!(
             "Invalid duration unit: '{unit}'. Supported units: s (seconds), m (minutes), h (hours)"
-        )))
+        ),
+            })
         }
     };
 
@@ -1138,15 +1140,13 @@ fn create_local_workflow_run_storage() -> Result<Box<dyn WorkflowRunStorageBacke
 
     // Create local .swissarmyhammer/workflow-runs directory
     let local_dir = std::path::PathBuf::from(".swissarmyhammer/workflow-runs");
-    fs::create_dir_all(&local_dir).map_err(|e| {
-        SwissArmyHammerError::Other(format!(
-            "Failed to create .swissarmyhammer/workflow-runs directory: {e}"
-        ))
+    fs::create_dir_all(&local_dir).map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Failed to create .swissarmyhammer/workflow-runs directory: {e}"),
     })?;
 
-    let run_storage = swissarmyhammer::workflow::FileSystemWorkflowRunStorage::new(&local_dir)
-        .map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to create local workflow run storage: {e}"))
+    let run_storage = swissarmyhammer_workflow::FileSystemWorkflowRunStorage::new(&local_dir)
+        .map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to create local workflow run storage: {e}"),
         })?;
 
     Ok(Box::new(run_storage))
@@ -1194,26 +1194,26 @@ mod tests {
         let workflow = workflow_storage.get_workflow(&workflow_name_typed).unwrap();
 
         // Create a workflow run without plan_filename parameter
-        let run = swissarmyhammer::workflow::WorkflowRun::new(workflow.clone());
+        let run = swissarmyhammer_workflow::WorkflowRun::new(workflow.clone());
 
         // This should work without plan_filename - testing backward compatibility
         assert_eq!(run.workflow.name.as_str(), "plan");
         assert_eq!(
             run.status,
-            swissarmyhammer::workflow::WorkflowRunStatus::Running
+            swissarmyhammer_workflow::WorkflowRunStatus::Running
         );
 
         // The workflow should have the expected states
         assert_eq!(workflow.states.len(), 3);
         assert!(workflow
             .states
-            .contains_key(&swissarmyhammer::workflow::StateId::new("start")));
+            .contains_key(&swissarmyhammer_workflow::StateId::new("start")));
         assert!(workflow
             .states
-            .contains_key(&swissarmyhammer::workflow::StateId::new("plan")));
+            .contains_key(&swissarmyhammer_workflow::StateId::new("plan")));
         assert!(workflow
             .states
-            .contains_key(&swissarmyhammer::workflow::StateId::new("done")));
+            .contains_key(&swissarmyhammer_workflow::StateId::new("done")));
     }
 
     #[tokio::test]
@@ -1224,7 +1224,7 @@ mod tests {
         let workflow = workflow_storage.get_workflow(&workflow_name_typed).unwrap();
 
         // Create a workflow run with plan_filename parameter
-        let mut run = swissarmyhammer::workflow::WorkflowRun::new(workflow.clone());
+        let mut run = swissarmyhammer_workflow::WorkflowRun::new(workflow.clone());
         run.context.insert(
             "plan_filename".to_string(),
             serde_json::Value::String("./specification/test.md".to_string()),
@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(run.workflow.name.as_str(), "plan");
         assert_eq!(
             run.status,
-            swissarmyhammer::workflow::WorkflowRunStatus::Running
+            swissarmyhammer_workflow::WorkflowRunStatus::Running
         );
         assert!(run.context.contains_key("plan_filename"));
         assert_eq!(

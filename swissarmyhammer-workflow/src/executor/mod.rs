@@ -47,6 +47,15 @@ pub enum ExecutorError {
     Abort(String),
 }
 
+/// Convert ExecutorError to SwissArmyHammerError
+impl From<ExecutorError> for swissarmyhammer_common::SwissArmyHammerError {
+    fn from(err: ExecutorError) -> Self {
+        swissarmyhammer_common::SwissArmyHammerError::Other { 
+            message: format!("Executor error: {}", err) 
+        }
+    }
+}
+
 /// Result type for executor operations
 pub type ExecutorResult<T> = Result<T, ExecutorError>;
 

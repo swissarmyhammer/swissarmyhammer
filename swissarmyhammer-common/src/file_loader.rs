@@ -24,10 +24,10 @@
 //! All skipped files and errors are logged using the `tracing` framework at
 //! appropriate levels (warn for security issues, debug for missing directories).
 
-use anyhow::Result;
+use crate::utils::find_swissarmyhammer_directory;
+use crate::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::utils::find_swissarmyhammer_directory;
 use walkdir::WalkDir;
 
 /// Maximum file size to load (10MB)

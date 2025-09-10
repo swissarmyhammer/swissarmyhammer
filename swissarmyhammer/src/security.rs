@@ -45,12 +45,12 @@ pub fn validate_path_security(path: &Path, root: &Path) -> Result<PathBuf> {
     for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
-                return Err(SwissArmyHammerError::Other(
+                return Err(SwissArmyHammerError::Other { message: 
                     "Path contains parent directory references (..)".to_string(),
                 ));
             }
             std::path::Component::RootDir => {
-                return Err(SwissArmyHammerError::Other(
+                return Err(SwissArmyHammerError::Other { message: 
                     "Path contains absolute root reference".to_string(),
                 ));
             }
@@ -60,7 +60,7 @@ pub fn validate_path_security(path: &Path, root: &Path) -> Result<PathBuf> {
 
     // Get canonical paths to resolve symlinks and relative paths
     let canonical_root = root.canonicalize().map_err(|e| {
-        SwissArmyHammerError::Other(format!("Failed to canonicalize root path: {e}"))
+        SwissArmyHammerError::Other { message: format!("Failed to canonicalize root path: {e}") }
     })?;
 
     let full_path = if path.is_absolute() {
@@ -77,24 +77,24 @@ pub fn validate_path_security(path: &Path, root: &Path) -> Result<PathBuf> {
     } else {
         // Check the parent directory exists and is valid
         let parent = full_path.parent().ok_or_else(|| {
-            SwissArmyHammerError::Other("Path has no parent directory".to_string())
+            SwissArmyHammerError::Other { message: "Path has no parent directory".to_string() }
         })?;
 
         let canonical_parent = parent.canonicalize().map_err(|e| {
-            SwissArmyHammerError::Other(format!("Failed to canonicalize parent path: {e}"))
+            SwissArmyHammerError::Other { message: format!("Failed to canonicalize parent path: {e}") }
         })?;
 
         // Ensure the parent is within the root
         if !canonical_parent.starts_with(&canonical_root) {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "Path '{}' parent is outside allowed directory",
                 path.display()
-            )));
+            ) });
         }
 
         // Return the intended path (parent + filename)
         let filename = full_path.file_name().ok_or_else(|| {
-            SwissArmyHammerError::Other("Path has no filename component".to_string())
+            SwissArmyHammerError::Other { message: "Path has no filename component".to_string() }
         })?;
 
         canonical_parent.join(filename)
@@ -102,10 +102,10 @@ pub fn validate_path_security(path: &Path, root: &Path) -> Result<PathBuf> {
 
     // Ensure the canonical path is within the root
     if !canonical_path.starts_with(&canonical_root) {
-        return Err(SwissArmyHammerError::Other(format!(
+        return Err(SwissArmyHammerError::Other { message: format!(
             "Path '{}' is outside allowed directory",
             path.display()
-        )));
+        ) });
     }
 
     Ok(canonical_path)
@@ -156,7 +156,7 @@ pub fn validate_workflow_complexity(states_count: usize, transitions_count: usiz
     let total_complexity = states_count + transitions_count;
 
     if total_complexity > MAX_WORKFLOW_COMPLEXITY {
-        return Err(SwissArmyHammerError::Other(format!(
+        return Err(SwissArmyHammerError::Other { message: format!(
             "Workflow too complex: {states_count} states + {transitions_count} transitions = {total_complexity} (max allowed: {MAX_WORKFLOW_COMPLEXITY})"
         )));
     }
@@ -182,7 +182,7 @@ pub fn validate_template_security(template_content: &str, is_trusted: bool) -> R
     if is_trusted {
         // Even trusted templates should have reasonable size limits
         if template_content.len() > MAX_TEMPLATE_SIZE * 10 {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "Template too large: {} bytes (max allowed for trusted: {})",
                 template_content.len(),
                 MAX_TEMPLATE_SIZE * 10
@@ -195,7 +195,7 @@ pub fn validate_template_security(template_content: &str, is_trusted: bool) -> R
 
     // Check template size
     if template_content.len() > MAX_TEMPLATE_SIZE {
-        return Err(SwissArmyHammerError::Other(format!(
+        return Err(SwissArmyHammerError::Other { message: format!(
             "Template too large: {} bytes (max allowed: {MAX_TEMPLATE_SIZE})",
             template_content.len()
         )));
@@ -204,7 +204,7 @@ pub fn validate_template_security(template_content: &str, is_trusted: bool) -> R
     // Count template variables and control structures
     let variable_count = count_template_variables(template_content);
     if variable_count > MAX_TEMPLATE_VARIABLES {
-        return Err(SwissArmyHammerError::Other(format!(
+        return Err(SwissArmyHammerError::Other { message: format!(
             "Too many template variables: {variable_count} (max allowed: {MAX_TEMPLATE_VARIABLES})"
         )));
     }
@@ -219,7 +219,7 @@ pub fn validate_template_security(template_content: &str, is_trusted: bool) -> R
 
     for pattern in &dangerous_patterns {
         if template_content.contains(&format!("{{% {pattern}")) {
-            return Err(SwissArmyHammerError::Other(format!(
+            return Err(SwissArmyHammerError::Other { message: format!(
                 "Template contains potentially dangerous pattern: {pattern}"
             )));
         }
@@ -228,7 +228,7 @@ pub fn validate_template_security(template_content: &str, is_trusted: bool) -> R
     // Check for excessive nesting that could cause stack overflow
     let max_nesting = check_template_nesting_depth(template_content);
     if max_nesting > MAX_TEMPLATE_RECURSION_DEPTH {
-        return Err(SwissArmyHammerError::Other(format!(
+        return Err(SwissArmyHammerError::Other { message: format!(
             "Template nesting too deep: {max_nesting} levels (max allowed: {MAX_TEMPLATE_RECURSION_DEPTH})"
         )));
     }

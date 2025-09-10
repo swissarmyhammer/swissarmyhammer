@@ -377,7 +377,7 @@ fn extract_template_variables(template: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer::common::{Parameter, ParameterType};
+    use swissarmyhammer::{Parameter, ParameterType};
 
     #[test]
     fn test_runner_creation() {

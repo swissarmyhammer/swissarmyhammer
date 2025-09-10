@@ -9,6 +9,15 @@ use std::io;
 use std::path::PathBuf;
 use thiserror::Error as ThisError;
 
+/// Severity levels for validation errors
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub enum ErrorSeverity {
+    Warning,
+    Error,
+    Critical,
+}
+
 /// Result type alias for SwissArmyHammer operations
 pub type Result<T> = std::result::Result<T, SwissArmyHammerError>;
 

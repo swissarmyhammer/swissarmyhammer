@@ -16,11 +16,11 @@ pub trait ToSwissArmyHammerError<T> {
 
 impl<T, E: std::fmt::Display> ToSwissArmyHammerError<T> for std::result::Result<T, E> {
     fn to_swiss_error(self) -> crate::Result<T> {
-        self.map_err(|e| SwissArmyHammerError::Other(e.to_string()))
+        self.map_err(|e| SwissArmyHammerError::Other { message: e.to_string() })
     }
 
     fn to_swiss_error_with_context(self, context: &str) -> crate::Result<T> {
-        self.map_err(|e| SwissArmyHammerError::Other(format!("{context}: {e}")))
+        self.map_err(|e| SwissArmyHammerError::Other { message: format!("{context}: {e}") })
     }
 }
 
@@ -30,37 +30,37 @@ pub mod mcp {
 
     /// Convert tantivy errors to SwissArmyHammerError
     pub fn tantivy_error<E: std::fmt::Display>(error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("Search index error: {error}"))
+        SwissArmyHammerError::Other { message: format!("Search index error: {error}") }
     }
 
     /// Convert serde errors to SwissArmyHammerError
     pub fn serde_error<E: std::fmt::Display>(error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("Serialization error: {error}"))
+        SwissArmyHammerError::Other { message: format!("Serialization error: {error}") }
     }
 
     /// Convert JSON parsing errors to SwissArmyHammerError  
     pub fn json_error<E: std::fmt::Display>(error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("JSON parsing error: {error}"))
+        SwissArmyHammerError::Other { message: format!("JSON parsing error: {error}") }
     }
 
     /// Convert template rendering errors to SwissArmyHammerError
     pub fn template_error<E: std::fmt::Display>(error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("Template rendering error: {error}"))
+        SwissArmyHammerError::Other { message: format!("Template rendering error: {error}") }
     }
 
     /// Convert workflow errors to SwissArmyHammerError
     pub fn workflow_error<E: std::fmt::Display>(error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("Workflow error: {error}"))
+        SwissArmyHammerError::Other { message: format!("Workflow error: {error}") }
     }
 
     /// Convert validation errors to SwissArmyHammerError
     pub fn validation_error<E: std::fmt::Display>(error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("Validation error: {error}"))
+        SwissArmyHammerError::Other { message: format!("Validation error: {error}") }
     }
 
     /// Convert generic external library errors to SwissArmyHammerError
     pub fn external_error<E: std::fmt::Display>(library: &str, error: E) -> SwissArmyHammerError {
-        SwissArmyHammerError::Other(format!("{library} error: {error}"))
+        SwissArmyHammerError::Other { message: format!("{library} error: {error}") }
     }
 }
 
@@ -129,7 +129,7 @@ mod tests {
 
         assert!(converted.is_err());
         match converted.err().unwrap() {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert_eq!(msg, "test error");
             }
             _ => panic!("Expected Other error"),
@@ -143,7 +143,7 @@ mod tests {
 
         assert!(converted.is_err());
         match converted.err().unwrap() {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert_eq!(msg, "Failed operation: original error");
             }
             _ => panic!("Expected Other error"),
@@ -156,7 +156,7 @@ mod tests {
 
         let tantivy = mcp::tantivy_error(error);
         match tantivy {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("Search index error"));
                 assert!(msg.contains("test error"));
             }
@@ -165,7 +165,7 @@ mod tests {
 
         let serde = mcp::serde_error(error);
         match serde {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("Serialization error"));
                 assert!(msg.contains("test error"));
             }
@@ -174,7 +174,7 @@ mod tests {
 
         let json = mcp::json_error(error);
         match json {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("JSON parsing error"));
                 assert!(msg.contains("test error"));
             }
@@ -189,7 +189,7 @@ mod tests {
         let tantivy_result = result.clone().with_tantivy_context();
         assert!(tantivy_result.is_err());
         match tantivy_result.err().unwrap() {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("Search index error"));
             }
             _ => panic!("Expected Other error"),
@@ -198,7 +198,7 @@ mod tests {
         let serde_result = result.clone().with_serde_context();
         assert!(serde_result.is_err());
         match serde_result.err().unwrap() {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("Serialization error"));
             }
             _ => panic!("Expected Other error"),
@@ -207,7 +207,7 @@ mod tests {
         let external_result = result.with_external_context("MyLibrary");
         assert!(external_result.is_err());
         match external_result.err().unwrap() {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("MyLibrary error"));
             }
             _ => panic!("Expected Other error"),
@@ -220,25 +220,25 @@ mod tests {
 
         let template = mcp::template_error(error);
         match template {
-            SwissArmyHammerError::Other(msg) => assert!(msg.contains("Template rendering error")),
+            SwissArmyHammerError::Other { message: msg } => assert!(msg.contains("Template rendering error")),
             _ => panic!("Expected Other error"),
         }
 
         let workflow = mcp::workflow_error(error);
         match workflow {
-            SwissArmyHammerError::Other(msg) => assert!(msg.contains("Workflow error")),
+            SwissArmyHammerError::Other { message: msg } => assert!(msg.contains("Workflow error")),
             _ => panic!("Expected Other error"),
         }
 
         let validation = mcp::validation_error(error);
         match validation {
-            SwissArmyHammerError::Other(msg) => assert!(msg.contains("Validation error")),
+            SwissArmyHammerError::Other { message: msg } => assert!(msg.contains("Validation error")),
             _ => panic!("Expected Other error"),
         }
 
         let external = mcp::external_error("TestLib", error);
         match external {
-            SwissArmyHammerError::Other(msg) => {
+            SwissArmyHammerError::Other { message: msg } => {
                 assert!(msg.contains("TestLib error"));
                 assert!(msg.contains("sample error"));
             }

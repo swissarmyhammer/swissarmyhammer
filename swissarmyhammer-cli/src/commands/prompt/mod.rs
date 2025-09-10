@@ -7,10 +7,9 @@ use crate::error::{CliError, CliResult};
 use crate::exit_codes::EXIT_SUCCESS;
 use std::collections::HashMap;
 
-use swissarmyhammer::common::{
-    InteractivePrompts, Parameter, ParameterError, ParameterProvider, ParameterType,
-};
+use swissarmyhammer::interactive_prompts::InteractivePrompts;
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
+use swissarmyhammer_common::{Parameter, ParameterError, ParameterProvider, ParameterType};
 use swissarmyhammer_config::TemplateContext;
 
 /// Help text for the prompt command
@@ -73,7 +72,7 @@ async fn run_prompt_command(
 /// Partial templates are identified by either:
 /// 1. Starting with the `{% partial %}` marker
 /// 2. Having a description containing "Partial template for reuse in other prompts"
-fn is_partial_template(prompt: &swissarmyhammer::prompts::Prompt) -> bool {
+fn is_partial_template(prompt: &swissarmyhammer_prompts::Prompt) -> bool {
     // Check if the template starts with the partial marker
     if prompt.template.trim().starts_with("{% partial %}") {
         return true;
@@ -106,7 +105,7 @@ fn run_list_command(
 
     if let Some(ref source) = source_filter {
         let lib_source: swissarmyhammer::PromptSource = source.clone().into();
-        filter = filter.with_source(lib_source);
+        filter = filter.with_sources(vec![lib_source]);
     }
 
     if let Some(ref category) = category_filter {
@@ -424,6 +423,8 @@ fn prompt_for_all_missing_parameters(
 
 #[cfg(test)]
 mod tests {
+    use swissarmyhammer::interactive_prompts::InteractivePrompts;
+
     use super::*;
     use crate::cli::PromptSubcommand;
 
@@ -469,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_is_partial_template() {
-        use swissarmyhammer::prompts::Prompt;
+        use swissarmyhammer_prompts::Prompt;
 
         // Test template with partial marker
         let partial_prompt = Prompt {

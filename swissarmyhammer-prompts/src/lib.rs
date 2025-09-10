@@ -16,29 +16,18 @@ use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::SwissArmyHammerError;
 
 // Declare modules
-mod file_loader;
 mod frontmatter;
 mod prompt_filter;
 mod prompt_partial_adapter;
 mod prompt_resolver;
 mod prompts;
 mod storage;
-mod validation;
 
 // Re-export main types from prompts module
 pub use prompts::{Prompt, PromptLibrary, PromptLoader};
 
 // Re-export prompt resolver
 pub use prompt_resolver::PromptResolver;
-
-// Re-export file loader types
-pub use file_loader::{FileEntry, FileSource, VirtualFileSystem};
-
-// Re-export validation types
-pub use validation::{Validatable, ValidationIssue, ValidationLevel, ValidationResult};
-
-// Re-export parameter types
-pub use swissarmyhammer_common::{Parameter, ParameterProvider, ParameterType};
 
 // Re-export storage types
 pub use storage::{FileStorage, MemoryStorage, StorageBackend};

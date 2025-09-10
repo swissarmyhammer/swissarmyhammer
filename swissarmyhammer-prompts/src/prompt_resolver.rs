@@ -1,6 +1,6 @@
-use crate::file_loader::{FileSource, VirtualFileSystem};
 use crate::{PromptLibrary, PromptLoader, Result};
 use std::collections::HashMap;
+use swissarmyhammer_common::file_loader::{FileSource, VirtualFileSystem};
 
 // Include the generated builtin prompts
 include!(concat!(env!("OUT_DIR"), "/builtin_prompts.rs"));

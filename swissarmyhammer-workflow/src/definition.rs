@@ -14,6 +14,13 @@ pub enum WorkflowError {
     /// Workflow name cannot be empty or whitespace only
     #[error("Workflow name cannot be empty or whitespace only")]
     EmptyWorkflowName,
+
+    /// General execution failure with reason
+    #[error("Workflow execution failed: {reason}")]
+    ExecutionFailed {
+        /// Reason for the failure
+        reason: String,
+    },
 }
 
 /// Result type for workflow operations

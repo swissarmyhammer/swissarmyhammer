@@ -6,6 +6,7 @@
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;
+use swissarmyhammer::ErrorSeverity;
 use thiserror::Error;
 
 /// Errors that can occur during schema validation
@@ -83,15 +84,6 @@ impl ValidationError {
     }
 }
 
-/// Severity levels for validation errors
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
-pub enum ErrorSeverity {
-    Warning,
-    Error,
-    Critical,
-}
-
 /// Schema validator for comprehensive JSON schema validation
 #[allow(dead_code)]
 pub struct SchemaValidator;
@@ -102,7 +94,7 @@ impl SchemaValidator {
     ///
     /// Performs comprehensive validation including:
     /// - Schema structure validation
-    /// - Property definition validation  
+    /// - Property definition validation
     /// - Type compatibility checks
     /// - Parameter name validation
     /// - Conflict detection

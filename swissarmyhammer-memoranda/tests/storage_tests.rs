@@ -1,6 +1,6 @@
-//! Direct API tests for memoranda functionality
+//! Integration tests for memoranda storage functionality
 //!
-//! Tests core memo operations without external process dependencies:
+//! Tests core memo operations:
 //! - Creating, reading, updating, deleting memos
 //! - Listing memos and getting all context
 //! - Error handling and edge cases
@@ -21,7 +21,7 @@ async fn create_test_storage() -> Arc<Mutex<MarkdownMemoStorage>> {
 /// Test creating a memo
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_create() {
+async fn test_memo_create() {
     let storage = create_test_storage().await;
     
     let title = MemoTitle::new("Test Memo".to_string()).unwrap();
@@ -35,7 +35,7 @@ async fn test_mcp_memo_create() {
 /// Test retrieving a memo
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_get() {
+async fn test_memo_get() {
     let storage = create_test_storage().await;
     
     let title = MemoTitle::new("Get Test Memo".to_string()).unwrap();
@@ -55,7 +55,7 @@ async fn test_mcp_memo_get() {
 /// Test listing memos
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_list() {
+async fn test_memo_list() {
     let storage = create_test_storage().await;
     
     // Create multiple memos
@@ -78,7 +78,7 @@ async fn test_mcp_memo_list() {
 /// Test updating a memo
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_update() {
+async fn test_memo_update() {
     let storage = create_test_storage().await;
     
     let title = MemoTitle::new("Update Test Memo".to_string()).unwrap();
@@ -100,7 +100,7 @@ async fn test_mcp_memo_update() {
 /// Test deleting a memo
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_delete() {
+async fn test_memo_delete() {
     let storage = create_test_storage().await;
     
     let title = MemoTitle::new("Delete Test Memo".to_string()).unwrap();
@@ -122,37 +122,10 @@ async fn test_mcp_memo_delete() {
     assert!(retrieved.is_none());
 }
 
-/// Test basic memo functionality (original test renamed)
-#[tokio::test]
-#[serial]
-async fn test_mcp_memo_tool_list() {
-    let storage = create_test_storage().await;
-    
-    // Test basic memo operations to verify functionality
-    let title = MemoTitle::new("Test Title".to_string()).unwrap();
-    let content = MemoContent::from("Test Content".to_string());
-    
-    let _memo = storage.lock().await.create(title.clone(), content.clone()).await.unwrap();
-    
-    let retrieved_memo = storage.lock().await.get(&title).await.unwrap();
-    assert!(retrieved_memo.is_some());
-    let retrieved_memo = retrieved_memo.unwrap();
-    assert_eq!(retrieved_memo.title.as_str(), "Test Title");
-    assert_eq!(retrieved_memo.content.as_str(), "Test Content");
-    
-    let memos = storage.lock().await.list().await.unwrap();
-    assert_eq!(memos.len(), 1);
-    assert_eq!(memos[0].title.as_str(), "Test Title");
-    
-    // Test that memo functionality works - this validates the core functionality
-    // that would be exposed via MCP tools
-    println!("Memo functionality test passed - basic CRUD operations work");
-}
-
 /// Test error handling for invalid titles
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_invalid_title() {
+async fn test_memo_invalid_title() {
     // Test empty title
     let result = MemoTitle::new("".to_string());
     assert!(result.is_err());
@@ -165,7 +138,7 @@ async fn test_mcp_memo_invalid_title() {
 /// Test getting non-existent memo
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_get_nonexistent() {
+async fn test_memo_get_nonexistent() {
     let storage = create_test_storage().await;
     
     let title = MemoTitle::new("Nonexistent Memo".to_string()).unwrap();
@@ -176,7 +149,7 @@ async fn test_mcp_memo_get_nonexistent() {
 /// Test deleting non-existent memo
 #[tokio::test]
 #[serial]
-async fn test_mcp_memo_delete_nonexistent() {
+async fn test_memo_delete_nonexistent() {
     let storage = create_test_storage().await;
     
     let title = MemoTitle::new("Nonexistent Memo".to_string()).unwrap();

@@ -26,11 +26,11 @@
 
 use swissarmyhammer_common::SwissArmyHammerError;
 
-use crate::{Result, Validatable, ValidationIssue, ValidationLevel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use swissarmyhammer_common::{Result, Validatable, ValidationIssue, ValidationLevel};
 use swissarmyhammer_config::TemplateContext;
 
 // Temporary re-exports until Parameter types are moved to swissarmyhammer-common
