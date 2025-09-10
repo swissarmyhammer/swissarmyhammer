@@ -1,0 +1,174 @@
+[package]
+name = "swissarmyhammer-workflow"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A flexible prompt management library for AI assistants"
+documentation = "https://docs.rs/swissarmyhammer"
+readme = "../README.md"
+keywords = ["prompt", "template", "ai", "assistant", "liquid"]
+categories = ["template-engine", "development-tools"]
+
+[lints]
+workspace = true
+
+[build-dependencies]
+# None needed for build script
+
+[dependencies]
+# Core dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+# SwissArmyHammer common functionality
+swissarmyhammer-common = { path = "../swissarmyhammer-common" }
+swissarmyhammer-prompts = { path = "../swissarmyhammer-prompts" }
+swissarmyhammer-shell = { path = "../swissarmyhammer-shell" }
+swissarmyhammer-templating = { path = "../swissarmyhammer-templating" }
+
+# Template engine (legacy - being phased out)
+liquid = { workspace = true }
+liquid-core = { workspace = true }
+
+# File system
+walkdir = { workspace = true }
+
+glob = { workspace = true }
+ignore = { workspace = true }
+tempfile = { workspace = true }
+
+# Data structures
+dashmap = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+ulid = { workspace = true }
+toml = { workspace = true }
+
+
+
+
+
+# MCP support
+rmcp = { workspace = true }
+schemars = { workspace = true }
+dirs = { workspace = true }
+
+# Tree-sitter for outline generation (only needed for outline module)
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-dart = { workspace = true }
+
+# Mermaid parsing
+mermaid-parser = { git = "https://github.com/wballard/mermaid_parser" }
+
+# CEL expression evaluation
+cel-interpreter = "0.8"
+
+# Parser combinator library for action parsing
+chumsky = "0.10.1"
+
+# Performance optimizations
+lru = "0.12"
+zstd = "0.13"
+memmap2 = "0.9"
+rayon = "1.8"
+base64 = "0.22"
+which = "8.0.0"
+
+# Git operations
+git2 = { workspace = true }
+swissarmyhammer-git = { path = "../swissarmyhammer-git" }
+
+# Common utilities
+
+# Configuration support
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-issues-config = { path = "../swissarmyhammer-issues-config" }
+
+# Memoranda support for examples only
+swissarmyhammer-memoranda = { path = "../swissarmyhammer-memoranda" }
+
+
+
+
+
+# Search support
+swissarmyhammer-search = { path = "../swissarmyhammer-search" }
+
+# Syntax highlighting
+syntect = { workspace = true }
+
+# HTTP client for API calls
+reqwest = { workspace = true }
+
+# HTTP server dependencies for MCP server
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["trace"] }
+hyper = { workspace = true }
+
+# LlamaAgent integration for local AI execution
+llama-agent = { workspace = true }
+
+# Progress bars and user interface
+indicatif = { workspace = true }
+
+# CLI argument parsing
+clap = { workspace = true }
+dialoguer = { workspace = true }
+is-terminal = { workspace = true }
+
+
+# NEVER add features or feature flags to this Cargo.toml!
+# SwissArmyHammer provides ALL functionality ALL the time.
+# This is a SwissArmyHammer - every tool, every time!
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+criterion = { workspace = true }
+tracing-subscriber = { workspace = true }
+sysinfo = { workspace = true }
+serial_test = "3.1"
+rand = { workspace = true }
+
+futures = "0.3"
+swissarmyhammer-config = { path = "../swissarmyhammer-config" }
+swissarmyhammer-issues = { path = "../swissarmyhammer-issues" }
+
+[lib]
+name = "swissarmyhammer_workflow"
+path = "src/lib.rs"
+
+# Benchmark configuration
+# Note: These benchmarks don't exist yet, commenting out until they're created
+# [[bench]]
+# name = "benchmarks"
+# harness = false
+# path = "../benches/benchmarks.rs"
+#
+# [[bench]]
+# name = "issue_performance"
+# harness = false
+# path = "../benches/issue_performance.rs"
+#
+# [[bench]]
+# name = "memo_benchmarks"
+# harness = false
+# path = "../benches/memo_benchmarks.rs"
+#
+# [[bench]]
+# name = "executor_performance"
+# harness = false
+# path = "../benches/executor_performance.rs"
