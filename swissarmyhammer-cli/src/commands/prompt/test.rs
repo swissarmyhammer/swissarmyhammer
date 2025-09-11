@@ -15,30 +15,76 @@ pub async fn execute_test_command(
     test_cmd: TestCommand,
     cli_context: &CliContext,
 ) -> Result<()> {
-    let prompt_name = test_cmd.prompt_name.clone()
-        .ok_or_else(|| anyhow::anyhow!("Prompt name is required"))?;
-
-    if cli_context.verbose {
-        println!("Testing prompt: {}", prompt_name);
-    }
-
-    // Get prompt library from CliContext
-    let library = cli_context.get_prompt_library()?;
+    // Determine debug mode from either test command or global context
+    let debug_mode = test_cmd.debug || cli_context.debug;
     
-    // Get the specific prompt
-    let prompt = library
-        .get(&prompt_name)
-        .map_err(|e| anyhow::anyhow!("Failed to get prompt '{}': {}", prompt_name, e))?;
+    // Handle file-based prompt loading
+    let (prompt_name, prompt) = if let Some(file_path) = &test_cmd.file {
+        if debug_mode {
+            println!("Loading prompt from file: {}", file_path);
+        }
+        
+        // Use file name as prompt name for display
+        let name = std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(file_path)
+            .to_string();
+            
+        // Load prompt from file
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read prompt file '{}': {}", file_path, e))?;
+        
+        // Parse the prompt from the file content using PromptLoader
+        let loader = swissarmyhammer_prompts::PromptLoader::new();
+        let prompt = loader.load_from_string(&name, &content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse prompt from file '{}': {}", file_path, e))?;
+            
+        (name, prompt)
+    } else {
+        // Use prompt name from library
+        let prompt_name = test_cmd.prompt_name.clone()
+            .ok_or_else(|| anyhow::anyhow!("Either prompt name or file path is required"))?;
 
-    if cli_context.debug {
+        if cli_context.verbose {
+            println!("Testing prompt: {}", prompt_name);
+        }
+
+        // Get prompt library from CliContext
+        let library = cli_context.get_prompt_library()?;
+        
+        // Get the specific prompt
+        let prompt = library
+            .get(&prompt_name)
+            .map_err(|e| anyhow::anyhow!("Failed to get prompt '{}': {}", prompt_name, e))?;
+            
+        (prompt_name, prompt)
+    };
+
+    if debug_mode {
         println!("Prompt parameters: {:#?}", prompt.get_parameters());
     }
 
     // Collect parameters
-    let parameters = collect_test_parameters(&test_cmd, prompt.get_parameters(), cli_context)?;
+    let parameters = collect_test_parameters(&test_cmd, prompt.get_parameters(), cli_context, debug_mode)?;
     
-    // Render the prompt using CliContext
-    let rendered = cli_context.render_prompt(&prompt_name, &parameters)?;
+    // Render the prompt - handle both file and library cases
+    let rendered = if test_cmd.file.is_some() {
+        // For file-based prompts, render using templating engine directly
+        let mut template_context = cli_context.template_context.clone();
+        for (key, value) in &parameters {
+            template_context.set(key.clone(), value.clone());
+        }
+        
+        // Create template and render
+        let template = swissarmyhammer_templating::Template::new(&prompt.template)
+            .map_err(|e| anyhow::anyhow!("Failed to create template: {}", e))?;
+        template.render_with_context(&template_context)
+            .map_err(|e| anyhow::anyhow!("Failed to render prompt: {}", e))?
+    } else {
+        // For library prompts, use CliContext
+        cli_context.render_prompt(&prompt_name, &parameters)?
+    };
 
     // Output the result
     output_rendered_prompt(&rendered, &test_cmd, cli_context)?;
@@ -51,11 +97,12 @@ fn collect_test_parameters(
     test_cmd: &TestCommand,
     prompt_parameters: &[Parameter],
     cli_context: &CliContext,
+    debug_mode: bool,
 ) -> Result<HashMap<String, serde_json::Value>> {
     // Parse CLI variables
     let cli_parameters = parse_cli_variables(&test_cmd.vars)?;
     
-    if cli_context.verbose && !cli_parameters.is_empty() {
+    if (cli_context.verbose || debug_mode) && !cli_parameters.is_empty() {
         println!("CLI parameters: {:#?}", cli_parameters);
     }
 
@@ -65,10 +112,10 @@ fn collect_test_parameters(
         &interactive_prompts,
         prompt_parameters,
         &cli_parameters,
-        cli_context.verbose,
+        cli_context.verbose || debug_mode,
     )?;
 
-    if cli_context.verbose {
+    if cli_context.verbose || debug_mode {
         println!("Final parameters: {:#?}", all_parameters);
     }
 

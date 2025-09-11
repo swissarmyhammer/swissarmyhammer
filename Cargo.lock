@@ -6259,6 +6259,7 @@ dependencies = [
  "swissarmyhammer-issues",
  "swissarmyhammer-memoranda",
  "swissarmyhammer-prompts",
+ "swissarmyhammer-templating",
  "swissarmyhammer-tools",
  "swissarmyhammer-workflow",
  "tabled",

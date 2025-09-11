@@ -115,12 +115,6 @@ fn run_list_command(
     Ok(())
 }
 
-
-
-
-
-
-
 /// Run the validate command - delegates to root validate functionality
 async fn run_validate_command() -> Result<(), anyhow::Error> {
     // For now, delegate to the main validate command functionality
@@ -147,8 +141,7 @@ async fn run_validate_command() -> Result<(), anyhow::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swissarmyhammer::interactive_prompts::InteractivePrompts;
-    use swissarmyhammer_common::{Parameter, ParameterError, ParameterType};
+
     use swissarmyhammer_config::TemplateContext;
 
     #[tokio::test]

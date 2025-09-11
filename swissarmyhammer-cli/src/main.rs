@@ -421,6 +421,18 @@ async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
     commands::doctor::handle_command(template_context).await
 }
 
+/// Handle prompt command routing using the new CliContext-based architecture.
+///
+/// This function parses prompt subcommands using the new typed CLI system and routes
+/// them to appropriate handlers. It supports global arguments like --verbose, --format,
+/// and --debug through the CliContext parameter.
+///
+/// # Arguments
+/// * `matches` - Clap argument matches for the prompt subcommand
+/// * `context` - CliContext containing global configuration and prompt library access
+///
+/// # Returns
+/// Exit code (0 for success, non-zero for error)
 async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::commands::prompt::cli;
 
