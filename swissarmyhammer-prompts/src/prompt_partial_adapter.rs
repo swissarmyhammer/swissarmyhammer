@@ -6,6 +6,7 @@
 use crate::prompts::PromptLibrary;
 use std::sync::Arc;
 use std::borrow::Cow;
+use swissarmyhammer_templating::partials::normalize_partial_name;
 
 /// Adapter that allows prompts to be used as Liquid template partials
 #[derive(Debug)]
@@ -27,24 +28,58 @@ impl PromptPartialAdapter {
 
 impl swissarmyhammer_templating::PartialLoader for PromptPartialAdapter {
     fn contains(&self, name: &str) -> bool {
-        self.library.get(name).is_ok()
+        tracing::debug!("PromptPartialAdapter::contains called with name: '{}'", name);
+        
+        // Try the requested name and all normalized variants
+        let candidates = normalize_partial_name(name);
+        tracing::debug!("Trying candidates: {:?}", candidates);
+        
+        for candidate in candidates {
+            if self.library.get(&candidate).is_ok() {
+                tracing::debug!("Found matching partial: '{}'", candidate);
+                return true;
+            }
+        }
+        
+        tracing::debug!("No matching partial found for: '{}'", name);
+        false
     }
 
     fn names(&self) -> Vec<String> {
-        self.library.list_names().unwrap_or_default()
+        let names = self.library.list_names().unwrap_or_default();
+        tracing::debug!("PromptPartialAdapter::names returning: {:?}", names);
+        names
     }
 
     fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
-        match self.library.get(name) {
-            Ok(prompt) => Some(Cow::Owned(prompt.template.clone())),
-            Err(_) => None,
+        tracing::debug!("PromptPartialAdapter::try_get called with name: '{}'", name);
+        
+        // Try the requested name and all normalized variants
+        let candidates = normalize_partial_name(name);
+        tracing::debug!("Trying candidates: {:?}", candidates);
+        
+        for candidate in candidates {
+            if let Ok(prompt) = self.library.get(&candidate) {
+                tracing::debug!("Found matching partial: '{}'", candidate);
+                return Some(Cow::Owned(prompt.template.clone()));
+            }
         }
+        
+        tracing::debug!("No matching partial found for: '{}'", name);
+        None
     }
 }
 
 impl liquid::partials::PartialSource for PromptPartialAdapter {
     fn contains(&self, name: &str) -> bool {
-        self.library.get(name).is_ok()
+        // Try the requested name and all normalized variants
+        let candidates = normalize_partial_name(name);
+        for candidate in candidates {
+            if self.library.get(&candidate).is_ok() {
+                return true;
+            }
+        }
+        false
     }
 
     fn names(&self) -> Vec<&str> {
@@ -53,10 +88,14 @@ impl liquid::partials::PartialSource for PromptPartialAdapter {
     }
 
     fn try_get(&self, name: &str) -> Option<std::borrow::Cow<'_, str>> {
-        match self.library.get(name) {
-            Ok(prompt) => Some(std::borrow::Cow::Owned(prompt.template.clone())),
-            Err(_) => None,
+        // Try the requested name and all normalized variants
+        let candidates = normalize_partial_name(name);
+        for candidate in candidates {
+            if let Ok(prompt) = self.library.get(&candidate) {
+                return Some(std::borrow::Cow::Owned(prompt.template.clone()));
+            }
         }
+        None
     }
 }
 

@@ -1,5 +1,6 @@
 use swissarmyhammer::{Prompt, PromptLibrary};
 use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_prompts::PromptResolver;
 
 #[test]
 fn test_partials_with_liquid_extension() {

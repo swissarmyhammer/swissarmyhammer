@@ -143,6 +143,7 @@ tracing-subscriber = { workspace = true }
 sysinfo = { workspace = true }
 serial_test = "3.1"
 rand = { workspace = true }
+rstest = "0.22"
 
 futures = "0.3"
 swissarmyhammer-config = { path = "../swissarmyhammer-config" }
