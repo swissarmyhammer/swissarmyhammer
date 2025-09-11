@@ -88,49 +88,38 @@ impl Renderable for PartialRenderable {
 /// Helper function to normalize partial names by trying different extensions
 pub fn normalize_partial_name(requested_name: &str) -> Vec<String> {
     let mut candidates = Vec::new();
-
-    // Try exact name first
-    candidates.push(requested_name.to_string());
-
-    // If the request ends with .liquid (added by liquid engine), try without it
-    if let Some(name_without_liquid) = requested_name.strip_suffix(".liquid") {
-        candidates.push(name_without_liquid.to_string());
-        
-        // Also try with other extensions after stripping .liquid
-        for ext in TEMPLATE_EXTENSIONS {
-            let name_with_ext = format!("{name_without_liquid}{ext}");
-            candidates.push(name_with_ext);
-        }
-    }
-
-    // Try with various prompt file extensions
-    for ext in TEMPLATE_EXTENSIONS {
-        let name_with_ext = format!("{requested_name}{ext}");
-        candidates.push(name_with_ext);
-    }
-
-    // If the name already has an extension, try stripping it and adding others
-    if requested_name.contains('.') {
-        for ext in TEMPLATE_EXTENSIONS {
-            if let Some(name_without_ext) = requested_name.strip_suffix(ext) {
-                candidates.push(name_without_ext.to_string());
-                // Also try with other extensions
-                for other_ext in TEMPLATE_EXTENSIONS {
-                    if ext != other_ext {
-                        let name_with_other_ext = format!("{name_without_ext}{other_ext}");
-                        candidates.push(name_with_other_ext);
-                    }
-                }
-            }
-        }
-    }
-
-    // Remove duplicates while preserving order
     let mut seen = std::collections::HashSet::new();
+
+    // Helper function to add candidate if not already seen
+    let mut add_candidate = |name: String| {
+        if seen.insert(name.clone()) {
+            candidates.push(name);
+        }
+    };
+
+    // 1. Try the exact name first
+    add_candidate(requested_name.to_string());
+
+    // 2. Generate base names by stripping known extensions
+    let mut base_names = vec![requested_name.to_string()];
+    for ext in TEMPLATE_EXTENSIONS {
+        if let Some(name_without_ext) = requested_name.strip_suffix(ext) {
+            base_names.push(name_without_ext.to_string());
+        }
+    }
+
+    // 3. For each base name, try all extension combinations
+    for base_name in base_names {
+        // Add base name without any extension
+        add_candidate(base_name.clone());
+
+        // Add base name with each extension
+        for ext in TEMPLATE_EXTENSIONS {
+            add_candidate(format!("{}{}", base_name, ext));
+        }
+    }
+
     candidates
-        .into_iter()
-        .filter(|name| seen.insert(name.clone()))
-        .collect()
 }
 
 /// Adapter to make any PartialLoader work with Liquid's PartialSource trait
