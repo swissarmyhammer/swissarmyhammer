@@ -1,7 +1,7 @@
 use crate::commands;
 use clap::{Parser, Subcommand, ValueEnum};
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum OutputFormat {
     Table,
     Json,
@@ -42,11 +42,7 @@ impl From<PromptSource> for PromptSourceArg {
     }
 }
 
-#[derive(ValueEnum, Clone, Debug)]
-pub enum ValidateFormat {
-    Text,
-    Json,
-}
+
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum VisualizationFormat {
@@ -85,6 +81,10 @@ pub struct Cli {
     /// Suppress all output except errors
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Global output format
+    #[arg(long, value_enum)]
+    pub format: Option<OutputFormat>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -157,8 +157,8 @@ Examples:
         quiet: bool,
 
         /// Output format
-        #[arg(long, value_enum, default_value = "text")]
-        format: ValidateFormat,
+        #[arg(long, value_enum, default_value = "table")]
+        format: OutputFormat,
 
         /// \[DEPRECATED\] This parameter is ignored. Workflows are now only loaded from standard locations.
         #[arg(long = "workflow-dir", value_name = "DIR", hide = true)]
@@ -833,7 +833,7 @@ mod tests {
         }) = cli.command
         {
             assert!(!quiet);
-            assert!(matches!(format, ValidateFormat::Text));
+            assert!(matches!(format, OutputFormat::Table));
             assert!(workflow_dirs.is_empty());
         } else {
             unreachable!("Expected Validate command");
@@ -862,7 +862,7 @@ mod tests {
         }) = cli.command
         {
             assert!(quiet);
-            assert!(matches!(format, ValidateFormat::Json));
+            assert!(matches!(format, OutputFormat::Json));
             assert_eq!(workflow_dirs, vec!["./workflows"]);
         } else {
             unreachable!("Expected Validate command");
@@ -1314,5 +1314,58 @@ mod tests {
         assert!(cli.verbose);
         assert!(cli.debug);
         assert!(matches!(cli.command, Some(Commands::Implement)));
+    }
+
+    #[test]
+    fn test_global_format_flag() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "prompt", "list"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(cli.format, Some(OutputFormat::Json)));
+    }
+
+    #[test]
+    fn test_global_format_flag_yaml() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "yaml", "doctor"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(cli.format, Some(OutputFormat::Yaml)));
+    }
+
+    #[test]
+    fn test_global_format_flag_table() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "prompt", "list"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(matches!(cli.format, Some(OutputFormat::Table)));
+    }
+
+    #[test]
+    fn test_global_format_flag_default() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "prompt", "list"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        // When global format is not specified, it should be None
+        assert_eq!(cli.format, None);
+    }
+
+    #[test]
+    fn test_global_format_flag_with_verbose() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--verbose", "--format", "json", "prompt", "list"]);
+        assert!(result.is_ok());
+
+        let cli = result.unwrap();
+        assert!(cli.verbose);
+        assert!(matches!(cli.format, Some(OutputFormat::Json)));
+    }
+
+    #[test]
+    fn test_global_format_flag_invalid() {
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "prompt", "list"]);
+        assert!(result.is_err());
     }
 }

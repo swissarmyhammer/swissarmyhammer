@@ -18,7 +18,7 @@ pub async fn handle_command(context: &CliContext) -> i32 {
         interactive: false,
         dry_run: false,
         timeout: None,
-        quiet: false,
+        quiet: context.quiet,
     };
 
     crate::commands::flow::handle_command(subcommand, context).await

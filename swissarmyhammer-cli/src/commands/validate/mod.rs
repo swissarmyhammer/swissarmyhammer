@@ -2,7 +2,7 @@
 //!
 //! Validates prompt files and workflows for syntax and best practices
 
-use crate::cli::ValidateFormat;
+use crate::cli::OutputFormat;
 use crate::exit_codes::EXIT_ERROR;
 use crate::validate;
 
@@ -12,7 +12,7 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// Handle the validate command
 pub async fn handle_command(
     quiet: bool,
-    format: ValidateFormat,
+    format: OutputFormat,
     workflow_dirs: Vec<String>,
     validate_tools: bool,
     _template_context: &swissarmyhammer_config::TemplateContext,

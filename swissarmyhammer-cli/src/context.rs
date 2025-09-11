@@ -3,12 +3,14 @@
 //! Shared context object that holds all storage instances and configuration
 //! to avoid recreating them in each command.
 
-use std::sync::Arc;
+use std::{sync::Arc, rc::Rc};
 use swissarmyhammer_common::Result;
 use swissarmyhammer_git::GitOperations;
 
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_workflow::{FileSystemWorkflowRunStorage, WorkflowStorage};
+use crate::cli::OutputFormat;
+
 
 /// Shared CLI context containing all storage objects, configuration, and parsed arguments
 pub struct CliContext {
@@ -33,10 +35,25 @@ pub struct CliContext {
 
     /// Git operations (optional - None if not in a git repository)
     #[allow(dead_code)]
-    pub git_operations: Option<Arc<GitOperations>>,
+    pub git_operations: Option<Rc<GitOperations>>,
 
     /// Template context with configuration
     pub template_context: swissarmyhammer_config::TemplateContext,
+
+    /// Global output format setting
+    pub format: OutputFormat,
+
+    /// Original global output format option (None if not explicitly specified)
+    pub format_option: Option<OutputFormat>,
+
+    /// Enable verbose output
+    pub verbose: bool,
+
+    /// Enable debug output
+    pub debug: bool,
+
+    /// Suppress output except errors
+    pub quiet: bool,
 
     /// Parsed CLI arguments
     pub matches: clap::ArgMatches,
@@ -46,6 +63,11 @@ impl CliContext {
     /// Create a new CLI context with default storage implementations
     pub async fn new(
         template_context: swissarmyhammer_config::TemplateContext,
+        format: OutputFormat,
+        format_option: Option<OutputFormat>,
+        verbose: bool,
+        debug: bool,
+        quiet: bool,
         matches: clap::ArgMatches,
     ) -> Result<Self> {
         let workflow_storage = Arc::new(
@@ -98,7 +120,7 @@ impl CliContext {
         let git_operations = match GitOperations::new() {
             Ok(ops) => {
                 tracing::debug!("Git operations initialized successfully");
-                Some(Arc::new(ops))
+                Some(Rc::new(ops))
             }
             Err(e) => {
                 tracing::warn!("Git operations not available: {}", e);
@@ -113,7 +135,44 @@ impl CliContext {
             issue_storage,
             git_operations,
             template_context,
+            format,
+            format_option,
+            verbose,
+            debug,
+            quiet,
             matches,
         })
+    }
+
+    /// Display items using the configured output format
+    pub fn display<T>(&self, items: Vec<T>) -> Result<()> 
+    where 
+        T: serde::Serialize,
+    {
+        match self.format {
+            OutputFormat::Json => {
+                let json = serde_json::to_string_pretty(&items)
+                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to serialize to JSON: {e}"),
+                    })?;
+                println!("{}", json);
+            }
+            OutputFormat::Yaml => {
+                let yaml = serde_yaml::to_string(&items)
+                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to serialize to YAML: {e}"),
+                    })?;
+                println!("{}", yaml);
+            }
+            OutputFormat::Table => {
+                // Simple table fallback - just print as JSON for now
+                let json = serde_json::to_string_pretty(&items)
+                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to serialize to JSON: {e}"),
+                    })?;
+                println!("{}", json);
+            }
+        }
+        Ok(())
     }
 }

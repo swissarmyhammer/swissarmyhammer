@@ -13,7 +13,7 @@ use swissarmyhammer_workflow::{
     MemoryWorkflowStorage, MermaidParser, Workflow, WorkflowResolver, WorkflowStorageBackend,
 };
 
-use crate::cli::ValidateFormat;
+use crate::cli::OutputFormat;
 use crate::dynamic_cli::CliBuilder;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use crate::mcp_integration::CliToolContext;
@@ -386,13 +386,17 @@ impl Validator {
         }
     }
 
-    pub fn print_results(&self, result: &ValidationResult, format: ValidateFormat) -> Result<()> {
+    pub fn print_results(&self, result: &ValidationResult, format: OutputFormat) -> Result<()> {
         match format {
-            ValidateFormat::Text => {
+            OutputFormat::Table => {
                 self.print_text_results(result);
                 Ok(())
             }
-            ValidateFormat::Json => self.print_json_results(result),
+            OutputFormat::Json => self.print_json_results(result),
+            OutputFormat::Yaml => {
+                // For validate command, YAML output is not implemented, fall back to JSON
+                self.print_json_results(result)
+            }
         }
     }
 
@@ -401,11 +405,15 @@ impl Validator {
     pub fn format_results(
         &self,
         result: &ValidationResult,
-        format: ValidateFormat,
+        format: OutputFormat,
     ) -> Result<String> {
         match format {
-            ValidateFormat::Text => Ok(self.format_text_results(result)),
-            ValidateFormat::Json => self.format_json_results(result),
+            OutputFormat::Table => Ok(self.format_text_results(result)),
+            OutputFormat::Json => self.format_json_results(result),
+            OutputFormat::Yaml => {
+                // For validate command, YAML output is not implemented, fall back to JSON
+                self.format_json_results(result)
+            }
         }
     }
 
@@ -864,7 +872,7 @@ impl Validator {
 
 pub async fn run_validate_command_with_dirs(
     quiet: bool,
-    format: ValidateFormat,
+    format: OutputFormat,
     workflow_dirs: Vec<String>,
     validate_tools: bool,
 ) -> Result<i32> {
@@ -896,7 +904,7 @@ pub async fn run_validate_command_with_dirs(
 #[allow(dead_code)] // Used by test infrastructure
 pub async fn run_validate_command_with_dirs_captured(
     quiet: bool,
-    format: ValidateFormat,
+    format: OutputFormat,
     workflow_dirs: Vec<String>,
     validate_tools: bool,
 ) -> Result<(String, i32)> {

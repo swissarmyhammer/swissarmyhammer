@@ -20,9 +20,10 @@ fn get_repo_root() -> PathBuf {
 
 /// Create a minimal test CliContext
 async fn create_test_cli_context() -> Result<CliContext> {
+    use swissarmyhammer_cli::cli::OutputFormat;
     let template_context = swissarmyhammer_config::TemplateContext::new();
     let matches = clap::ArgMatches::default();
-    CliContext::new(template_context, matches).await.map_err(Into::into)
+    CliContext::new(template_context, OutputFormat::Table, None, false, false, false, matches).await.map_err(Into::into)
 }
 
 /// Run flow command in-process from the repo root

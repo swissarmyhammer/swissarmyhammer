@@ -274,6 +274,12 @@ and ensuring perfect consistency between MCP and CLI interfaces.
                     .long("validate-tools")
                     .help("Validate all tool schemas and exit")
                     .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("format")
+                    .long("format")
+                    .help("Global output format")
+                    .value_parser(["table", "json", "yaml"]),
             );
 
         // Add core serve command (non-MCP command)

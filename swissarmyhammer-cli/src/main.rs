@@ -182,6 +182,18 @@ async fn handle_dynamic_matches(
     let debug = matches.get_flag("debug");
     let quiet = matches.get_flag("quiet");
     let validate_tools = matches.get_flag("validate-tools");
+    
+    // Handle global format flag  
+    use crate::cli::OutputFormat;
+    let format_option = matches.try_get_one::<String>("format")
+        .unwrap_or(None)
+        .map(|s| match s.as_str() {
+            "json" => OutputFormat::Json,
+            "yaml" => OutputFormat::Yaml,
+            "table" => OutputFormat::Table,
+            _ => OutputFormat::Table,
+        });
+    let format = format_option.unwrap_or(OutputFormat::Table);
 
     // Check if this is a serve command for MCP mode logging
     let is_serve_command = matches
@@ -218,7 +230,7 @@ async fn handle_dynamic_matches(
     }
 
     // Create shared CLI context
-    let context = match CliContext::new(template_context.clone(), matches).await {
+    let context = match CliContext::new(template_context.clone(), format, format_option, verbose, debug, quiet, matches).await {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("Failed to initialize CLI context: {}", e);
@@ -233,7 +245,7 @@ async fn handle_dynamic_matches(
         }
         Some(("doctor", _)) => handle_doctor_command(&template_context).await,
         Some(("prompt", sub_matches)) => {
-            handle_prompt_command(sub_matches, &template_context).await
+            handle_prompt_command(sub_matches, &context).await
         }
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => {
@@ -402,18 +414,22 @@ async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
 
 async fn handle_prompt_command(
     matches: &clap::ArgMatches,
-    template_context: &TemplateContext,
+    context: &CliContext,
 ) -> i32 {
     use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
 
     let subcommand = match matches.subcommand() {
         Some(("list", sub_matches)) => {
+            // Use global format from context, allow subcommand format to override
             let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
                 Some("json") => OutputFormat::Json,
                 Some("yaml") => OutputFormat::Yaml,
+                Some("table") => OutputFormat::Table,
+                None => context.format_option.unwrap_or(OutputFormat::Table), // Use global format when no subcommand format specified, default to Table
                 _ => OutputFormat::Table,
             };
-            let verbose = sub_matches.get_flag("verbose");
+            // Use global verbose from context, allow subcommand verbose to override
+            let verbose = sub_matches.get_flag("verbose") || context.verbose;
             let source = sub_matches
                 .get_one::<String>("source")
                 .map(|s| match s.as_str() {
@@ -442,7 +458,8 @@ async fn handle_prompt_command(
             let raw = sub_matches.get_flag("raw");
             let copy = sub_matches.get_flag("copy");
             let save = sub_matches.get_one::<String>("save").cloned();
-            let debug = sub_matches.get_flag("debug");
+            // Use global debug from context, allow subcommand debug to override
+            let debug = sub_matches.get_flag("debug") || context.debug;
 
             PromptSubcommand::Test {
                 prompt_name,
@@ -461,7 +478,7 @@ async fn handle_prompt_command(
         }
     };
 
-    commands::prompt::handle_command(subcommand, template_context).await
+    commands::prompt::handle_command(subcommand, &context.template_context).await
 }
 
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
@@ -622,12 +639,13 @@ async fn handle_validate_command(
     matches: &clap::ArgMatches,
     template_context: &TemplateContext,
 ) -> i32 {
-    use crate::cli::ValidateFormat;
+    use crate::cli::OutputFormat;
 
     let quiet = matches.get_flag("quiet");
     let format = match matches.get_one::<String>("format").map(|s| s.as_str()) {
-        Some("json") => ValidateFormat::Json,
-        _ => ValidateFormat::Text,
+        Some("json") => OutputFormat::Json,
+        Some("yaml") => OutputFormat::Yaml,
+        _ => OutputFormat::Table,
     };
     let workflow_dirs = matches
         .get_many::<String>("workflow-dirs")
