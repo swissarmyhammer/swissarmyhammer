@@ -6198,6 +6198,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "criterion",
+ "derive_builder",
  "dialoguer",
  "dirs 5.0.1",
  "git2",

@@ -2,11 +2,14 @@ use crate::commands;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+#[derive(Default)]
 pub enum OutputFormat {
+    #[default]
     Table,
     Json,
     Yaml,
 }
+
 
 // Re-export PromptSource from the library
 pub use swissarmyhammer::PromptSource;

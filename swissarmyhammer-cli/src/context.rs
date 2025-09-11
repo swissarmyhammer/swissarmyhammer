@@ -13,6 +13,8 @@ use crate::cli::OutputFormat;
 
 
 /// Shared CLI context containing all storage objects, configuration, and parsed arguments
+#[derive(derive_builder::Builder)]
+#[builder(pattern = "owned")]
 pub struct CliContext {
     /// Workflow storage for loading and managing workflows
     pub workflow_storage: Arc<WorkflowStorage>,
@@ -38,24 +40,31 @@ pub struct CliContext {
     pub git_operations: Option<Rc<GitOperations>>,
 
     /// Template context with configuration
+    #[builder(setter(into))]
     pub template_context: swissarmyhammer_config::TemplateContext,
 
     /// Global output format setting
+    #[builder(default = "OutputFormat::Table")]
     pub format: OutputFormat,
 
     /// Original global output format option (None if not explicitly specified)
+    #[builder(default)]
     pub format_option: Option<OutputFormat>,
 
     /// Enable verbose output
+    #[builder(default)]
     pub verbose: bool,
 
     /// Enable debug output
+    #[builder(default)]
     pub debug: bool,
 
     /// Suppress output except errors
+    #[builder(default)]
     pub quiet: bool,
 
     /// Parsed CLI arguments
+    #[builder(setter(into))]
     pub matches: clap::ArgMatches,
 }
 
@@ -70,6 +79,55 @@ impl CliContext {
         quiet: bool,
         matches: clap::ArgMatches,
     ) -> Result<Self> {
+        CliContextBuilder::default()
+            .template_context(template_context)
+            .format(format)
+            .format_option(format_option)
+            .verbose(verbose)
+            .debug(debug)
+            .quiet(quiet)
+            .matches(matches)
+            .build_async()
+            .await
+    }
+
+    /// Display items using the configured output format
+    pub fn display<T>(&self, items: Vec<T>) -> Result<()> 
+    where 
+        T: serde::Serialize,
+    {
+        match self.format {
+            OutputFormat::Json => {
+                let json = serde_json::to_string_pretty(&items)
+                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to serialize to JSON: {e}"),
+                    })?;
+                println!("{}", json);
+            }
+            OutputFormat::Yaml => {
+                let yaml = serde_yaml::to_string(&items)
+                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to serialize to YAML: {e}"),
+                    })?;
+                println!("{}", yaml);
+            }
+            OutputFormat::Table => {
+                // Simple table fallback - just print as JSON for now
+                let json = serde_json::to_string_pretty(&items)
+                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                        message: format!("Failed to serialize to JSON: {e}"),
+                    })?;
+                println!("{}", json);
+            }
+        }
+        Ok(())
+    }
+
+}
+
+impl CliContextBuilder {
+    /// Build the CliContext with async initialization of storage components
+    pub async fn build_async(self) -> Result<CliContext> {
         let workflow_storage = Arc::new(
             tokio::task::spawn_blocking(WorkflowStorage::file_system)
                 .await
@@ -127,52 +185,25 @@ impl CliContext {
                 None
             }
         };
-        Ok(Self {
+        
+        Ok(CliContext {
             workflow_storage,
             workflow_run_storage,
             prompt_library: Arc::new(prompt_library),
             memo_storage,
             issue_storage,
             git_operations,
-            template_context,
-            format,
-            format_option,
-            verbose,
-            debug,
-            quiet,
-            matches,
+            template_context: self.template_context.ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: "template_context is required".to_string(),
+            })?,
+            format: self.format.unwrap_or(OutputFormat::Table),
+            format_option: self.format_option.unwrap_or_default(),
+            verbose: self.verbose.unwrap_or_default(),
+            debug: self.debug.unwrap_or_default(),
+            quiet: self.quiet.unwrap_or_default(),
+            matches: self.matches.ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: "matches is required".to_string(),
+            })?,
         })
-    }
-
-    /// Display items using the configured output format
-    pub fn display<T>(&self, items: Vec<T>) -> Result<()> 
-    where 
-        T: serde::Serialize,
-    {
-        match self.format {
-            OutputFormat::Json => {
-                let json = serde_json::to_string_pretty(&items)
-                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                        message: format!("Failed to serialize to JSON: {e}"),
-                    })?;
-                println!("{}", json);
-            }
-            OutputFormat::Yaml => {
-                let yaml = serde_yaml::to_string(&items)
-                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                        message: format!("Failed to serialize to YAML: {e}"),
-                    })?;
-                println!("{}", yaml);
-            }
-            OutputFormat::Table => {
-                // Simple table fallback - just print as JSON for now
-                let json = serde_json::to_string_pretty(&items)
-                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                        message: format!("Failed to serialize to JSON: {e}"),
-                    })?;
-                println!("{}", json);
-            }
-        }
-        Ok(())
     }
 }
