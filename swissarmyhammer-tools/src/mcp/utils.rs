@@ -4,7 +4,7 @@ use rmcp::ErrorData as McpError;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use swissarmyhammer_issues_config::Config;
+use swissarmyhammer_issues::Config;
 
 /// Convert a JSON map to a string map for template arguments
 pub fn convert_prompt_arguments(arguments: &HashMap<String, Value>) -> HashMap<String, String> {
@@ -49,11 +49,8 @@ where
 
 /// Validate and normalize an issue name according to MCP standards
 ///
-/// This function performs comprehensive validation including:
-/// - Empty/whitespace checks
-/// - Length limits (configurable maximum)
-/// - Invalid filesystem character checks
-/// - Additional validation using the existing issues module
+/// This function uses the centralized validation logic from the issues module
+/// but adds MCP-specific requirements (e.g., no empty names allowed).
 ///
 /// # Arguments
 ///
@@ -63,40 +60,19 @@ where
 ///
 /// * `Result<String, McpError>` - The validated and trimmed name, or an error
 pub fn validate_issue_name(name: &str) -> std::result::Result<String, McpError> {
+    use swissarmyhammer_issues::IssueName;
+    
+    // MCP interface doesn't allow empty names, unlike the internal API
     let trimmed = name.trim();
-
     if trimmed.is_empty() {
         return Err(McpError::invalid_params("Issue name cannot be empty", None));
     }
-
-    let config = Config::global();
-    if trimmed.len() > config.max_issue_name_length {
-        return Err(McpError::invalid_params(
-            format!(
-                "Issue name too long (max {} characters)",
-                config.max_issue_name_length
-            ),
-            None,
-        ));
+    
+    // Use the centralized validation logic
+    match IssueName::new(name.to_string()) {
+        Ok(issue_name) => Ok(issue_name.into_string()),
+        Err(e) => Err(McpError::invalid_params(e.to_string(), None)),
     }
-
-    // Check for invalid characters
-    if trimmed.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
-        return Err(McpError::invalid_params(
-            "Issue name contains invalid characters",
-            None,
-        ));
-    }
-
-    // Additional validation
-    if trimmed.contains('\0') {
-        return Err(McpError::invalid_params(
-            "Issue name contains null characters",
-            None,
-        ));
-    }
-
-    Ok(trimmed.to_string())
 }
 
 /// Validate issue content comprehensively according to MCP standards

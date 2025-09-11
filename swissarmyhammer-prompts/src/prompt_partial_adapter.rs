@@ -4,8 +4,8 @@
 //! the Liquid template engine's partial system.
 
 use crate::prompts::PromptLibrary;
-use std::sync::Arc;
 use std::borrow::Cow;
+use std::sync::Arc;
 use swissarmyhammer_templating::partials::normalize_partial_name;
 
 /// Adapter that allows prompts to be used as Liquid template partials
@@ -28,19 +28,22 @@ impl PromptPartialAdapter {
 
 impl swissarmyhammer_templating::PartialLoader for PromptPartialAdapter {
     fn contains(&self, name: &str) -> bool {
-        tracing::debug!("PromptPartialAdapter::contains called with name: '{}'", name);
-        
+        tracing::debug!(
+            "PromptPartialAdapter::contains called with name: '{}'",
+            name
+        );
+
         // Try the requested name and all normalized variants
         let candidates = normalize_partial_name(name);
         tracing::debug!("Trying candidates: {:?}", candidates);
-        
+
         for candidate in candidates {
             if self.library.get(&candidate).is_ok() {
                 tracing::debug!("Found matching partial: '{}'", candidate);
                 return true;
             }
         }
-        
+
         tracing::debug!("No matching partial found for: '{}'", name);
         false
     }
@@ -53,18 +56,18 @@ impl swissarmyhammer_templating::PartialLoader for PromptPartialAdapter {
 
     fn try_get(&self, name: &str) -> Option<Cow<'_, str>> {
         tracing::debug!("PromptPartialAdapter::try_get called with name: '{}'", name);
-        
+
         // Try the requested name and all normalized variants
         let candidates = normalize_partial_name(name);
         tracing::debug!("Trying candidates: {:?}", candidates);
-        
+
         for candidate in candidates {
             if let Ok(prompt) = self.library.get(&candidate) {
                 tracing::debug!("Found matching partial: '{}'", candidate);
                 return Some(Cow::Owned(prompt.template.clone()));
             }
         }
-        
+
         tracing::debug!("No matching partial found for: '{}'", name);
         None
     }
@@ -99,16 +102,11 @@ impl liquid::partials::PartialSource for PromptPartialAdapter {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::prompts::{Prompt, PromptLibrary};
     use swissarmyhammer_templating::PartialLoader;
-
-
-
 
     #[test]
     fn test_prompt_partial_adapter() {

@@ -3,8 +3,8 @@
 //! This module defines the storage abstraction used by prompt libraries
 //! to persist and retrieve prompts from various storage backends.
 
-use crate::Result;
 use crate::prompts::Prompt;
+use crate::Result;
 use std::collections::HashMap;
 use std::path::Path;
 use swissarmyhammer_common::SwissArmyHammerError;
@@ -52,13 +52,23 @@ pub trait StorageBackend: Send + Sync {
     fn search(&self, query: &str) -> Result<Vec<Prompt>> {
         let prompts = self.list()?;
         let query_lower = query.to_lowercase();
-        
-        Ok(prompts.into_iter().filter(|prompt| {
-            prompt.name.to_lowercase().contains(&query_lower) ||
-            prompt.description.as_ref().map(|d| d.to_lowercase().contains(&query_lower)).unwrap_or(false) ||
-            prompt.template.to_lowercase().contains(&query_lower) ||
-            prompt.tags.iter().any(|tag| tag.to_lowercase().contains(&query_lower))
-        }).collect())
+
+        Ok(prompts
+            .into_iter()
+            .filter(|prompt| {
+                prompt.name.to_lowercase().contains(&query_lower)
+                    || prompt
+                        .description
+                        .as_ref()
+                        .map(|d| d.to_lowercase().contains(&query_lower))
+                        .unwrap_or(false)
+                    || prompt.template.to_lowercase().contains(&query_lower)
+                    || prompt
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query_lower))
+            })
+            .collect())
     }
 }
 
@@ -146,13 +156,12 @@ impl FileStorage {
 impl StorageBackend for FileStorage {
     fn store(&mut self, key: &str, prompt: &Prompt) -> Result<()> {
         let file_path = self.get_file_path(key);
-        
+
         // Ensure the directory exists
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| SwissArmyHammerError::Other {
-                    message: format!("Failed to create directory {}: {}", parent.display(), e)
-                })?;
+            std::fs::create_dir_all(parent).map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to create directory {}: {}", parent.display(), e),
+            })?;
         }
 
         // Serialize the prompt to YAML front matter + content
@@ -162,30 +171,30 @@ impl StorageBackend for FileStorage {
             "category": prompt.category,
             "tags": prompt.tags,
             "parameters": prompt.parameters
-        })).map_err(|e| SwissArmyHammerError::Other {
-            message: format!("Failed to serialize prompt metadata: {}", e)
+        }))
+        .map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to serialize prompt metadata: {}", e),
         })?;
 
         let content = format!("---\n{}---\n{}", yaml_front_matter, prompt.template);
-        
-        std::fs::write(&file_path, content)
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to write prompt file {}: {}", file_path.display(), e)
-            })?;
+
+        std::fs::write(&file_path, content).map_err(|e| SwissArmyHammerError::Other {
+            message: format!("Failed to write prompt file {}: {}", file_path.display(), e),
+        })?;
 
         Ok(())
     }
 
     fn get(&self, key: &str) -> Result<Option<Prompt>> {
         let file_path = self.get_file_path(key);
-        
+
         if !file_path.exists() {
             return Ok(None);
         }
 
-        let content = std::fs::read_to_string(&file_path)
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to read prompt file {}: {}", file_path.display(), e)
+        let content =
+            std::fs::read_to_string(&file_path).map_err(|e| SwissArmyHammerError::Other {
+                message: format!("Failed to read prompt file {}: {}", file_path.display(), e),
             })?;
 
         // Parse the file using the frontmatter parser
@@ -198,15 +207,19 @@ impl StorageBackend for FileStorage {
             return Ok(Vec::new());
         }
 
-        let entries = std::fs::read_dir(&self.base_path)
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to read directory {}: {}", self.base_path.display(), e)
+        let entries =
+            std::fs::read_dir(&self.base_path).map_err(|e| SwissArmyHammerError::Other {
+                message: format!(
+                    "Failed to read directory {}: {}",
+                    self.base_path.display(),
+                    e
+                ),
             })?;
 
         let mut keys = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to read directory entry: {}", e)
+                message: format!("Failed to read directory entry: {}", e),
             })?;
 
             let path = entry.path();
@@ -222,15 +235,18 @@ impl StorageBackend for FileStorage {
 
     fn remove(&mut self, key: &str) -> Result<bool> {
         let file_path = self.get_file_path(key);
-        
+
         if !file_path.exists() {
             return Ok(false);
         }
 
-        std::fs::remove_file(&file_path)
-            .map_err(|e| SwissArmyHammerError::Other {
-                message: format!("Failed to remove prompt file {}: {}", file_path.display(), e)
-            })?;
+        std::fs::remove_file(&file_path).map_err(|e| SwissArmyHammerError::Other {
+            message: format!(
+                "Failed to remove prompt file {}: {}",
+                file_path.display(),
+                e
+            ),
+        })?;
 
         Ok(true)
     }
@@ -247,7 +263,6 @@ impl StorageBackend for FileStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_memory_storage() {

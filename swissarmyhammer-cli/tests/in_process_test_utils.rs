@@ -432,7 +432,8 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
 
                     if workflow_exists {
                         let mut output = if dry_run {
-                            let mut dry_output = format!("🔍 Dry run mode\nRunning workflow: {}", workflow);
+                            let mut dry_output =
+                                format!("🔍 Dry run mode\nRunning workflow: {}", workflow);
                             if let Some(timeout_val) = timeout {
                                 dry_output.push_str(&format!("\nTimeout: {}", timeout_val));
                             }

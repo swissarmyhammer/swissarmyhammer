@@ -95,7 +95,7 @@ pub fn normalize_partial_name(requested_name: &str) -> Vec<String> {
     // If the request ends with .liquid (added by liquid engine), try without it
     if let Some(name_without_liquid) = requested_name.strip_suffix(".liquid") {
         candidates.push(name_without_liquid.to_string());
-        
+
         // Also try with other extensions after stripping .liquid
         for ext in TEMPLATE_EXTENSIONS {
             let name_with_ext = format!("{name_without_liquid}{ext}");

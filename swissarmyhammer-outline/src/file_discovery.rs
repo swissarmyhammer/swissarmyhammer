@@ -269,8 +269,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-
-
     #[test]
     fn test_file_discovery_creation() {
         let patterns = vec!["**/*.rs".to_string()];

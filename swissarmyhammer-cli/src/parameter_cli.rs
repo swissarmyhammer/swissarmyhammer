@@ -164,8 +164,6 @@ pub fn resolve_workflow_parameters_interactive(
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

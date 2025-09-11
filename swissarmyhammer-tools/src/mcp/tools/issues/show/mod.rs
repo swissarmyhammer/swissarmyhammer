@@ -9,8 +9,8 @@ use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use serde::{Deserialize, Serialize};
 use swissarmyhammer_common::SwissArmyHammerError;
+use swissarmyhammer_issues::Config;
 use swissarmyhammer_issues::IssueInfo;
-use swissarmyhammer_issues_config::Config;
 
 /// Request structure for showing an issue
 #[derive(Debug, Deserialize, Serialize)]

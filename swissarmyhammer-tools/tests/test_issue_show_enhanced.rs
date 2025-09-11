@@ -8,8 +8,8 @@ use serde_json::json;
 use std::sync::Arc;
 use swissarmyhammer_common::rate_limiter::{RateLimiter, RateLimiterConfig};
 use swissarmyhammer_git::GitOperations;
+use swissarmyhammer_issues::Config;
 use swissarmyhammer_issues::{FileSystemIssueStorage, IssueStorage};
-use swissarmyhammer_issues_config::Config;
 use swissarmyhammer_memoranda::{MarkdownMemoStorage, MemoStorage};
 use swissarmyhammer_tools::mcp::tool_handlers::ToolHandlers;
 use swissarmyhammer_tools::mcp::tool_registry::{McpTool, ToolContext};
@@ -819,8 +819,6 @@ async fn test_issue_show_switching_between_parameters() {
 }
 
 // Performance tests
-
-
 
 #[tokio::test]
 async fn test_issue_show_memory_usage() {

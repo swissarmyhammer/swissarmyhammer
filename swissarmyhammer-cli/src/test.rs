@@ -271,10 +271,8 @@ impl TestRunner {
                     .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                     .collect(),
             )
-            .map_err(|e| {
-                swissarmyhammer::SwissArmyHammerError::Other { message: format!(
-                    "Template context error: {e}"
-                ) }
+            .map_err(|e| swissarmyhammer::SwissArmyHammerError::Other {
+                message: format!("Template context error: {e}"),
             })?;
             Ok(self.library.render(&prompt.name, &template_context)?)
         }

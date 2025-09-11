@@ -73,7 +73,7 @@ impl TestEnvironment {
         let workflow_name = name.replace(' ', "_").to_lowercase();
         let workflow_file = format!("{}.md", workflow_name);
         let workflow_content = format!(
-r#"---
+            r#"---
 name: {workflow_name}
 title: {name}
 description: Test workflow for {name}
@@ -101,12 +101,13 @@ stateDiagram-v2
     Complete: Complete state
     Complete: terminal: true
 ```
-"#);
-        
+"#
+        );
+
         // Create .swissarmyhammer/workflows directory
         let workflows_dir = self.temp_path.join(".swissarmyhammer").join("workflows");
         fs::create_dir_all(&workflows_dir)?;
-        
+
         // Write workflow to the workflows directory
         let workflow_path = workflows_dir.join(&workflow_file);
         fs::write(&workflow_path, workflow_content)?;

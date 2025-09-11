@@ -124,8 +124,6 @@ fn format_directory_access_error(details: &str) -> String {
     )
 }
 
-
-
 /// Format component-specific Git repository requirement error
 #[allow(dead_code)]
 pub fn format_component_specific_git_error(component: &str, explanation: &str) -> String {

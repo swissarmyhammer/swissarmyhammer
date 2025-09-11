@@ -1,8 +1,6 @@
 //! Integration tests for CLI parameter resolution system
 
-use swissarmyhammer_cli::parameter_cli::{
-    resolve_workflow_parameters_interactive,
-};
+use swissarmyhammer_cli::parameter_cli::resolve_workflow_parameters_interactive;
 use swissarmyhammer_workflow::{Workflow, WorkflowName};
 
 fn create_test_workflow() -> Workflow {
@@ -22,11 +20,8 @@ fn test_parameter_resolution_with_valid_workflow() {
     // This test would require a test workflow file to exist
     // For now, we'll test with nonexistent workflow (graceful handling)
     let workflow = create_test_workflow();
-    let result = resolve_workflow_parameters_interactive(
-        &workflow,
-        &["name=John".to_string()],
-        false,
-    );
+    let result =
+        resolve_workflow_parameters_interactive(&workflow, &["name=John".to_string()], false);
 
     // Should not fail, but return empty since workflow doesn't exist
     assert!(result.is_ok());
@@ -36,17 +31,12 @@ fn test_parameter_resolution_with_valid_workflow() {
 fn test_parameter_resolution_with_invalid_var_format() {
     // Test with invalid --var format
     let workflow = create_test_workflow();
-    let result = resolve_workflow_parameters_interactive(
-        &workflow,
-        &["invalid_format".to_string()],
-        false,
-    );
+    let result =
+        resolve_workflow_parameters_interactive(&workflow, &["invalid_format".to_string()], false);
 
     // Should handle gracefully - either succeed with empty params or fail gracefully
     assert!(result.is_ok() || result.is_err());
 }
-
-
 
 #[test]
 fn test_backward_compatibility() {
@@ -101,11 +91,8 @@ fn test_empty_parameters() {
 fn test_parameter_precedence() {
     // Test that --var parameters work correctly
     let workflow = create_test_workflow();
-    let result = resolve_workflow_parameters_interactive(
-        &workflow,
-        &["name=FromVar".to_string()],
-        false,
-    );
+    let result =
+        resolve_workflow_parameters_interactive(&workflow, &["name=FromVar".to_string()], false);
 
     assert!(result.is_ok());
 }

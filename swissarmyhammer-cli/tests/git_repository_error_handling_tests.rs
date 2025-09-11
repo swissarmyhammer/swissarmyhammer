@@ -58,7 +58,10 @@ async fn test_issue_commands_require_git_repository() {
 
     let output = result.unwrap();
     // Issue commands now work gracefully without git repositories
-    assert_eq!(output.exit_code, 0, "Command should succeed without git repository");
+    assert_eq!(
+        output.exit_code, 0,
+        "Command should succeed without git repository"
+    );
     assert!(
         output.stdout.contains("No issues found."),
         "Should show no issues found: {}",
@@ -158,7 +161,10 @@ async fn test_git_repository_error_exit_codes() {
         output.exit_code
     );
     // Memo commands now work gracefully without git repositories
-    assert_eq!(output.exit_code, 0, "Memo commands should succeed without git repository");
+    assert_eq!(
+        output.exit_code, 0,
+        "Memo commands should succeed without git repository"
+    );
 }
 
 // Removed test_shell_commands_work_without_git - shell command was migrated away from static CLI
@@ -225,7 +231,10 @@ async fn test_error_messages_are_actionable() {
     );
 
     // Issue create commands now work gracefully without git repositories
-    assert_eq!(output.exit_code, 0, "Issue create should succeed without git repository");
+    assert_eq!(
+        output.exit_code, 0,
+        "Issue create should succeed without git repository"
+    );
 
     let stdout = &output.stdout;
     // The stdout should confirm issue creation

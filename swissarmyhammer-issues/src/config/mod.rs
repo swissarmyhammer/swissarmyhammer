@@ -1,12 +1,12 @@
 //! Issue management configuration for SwissArmyHammer
 //!
-//! This crate provides centralized configuration management for issue tracking
+//! This module provides centralized configuration management for issue tracking
 //! functionality with environment variable support and sensible defaults.
 //!
 //! # Examples
 //!
 //! ```rust
-//! use swissarmyhammer_issues_config::Config;
+//! use swissarmyhammer_issues::Config;
 //!
 //! // Get global configuration instance
 //! let config = Config::global();

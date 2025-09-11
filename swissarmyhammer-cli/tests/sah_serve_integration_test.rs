@@ -11,6 +11,7 @@ use tokio::time::timeout;
 
 mod test_utils;
 use test_utils::ProcessGuard;
+use std::path::PathBuf;
 
 /// Sample of expected tools with their names - this is not exhaustive but validates key tools
 const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
@@ -44,10 +45,12 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
 #[tokio::test]
 
 async fn test_sah_serve_tools_integration() -> Result<(), Box<dyn std::error::Error>> {
-    // Start the MCP server process
-    let child = Command::new("cargo")
-        .args(["run", "--bin", "sah", "--", "serve"])
-        // Run from CLI directory instead of project root to avoid initialization issues
+    // Build the binary once if it doesn't exist
+    let binary_path = ensure_binary_built()?;
+    
+    // Start the MCP server process using pre-built binary
+    let child = Command::new(&binary_path)
+        .args(["serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -56,8 +59,8 @@ async fn test_sah_serve_tools_integration() -> Result<(), Box<dyn std::error::Er
 
     let mut child = ProcessGuard(child);
 
-    // Wait for server compilation and initialization with proper process monitoring
-    wait_for_server_ready(&mut child, Duration::from_secs(60))?;
+    // Wait for server initialization (much faster without compilation)
+    wait_for_server_ready(&mut child, Duration::from_secs(10))?;
 
     let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
     let stdout = child.0.stdout.take().expect("Failed to get stdout");
@@ -448,14 +451,51 @@ fn read_mcp_response(
     Ok(response)
 }
 
+/// Ensure the SAH binary is built and return its path
+fn ensure_binary_built() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Get the target directory
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1"])
+        .output()
+        .expect("Failed to get cargo metadata");
+    
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let target_dir = metadata["target_directory"]
+        .as_str()
+        .ok_or("Failed to get target directory")?;
+    
+    let binary_path = PathBuf::from(target_dir)
+        .join("debug")
+        .join("sah");
+    
+    // Check if binary exists and is recent
+    if !binary_path.exists() {
+        println!("Building SAH binary for tests...");
+        let output = Command::new("cargo")
+            .args(["build", "--bin", "sah"])
+            .output()
+            .expect("Failed to build SAH binary");
+        
+        if !output.status.success() {
+            return Err(format!("Failed to build SAH binary: {}", 
+                String::from_utf8_lossy(&output.stderr)).into());
+        }
+        println!("✅ SAH binary built successfully");
+    }
+    
+    Ok(binary_path)
+}
+
 /// Test that validates the server properly shuts down
 #[tokio::test]
 
 async fn test_sah_serve_shutdown() {
+    // Build the binary once if it doesn't exist
+    let binary_path = ensure_binary_built().expect("Failed to ensure binary is built");
+    
     // Start server
-    let child = Command::new("cargo")
-        .args(["run", "--bin", "sah", "--", "serve"])
-        .current_dir("..")
+    let child = Command::new(&binary_path)
+        .args(["serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -500,9 +540,10 @@ async fn test_sah_serve_concurrent_requests() {
     // Note: Since we're using stdio, we can't truly test concurrent connections,
     // but we can test rapid sequential requests
 
-    let child = Command::new("cargo")
-        .args(["run", "--bin", "sah", "--", "serve"])
-        .current_dir("..")
+    let binary_path = ensure_binary_built().expect("Failed to ensure binary is built");
+    
+    let child = Command::new(&binary_path)
+        .args(["serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -510,7 +551,7 @@ async fn test_sah_serve_concurrent_requests() {
         .expect("Failed to start MCP server");
 
     let mut child = ProcessGuard(child);
-    std::thread::sleep(Duration::from_millis(1000));
+    std::thread::sleep(Duration::from_millis(500));
 
     let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
     let stdout = child.0.stdout.take().expect("Failed to get stdout");

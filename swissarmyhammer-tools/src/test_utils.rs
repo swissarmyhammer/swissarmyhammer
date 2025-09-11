@@ -35,8 +35,12 @@ pub fn create_test_rate_limiter() -> Arc<RateLimiter> {
 pub async fn create_test_context() -> ToolContext {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let unique_id = format!("{}_{}", std::process::id(), COUNTER.fetch_add(1, Ordering::SeqCst));
-    
+    let unique_id = format!(
+        "{}_{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+
     // Use system temp directory to avoid path issues
     let test_issues_dir = std::env::temp_dir()
         .join("sah_test_issues")
@@ -46,9 +50,7 @@ pub async fn create_test_context() -> ToolContext {
     )));
     let git_ops: Arc<TokioMutex<Option<GitOperations>>> = Arc::new(TokioMutex::new(None));
     // Create temporary directory for memo storage in tests
-    let memo_temp_dir = std::env::temp_dir()
-        .join("sah_test_memos")
-        .join(&unique_id);
+    let memo_temp_dir = std::env::temp_dir().join("sah_test_memos").join(&unique_id);
 
     let memo_storage: Arc<RwLock<Box<dyn MemoStorage>>> = Arc::new(RwLock::new(Box::new(
         MarkdownMemoStorage::new(memo_temp_dir),

@@ -33,7 +33,7 @@ pub struct CliContext {
 
     /// Git operations (optional - None if not in a git repository)
     #[allow(dead_code)]
-    pub git_operations: Option<Arc<GitOperations>>,
+    pub git_operations: Option<GitOperations>,
 
     /// Template context with configuration
     pub template_context: swissarmyhammer_config::TemplateContext,
@@ -62,10 +62,10 @@ impl CliContext {
                     .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
                 FileSystemWorkflowRunStorage::new(base_path)
             })
-                .await
-                .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                    message: format!("Failed to create workflow run storage: {e}"),
-                })??
+            .await
+            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to create workflow run storage: {e}"),
+            })??,
         );
 
         let mut prompt_library = PromptLibrary::new();
@@ -84,21 +84,21 @@ impl CliContext {
         }
 
         let memo_storage = Arc::new(
-            swissarmyhammer_memoranda::MarkdownMemoStorage::new_default().await
+            swissarmyhammer_memoranda::MarkdownMemoStorage::new_default()
+                .await
                 .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
                     message: format!("Failed to create memo storage: {e}"),
-                })?
+                })?,
         );
 
-        let issue_storage = Arc::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new_default()?
-        );
+        let issue_storage =
+            Arc::new(swissarmyhammer_issues::FileSystemIssueStorage::new_default()?);
 
         // Initialize git operations - make it optional when not in a git repository
         let git_operations = match GitOperations::new() {
             Ok(ops) => {
                 tracing::debug!("Git operations initialized successfully");
-                Some(Arc::new(ops))
+                Some(ops)
             }
             Err(e) => {
                 tracing::warn!("Git operations not available: {}", e);

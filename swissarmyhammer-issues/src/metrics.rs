@@ -552,8 +552,6 @@ mod tests {
         assert_eq!(stats.overall_avg_time(), 1_000_000.0);
     }
 
-
-
     #[test]
     fn test_default_implementation() {
         let metrics = PerformanceMetrics::default();

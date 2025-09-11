@@ -145,8 +145,6 @@ impl Default for ActionTimeouts {
     }
 }
 
-
-
 /// Agent execution context for prompt execution
 #[derive(Debug)]
 pub struct AgentExecutionContext<'a> {
@@ -286,7 +284,9 @@ impl AgentExecutorFactory {
             }
             AgentExecutorType::LlamaAgent => {
                 // Temporarily disabled due to llama-cpp build issues
-                Err(ActionError::ExecutionError("LlamaAgent executor is temporarily disabled due to build issues".to_string()))
+                Err(ActionError::ExecutionError(
+                    "LlamaAgent executor is temporarily disabled due to build issues".to_string(),
+                ))
             }
         }
     }
@@ -2414,7 +2414,9 @@ mod tests {
         // LlamaAgent is temporarily disabled, so this should fail with the expected error
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(_) => panic!("LlamaAgent executor should be temporarily disabled"),
-            Err(ActionError::ExecutionError(msg)) if msg.contains("temporarily disabled due to build issues") => {
+            Err(ActionError::ExecutionError(msg))
+                if msg.contains("temporarily disabled due to build issues") =>
+            {
                 // Expected error - test passes
             }
             Err(e) => panic!("Unexpected error type: {}", e),
@@ -2437,7 +2439,9 @@ mod tests {
         // Test LlamaAgent validation (should fail because it's temporarily disabled)
         match executor_utils::validate_executor_availability(AgentExecutorType::LlamaAgent).await {
             Ok(()) => panic!("LlamaAgent should be temporarily disabled"),
-            Err(ActionError::ExecutionError(msg)) if msg.contains("temporarily disabled due to build issues") => {
+            Err(ActionError::ExecutionError(msg))
+                if msg.contains("temporarily disabled due to build issues") =>
+            {
                 // Expected error - test passes
             }
             Err(e) => panic!("Unexpected error: {}", e),
@@ -3637,7 +3641,9 @@ mod tests {
         // LlamaAgent is temporarily disabled, so this should fail with the expected error
         match AgentExecutorFactory::create_executor(&execution_context).await {
             Ok(_) => panic!("LlamaAgent executor should be temporarily disabled"),
-            Err(ActionError::ExecutionError(msg)) if msg.contains("temporarily disabled due to build issues") => {
+            Err(ActionError::ExecutionError(msg))
+                if msg.contains("temporarily disabled due to build issues") =>
+            {
                 println!("DEBUG: Got expected error for disabled LlamaAgent: {}", msg);
                 // Expected error - test passes
             }

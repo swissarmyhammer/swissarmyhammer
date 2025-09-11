@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use std::path::PathBuf;
 
 mod test_utils;
 use test_utils::ProcessGuard;
@@ -21,10 +22,12 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
     println!("🚀 Starting sah serve MCP tools validation test");
 
-    // Start the MCP server process
-    let child = Command::new("cargo")
-        .args(["run", "--bin", "sah", "--", "serve"])
-        // Run from CLI directory instead of project root to avoid initialization issues
+    // Build the binary once if it doesn't exist
+    let binary_path = ensure_binary_built()?;
+    
+    // Start the MCP server process using pre-built binary
+    let child = Command::new(&binary_path)
+        .args(["serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -33,9 +36,9 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
 
     let mut child = ProcessGuard(child);
 
-    // Wait for server compilation and initialization with proper process monitoring
-    println!("⏳ Waiting for server to compile and initialize...");
-    wait_for_server_ready(&mut child, Duration::from_secs(60))?;
+    // Wait for server initialization (much faster without compilation)
+    println!("⏳ Waiting for server to initialize...");
+    wait_for_server_ready(&mut child, Duration::from_secs(10))?;
 
     let mut stdin = child.0.stdin.take().expect("Failed to get stdin");
     let stdout = child.0.stdout.take().expect("Failed to get stdout");
@@ -339,13 +342,49 @@ fn read_response_with_timeout(
     }
 }
 
+/// Ensure the SAH binary is built and return its path
+fn ensure_binary_built() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Get the target directory
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1"])
+        .output()
+        .expect("Failed to get cargo metadata");
+    
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let target_dir = metadata["target_directory"]
+        .as_str()
+        .ok_or("Failed to get target directory")?;
+    
+    let binary_path = PathBuf::from(target_dir)
+        .join("debug")
+        .join("sah");
+    
+    // Check if binary exists and is recent
+    if !binary_path.exists() {
+        println!("Building SAH binary for tests...");
+        let output = Command::new("cargo")
+            .args(["build", "--bin", "sah"])
+            .output()
+            .expect("Failed to build SAH binary");
+        
+        if !output.status.success() {
+            return Err(format!("Failed to build SAH binary: {}", 
+                String::from_utf8_lossy(&output.stderr)).into());
+        }
+        println!("✅ SAH binary built successfully");
+    }
+    
+    Ok(binary_path)
+}
+
 /// Quick smoke test to ensure sah binary exists and can be invoked
 #[tokio::test]
 
 async fn test_sah_binary_exists() {
-    let output = Command::new("cargo")
-        .args(["run", "--bin", "sah", "--", "--help"])
-        .current_dir("..")
+    let binary_path = ensure_binary_built().expect("Failed to ensure binary is built");
+    
+    let output = Command::new(&binary_path)
+        .args(["--help"])
         .output()
         .expect("Failed to run sah --help");
 

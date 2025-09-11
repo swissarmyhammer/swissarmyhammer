@@ -16,7 +16,7 @@ pub use swissarmyhammer::test_utils::ProcessGuard;
 // Re-export commonly used test utilities from the main crate
 #[allow(unused_imports)]
 pub use swissarmyhammer_common::test_utils::{
-    IsolatedTestHome, IsolatedTestEnvironment, create_isolated_test_home,
+    create_isolated_test_home, IsolatedTestEnvironment, IsolatedTestHome,
 };
 
 // Legacy compatibility aliases
@@ -57,15 +57,6 @@ pub fn create_test_prompt_library() -> swissarmyhammer::PromptLibrary {
 pub fn create_test_prompts() -> Vec<swissarmyhammer::Prompt> {
     vec![create_simple_test_prompt()]
 }
-
-
-
-
-
-
-
-
-
 
 /// Create a temporary directory for testing
 ///
@@ -139,10 +130,10 @@ pub fn create_test_environment() -> Result<(TempDir, PathBuf)> {
     let temp_dir = create_temp_dir()?;
     let prompts_dir = temp_dir.path().join("prompts");
     std::fs::create_dir_all(&prompts_dir)?;
-    
+
     // Create test prompt files in the directory
     create_test_prompt_files(&prompts_dir)?;
-    
+
     Ok((temp_dir, prompts_dir))
 }
 

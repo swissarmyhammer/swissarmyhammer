@@ -5,8 +5,8 @@ use rmcp::RoleServer;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use swissarmyhammer_prompts::PromptResolver;
 use swissarmyhammer_common::{Result, SwissArmyHammerError};
+use swissarmyhammer_prompts::PromptResolver;
 use tokio::sync::Mutex;
 
 /// Common prompt file extensions
@@ -58,7 +58,11 @@ pub struct FileWatcher {
     /// The async debouncer instance
     debouncer: Option<AsyncDebouncer<async_watcher::notify::RecommendedWatcher>>,
     /// Channel receiver for debounced events
-    event_rx: Option<tokio::sync::mpsc::Receiver<std::result::Result<Vec<DebouncedEvent>, Vec<async_watcher::notify::Error>>>>,
+    event_rx: Option<
+        tokio::sync::mpsc::Receiver<
+            std::result::Result<Vec<DebouncedEvent>, Vec<async_watcher::notify::Error>>,
+        >,
+    >,
     /// Handle to the background event processing task
     event_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -117,19 +121,22 @@ impl FileWatcher {
 
         // Create async debouncer with 500ms timeout and channel for events
         let (mut debouncer, event_rx) = AsyncDebouncer::new_with_channel(
-            Duration::from_millis(500), 
-            None // Use default tick rate
-        ).await.map_err(|e| SwissArmyHammerError::Other {
+            Duration::from_millis(500),
+            None, // Use default tick rate
+        )
+        .await
+        .map_err(|e| SwissArmyHammerError::Other {
             message: format!("Failed to create async debouncer: {}", e),
         })?;
 
         // Watch all directories
         for path in &watch_paths {
-            debouncer.watcher().watch(path, RecursiveMode::Recursive).map_err(|e| {
-                SwissArmyHammerError::Other {
+            debouncer
+                .watcher()
+                .watch(path, RecursiveMode::Recursive)
+                .map_err(|e| SwissArmyHammerError::Other {
                     message: format!("Failed to watch directory {path:?}: {}", e),
-                }
-            })?;
+                })?;
             tracing::info!("Watching directory: {:?}", path);
         }
 
@@ -163,7 +170,9 @@ impl FileWatcher {
                     Err(errors) => {
                         for error in errors {
                             tracing::error!("❌ File watcher error: {}", error);
-                            callback.on_error(format!("File watcher error: {error}")).await;
+                            callback
+                                .on_error(format!("File watcher error: {error}"))
+                                .await;
                         }
                     }
                 }
