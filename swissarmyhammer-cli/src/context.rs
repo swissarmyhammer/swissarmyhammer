@@ -90,6 +90,43 @@ impl CliContext {
             .await
     }
 
+    /// Get the prompt library - returns a new library with all prompts loaded
+    /// This reloads prompts to ensure we have the latest version
+    pub fn get_prompt_library(&self) -> Result<swissarmyhammer_prompts::PromptLibrary> {
+        let mut library = swissarmyhammer_prompts::PromptLibrary::new();
+        let mut resolver = swissarmyhammer::PromptResolver::new();
+        
+        resolver.load_all_prompts(&mut library).map_err(|e| {
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to load prompts: {e}"),
+            }
+        })?;
+        
+        Ok(library)
+    }
+
+    /// Render a prompt with parameters, merging with template context
+    pub fn render_prompt(
+        &self,
+        prompt_name: &str,
+        parameters: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<String> {
+        let library = self.get_prompt_library()?;
+        
+        // Create a template context with CLI arguments having highest precedence
+        let mut final_context = self.template_context.clone();
+        for (key, value) in parameters {
+            final_context.set(key.clone(), value.clone());
+        }
+        
+        // Render the prompt with the merged context
+        library.render(prompt_name, &final_context).map_err(|e| {
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to render prompt '{}': {}", prompt_name, e),
+            }
+        })
+    }
+
     /// Get all available prompts from the prompt library, filtering out partial templates
     pub fn get_all_prompts(&self) -> Result<Vec<swissarmyhammer_prompts::Prompt>> {
         // Create a new library and resolver to load all prompts
