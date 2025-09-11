@@ -356,8 +356,6 @@ impl McpServer {
         }
     }
 
-
-
     /// Get a specific prompt by name, with optional template argument rendering.
     ///
     /// # Arguments

@@ -54,8 +54,6 @@ async fn run_prompt_command_typed(
     }
 }
 
-
-
 /// Run the list command
 fn run_list_command(
     context: &crate::context::CliContext,
@@ -239,6 +237,4 @@ mod tests {
         };
         assert!(!regular_prompt.is_partial_template());
     }
-
-
 }

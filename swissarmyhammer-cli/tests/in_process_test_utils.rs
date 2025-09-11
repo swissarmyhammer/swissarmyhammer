@@ -174,24 +174,23 @@ async fn run_sah_command_in_process_inner_with_dir(
 
         // For prompt commands, use the repository root as working directory
         // This ensures prompt loading finds the right configuration files
-        let repo_root = format!(
-            "{}",
-            env!("CARGO_MANIFEST_DIR").replace("/swissarmyhammer-cli", "")
-        );
-        let actual_working_dir = if args.len() > 0 && args[0] == "prompt" {
+        let repo_root = env!("CARGO_MANIFEST_DIR")
+            .replace("/swissarmyhammer-cli", "")
+            .to_string();
+        let actual_working_dir = if !args.is_empty() && args[0] == "prompt" {
             std::path::Path::new(&repo_root)
         } else {
             working_dir
         };
 
-        // Use explicit working directory instead of global current directory  
+        // Use explicit working directory instead of global current directory
         let mut cmd = tokio::process::Command::new(&binary_path);
         cmd.args(args)
             .current_dir(actual_working_dir) // Use correct working directory for prompt commands
             .kill_on_drop(true); // Ensure the process is killed if timeout occurs
-            
+
         // For prompt commands, ensure required environment variables are set
-        if args.len() > 0 && args[0] == "prompt" {
+        if !args.is_empty() && args[0] == "prompt" {
             if let Ok(home) = std::env::var("HOME") {
                 cmd.env("HOME", home);
             }
@@ -201,9 +200,8 @@ async fn run_sah_command_in_process_inner_with_dir(
             // Explicitly set RUST_LOG to reduce noise
             cmd.env("RUST_LOG", "error");
         }
-        
-        let output = match cmd.output().await
-        {
+
+        let output = match cmd.output().await {
             Ok(output) => output,
             Err(e) => {
                 // Instead of propagating the error, return it as a failed command execution
@@ -395,15 +393,19 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                             match prompt_name.as_str() {
                                 "override-test" => {
                                     // For override test, output the message variable
-                                    let message = vars.get("message").map(|s| s.as_str()).unwrap_or("");
+                                    let message =
+                                        vars.get("message").map(|s| s.as_str()).unwrap_or("");
                                     let _ = writeln!(stdout, "Message: {}", message);
                                 }
                                 "empty-test" => {
                                     // For empty test, output all the variables as provided
-                                    let content = vars.get("content").map(|s| s.as_str()).unwrap_or("");
-                                    let author = vars.get("author").map(|s| s.as_str()).unwrap_or("");
-                                    let version = vars.get("version").map(|s| s.as_str()).unwrap_or("");
-                                    
+                                    let content =
+                                        vars.get("content").map(|s| s.as_str()).unwrap_or("");
+                                    let author =
+                                        vars.get("author").map(|s| s.as_str()).unwrap_or("");
+                                    let version =
+                                        vars.get("version").map(|s| s.as_str()).unwrap_or("");
+
                                     let _ = writeln!(stdout, "Content: {}", content);
                                     let _ = writeln!(stdout, "Author: {}", author);
                                     let _ = writeln!(stdout, "Version: {}", version);

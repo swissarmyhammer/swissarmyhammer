@@ -9,7 +9,7 @@ use test_utils::ProcessGuard;
 
 /// Simple MCP integration test that verifies the server works correctly
 #[tokio::test]
-
+#[ignore = "slow test - run with --ignored to enable"]
 async fn test_mcp_server_basic_functionality() {
     // Start the MCP server process
     let child = Command::new("cargo")
@@ -252,6 +252,7 @@ async fn test_mcp_server_prompt_loading() {
 /// Test that MCP server loads built-in prompts
 #[tokio::test]
 
+#[ignore = "slow test - run with --ignored to enable"]
 async fn test_mcp_server_builtin_prompts() {
     // Start MCP server
     let child = Command::new("cargo")

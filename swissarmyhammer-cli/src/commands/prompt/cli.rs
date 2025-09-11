@@ -9,6 +9,8 @@ use clap::ArgMatches;
 /// Error type for command parsing
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
+    /// Occurs when an invalid or unrecognized subcommand is provided,
+    /// or when required arguments for a subcommand are missing or malformed
     #[error("Unknown subcommand")]
     UnknownSubcommand,
 }
@@ -196,6 +198,51 @@ mod tests {
             .unwrap()
     }
 
+    fn create_mock_test_matches_with_args() -> ArgMatches {
+        Command::new("prompt")
+            .subcommand(
+                Command::new("test")
+                    .arg(clap::Arg::new("prompt_name").index(1))
+                    .arg(clap::Arg::new("file").short('f').long("file"))
+                    .arg(
+                        clap::Arg::new("var")
+                            .long("var")
+                            .action(clap::ArgAction::Append),
+                    )
+                    .arg(
+                        clap::Arg::new("raw")
+                            .long("raw")
+                            .action(clap::ArgAction::SetTrue),
+                    )
+                    .arg(
+                        clap::Arg::new("copy")
+                            .long("copy")
+                            .action(clap::ArgAction::SetTrue),
+                    )
+                    .arg(clap::Arg::new("save").long("save"))
+                    .arg(
+                        clap::Arg::new("debug")
+                            .long("debug")
+                            .action(clap::ArgAction::SetTrue),
+                    ),
+            )
+            .try_get_matches_from([
+                "prompt",
+                "test",
+                "help",
+                "--var",
+                "key1=value1",
+                "--var",
+                "key2=value2",
+                "--raw",
+                "--copy",
+                "--save",
+                "output.txt",
+                "--debug",
+            ])
+            .unwrap()
+    }
+
     #[test]
     fn test_parse_list_command() {
         let matches = create_mock_list_matches();
@@ -227,6 +274,48 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_test_command_with_all_args() {
+        let matches = create_mock_test_matches_with_args();
+        let parsed = parse_prompt_command(&matches).unwrap();
+
+        match parsed {
+            PromptCommand::Test(test_cmd) => {
+                assert_eq!(test_cmd.prompt_name, Some("help".to_string()));
+                assert_eq!(test_cmd.file, None);
+                assert_eq!(test_cmd.vars, vec!["key1=value1", "key2=value2"]);
+                assert!(test_cmd.raw);
+                assert!(test_cmd.copy);
+                assert_eq!(test_cmd.save, Some("output.txt".to_string()));
+                assert!(test_cmd.debug);
+            }
+            _ => panic!("Expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_test_command_with_file() {
+        // Test TestCommand structure with file parameter
+        let test_cmd = TestCommand {
+            prompt_name: None,
+            file: Some("test.md".to_string()),
+            vars: vec![],
+            raw: false,
+            copy: false,
+            save: None,
+            debug: false,
+        };
+
+        match PromptCommand::Test(test_cmd) {
+            PromptCommand::Test(cmd) => {
+                assert_eq!(cmd.prompt_name, None);
+                assert_eq!(cmd.file, Some("test.md".to_string()));
+                assert!(!cmd.debug);
+            }
+            _ => panic!("Expected Test command"),
+        }
+    }
+
+    #[test]
     fn test_parse_unknown_subcommand() {
         let matches = Command::new("prompt")
             .try_get_matches_from(["prompt"])
@@ -243,6 +332,32 @@ mod tests {
         match PromptCommand::List(list_cmd) {
             PromptCommand::List(_) => (),
             _ => panic!("ListCommand should match PromptCommand::List"),
+        }
+    }
+
+    #[test]
+    fn test_test_command_struct_defaults() {
+        let test_cmd = TestCommand {
+            prompt_name: None,
+            file: None,
+            vars: vec![],
+            raw: false,
+            copy: false,
+            save: None,
+            debug: false,
+        };
+
+        match PromptCommand::Test(test_cmd) {
+            PromptCommand::Test(cmd) => {
+                assert_eq!(cmd.prompt_name, None);
+                assert_eq!(cmd.file, None);
+                assert!(cmd.vars.is_empty());
+                assert!(!cmd.raw);
+                assert!(!cmd.copy);
+                assert_eq!(cmd.save, None);
+                assert!(!cmd.debug);
+            }
+            _ => panic!("TestCommand should match PromptCommand::Test"),
         }
     }
 
@@ -294,5 +409,157 @@ mod tests {
             PromptCommand::Validate(_) => (),
             _ => panic!("Expected Validate command"),
         }
+    }
+
+    // Test the parse_prompt_command_from_args function
+    #[test]
+    fn test_parse_prompt_command_from_args_empty() {
+        let args = vec![];
+        let result = parse_prompt_command_from_args(&args).unwrap();
+        match result {
+            PromptCommand::List(_) => (),
+            _ => panic!("Expected default to List command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_list() {
+        let args = vec!["list".to_string()];
+        let result = parse_prompt_command_from_args(&args).unwrap();
+        match result {
+            PromptCommand::List(_) => (),
+            _ => panic!("Expected List command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_test_basic() {
+        let args = vec!["test".to_string(), "help".to_string()];
+        let result = parse_prompt_command_from_args(&args).unwrap();
+        match result {
+            PromptCommand::Test(test_cmd) => {
+                assert_eq!(test_cmd.prompt_name, Some("help".to_string()));
+                assert!(!test_cmd.raw);
+                assert!(!test_cmd.copy);
+                assert!(!test_cmd.debug);
+            }
+            _ => panic!("Expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_test_with_options() {
+        let args = vec![
+            "test".to_string(),
+            "help".to_string(),
+            "--raw".to_string(),
+            "--var".to_string(),
+            "key=value".to_string(),
+            "--debug".to_string(),
+            "--save".to_string(),
+            "output.txt".to_string(),
+        ];
+        let result = parse_prompt_command_from_args(&args).unwrap();
+        match result {
+            PromptCommand::Test(test_cmd) => {
+                assert_eq!(test_cmd.prompt_name, Some("help".to_string()));
+                assert!(test_cmd.raw);
+                assert!(!test_cmd.copy);
+                assert!(test_cmd.debug);
+                assert_eq!(test_cmd.vars, vec!["key=value"]);
+                assert_eq!(test_cmd.save, Some("output.txt".to_string()));
+            }
+            _ => panic!("Expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_test_with_file() {
+        let args = vec![
+            "test".to_string(),
+            "--file".to_string(),
+            "test.md".to_string(),
+            "--copy".to_string(),
+        ];
+        let result = parse_prompt_command_from_args(&args).unwrap();
+        match result {
+            PromptCommand::Test(test_cmd) => {
+                assert_eq!(test_cmd.prompt_name, None);
+                assert_eq!(test_cmd.file, Some("test.md".to_string()));
+                assert!(test_cmd.copy);
+                assert!(!test_cmd.raw);
+            }
+            _ => panic!("Expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_validate() {
+        let args = vec!["validate".to_string()];
+        let result = parse_prompt_command_from_args(&args).unwrap();
+        match result {
+            PromptCommand::Validate(_) => (),
+            _ => panic!("Expected Validate command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_unknown() {
+        let args = vec!["unknown".to_string()];
+        let result = parse_prompt_command_from_args(&args);
+        assert!(matches!(result, Err(ParseError::UnknownSubcommand)));
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_invalid_option() {
+        let args = vec!["test".to_string(), "--invalid-option".to_string()];
+        let result = parse_prompt_command_from_args(&args);
+        assert!(matches!(result, Err(ParseError::UnknownSubcommand)));
+    }
+
+    #[test]
+    fn test_parse_prompt_command_from_args_missing_value() {
+        let args = vec!["test".to_string(), "--file".to_string()];
+        let result = parse_prompt_command_from_args(&args);
+        assert!(matches!(result, Err(ParseError::UnknownSubcommand)));
+    }
+
+    #[test]
+    fn test_command_debug_display() {
+        let list_cmd = ListCommand {};
+        let debug_str = format!("{:?}", list_cmd);
+        assert!(debug_str.contains("ListCommand"));
+
+        let test_cmd = TestCommand {
+            prompt_name: Some("test".to_string()),
+            file: None,
+            vars: vec!["key=value".to_string()],
+            raw: true,
+            copy: false,
+            save: None,
+            debug: false,
+        };
+        let debug_str = format!("{:?}", test_cmd);
+        assert!(debug_str.contains("TestCommand"));
+        assert!(debug_str.contains("test"));
+        assert!(debug_str.contains("key=value"));
+
+        let validate_cmd = ValidateCommand {};
+        let debug_str = format!("{:?}", validate_cmd);
+        assert!(debug_str.contains("ValidateCommand"));
+
+        let prompt_cmd = PromptCommand::List(list_cmd);
+        let debug_str = format!("{:?}", prompt_cmd);
+        assert!(debug_str.contains("List"));
+    }
+
+    #[test]
+    fn test_parse_error_display() {
+        let error = ParseError::UnknownSubcommand;
+        let error_str = format!("{}", error);
+        assert_eq!(error_str, "Unknown subcommand");
+
+        let debug_str = format!("{:?}", error);
+        assert!(debug_str.contains("UnknownSubcommand"));
     }
 }

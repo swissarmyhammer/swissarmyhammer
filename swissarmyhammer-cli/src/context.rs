@@ -95,13 +95,13 @@ impl CliContext {
     pub fn get_prompt_library(&self) -> Result<swissarmyhammer_prompts::PromptLibrary> {
         let mut library = swissarmyhammer_prompts::PromptLibrary::new();
         let mut resolver = swissarmyhammer::PromptResolver::new();
-        
+
         resolver.load_all_prompts(&mut library).map_err(|e| {
             swissarmyhammer_common::SwissArmyHammerError::Other {
                 message: format!("Failed to load prompts: {e}"),
             }
         })?;
-        
+
         Ok(library)
     }
 
@@ -112,13 +112,13 @@ impl CliContext {
         parameters: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<String> {
         let library = self.get_prompt_library()?;
-        
+
         // Create a template context with CLI arguments having highest precedence
         let mut final_context = self.template_context.clone();
         for (key, value) in parameters {
             final_context.set(key.clone(), value.clone());
         }
-        
+
         // Render the prompt with the merged context
         library.render(prompt_name, &final_context).map_err(|e| {
             swissarmyhammer_common::SwissArmyHammerError::Other {
@@ -126,8 +126,6 @@ impl CliContext {
             }
         })
     }
-
-
 
     /// Display items using the configured output format
     pub fn display<T>(&self, items: Vec<T>) -> Result<()>
@@ -264,5 +262,3 @@ impl CliContextBuilder {
         })
     }
 }
-
-

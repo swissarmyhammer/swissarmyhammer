@@ -216,8 +216,6 @@ Example:
     },
 }
 
-
-
 #[derive(Subcommand, Debug)]
 pub enum FlowSubcommand {
     /// Run a workflow
@@ -508,18 +506,6 @@ mod tests {
         let error = result.unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
     #[test]
     fn test_cli_validate_command() {
@@ -1020,8 +1006,7 @@ mod tests {
 
     #[test]
     fn test_global_format_flag() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "doctor"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "doctor"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1039,8 +1024,7 @@ mod tests {
 
     #[test]
     fn test_global_format_flag_table() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "doctor"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "doctor"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1075,8 +1059,7 @@ mod tests {
 
     #[test]
     fn test_global_format_flag_invalid() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "doctor"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "doctor"]);
         assert!(result.is_err());
     }
 }

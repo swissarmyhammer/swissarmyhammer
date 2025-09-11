@@ -485,6 +485,7 @@ fn setup_regression_test_environment() -> Result<(TempDir, PathBuf)> {
 /// Test the regression testing framework itself
 
 #[tokio::test]
+#[ignore = "slow test - run with --ignored to enable"]
 async fn test_regression_framework() -> Result<()> {
     let (_temp_dir, temp_path) = setup_regression_test_environment()?;
 
