@@ -90,6 +90,37 @@ impl CliContext {
             .await
     }
 
+    /// Get all available prompts from the prompt library, filtering out partial templates
+    pub fn get_all_prompts(&self) -> Result<Vec<swissarmyhammer_prompts::Prompt>> {
+        // Create a new library and resolver to load all prompts
+        let mut library = swissarmyhammer_prompts::PromptLibrary::new();
+        let mut resolver = swissarmyhammer::PromptResolver::new();
+
+        resolver.load_all_prompts(&mut library).map_err(|e| {
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to load prompts: {e}"),
+            }
+        })?;
+
+        // Get all prompts without filtering by source/category
+        let filter = swissarmyhammer::PromptFilter::new();
+        let file_sources = std::collections::HashMap::new();
+
+        let all_prompts = library.list_filtered(&filter, &file_sources).map_err(|e| {
+            swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to list prompts: {e}"),
+            }
+        })?;
+
+        // Filter out partial templates
+        let filtered_prompts: Vec<_> = all_prompts
+            .into_iter()
+            .filter(|prompt| !is_partial_template(prompt))
+            .collect();
+
+        Ok(filtered_prompts)
+    }
+
     /// Display items using the configured output format
     pub fn display<T>(&self, items: Vec<T>) -> Result<()>
     where
@@ -224,4 +255,25 @@ impl CliContextBuilder {
             })?,
         })
     }
+}
+
+/// Check if a prompt is a partial template that should not be displayed in the list.
+///
+/// Partial templates are identified by either:
+/// 1. Starting with the `{% partial %}` marker
+/// 2. Having a description containing "Partial template for reuse in other prompts"
+fn is_partial_template(prompt: &swissarmyhammer_prompts::Prompt) -> bool {
+    // Check if the template starts with the partial marker
+    if prompt.template.trim().starts_with("{% partial %}") {
+        return true;
+    }
+
+    // Check if the description indicates it's a partial template
+    if let Some(description) = &prompt.description {
+        if description.contains("Partial template for reuse in other prompts") {
+            return true;
+        }
+    }
+
+    false
 }

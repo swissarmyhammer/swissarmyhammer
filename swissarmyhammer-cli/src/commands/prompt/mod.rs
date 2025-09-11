@@ -4,6 +4,7 @@
 
 pub mod cli;
 pub mod display;
+pub mod list;
 
 use crate::error::{CliError, CliResult};
 use crate::exit_codes::EXIT_SUCCESS;

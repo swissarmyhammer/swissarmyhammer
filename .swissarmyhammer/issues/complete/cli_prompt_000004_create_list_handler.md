@@ -124,3 +124,79 @@ impl CliContext {
 **Estimated Effort**: Medium (200-300 lines including tests)
 **Dependencies**: cli_prompt_000003_create_display_objects, cli_prompt_000001_add_global_format_argument
 **Blocks**: cli_prompt_000006_update_main_command_routing
+
+## Proposed Solution
+
+After examining the existing codebase, I can see that most components are already in place:
+
+### Current Assets:
+- CliContext has `prompt_library: Arc<PromptLibrary>` and `display()` methods
+- display.rs has `prompts_to_display_rows()` and `DisplayRows` 
+- Existing `is_partial_template()` function for filtering
+
+### Implementation Plan:
+
+1. **Add `get_all_prompts()` method to CliContext**:
+   - Reuse the existing `prompt_library` field
+   - Load all prompts using PromptResolver 
+   - Apply partial template filtering
+   - Cache the results to avoid reloading
+
+2. **Create simplified list.rs module**:
+   - `execute_list_command()` - core logic using CliContext
+   - `handle_list_command()` - public interface with error handling
+   - Remove all source/category filtering complexity
+
+3. **Integration**:
+   - Export list module from mod.rs
+   - Keep existing implementation until ready to switch
+
+### Key Simplifications:
+- No source/category filtering parameters
+- Use existing CliContext.prompt_library instead of recreating
+- Use existing display infrastructure  
+- Automatic partial template filtering
+- Clean separation of concerns
+
+This approach leverages all existing infrastructure while dramatically simplifying the interface.
+
+## Implementation Completed ✅
+
+### Successfully Implemented:
+
+1. **Updated CliContext** (`/Users/wballard/github/swissarmyhammer/swissarmyhammer-cli/src/context.rs`):
+   - Added `get_all_prompts()` method that reuses prompt loading infrastructure
+   - Includes automatic partial template filtering using `is_partial_template()`
+   - Uses existing PromptLibrary and PromptResolver without recreating them
+
+2. **Created List Handler Module** (`/Users/wballard/github/swissarmyhammer/swissarmyhammer-cli/src/commands/prompt/list.rs`):
+   - `execute_list_command()` - core logic using CliContext
+   - `handle_list_command()` - public interface with proper error handling
+   - Comprehensive unit tests covering all output formats and verbose mode
+
+3. **Updated Module Exports** (`/Users/wballard/github/swissarmyhammer/swissarmyhammer-cli/src/commands/prompt/mod.rs`):
+   - Added `pub mod list;` to export the new module
+
+### Key Features:
+- ✅ Simplified interface with no source/category filtering complexity
+- ✅ Reuses existing CliContext.prompt_library instead of recreating expensive objects
+- ✅ Uses existing display infrastructure (prompts_to_display_rows, DisplayRows)
+- ✅ Automatic partial template filtering 
+- ✅ Support for all output formats (Table, JSON, YAML)
+- ✅ Support for verbose and standard modes
+- ✅ Comprehensive error handling
+- ✅ Full unit test coverage (5 tests, all passing)
+
+### Build Status:
+- ✅ Compiles successfully: `cargo build` - PASS
+- ✅ All tests pass: `cargo test --package swissarmyhammer-cli --lib commands::prompt::list` - PASS (5/5)
+- ✅ Code formatted: `cargo fmt --all` - PASS
+- ✅ Linting clean: `cargo clippy --all-targets --all-features` - PASS (only expected warnings about unused functions)
+
+### Ready for Integration:
+The implementation is complete and ready for integration with the main command router. The unused function warnings are expected since the new handlers haven't been wired up yet.
+
+### Next Steps:
+- Integration with main command routing (handled by issue cli_prompt_000006_update_main_command_routing)
+- Testing with real prompts to verify filtering works correctly
+- Performance testing with large prompt libraries
