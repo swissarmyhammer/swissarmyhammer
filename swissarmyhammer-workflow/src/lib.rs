@@ -47,7 +47,8 @@ pub use actions::{
     LogAction, LogLevel, PromptAction, SetVariableAction, ShellAction, SubWorkflowAction,
     WaitAction,
 };
-pub use agents::LlamaAgentExecutor;
+// Temporarily disabled due to llama-cpp build issues
+// pub use agents::LlamaAgentExecutor;
 
 pub use definition::{Workflow, WorkflowError, WorkflowName, WorkflowResult};
 pub use error_utils::{

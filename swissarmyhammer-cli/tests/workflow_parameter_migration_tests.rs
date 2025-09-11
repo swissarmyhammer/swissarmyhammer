@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_cli::{cli::FlowSubcommand, commands::flow::run_flow_command};
+use swissarmyhammer_cli::{cli::FlowSubcommand, commands::flow::run_flow_command, context::CliContext};
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
@@ -16,6 +16,13 @@ fn get_repo_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+/// Create a minimal test CliContext
+async fn create_test_cli_context() -> Result<CliContext> {
+    let template_context = swissarmyhammer_config::TemplateContext::new();
+    let matches = clap::ArgMatches::default();
+    CliContext::new(template_context, matches).await.map_err(Into::into)
 }
 
 /// Run flow command in-process from the repo root
@@ -39,8 +46,8 @@ async fn run_builtin_workflow_in_process(
         quiet: true,
     };
 
-    let test_context = swissarmyhammer_config::TemplateContext::new();
-    let result = run_flow_command(subcommand, &test_context).await;
+    let cli_context = create_test_cli_context().await?;
+    let result = run_flow_command(subcommand, &cli_context).await;
 
     Ok(result.is_ok())
 }

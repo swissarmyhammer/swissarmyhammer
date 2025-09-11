@@ -119,8 +119,8 @@ tower = { workspace = true }
 tower-http = { workspace = true, features = ["trace"] }
 hyper = { workspace = true }
 
-# LlamaAgent integration for local AI execution
-llama-agent = { workspace = true }
+# LlamaAgent integration for local AI execution - TEMPORARILY DISABLED due to hanging cmake build
+# llama-agent = { workspace = true }
 
 # Progress bars and user interface
 indicatif = { workspace = true }

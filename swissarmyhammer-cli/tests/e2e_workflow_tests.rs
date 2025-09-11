@@ -739,10 +739,7 @@ async fn test_error_recovery_workflow_lightweight() -> Result<()> {
                 timeout_duration.as_secs()
             );
             // For the lightweight version, timeout is more concerning
-            Err(swissarmyhammer::error::SwissArmyHammerError::Other(
-                "Lightweight test timed out".to_string(),
-            )
-            .into())
+            Err(anyhow::anyhow!("Lightweight test timed out"))
         }
     }
 }

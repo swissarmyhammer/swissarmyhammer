@@ -15,10 +15,48 @@ pub use swissarmyhammer::test_utils::ProcessGuard;
 
 // Re-export commonly used test utilities from the main crate
 #[allow(unused_imports)]
-pub use swissarmyhammer::test_utils::{
-    create_simple_test_prompt, create_test_home_guard, create_test_prompt_library,
-    create_test_prompts, get_test_home, get_test_swissarmyhammer_dir, TestHomeGuard,
+pub use swissarmyhammer_common::test_utils::{
+    IsolatedTestHome, IsolatedTestEnvironment, create_isolated_test_home,
 };
+
+// Legacy compatibility aliases
+pub type TestHomeGuard = IsolatedTestHome;
+
+pub fn create_test_home_guard() -> IsolatedTestHome {
+    IsolatedTestHome::new()
+}
+
+pub fn get_test_home() -> std::path::PathBuf {
+    let guard = IsolatedTestHome::new();
+    guard.home_path()
+}
+
+pub fn get_test_swissarmyhammer_dir() -> std::path::PathBuf {
+    let guard = IsolatedTestHome::new();
+    guard.swissarmyhammer_dir()
+}
+
+// Placeholder functions for prompt-related utilities that don't exist yet
+pub fn create_simple_test_prompt() -> swissarmyhammer::Prompt {
+    swissarmyhammer::Prompt {
+        name: "test-prompt".to_string(),
+        description: Some("Test prompt".to_string()),
+        category: Some("test".to_string()),
+        tags: vec![],
+        template: "Test content".to_string(),
+        parameters: vec![],
+        source: None,
+        metadata: std::collections::HashMap::new(),
+    }
+}
+
+pub fn create_test_prompt_library() -> swissarmyhammer::PromptLibrary {
+    swissarmyhammer::PromptLibrary::new()
+}
+
+pub fn create_test_prompts() -> Vec<swissarmyhammer::Prompt> {
+    vec![create_simple_test_prompt()]
+}
 
 
 

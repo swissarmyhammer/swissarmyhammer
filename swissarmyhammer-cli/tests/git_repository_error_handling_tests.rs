@@ -57,18 +57,17 @@ async fn test_issue_commands_require_git_repository() {
     // Restore original directory
 
     let output = result.unwrap();
-    // Issue commands currently succeed outside git repos and show "No issues found."
-    // This tests the current behavior rather than expected git repo validation
-    assert_eq!(output.exit_code, 0, "Command should succeed");
+    // Issue commands now work gracefully without git repositories
+    assert_eq!(output.exit_code, 0, "Command should succeed without git repository");
     assert!(
         output.stdout.contains("No issues found."),
         "Should show no issues found: {}",
         output.stdout
     );
-    // The stderr contains CLI validation warnings about MCP tools
+    // The stderr contains git warnings but not failures
     assert!(
-        output.stderr.contains("CLI Validation Issues") || !output.stderr.is_empty(),
-        "Should contain some stderr output: {}",
+        output.stderr.contains("Git operations not available") || output.stderr.is_empty(),
+        "Should contain git warning or be empty: {}",
         output.stderr
     );
 }
@@ -158,8 +157,8 @@ async fn test_git_repository_error_exit_codes() {
         "DEBUG test_git_repository_error_exit_codes: exit_code: {}",
         output.exit_code
     );
-    // Memo commands currently succeed and show "No memos found." rather than git repo errors
-    assert_eq!(output.exit_code, 0, "Memo commands currently succeed");
+    // Memo commands now work gracefully without git repositories
+    assert_eq!(output.exit_code, 0, "Memo commands should succeed without git repository");
 }
 
 // Removed test_shell_commands_work_without_git - shell command was migrated away from static CLI
@@ -225,14 +224,22 @@ async fn test_error_messages_are_actionable() {
         output.exit_code
     );
 
-    // Issue create commands currently succeed rather than failing with git repo errors
-    assert_eq!(output.exit_code, 0, "Issue create currently succeeds");
+    // Issue create commands now work gracefully without git repositories
+    assert_eq!(output.exit_code, 0, "Issue create should succeed without git repository");
+
+    let stdout = &output.stdout;
+    // The stdout should confirm issue creation
+    assert!(
+        stdout.contains("Created issue"),
+        "Should confirm issue creation: {}",
+        stdout
+    );
 
     let stderr = &output.stderr;
-    // The stderr contains CLI validation warnings instead of git repo errors
+    // The stderr should contain git warning but not fail the operation
     assert!(
-        stderr.contains("CLI Validation Issues") || !stderr.is_empty(),
-        "Should contain stderr output: {}",
+        stderr.contains("Git operations not available"),
+        "Should contain git operations warning: {}",
         stderr
     );
 }

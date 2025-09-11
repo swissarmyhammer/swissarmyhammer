@@ -164,13 +164,29 @@ pub fn resolve_workflow_parameters_interactive(
     }
 }
 
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swissarmyhammer_workflow::{Workflow, WorkflowName};
+
+    fn create_test_workflow() -> Workflow {
+        Workflow {
+            name: WorkflowName::new("test-workflow"),
+            description: "Test workflow".to_string(),
+            initial_state: swissarmyhammer_workflow::StateId::new("start"),
+            states: std::collections::HashMap::new(),
+            transitions: vec![],
+            parameters: vec![],
+            metadata: std::collections::HashMap::new(),
+        }
+    }
 
     #[test]
     fn test_resolve_workflow_parameters_empty() {
-        let result = resolve_workflow_parameters_interactive("nonexistent-workflow", &[], false);
+        let workflow = create_test_workflow();
+        let result = resolve_workflow_parameters_interactive(&workflow, &[], false);
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }
@@ -181,26 +197,24 @@ mod tests {
         // When no var_args are provided and workflow has parameters, it should enable interactive mode
         // Note: This test runs without a terminal, so interactive detection will be false
 
-        // Use a non-existent workflow to avoid slow file system operations
-        // This tests the logic paths without expensive I/O
-        let workflow_name = "nonexistent-workflow";
+        let workflow = create_test_workflow();
         let empty_vars: &[String] = &[];
 
         // Test with explicit interactive = false and no vars - should work with empty workflow
-        let result = resolve_workflow_parameters_interactive(workflow_name, empty_vars, false);
+        let result = resolve_workflow_parameters_interactive(&workflow, empty_vars, false);
         // Should succeed with empty parameters for non-existent workflow
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
 
         // Test with explicit interactive = true - should succeed (no parameters to prompt for)
         let result_interactive =
-            resolve_workflow_parameters_interactive(workflow_name, empty_vars, true);
+            resolve_workflow_parameters_interactive(&workflow, empty_vars, true);
         assert!(result_interactive.is_ok());
 
         // Test with provided vars - should succeed and ignore extra vars
         let vars_with_values = vec!["person_name=TestUser".to_string()];
         let result_with_vars =
-            resolve_workflow_parameters_interactive(workflow_name, &vars_with_values, false);
+            resolve_workflow_parameters_interactive(&workflow, &vars_with_values, false);
         assert!(result_with_vars.is_ok());
     }
 }

@@ -16,19 +16,24 @@ pub struct CliContext {
     pub workflow_storage: Arc<WorkflowStorage>,
 
     /// Workflow run storage for execution state
+    #[allow(dead_code)]
     pub workflow_run_storage: Arc<FileSystemWorkflowRunStorage>,
 
     /// Prompt library for managing prompts
+    #[allow(dead_code)]
     pub prompt_library: Arc<PromptLibrary>,
 
     /// Memo storage for memoranda
+    #[allow(dead_code)]
     pub memo_storage: Arc<swissarmyhammer_memoranda::MarkdownMemoStorage>,
 
     /// Issue storage for issue tracking
+    #[allow(dead_code)]
     pub issue_storage: Arc<swissarmyhammer_issues::FileSystemIssueStorage>,
 
-    /// Git operations
-    pub git_operations: Arc<GitOperations>,
+    /// Git operations (optional - None if not in a git repository)
+    #[allow(dead_code)]
+    pub git_operations: Option<Arc<GitOperations>>,
 
     /// Template context with configuration
     pub template_context: swissarmyhammer_config::TemplateContext,
@@ -89,12 +94,17 @@ impl CliContext {
             swissarmyhammer_issues::FileSystemIssueStorage::new_default()?
         );
 
-        let git_operations = Arc::new(GitOperations::new().map_err(|e| {
-            swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: format!("Failed to initialize git operations: {e}"),
+        // Initialize git operations - make it optional when not in a git repository
+        let git_operations = match GitOperations::new() {
+            Ok(ops) => {
+                tracing::debug!("Git operations initialized successfully");
+                Some(Arc::new(ops))
             }
-        })?);
-
+            Err(e) => {
+                tracing::warn!("Git operations not available: {}", e);
+                None
+            }
+        };
         Ok(Self {
             workflow_storage,
             workflow_run_storage,

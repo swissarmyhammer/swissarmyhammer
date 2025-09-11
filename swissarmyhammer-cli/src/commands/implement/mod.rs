@@ -8,7 +8,7 @@ use crate::cli::FlowSubcommand;
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the implement command
-use swissarmyhammer_cli::context::CliContext;
+use crate::context::CliContext;
 
 pub async fn handle_command(context: &CliContext) -> i32 {
     // Execute the implement workflow - equivalent to 'flow run implement'

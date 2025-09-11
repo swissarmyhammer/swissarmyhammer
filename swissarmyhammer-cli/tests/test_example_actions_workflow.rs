@@ -8,9 +8,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use swissarmyhammer::workflow::{
-    MermaidParser, StateId, WorkflowExecutor, WorkflowRun, WorkflowRunStatus,
-};
+use swissarmyhammer::{WorkflowExecutor, WorkflowRunStatus};
+use swissarmyhammer_workflow::{MermaidParser, StateId, WorkflowRun};
 
 /// Helper function to load the example-actions workflow
 fn load_example_actions_workflow() -> Result<String> {
@@ -448,7 +447,7 @@ async fn test_debug_cel_expressions() -> Result<()> {
     context.insert("example_var".to_string(), json!("Hello from workflow"));
 
     // Test key CEL expressions without full workflow execution
-    use swissarmyhammer::workflow::{ConditionType, TransitionCondition};
+    use swissarmyhammer_workflow::{ConditionType, TransitionCondition};
 
     let condition = TransitionCondition {
         condition_type: ConditionType::Custom,
@@ -471,7 +470,7 @@ async fn test_debug_cel_expressions() -> Result<()> {
 #[tokio::test]
 async fn test_branch1_liquid_template_rendering() -> Result<()> {
     // Test that the Branch1 log message properly renders {{branch_value}} with liquid templating
-    use swissarmyhammer::workflow::{Action, LogAction, LogLevel};
+    use swissarmyhammer_workflow::{Action, LogAction, LogLevel};
 
     // Create the exact log action from Branch1 in example-actions.md
     let log_action = LogAction::new(
@@ -486,7 +485,7 @@ async fn test_branch1_liquid_template_rendering() -> Result<()> {
         ("is_error".to_string(), json!(false)),
     ]);
     let mut context =
-        swissarmyhammer::workflow::WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
+        swissarmyhammer_workflow::WorkflowTemplateContext::with_vars(HashMap::new()).unwrap();
     context.set_workflow_vars(workflow_vars);
 
     // Execute the log action

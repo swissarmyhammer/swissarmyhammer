@@ -39,7 +39,7 @@ User: {{user_name}}"#;
     let mut library = PromptLibrary::new();
 
     // Add the test prompts directory to the library
-    let loader = swissarmyhammer::prompts::PromptLoader::new();
+    let loader = swissarmyhammer::PromptLoader::new();
     let prompts = loader.load_directory(&prompts_dir).unwrap();
     for prompt in prompts {
         library.add(prompt).unwrap();
@@ -115,7 +115,7 @@ Current User: {{USER}}"#;
 
     // Load prompts
     let mut library = PromptLibrary::new();
-    let loader = swissarmyhammer::prompts::PromptLoader::new();
+    let loader = swissarmyhammer::PromptLoader::new();
     let prompts = loader.load_directory(&prompts_dir).unwrap();
     for prompt in prompts {
         library.add(prompt).unwrap();

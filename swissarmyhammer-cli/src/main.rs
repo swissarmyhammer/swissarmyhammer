@@ -1,6 +1,7 @@
 use std::process;
 mod cli;
 mod commands;
+mod context;
 mod dynamic_cli;
 mod error;
 mod exit_codes;
@@ -11,7 +12,7 @@ mod schema_conversion;
 mod schema_validation;
 mod signal_handler;
 mod validate;
-use swissarmyhammer_cli::context::CliContext;
+use crate::context::CliContext;
 use dynamic_cli::CliBuilder;
 use exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use logging::FileWriterGuard;
@@ -234,7 +235,7 @@ async fn handle_dynamic_matches(
         Some(("prompt", sub_matches)) => {
             handle_prompt_command(sub_matches, &template_context).await
         }
-        Some(("flow", _sub_matches)) => handle_flow_command(&context).await,
+        Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => {
             handle_validate_command(sub_matches, &template_context).await
         }
@@ -463,10 +464,10 @@ async fn handle_prompt_command(
     commands::prompt::handle_command(subcommand, template_context).await
 }
 
-async fn handle_flow_command(context: &CliContext) -> i32 {
+async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::cli::{FlowSubcommand, OutputFormat, PromptSourceArg, VisualizationFormat};
 
-    let subcommand = match context.matches.subcommand() {
+    let subcommand = match sub_matches.subcommand() {
         Some(("run", sub_matches)) => {
             let workflow = sub_matches.get_one::<String>("workflow").cloned().unwrap();
             let vars = sub_matches
