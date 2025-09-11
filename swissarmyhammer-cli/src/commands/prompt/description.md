@@ -1,13 +1,12 @@
-Manage prompts with support for listing, validating, and testing.
-Prompts are markdown files with YAML front matter that define reusable templates.
+Manage and test prompts with built-in, user, and local template support.
 
-Basic usage:
-  swissarmyhammer prompt list                    # List all prompts
-  swissarmyhammer prompt validate                # Validate prompt files
-  swissarmyhammer prompt test <name>             # Test a prompt
+Prompts are Liquid templates that can be rendered with variables to generate text output.
+Use prompts for code reviews, planning, documentation, and other templated text generation.
 
+Available prompt sources:
+- Built-in prompts (shipped with the tool)
+- User prompts (~/.swissarmyhammer/prompts/)
+- Local prompts (./.swissarmyhammer/prompts/)
 
-Examples:
-  swissarmyhammer prompt list --source builtin
-  swissarmyhammer prompt validate --quiet
-  swissarmyhammer prompt test code-review --var file=main.rs
+Use 'sah prompt list' to see all available prompts.
+Use 'sah prompt test' to interactively test prompts with sample data.

@@ -96,7 +96,9 @@ impl CliContext {
     where 
         T: serde::Serialize,
     {
-        match self.format {
+        // Use explicit format option if provided, otherwise use default format
+        let format = self.format_option.unwrap_or(self.format);
+        match format {
             OutputFormat::Json => {
                 let json = serde_json::to_string_pretty(&items)
                     .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {

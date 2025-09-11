@@ -416,69 +416,19 @@ async fn handle_prompt_command(
     matches: &clap::ArgMatches,
     context: &CliContext,
 ) -> i32 {
-    use crate::cli::{OutputFormat, PromptSourceArg, PromptSubcommand};
+    use crate::commands::prompt::cli;
 
-    let subcommand = match matches.subcommand() {
-        Some(("list", sub_matches)) => {
-            // Use global format from context, allow subcommand format to override
-            let format = match sub_matches.get_one::<String>("format").map(|s| s.as_str()) {
-                Some("json") => OutputFormat::Json,
-                Some("yaml") => OutputFormat::Yaml,
-                Some("table") => OutputFormat::Table,
-                None => context.format_option.unwrap_or(OutputFormat::Table), // Use global format when no subcommand format specified, default to Table
-                _ => OutputFormat::Table,
-            };
-            // Use global verbose from context, allow subcommand verbose to override
-            let verbose = sub_matches.get_flag("verbose") || context.verbose;
-            let source = sub_matches
-                .get_one::<String>("source")
-                .map(|s| match s.as_str() {
-                    "builtin" => PromptSourceArg::Builtin,
-                    "user" => PromptSourceArg::User,
-                    "local" => PromptSourceArg::Local,
-                    "dynamic" => PromptSourceArg::Dynamic,
-                    _ => PromptSourceArg::Dynamic,
-                });
-            let category = sub_matches.get_one::<String>("category").cloned();
-
-            PromptSubcommand::List {
-                format,
-                verbose,
-                source,
-                category,
-            }
-        }
-        Some(("test", sub_matches)) => {
-            let prompt_name = sub_matches.get_one::<String>("prompt_name").cloned();
-            let file = sub_matches.get_one::<String>("file").cloned();
-            let vars = sub_matches
-                .get_many::<String>("vars")
-                .map(|vals| vals.cloned().collect())
-                .unwrap_or_default();
-            let raw = sub_matches.get_flag("raw");
-            let copy = sub_matches.get_flag("copy");
-            let save = sub_matches.get_one::<String>("save").cloned();
-            // Use global debug from context, allow subcommand debug to override
-            let debug = sub_matches.get_flag("debug") || context.debug;
-
-            PromptSubcommand::Test {
-                prompt_name,
-                file,
-                vars,
-                raw,
-                copy,
-                save,
-                debug,
-            }
-        }
-
-        _ => {
-            eprintln!("No prompt subcommand specified");
+    // Parse using the new CLI module
+    let command = match cli::parse_prompt_command(matches) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            eprintln!("Invalid prompt command: {}", e);
             return EXIT_ERROR;
         }
     };
 
-    commands::prompt::handle_command(subcommand, &context.template_context).await
+    // Use the new typed handler
+    commands::prompt::handle_command_typed(command, context).await
 }
 
 async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContext) -> i32 {

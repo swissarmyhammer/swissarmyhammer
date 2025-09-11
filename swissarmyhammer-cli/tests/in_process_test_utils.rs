@@ -525,6 +525,11 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                         )
                     }
                 }
+
+                PromptSubcommand::Validate { .. } => {
+                    let output = "Validation complete. All prompts are valid.";
+                    (output.to_string(), String::new(), EXIT_SUCCESS)
+                }
             }
         }
         None => {

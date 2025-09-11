@@ -817,6 +817,17 @@ Examples:
                             .action(ArgAction::SetTrue),
                     ),
             )
+            .subcommand(
+                Command::new("validate")
+                    .about("Validate prompt files and workflows")
+                    .arg(
+                        Arg::new("verbose")
+                            .short('v')
+                            .long("verbose")
+                            .help("Show verbose validation output")
+                            .action(ArgAction::SetTrue),
+                    ),
+            )
     }
 
     /// Build the flow command with all its subcommands

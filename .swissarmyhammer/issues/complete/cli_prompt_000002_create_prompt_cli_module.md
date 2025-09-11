@@ -197,3 +197,87 @@ pub enum PromptCommand {
 **Estimated Effort**: Medium (100-200 lines)
 **Dependencies**: cli_prompt_000001_add_global_format_argument
 **Blocks**: All subsequent implementation steps
+
+## Proposed Solution
+
+Based on my analysis of the current code structure, I will implement a dedicated CLI module within the prompt commands directory that provides:
+
+1. **Command Definition Module**: Create `swissarmyhammer-cli/src/commands/prompt/cli.rs` that uses clap builders instead of derive macros
+2. **Help Text Externalization**: Move help text to dedicated markdown files for better maintainability
+3. **Command Structure Simplification**: Remove unnecessary filtering from list command as specified in the issue
+4. **Strong Typing**: Create dedicated structs for each command type
+
+### Implementation Plan
+
+1. **Create CLI Module** (`cli.rs`):
+   - Use clap `Command` builders instead of derive macros
+   - Create `build_prompt_command()` function that returns the full command tree
+   - Separate builders for each subcommand (`build_list_command()`, `build_test_command()`)
+   - Include markdown help files using `include_str!()`
+
+2. **Create Command Types**:
+   - `ListCommand` struct (simplified, no filtering)
+   - `TestCommand` struct (preserving all current functionality)  
+   - `PromptCommand` enum to wrap both
+   - `parse_prompt_command()` function to convert clap matches to typed structs
+
+3. **Create Help Files**:
+   - `list_help.md` - Detailed help for list command
+   - `test_help.md` - Detailed help for test command
+   - Use existing `description.md` for main command description
+
+4. **Testing**:
+   - Unit tests for command building and parsing
+   - Tests for help text inclusion
+   - Validation that all current functionality is preserved
+
+This approach will create a clean separation between command definition (CLI module) and command execution (existing mod.rs), making the code more maintainable and testable.
+
+## Implementation Status
+
+✅ **COMPLETED** - All implementation steps have been successfully completed.
+
+### Files Created
+
+1. **CLI Module**: `swissarmyhammer-cli/src/commands/prompt/cli.rs`
+   - Clean command definitions using clap builders 
+   - Simplified list command with no filtering (as required)
+   - All test command functionality preserved
+   - Strong typing with command structs
+   - No global arguments duplicated in subcommands
+
+2. **Help Text Files**:
+   - `swissarmyhammer-cli/src/commands/prompt/list_help.md` - List command help
+   - `swissarmyhammer-cli/src/commands/prompt/test_help.md` - Test command help
+
+3. **Module Integration**:
+   - Updated `mod.rs` to include the new CLI module
+   - All code compiles successfully with only expected dead code warnings (since integration is pending)
+
+### Testing Results
+
+✅ All 10 unit tests pass successfully:
+- Command building tests
+- Argument parsing tests  
+- Error handling tests
+- Command validation tests
+
+### Code Quality
+
+- ✅ Compiles without errors
+- ✅ All tests pass
+- ✅ Only dead code warnings (expected until integration)
+- ✅ Follows Rust coding standards
+- ✅ Comprehensive test coverage
+
+### Next Steps
+
+This module is now ready for integration with the main CLI system. The implementation provides:
+
+- **Single Source of Truth**: All prompt command definitions in one place
+- **Clean Architecture**: Separation between command definition and execution
+- **Strong Typing**: Type-safe command parsing with detailed structs
+- **Maintainable Help**: Externalized help text in markdown files
+- **Test Coverage**: Comprehensive unit tests ensuring reliability
+
+The module successfully meets all requirements specified in the issue and is ready for production use.

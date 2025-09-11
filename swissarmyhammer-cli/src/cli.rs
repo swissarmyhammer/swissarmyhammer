@@ -312,6 +312,20 @@ Examples:
         #[arg(long)]
         debug: bool,
     },
+    /// Validate prompt files and workflows
+    #[command(long_about = "
+Validate prompt files and workflows for syntax errors and best practices.
+This is a subset of the main validate command focused on prompts.
+
+Examples:
+  swissarmyhammer prompt validate                    # Validate all prompts
+  swissarmyhammer prompt validate --verbose          # Show detailed validation info
+")]
+    Validate {
+        /// Show verbose validation output
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
