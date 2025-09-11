@@ -436,8 +436,14 @@ async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
 async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::commands::prompt::cli;
 
+    // Extract args from the prompt command
+    let args: Vec<String> = matches
+        .get_many::<String>("args")
+        .map(|vals| vals.cloned().collect())
+        .unwrap_or_default();
+
     // Parse using the new CLI module
-    let command = match cli::parse_prompt_command(matches) {
+    let command = match cli::parse_prompt_command_from_args(&args) {
         Ok(cmd) => cmd,
         Err(e) => {
             eprintln!("Invalid prompt command: {}", e);

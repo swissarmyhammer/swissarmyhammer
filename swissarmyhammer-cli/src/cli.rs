@@ -112,9 +112,10 @@ Example:
     Doctor {},
     /// Manage and test prompts
     #[command(long_about = commands::prompt::DESCRIPTION)]
+    #[command(trailing_var_arg = true)]
     Prompt {
-        #[command(subcommand)]
-        subcommand: PromptSubcommand,
+        /// Subcommand and arguments for prompt (handled dynamically)
+        args: Vec<String>,
     },
     /// Execute and manage workflows
     #[command(long_about = commands::flow::DESCRIPTION)]
@@ -215,114 +216,7 @@ Example:
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum PromptSubcommand {
-    /// List all available prompts
-    #[command(long_about = "
-Lists all available prompts from all sources (built-in, user, local).
-Shows prompt names, titles, descriptions, and source information.
 
-Output formats:
-  table  - Formatted table (default)
-  json   - JSON output for scripting
-  yaml   - YAML output for scripting
-
-Examples:
-  swissarmyhammer prompt list                        # Show all prompts in table format
-  swissarmyhammer prompt list --format json         # Output as JSON
-  swissarmyhammer prompt list --verbose             # Show full details including arguments
-  swissarmyhammer prompt list --source builtin      # Show only built-in prompts
-
-")]
-    List {
-        /// Output format
-        #[arg(long, value_enum, default_value = "table")]
-        format: OutputFormat,
-
-        /// Show verbose output including arguments
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Filter by source
-        #[arg(long, value_enum)]
-        source: Option<PromptSourceArg>,
-
-        /// Filter by category
-        #[arg(long)]
-        category: Option<String>,
-    },
-    /// Test prompts interactively with sample arguments
-    #[command(long_about = "
-Test prompts interactively to see how they render with different arguments.
-Helps debug template errors and refine prompt content before using in Claude Code.
-
-Usage modes:
-  swissarmyhammer prompt test prompt-name                    # Test by name (interactive)
-  swissarmyhammer prompt test -f path/to/prompt.md          # Test from file
-  swissarmyhammer prompt test prompt-name --var key=value   # Non-interactive mode
-
-Interactive features:
-- Prompts for each argument with descriptions
-- Shows default values (press Enter to accept)
-- Validates required arguments
-- Supports multi-line input
-
-Output options:
-  --raw     Show rendered prompt without formatting
-  --copy    Copy rendered prompt to clipboard
-  --save    Save rendered prompt to file
-  --debug   Show template processing details
-
-Examples:
-  swissarmyhammer prompt test code-review                           # Interactive test
-  swissarmyhammer prompt test -f my-prompt.md                       # Test file
-  swissarmyhammer prompt test help --var topic=git                  # Non-interactive
-  swissarmyhammer prompt test plan --debug --save output.md         # Debug + save
-  swissarmyhammer prompt test code-review --var author=John --var version=1.0  # With template variables
-")]
-    Test {
-        /// Prompt name to test (alternative to --file)
-        prompt_name: Option<String>,
-
-        /// Path to prompt file to test
-        #[arg(short, long)]
-        file: Option<String>,
-
-        /// Non-interactive mode: specify variables as key=value pairs
-        #[arg(long = "var", alias = "arg", value_name = "KEY=VALUE")]
-        vars: Vec<String>,
-
-        /// Show raw output without formatting
-        #[arg(long)]
-        raw: bool,
-
-        /// Copy rendered prompt to clipboard
-        #[arg(long)]
-        copy: bool,
-
-        /// Save rendered prompt to file
-        #[arg(long, value_name = "FILE")]
-        save: Option<String>,
-
-        /// Show debug information (template, args, processing steps)
-        #[arg(long)]
-        debug: bool,
-    },
-    /// Validate prompt files and workflows
-    #[command(long_about = "
-Validate prompt files and workflows for syntax errors and best practices.
-This is a subset of the main validate command focused on prompts.
-
-Examples:
-  swissarmyhammer prompt validate                    # Validate all prompts
-  swissarmyhammer prompt validate --verbose          # Show detailed validation info
-")]
-    Validate {
-        /// Show verbose validation output
-        #[arg(short, long)]
-        verbose: bool,
-    },
-}
 
 #[derive(Subcommand, Debug)]
 pub enum FlowSubcommand {
@@ -615,222 +509,17 @@ mod tests {
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
-    #[test]
-    fn test_cli_test_subcommand_with_prompt_name() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "prompt", "test", "help"]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Test {
-                prompt_name,
-                file,
-                vars,
-                raw,
-                copy,
-                save,
-                debug,
-            } = subcommand
-            {
-                assert_eq!(prompt_name, Some("help".to_string()));
-                assert_eq!(file, None);
-                assert!(vars.is_empty());
-                assert!(!raw);
-                assert!(!copy);
-                assert_eq!(save, None);
-                assert!(!debug);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
-    #[test]
-    fn test_cli_test_subcommand_with_file() {
-        let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "prompt", "test", "-f", "test.md"]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Test {
-                prompt_name,
-                file,
-                vars,
-                raw,
-                copy,
-                save,
-                debug,
-            } = subcommand
-            {
-                assert_eq!(prompt_name, None);
-                assert_eq!(file, Some("test.md".to_string()));
-                assert!(vars.is_empty());
-                assert!(!raw);
-                assert!(!copy);
-                assert_eq!(save, None);
-                assert!(!debug);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
-    #[test]
-    fn test_cli_test_subcommand_with_arguments() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "prompt",
-            "test",
-            "help",
-            "--var",
-            "topic=git",
-            "--var",
-            "format=markdown",
-        ]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Test {
-                prompt_name,
-                file,
-                vars,
-                raw,
-                copy,
-                save,
-                debug,
-            } = subcommand
-            {
-                assert_eq!(prompt_name, Some("help".to_string()));
-                assert_eq!(file, None);
-                assert_eq!(vars, vec!["topic=git", "format=markdown"]);
-                assert!(!raw);
-                assert!(!copy);
-                assert_eq!(save, None);
-                assert!(!debug);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
-    #[test]
-    fn test_cli_test_subcommand_with_all_flags() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "prompt",
-            "test",
-            "help",
-            "--raw",
-            "--copy",
-            "--debug",
-            "--save",
-            "output.md",
-        ]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Test {
-                prompt_name,
-                file,
-                vars,
-                raw,
-                copy,
-                save,
-                debug,
-            } = subcommand
-            {
-                assert_eq!(prompt_name, Some("help".to_string()));
-                assert_eq!(file, None);
-                assert!(vars.is_empty());
-                assert!(raw);
-                assert!(copy);
-                assert_eq!(save, Some("output.md".to_string()));
-                assert!(debug);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
-    #[test]
-    fn test_cli_test_subcommand_with_var_variables() {
-        let result = Cli::try_parse_from_args([
-            "swissarmyhammer",
-            "prompt",
-            "test",
-            "help",
-            "--var",
-            "topic=git",
-            "--var",
-            "author=John",
-            "--var",
-            "version=1.0",
-        ]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::Test {
-                prompt_name,
-                file,
-                vars,
-                raw,
-                copy,
-                save,
-                debug,
-            } = subcommand
-            {
-                assert_eq!(prompt_name, Some("help".to_string()));
-                assert_eq!(file, None);
-                assert_eq!(vars, vec!["topic=git", "author=John", "version=1.0"]);
-                assert!(!raw);
-                assert!(!copy);
-                assert_eq!(save, None);
-                assert!(!debug);
-            } else {
-                unreachable!("Expected Test subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
-    #[test]
-    fn test_cli_prompt_list_subcommand() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "prompt", "list"]);
-        assert!(result.is_ok());
 
-        let cli = result.unwrap();
-        if let Some(Commands::Prompt { subcommand }) = cli.command {
-            if let PromptSubcommand::List {
-                format,
-                verbose,
-                source,
-                category,
-            } = subcommand
-            {
-                assert!(matches!(format, OutputFormat::Table));
-                assert!(!verbose);
-                assert_eq!(source, None);
-                assert_eq!(category, None);
-            } else {
-                unreachable!("Expected List subcommand");
-            }
-        } else {
-            unreachable!("Expected Prompt command");
-        }
-    }
 
     #[test]
     fn test_cli_validate_command() {
@@ -1332,7 +1021,7 @@ mod tests {
     #[test]
     fn test_global_format_flag() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "prompt", "list"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "doctor"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1351,7 +1040,7 @@ mod tests {
     #[test]
     fn test_global_format_flag_table() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "prompt", "list"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "doctor"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1360,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_global_format_flag_default() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "prompt", "list"]);
+        let result = Cli::try_parse_from_args(["swissarmyhammer", "doctor"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1375,8 +1064,7 @@ mod tests {
             "--verbose",
             "--format",
             "json",
-            "prompt",
-            "list",
+            "doctor",
         ]);
         assert!(result.is_ok());
 
@@ -1388,7 +1076,7 @@ mod tests {
     #[test]
     fn test_global_format_flag_invalid() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "prompt", "list"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "doctor"]);
         assert!(result.is_err());
     }
 }

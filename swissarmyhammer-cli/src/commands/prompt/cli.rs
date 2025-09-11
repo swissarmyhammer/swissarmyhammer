@@ -3,6 +3,7 @@
 //! This module provides clap command builders for the prompt subcommands,
 //! using external markdown files for help text and strong typing for parsed arguments.
 
+#[cfg(test)]
 use clap::ArgMatches;
 
 /// Error type for command parsing
@@ -45,7 +46,8 @@ pub enum PromptCommand {
     Validate(ValidateCommand),
 }
 
-/// Parse clap matches into command structs
+/// Parse clap matches into command structs (legacy function for compatibility)
+#[cfg(test)]
 pub fn parse_prompt_command(matches: &ArgMatches) -> Result<PromptCommand, ParseError> {
     match matches.subcommand() {
         Some(("list", _sub_matches)) => Ok(PromptCommand::List(ListCommand {})),
@@ -65,6 +67,86 @@ pub fn parse_prompt_command(matches: &ArgMatches) -> Result<PromptCommand, Parse
             Ok(PromptCommand::Test(test_cmd))
         }
         Some(("validate", _sub_matches)) => Ok(PromptCommand::Validate(ValidateCommand {})),
+        _ => Err(ParseError::UnknownSubcommand),
+    }
+}
+
+/// Parse prompt command from args vector (new dynamic CLI approach)
+pub fn parse_prompt_command_from_args(args: &[String]) -> Result<PromptCommand, ParseError> {
+    if args.is_empty() {
+        // Default to list command when no subcommand is provided
+        return Ok(PromptCommand::List(ListCommand {}));
+    }
+
+    match args[0].as_str() {
+        "list" => Ok(PromptCommand::List(ListCommand {})),
+        "test" => {
+            let mut test_cmd = TestCommand {
+                prompt_name: None,
+                file: None,
+                vars: Vec::new(),
+                raw: false,
+                copy: false,
+                save: None,
+                debug: false,
+            };
+
+            // Parse the remaining arguments
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--file" | "-f" => {
+                        if i + 1 < args.len() {
+                            test_cmd.file = Some(args[i + 1].clone());
+                            i += 2;
+                        } else {
+                            return Err(ParseError::UnknownSubcommand);
+                        }
+                    }
+                    "--var" => {
+                        if i + 1 < args.len() {
+                            test_cmd.vars.push(args[i + 1].clone());
+                            i += 2;
+                        } else {
+                            return Err(ParseError::UnknownSubcommand);
+                        }
+                    }
+                    "--raw" => {
+                        test_cmd.raw = true;
+                        i += 1;
+                    }
+                    "--copy" => {
+                        test_cmd.copy = true;
+                        i += 1;
+                    }
+                    "--debug" => {
+                        test_cmd.debug = true;
+                        i += 1;
+                    }
+                    "--save" => {
+                        if i + 1 < args.len() {
+                            test_cmd.save = Some(args[i + 1].clone());
+                            i += 2;
+                        } else {
+                            return Err(ParseError::UnknownSubcommand);
+                        }
+                    }
+                    arg if !arg.starts_with('-') => {
+                        // This is the prompt name
+                        if test_cmd.prompt_name.is_none() {
+                            test_cmd.prompt_name = Some(arg.to_string());
+                        }
+                        i += 1;
+                    }
+                    _ => {
+                        return Err(ParseError::UnknownSubcommand);
+                    }
+                }
+            }
+
+            Ok(PromptCommand::Test(test_cmd))
+        }
+        "validate" => Ok(PromptCommand::Validate(ValidateCommand {})),
         _ => Err(ParseError::UnknownSubcommand),
     }
 }

@@ -16,6 +16,10 @@ use in_process_test_utils::{run_flow_test_in_process, run_sah_command_in_process
 async fn test_prompt_subcommand_list() -> Result<()> {
     let result = run_sah_command_in_process(&["prompt", "list"]).await?;
 
+    if result.exit_code != 0 {
+        eprintln!("STDERR: {}", result.stderr);
+        eprintln!("STDOUT: {}", result.stdout);
+    }
     assert_eq!(result.exit_code, 0, "prompt list command should succeed");
     Ok(())
 }
