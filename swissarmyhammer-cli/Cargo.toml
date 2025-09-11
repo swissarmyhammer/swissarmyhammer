@@ -41,6 +41,7 @@ dirs = { workspace = true }
 dialoguer = { workspace = true }
 arboard = { workspace = true }
 atty = { workspace = true }
+tabled = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

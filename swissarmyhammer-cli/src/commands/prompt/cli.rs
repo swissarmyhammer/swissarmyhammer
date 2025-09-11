@@ -12,8 +12,6 @@ pub enum ParseError {
     UnknownSubcommand,
 }
 
-
-
 /// Simplified list command structure - no filtering options
 /// Uses global verbose/format from CliContext
 #[derive(Debug)]
@@ -90,11 +88,27 @@ mod tests {
                 Command::new("test")
                     .arg(clap::Arg::new("prompt_name").index(1))
                     .arg(clap::Arg::new("file").short('f').long("file"))
-                    .arg(clap::Arg::new("var").long("var").action(clap::ArgAction::Append))
-                    .arg(clap::Arg::new("raw").long("raw").action(clap::ArgAction::SetTrue))
-                    .arg(clap::Arg::new("copy").long("copy").action(clap::ArgAction::SetTrue))
+                    .arg(
+                        clap::Arg::new("var")
+                            .long("var")
+                            .action(clap::ArgAction::Append),
+                    )
+                    .arg(
+                        clap::Arg::new("raw")
+                            .long("raw")
+                            .action(clap::ArgAction::SetTrue),
+                    )
+                    .arg(
+                        clap::Arg::new("copy")
+                            .long("copy")
+                            .action(clap::ArgAction::SetTrue),
+                    )
                     .arg(clap::Arg::new("save").long("save"))
-                    .arg(clap::Arg::new("debug").long("debug").action(clap::ArgAction::SetTrue))
+                    .arg(
+                        clap::Arg::new("debug")
+                            .long("debug")
+                            .action(clap::ArgAction::SetTrue),
+                    ),
             )
             .try_get_matches_from(["prompt", "test", "help"])
             .unwrap()
@@ -104,7 +118,7 @@ mod tests {
     fn test_parse_list_command() {
         let matches = create_mock_list_matches();
         let parsed = parse_prompt_command(&matches).unwrap();
-        
+
         match parsed {
             PromptCommand::List(_) => (),
             _ => panic!("Expected List command"),
@@ -115,7 +129,7 @@ mod tests {
     fn test_parse_test_command_with_prompt_name() {
         let matches = create_mock_test_matches();
         let parsed = parse_prompt_command(&matches).unwrap();
-        
+
         match parsed {
             PromptCommand::Test(test_cmd) => {
                 assert_eq!(test_cmd.prompt_name, Some("help".to_string()));
@@ -130,14 +144,12 @@ mod tests {
         }
     }
 
-
-
     #[test]
     fn test_parse_unknown_subcommand() {
         let matches = Command::new("prompt")
             .try_get_matches_from(["prompt"])
             .unwrap();
-        
+
         let result = parse_prompt_command(&matches);
         assert!(matches!(result, Err(ParseError::UnknownSubcommand)));
     }
@@ -163,7 +175,7 @@ mod tests {
             save: Some("output.txt".to_string()),
             debug: true,
         };
-        
+
         match PromptCommand::Test(test_cmd) {
             PromptCommand::Test(cmd) => {
                 assert_eq!(cmd.prompt_name, Some("test".to_string()));
@@ -180,7 +192,7 @@ mod tests {
     #[test]
     fn test_validate_command_struct() {
         let validate_cmd = ValidateCommand {};
-        
+
         match PromptCommand::Validate(validate_cmd) {
             PromptCommand::Validate(_) => (),
             _ => panic!("ValidateCommand should match PromptCommand::Validate"),
@@ -193,9 +205,9 @@ mod tests {
             .subcommand(Command::new("validate"))
             .try_get_matches_from(["prompt", "validate"])
             .unwrap();
-        
+
         let parsed = parse_prompt_command(&matches).unwrap();
-        
+
         match parsed {
             PromptCommand::Validate(_) => (),
             _ => panic!("Expected Validate command"),

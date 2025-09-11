@@ -105,8 +105,6 @@ pub struct ThreatDetector {
     /// Command frequency tracking for anomaly detection
     command_frequency: HashMap<String, CommandFrequency>,
 
-
-
     /// Configuration for threat detection
     config: ThreatDetectionConfig,
 }
@@ -145,8 +143,6 @@ struct CommandFrequency {
     first_seen: SystemTime,
     last_seen: SystemTime,
 }
-
-
 
 /// Security threat levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -393,8 +389,6 @@ impl ThreatDetector {
             recommendations.push("Review command parameters carefully".to_string());
         }
 
-
-
         SecurityAssessment {
             threat_level,
             threats,
@@ -484,8 +478,6 @@ impl ThreatDetector {
             .iter()
             .any(|&pattern| command.contains(pattern))
     }
-
-
 
     /// Get security statistics
     pub fn get_security_statistics(&self) -> SecurityStatistics {

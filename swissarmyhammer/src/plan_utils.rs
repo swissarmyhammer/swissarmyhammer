@@ -103,24 +103,36 @@ impl PlanCommandError {
     pub fn display_to_user(&self, _use_color: bool) -> String {
         format!("{}", self)
     }
-    
+
     /// Log the error for debugging
     pub fn log_error(&self) {
         tracing::error!("{}", self);
     }
-    
+
     /// Get error severity level
     pub fn severity(&self) -> swissarmyhammer_common::ErrorSeverity {
         match self {
             PlanCommandError::FileNotFound { .. } => swissarmyhammer_common::ErrorSeverity::Error,
-            PlanCommandError::PermissionDenied { .. } => swissarmyhammer_common::ErrorSeverity::Critical,
-            PlanCommandError::InvalidFileFormat { .. } => swissarmyhammer_common::ErrorSeverity::Error,
-            PlanCommandError::WorkflowExecutionFailed { .. } => swissarmyhammer_common::ErrorSeverity::Critical,
+            PlanCommandError::PermissionDenied { .. } => {
+                swissarmyhammer_common::ErrorSeverity::Critical
+            }
+            PlanCommandError::InvalidFileFormat { .. } => {
+                swissarmyhammer_common::ErrorSeverity::Error
+            }
+            PlanCommandError::WorkflowExecutionFailed { .. } => {
+                swissarmyhammer_common::ErrorSeverity::Critical
+            }
             PlanCommandError::FileTooLarge { .. } => swissarmyhammer_common::ErrorSeverity::Warning,
             PlanCommandError::EmptyPlanFile { .. } => swissarmyhammer_common::ErrorSeverity::Error,
-            PlanCommandError::IssueCreationFailed { .. } => swissarmyhammer_common::ErrorSeverity::Error,
-            PlanCommandError::IssuesDirectoryNotWritable { .. } => swissarmyhammer_common::ErrorSeverity::Critical,
-            PlanCommandError::InsufficientContent { .. } => swissarmyhammer_common::ErrorSeverity::Warning,
+            PlanCommandError::IssueCreationFailed { .. } => {
+                swissarmyhammer_common::ErrorSeverity::Error
+            }
+            PlanCommandError::IssuesDirectoryNotWritable { .. } => {
+                swissarmyhammer_common::ErrorSeverity::Critical
+            }
+            PlanCommandError::InsufficientContent { .. } => {
+                swissarmyhammer_common::ErrorSeverity::Warning
+            }
         }
     }
 }

@@ -182,10 +182,11 @@ async fn handle_dynamic_matches(
     let debug = matches.get_flag("debug");
     let quiet = matches.get_flag("quiet");
     let validate_tools = matches.get_flag("validate-tools");
-    
-    // Handle global format flag  
+
+    // Handle global format flag
     use crate::cli::OutputFormat;
-    let format_option = matches.try_get_one::<String>("format")
+    let format_option = matches
+        .try_get_one::<String>("format")
         .unwrap_or(None)
         .map(|s| match s.as_str() {
             "json" => OutputFormat::Json,
@@ -230,7 +231,17 @@ async fn handle_dynamic_matches(
     }
 
     // Create shared CLI context
-    let context = match CliContext::new(template_context.clone(), format, format_option, verbose, debug, quiet, matches).await {
+    let context = match CliContext::new(
+        template_context.clone(),
+        format,
+        format_option,
+        verbose,
+        debug,
+        quiet,
+        matches,
+    )
+    .await
+    {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("Failed to initialize CLI context: {}", e);
@@ -244,9 +255,7 @@ async fn handle_dynamic_matches(
             commands::serve::handle_command(sub_matches, &template_context).await
         }
         Some(("doctor", _)) => handle_doctor_command(&template_context).await,
-        Some(("prompt", sub_matches)) => {
-            handle_prompt_command(sub_matches, &context).await
-        }
+        Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => {
             handle_validate_command(sub_matches, &template_context).await
@@ -412,10 +421,7 @@ async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
     commands::doctor::handle_command(template_context).await
 }
 
-async fn handle_prompt_command(
-    matches: &clap::ArgMatches,
-    context: &CliContext,
-) -> i32 {
+async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::commands::prompt::cli;
 
     // Parse using the new CLI module

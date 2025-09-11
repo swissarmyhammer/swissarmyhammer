@@ -230,8 +230,6 @@ fn test_security_and_validation_features() {
     println!("✅ Security and validation features verified");
 }
 
-
-
 #[test]
 fn test_mcp_protocol_integration() {
     let tool = WebFetchTool::new();

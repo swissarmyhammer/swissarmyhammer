@@ -3,14 +3,14 @@
 //! Manages and tests prompts with support for listing, validating, and testing
 
 pub mod cli;
-
+pub mod display;
 
 use crate::error::{CliError, CliResult};
 use crate::exit_codes::EXIT_SUCCESS;
 use std::collections::HashMap;
 
+pub use cli::PromptCommand;
 use swissarmyhammer::interactive_prompts::InteractivePrompts;
-pub use cli::{PromptCommand};
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
 use swissarmyhammer_common::{Parameter, ParameterError, ParameterProvider, ParameterType};
 use swissarmyhammer_config::TemplateContext;
@@ -40,25 +40,22 @@ async fn run_prompt_command_typed(
     match command {
         PromptCommand::List(_) => {
             // Simplified list command - no source/category filtering
-            run_list_command(context, None, None)
-                .map_err(|e| CliError::new(e.to_string(), 1))
+            run_list_command(context, None, None).map_err(|e| CliError::new(e.to_string(), 1))
         }
-        PromptCommand::Test(test_cmd) => {
-            run_test_command(
-                TestCommandConfig {
-                    prompt_name: test_cmd.prompt_name,
-                    _file: test_cmd.file,
-                    vars: test_cmd.vars,
-                    _raw: test_cmd.raw,
-                    _copy: test_cmd.copy,
-                    _save: test_cmd.save,
-                    _debug: test_cmd.debug || context.debug,
-                },
-                &context.template_context,
-            )
-            .await
-            .map_err(|e| CliError::new(e.to_string(), 1))
-        }
+        PromptCommand::Test(test_cmd) => run_test_command(
+            TestCommandConfig {
+                prompt_name: test_cmd.prompt_name,
+                _file: test_cmd.file,
+                vars: test_cmd.vars,
+                _raw: test_cmd.raw,
+                _copy: test_cmd.copy,
+                _save: test_cmd.save,
+                _debug: test_cmd.debug || context.debug,
+            },
+            &context.template_context,
+        )
+        .await
+        .map_err(|e| CliError::new(e.to_string(), 1)),
         PromptCommand::Validate(_) => {
             // For now, just delegate to the root validate command
             // This provides basic validation functionality
@@ -123,36 +120,9 @@ fn run_list_command(
         .filter(|prompt| !is_partial_template(prompt))
         .collect();
 
-    // Display results using context's display method for JSON/YAML, custom for Table
-    match context.format {
-        crate::cli::OutputFormat::Table => {
-            println!("Available prompts:");
-            for prompt in prompts {
-                if context.verbose {
-                    println!(
-                        "  {} - {} ({})",
-                        prompt.name,
-                        prompt
-                            .metadata
-                            .get("title")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("No title"),
-                        prompt
-                            .metadata
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("No description")
-                    );
-                } else {
-                    println!("  {}", prompt.name);
-                }
-            }
-        }
-        crate::cli::OutputFormat::Json | crate::cli::OutputFormat::Yaml => {
-            // Use context's display method to demonstrate its usage
-            context.display(prompts)?;
-        }
-    }
+    // Convert to display objects and use context's display_prompts method
+    let display_rows = display::prompts_to_display_rows(prompts, context.verbose);
+    context.display_prompts(display_rows)?;
 
     Ok(())
 }
@@ -422,14 +392,22 @@ fn prompt_for_all_missing_parameters(
 async fn run_validate_command() -> Result<(), anyhow::Error> {
     // For now, delegate to the main validate command functionality
     // This uses the validate command implementation from the main CLI
-    let exit_code = crate::validate::run_validate_command_with_dirs(false, crate::cli::OutputFormat::Table, vec![], false)
-        .await
-        .map_err(|e| anyhow::anyhow!("Validation failed: {}", e))?;
-    
+    let exit_code = crate::validate::run_validate_command_with_dirs(
+        false,
+        crate::cli::OutputFormat::Table,
+        vec![],
+        false,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Validation failed: {}", e))?;
+
     if exit_code == 0 {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("Validation failed with exit code {}", exit_code))
+        Err(anyhow::anyhow!(
+            "Validation failed with exit code {}",
+            exit_code
+        ))
     }
 }
 
@@ -439,11 +417,10 @@ mod tests {
 
     use super::*;
 
-
     #[tokio::test]
     async fn test_run_prompt_command_typed_list() {
         use crate::context::CliContextBuilder;
-        
+
         // Create a List command using the new typed system
         let command = PromptCommand::List(cli::ListCommand {});
 
@@ -472,7 +449,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_prompt_command_typed_test_with_invalid_prompt() {
         use crate::context::CliContextBuilder;
-        
+
         // Create a Test command with a non-existent prompt using the new typed system
         let command = PromptCommand::Test(cli::TestCommand {
             prompt_name: Some("non_existent_prompt_12345".to_string()),

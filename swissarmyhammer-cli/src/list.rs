@@ -57,11 +57,13 @@ pub fn run_list_command(
     }
 
     // Convert FileSource to PromptSource for the API
-    let prompt_sources: std::collections::HashMap<String, swissarmyhammer_prompts::PromptSource> = 
-        resolver.prompt_sources.iter()
+    let prompt_sources: std::collections::HashMap<String, swissarmyhammer_prompts::PromptSource> =
+        resolver
+            .prompt_sources
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone().into()))
             .collect();
-    
+
     // Get filtered prompts
     let filtered_prompts = library.list_filtered(&filter, &prompt_sources)?;
 

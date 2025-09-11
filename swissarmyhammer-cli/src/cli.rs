@@ -1,15 +1,13 @@
 use crate::commands;
 use clap::{Parser, Subcommand, ValueEnum};
 
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Default)]
 pub enum OutputFormat {
     #[default]
     Table,
     Json,
     Yaml,
 }
-
 
 // Re-export PromptSource from the library
 pub use swissarmyhammer::PromptSource;
@@ -44,8 +42,6 @@ impl From<PromptSource> for PromptSourceArg {
         }
     }
 }
-
-
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum VisualizationFormat {
@@ -1335,7 +1331,8 @@ mod tests {
 
     #[test]
     fn test_global_format_flag() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "prompt", "list"]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--format", "json", "prompt", "list"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1353,7 +1350,8 @@ mod tests {
 
     #[test]
     fn test_global_format_flag_table() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "prompt", "list"]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--format", "table", "prompt", "list"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1372,7 +1370,14 @@ mod tests {
 
     #[test]
     fn test_global_format_flag_with_verbose() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "--verbose", "--format", "json", "prompt", "list"]);
+        let result = Cli::try_parse_from_args([
+            "swissarmyhammer",
+            "--verbose",
+            "--format",
+            "json",
+            "prompt",
+            "list",
+        ]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -1382,7 +1387,8 @@ mod tests {
 
     #[test]
     fn test_global_format_flag_invalid() {
-        let result = Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "prompt", "list"]);
+        let result =
+            Cli::try_parse_from_args(["swissarmyhammer", "--format", "invalid", "prompt", "list"]);
         assert!(result.is_err());
     }
 }

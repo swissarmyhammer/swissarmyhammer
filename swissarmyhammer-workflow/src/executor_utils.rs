@@ -26,7 +26,9 @@ pub async fn validate_executor_availability(executor_type: AgentExecutorType) ->
         }
         AgentExecutorType::LlamaAgent => {
             // Temporarily disabled due to llama-cpp build issues
-            Err(ActionError::ExecutionError("LlamaAgent executor is temporarily disabled due to build issues".to_string()))
+            Err(ActionError::ExecutionError(
+                "LlamaAgent executor is temporarily disabled due to build issues".to_string(),
+            ))
         }
     }
 }

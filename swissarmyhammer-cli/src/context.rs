@@ -3,14 +3,13 @@
 //! Shared context object that holds all storage instances and configuration
 //! to avoid recreating them in each command.
 
-use std::{sync::Arc, rc::Rc};
+use std::{rc::Rc, sync::Arc};
 use swissarmyhammer_common::Result;
 use swissarmyhammer_git::GitOperations;
 
+use crate::cli::OutputFormat;
 use swissarmyhammer_prompts::PromptLibrary;
 use swissarmyhammer_workflow::{FileSystemWorkflowRunStorage, WorkflowStorage};
-use crate::cli::OutputFormat;
-
 
 /// Shared CLI context containing all storage objects, configuration, and parsed arguments
 #[derive(derive_builder::Builder)]
@@ -92,39 +91,52 @@ impl CliContext {
     }
 
     /// Display items using the configured output format
-    pub fn display<T>(&self, items: Vec<T>) -> Result<()> 
-    where 
-        T: serde::Serialize,
+    pub fn display<T>(&self, items: Vec<T>) -> Result<()>
+    where
+        T: serde::Serialize + tabled::Tabled,
     {
         // Use explicit format option if provided, otherwise use default format
         let format = self.format_option.unwrap_or(self.format);
         match format {
+            OutputFormat::Table => {
+                if items.is_empty() {
+                    println!("No items to display");
+                } else {
+                    println!("{}", tabled::Table::new(&items));
+                }
+            }
             OutputFormat::Json => {
-                let json = serde_json::to_string_pretty(&items)
-                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                let json = serde_json::to_string_pretty(&items).map_err(|e| {
+                    swissarmyhammer_common::SwissArmyHammerError::Other {
                         message: format!("Failed to serialize to JSON: {e}"),
-                    })?;
+                    }
+                })?;
                 println!("{}", json);
             }
             OutputFormat::Yaml => {
-                let yaml = serde_yaml::to_string(&items)
-                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                let yaml = serde_yaml::to_string(&items).map_err(|e| {
+                    swissarmyhammer_common::SwissArmyHammerError::Other {
                         message: format!("Failed to serialize to YAML: {e}"),
-                    })?;
+                    }
+                })?;
                 println!("{}", yaml);
-            }
-            OutputFormat::Table => {
-                // Simple table fallback - just print as JSON for now
-                let json = serde_json::to_string_pretty(&items)
-                    .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                        message: format!("Failed to serialize to JSON: {e}"),
-                    })?;
-                println!("{}", json);
             }
         }
         Ok(())
     }
 
+    /// Display different types based on verbose flag using display rows enum
+    pub fn display_prompts(
+        &self,
+        rows: crate::commands::prompt::display::DisplayRows,
+    ) -> Result<()> {
+        use crate::commands::prompt::display::DisplayRows;
+
+        match rows {
+            DisplayRows::Standard(items) => self.display(items),
+            DisplayRows::Verbose(items) => self.display(items),
+        }
+    }
 }
 
 impl CliContextBuilder {
@@ -144,10 +156,10 @@ impl CliContextBuilder {
                     .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
                 FileSystemWorkflowRunStorage::new(base_path)
             })
-                .await
-                .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
-                    message: format!("Failed to create workflow run storage: {e}"),
-                })??
+            .await
+            .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
+                message: format!("Failed to create workflow run storage: {e}"),
+            })??,
         );
 
         let mut prompt_library = PromptLibrary::new();
@@ -166,15 +178,15 @@ impl CliContextBuilder {
         }
 
         let memo_storage = Arc::new(
-            swissarmyhammer_memoranda::MarkdownMemoStorage::new_default().await
+            swissarmyhammer_memoranda::MarkdownMemoStorage::new_default()
+                .await
                 .map_err(|e| swissarmyhammer_common::SwissArmyHammerError::Other {
                     message: format!("Failed to create memo storage: {e}"),
-                })?
+                })?,
         );
 
-        let issue_storage = Arc::new(
-            swissarmyhammer_issues::FileSystemIssueStorage::new_default()?
-        );
+        let issue_storage =
+            Arc::new(swissarmyhammer_issues::FileSystemIssueStorage::new_default()?);
 
         // Initialize git operations - make it optional when not in a git repository
         let git_operations = match GitOperations::new() {
@@ -187,7 +199,7 @@ impl CliContextBuilder {
                 None
             }
         };
-        
+
         Ok(CliContext {
             workflow_storage,
             workflow_run_storage,
@@ -195,16 +207,20 @@ impl CliContextBuilder {
             memo_storage,
             issue_storage,
             git_operations,
-            template_context: self.template_context.ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: "template_context is required".to_string(),
+            template_context: self.template_context.ok_or_else(|| {
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: "template_context is required".to_string(),
+                }
             })?,
             format: self.format.unwrap_or(OutputFormat::Table),
             format_option: self.format_option.unwrap_or_default(),
             verbose: self.verbose.unwrap_or_default(),
             debug: self.debug.unwrap_or_default(),
             quiet: self.quiet.unwrap_or_default(),
-            matches: self.matches.ok_or_else(|| swissarmyhammer_common::SwissArmyHammerError::Other {
-                message: "matches is required".to_string(),
+            matches: self.matches.ok_or_else(|| {
+                swissarmyhammer_common::SwissArmyHammerError::Other {
+                    message: "matches is required".to_string(),
+                }
             })?,
         })
     }

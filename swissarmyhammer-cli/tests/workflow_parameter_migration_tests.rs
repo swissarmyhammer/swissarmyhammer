@@ -4,7 +4,9 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use swissarmyhammer::test_utils::IsolatedTestEnvironment;
-use swissarmyhammer_cli::{cli::FlowSubcommand, commands::flow::run_flow_command, context::CliContext};
+use swissarmyhammer_cli::{
+    cli::FlowSubcommand, commands::flow::run_flow_command, context::CliContext,
+};
 
 mod in_process_test_utils;
 use in_process_test_utils::run_sah_command_in_process;
@@ -23,7 +25,17 @@ async fn create_test_cli_context() -> Result<CliContext> {
     use swissarmyhammer_cli::cli::OutputFormat;
     let template_context = swissarmyhammer_config::TemplateContext::new();
     let matches = clap::ArgMatches::default();
-    CliContext::new(template_context, OutputFormat::Table, None, false, false, false, matches).await.map_err(Into::into)
+    CliContext::new(
+        template_context,
+        OutputFormat::Table,
+        None,
+        false,
+        false,
+        false,
+        matches,
+    )
+    .await
+    .map_err(Into::into)
 }
 
 /// Run flow command in-process from the repo root

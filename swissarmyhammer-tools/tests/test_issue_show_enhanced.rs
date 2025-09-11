@@ -820,8 +820,6 @@ async fn test_issue_show_switching_between_parameters() {
 
 // Performance tests
 
-
-
 #[tokio::test]
 async fn test_issue_show_memory_usage() {
     let env = IssueShowTestEnvironment::new().await;

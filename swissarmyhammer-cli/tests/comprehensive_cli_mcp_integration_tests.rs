@@ -571,7 +571,6 @@ async fn test_tool_context_configurations() -> Result<()> {
     Ok(())
 }
 
-
 /// Test MCP tool state consistency across operations
 #[tokio::test]
 async fn test_mcp_tool_state_consistency() -> Result<()> {

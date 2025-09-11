@@ -65,14 +65,17 @@ async fn test_prompt_subcommand_test() -> Result<()> {
 #[tokio::test]
 async fn test_prompt_help() -> Result<()> {
     let _guard = IsolatedTestEnvironment::new()?;
-    
+
     let result = run_sah_command_in_process(&["prompt", "--help"]).await?;
 
     assert_eq!(result.exit_code, 0, "prompt help should succeed");
-    
+
     // Simply check that help contains the basic structure like the working test does
-    assert!(result.stdout.contains("prompt") || result.stdout.contains("Commands"), "help output should be relevant");
-    
+    assert!(
+        result.stdout.contains("prompt") || result.stdout.contains("Commands"),
+        "help output should be relevant"
+    );
+
     // For now, let's just ensure the basic functionality works
     // The detailed subcommand checking can be addressed once we understand the in-process utility better
     Ok(())
@@ -237,9 +240,13 @@ async fn test_flow_test_nonexistent_workflow() -> Result<()> {
 
 async fn test_flow_test_with_timeout() -> Result<()> {
     let result =
-        run_sah_command_in_process(&["flow", "run", "hello-world", "--timeout", "5s", "--dry-run"]).await?;
+        run_sah_command_in_process(&["flow", "run", "hello-world", "--timeout", "5s", "--dry-run"])
+            .await?;
 
-    assert_eq!(result.exit_code, 0, "flow run with timeout and dry-run should succeed");
+    assert_eq!(
+        result.exit_code, 0,
+        "flow run with timeout and dry-run should succeed"
+    );
 
     assert!(
         result.stdout.contains("Timeout: 5s"),

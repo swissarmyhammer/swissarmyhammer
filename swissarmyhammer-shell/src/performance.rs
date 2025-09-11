@@ -480,8 +480,6 @@ impl PerformanceStatistics {
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_profiler_lifecycle() {
         let mut profiler = ShellPerformanceProfiler::new();
@@ -509,8 +507,4 @@ mod tests {
         assert!(!metrics.total_execution_time.is_zero());
         assert_eq!(metrics.stdout_size, 10);
     }
-
-
-
-
 }

@@ -50,8 +50,8 @@ pub enum ExecutorError {
 /// Convert ExecutorError to SwissArmyHammerError
 impl From<ExecutorError> for swissarmyhammer_common::SwissArmyHammerError {
     fn from(err: ExecutorError) -> Self {
-        swissarmyhammer_common::SwissArmyHammerError::Other { 
-            message: format!("Executor error: {}", err) 
+        swissarmyhammer_common::SwissArmyHammerError::Other {
+            message: format!("Executor error: {}", err),
         }
     }
 }

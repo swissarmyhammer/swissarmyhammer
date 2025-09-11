@@ -54,10 +54,6 @@ impl IsolatedEnvTest {
 
         env::set_var(key, value);
     }
-
-
-
-
 }
 
 impl Drop for IsolatedEnvTest {

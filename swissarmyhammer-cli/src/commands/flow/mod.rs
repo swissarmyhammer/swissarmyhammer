@@ -5,6 +5,7 @@
 use crate::cli::{
     FlowSubcommand, OutputFormat, PromptSource, PromptSourceArg, VisualizationFormat,
 };
+use crate::context::CliContext;
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 use crate::parameter_cli;
 use colored::*;
@@ -19,8 +20,7 @@ use swissarmyhammer::{
     WorkflowRunStorageBackend, WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
-use swissarmyhammer_workflow::{ExecutorError, MemoryWorkflowStorage, ExecutionVisualizer};
-use crate::context::CliContext;
+use swissarmyhammer_workflow::{ExecutionVisualizer, ExecutorError, MemoryWorkflowStorage};
 use tokio::signal;
 use tokio::time::timeout;
 
@@ -28,10 +28,7 @@ use tokio::time::timeout;
 pub const DESCRIPTION: &str = include_str!("description.md");
 
 /// Handle the flow command
-pub async fn handle_command(
-    subcommand: FlowSubcommand,
-    context: &CliContext,
-) -> i32 {
+pub async fn handle_command(subcommand: FlowSubcommand, context: &CliContext) -> i32 {
     match run_flow_command(subcommand, context).await {
         Ok(_) => EXIT_SUCCESS,
         Err(e) => {
@@ -42,10 +39,7 @@ pub async fn handle_command(
 }
 
 /// Main entry point for flow command
-pub async fn run_flow_command(
-    subcommand: FlowSubcommand,
-    context: &CliContext,
-) -> Result<()> {
+pub async fn run_flow_command(subcommand: FlowSubcommand, context: &CliContext) -> Result<()> {
     match subcommand {
         FlowSubcommand::Run {
             workflow,
@@ -150,7 +144,9 @@ pub async fn run_workflow_command(
     context: &CliContext,
 ) -> Result<()> {
     let workflow_name_typed = WorkflowName::new(&config.workflow_name);
-    let workflow = context.workflow_storage.get_workflow(&workflow_name_typed)?;
+    let workflow = context
+        .workflow_storage
+        .get_workflow(&workflow_name_typed)?;
 
     // Resolve workflow parameters with enhanced parameter system
     let workflow_variables = parameter_cli::resolve_workflow_parameters_interactive(
@@ -223,7 +219,7 @@ pub async fn run_workflow_command(
             message: e.to_string(),
         });
         return Err(SwissArmyHammerError::from(
-            swissarmyhammer_workflow::ExecutorError::Abort(abort_reason)
+            swissarmyhammer_workflow::ExecutorError::Abort(abort_reason),
         ));
     }
 
@@ -900,8 +896,8 @@ fn parse_duration(s: &str) -> Result<Duration> {
 
 /// Helper to parse WorkflowRunId from string
 fn parse_workflow_run_id(s: &str) -> Result<WorkflowRunId> {
-    WorkflowRunId::parse(s).map_err(|e| SwissArmyHammerError::Other { 
-        message: format!("Invalid workflow run ID '{s}': {e}") 
+    WorkflowRunId::parse(s).map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Invalid workflow run ID '{s}': {e}"),
     })
 }
 

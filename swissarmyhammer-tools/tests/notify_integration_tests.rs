@@ -302,7 +302,6 @@ async fn test_notify_tool_rate_limiting_integration() {
     }
 }
 
-
 #[tokio::test]
 async fn test_notify_tool_resource_cleanup() {
     let registry = create_test_registry();

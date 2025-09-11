@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// * `Err(SwissArmyHammerError)` if there was an error resolving or creating the directory
 fn get_swissarmyhammer_dir_for_path<P: AsRef<Path>>(work_dir: P) -> Result<PathBuf> {
     let work_dir = work_dir.as_ref();
-    
+
     if work_dir == std::env::current_dir()? {
         // If work_dir is current directory, use the common utility
         Ok(crate::utils::paths::get_swissarmyhammer_dir()?)
