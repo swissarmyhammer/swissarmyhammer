@@ -54,26 +54,7 @@ async fn run_prompt_command_typed(
     }
 }
 
-/// Check if a prompt is a partial template that should not be displayed in the list.
-///
-/// Partial templates are identified by either:
-/// 1. Starting with the `{% partial %}` marker
-/// 2. Having a description containing "Partial template for reuse in other prompts"
-fn is_partial_template(prompt: &swissarmyhammer_prompts::Prompt) -> bool {
-    // Check if the template starts with the partial marker
-    if prompt.template.trim().starts_with("{% partial %}") {
-        return true;
-    }
 
-    // Check if the description indicates it's a partial template
-    if let Some(description) = &prompt.description {
-        if description.contains("Partial template for reuse in other prompts") {
-            return true;
-        }
-    }
-
-    false
-}
 
 /// Run the list command
 fn run_list_command(
@@ -105,7 +86,7 @@ fn run_list_command(
     // Filter out partial templates
     let prompts: Vec<_> = all_prompts
         .into_iter()
-        .filter(|prompt| !is_partial_template(prompt))
+        .filter(|prompt| !prompt.is_partial_template())
         .collect();
 
     // Convert to display objects and use context's display_prompts method
@@ -216,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_partial_template() {
+    fn test_prompt_is_partial_template() {
         use swissarmyhammer_prompts::Prompt;
 
         // Test template with partial marker
@@ -230,7 +211,7 @@ mod tests {
             source: None,
             metadata: Default::default(),
         };
-        assert!(is_partial_template(&partial_prompt));
+        assert!(partial_prompt.is_partial_template());
 
         // Test template with partial description
         let partial_desc_prompt = Prompt {
@@ -243,7 +224,7 @@ mod tests {
             source: None,
             metadata: Default::default(),
         };
-        assert!(is_partial_template(&partial_desc_prompt));
+        assert!(partial_desc_prompt.is_partial_template());
 
         // Test regular template
         let regular_prompt = Prompt {
@@ -256,7 +237,7 @@ mod tests {
             source: None,
             metadata: Default::default(),
         };
-        assert!(!is_partial_template(&regular_prompt));
+        assert!(!regular_prompt.is_partial_template());
     }
 
 

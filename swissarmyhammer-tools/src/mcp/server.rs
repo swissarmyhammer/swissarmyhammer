@@ -283,7 +283,7 @@ impl McpServer {
         })?;
         Ok(prompts
             .iter()
-            .filter(|p| !Self::is_partial_template(p))
+            .filter(|p| !p.is_partial_template())
             .map(|p| p.name.clone())
             .collect())
     }
@@ -356,34 +356,7 @@ impl McpServer {
         }
     }
 
-    /// Check if a prompt is a partial template that should not be exposed over MCP.
-    ///
-    /// Partial templates are identified by either:
-    /// 1. Starting with the `{% partial %}` marker
-    /// 2. Having a description containing "Partial template for reuse"
-    ///
-    /// # Arguments
-    ///
-    /// * `prompt` - The prompt to check
-    ///
-    /// # Returns
-    ///
-    /// * `bool` - True if the prompt is a partial template
-    fn is_partial_template(prompt: &swissarmyhammer_prompts::Prompt) -> bool {
-        // Check if the template starts with the partial marker
-        if prompt.template.trim().starts_with("{% partial %}") {
-            return true;
-        }
 
-        // Check if the description indicates it's a partial template
-        if let Some(description) = &prompt.description {
-            if description.contains("Partial template for reuse in other prompts") {
-                return true;
-            }
-        }
-
-        false
-    }
 
     /// Get a specific prompt by name, with optional template argument rendering.
     ///
@@ -411,7 +384,7 @@ impl McpServer {
         })?;
 
         // Check if this is a partial template
-        if Self::is_partial_template(&prompt) {
+        if prompt.is_partial_template() {
             return Err(SwissArmyHammerError::Other { message: format!(
                 "Cannot access partial template '{name}' via MCP. Partial templates are for internal use only."
             ) });
@@ -712,7 +685,7 @@ impl ServerHandler for McpServer {
             Ok(prompts) => {
                 let prompt_list: Vec<Prompt> = prompts
                     .iter()
-                    .filter(|p| !Self::is_partial_template(p)) // Filter out partial templates
+                    .filter(|p| !p.is_partial_template()) // Filter out partial templates
                     .map(|p| {
                         // Domain prompts don't have parameters yet - using empty list for now
                         let arguments = None;
@@ -743,7 +716,7 @@ impl ServerHandler for McpServer {
         match library.get(&request.name) {
             Ok(prompt) => {
                 // Check if this is a partial template
-                if Self::is_partial_template(&prompt) {
+                if prompt.is_partial_template() {
                     return Err(McpError::invalid_request(
                         format!(
                             "Cannot access partial template '{}' via MCP. Partial templates are for internal use only.",

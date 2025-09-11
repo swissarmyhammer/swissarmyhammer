@@ -308,6 +308,44 @@ impl Prompt {
         self.tags = tags;
         self
     }
+
+    /// Check if this prompt is a partial template.
+    ///
+    /// Partial templates are identified by either:
+    /// 1. Starting with the `{% partial %}` marker
+    /// 2. Having a description containing "Partial template for reuse in other prompts"
+    ///
+    /// # Returns
+    ///
+    /// `true` if the prompt is a partial template, `false` otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swissarmyhammer_prompts::Prompt;
+    ///
+    /// let partial = Prompt::new("header", "{% partial %}\n# Common Header");
+    /// assert!(partial.is_partial_template());
+    ///
+    /// let regular = Prompt::new("greeting", "Hello {{name}}!")
+    ///     .with_description("A greeting prompt");
+    /// assert!(!regular.is_partial_template());
+    /// ```
+    pub fn is_partial_template(&self) -> bool {
+        // Check if the template starts with the partial marker
+        if self.template.trim().starts_with("{% partial %}") {
+            return true;
+        }
+
+        // Check if the description indicates it's a partial template
+        if let Some(description) = &self.description {
+            if description.contains("Partial template for reuse in other prompts") {
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 impl Validatable for Prompt {
