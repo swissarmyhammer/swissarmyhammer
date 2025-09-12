@@ -211,11 +211,14 @@ pub async fn run_workflow_command(
     tracing::info!("🚀 Starting workflow: {}", workflow.name);
 
     // Check for abort file before starting workflow
-    if let Some(abort_reason) = read_abort_file(".").map_err(|e| SwissArmyHammerError::Other {
+    let current_dir = std::env::current_dir().map_err(|e| SwissArmyHammerError::Other {
+        message: format!("Failed to get current directory: {}", e),
+    })?;
+    if let Some(abort_reason) = read_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
         message: e.to_string(),
     })? {
         // Clean up the abort file after detection
-        let _ = remove_abort_file(".").map_err(|e| SwissArmyHammerError::Other {
+        let _ = remove_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
             message: e.to_string(),
         });
         return Err(SwissArmyHammerError::from(

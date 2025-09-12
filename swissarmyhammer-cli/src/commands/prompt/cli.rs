@@ -32,18 +32,11 @@ pub struct TestCommand {
     pub debug: bool,
 }
 
-/// Validate command structure
-#[derive(Debug)]
-pub struct ValidateCommand {
-    // No fields needed for now - uses global context
-}
-
 /// Command enum wrapping all prompt subcommands
 #[derive(Debug)]
 pub enum PromptCommand {
     List(ListCommand),
     Test(TestCommand),
-    Validate(ValidateCommand),
 }
 
 /// Parse clap matches into command structs (legacy function for compatibility)
@@ -66,7 +59,7 @@ pub fn parse_prompt_command(matches: &ArgMatches) -> Result<PromptCommand, Parse
             };
             Ok(PromptCommand::Test(test_cmd))
         }
-        Some(("validate", _sub_matches)) => Ok(PromptCommand::Validate(ValidateCommand {})),
+
         _ => Err(ParseError::UnknownSubcommand),
     }
 }
@@ -304,30 +297,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_validate_command_struct() {
-        let validate_cmd = ValidateCommand {};
 
-        match PromptCommand::Validate(validate_cmd) {
-            PromptCommand::Validate(_) => (),
-            _ => panic!("ValidateCommand should match PromptCommand::Validate"),
-        }
-    }
-
-    #[test]
-    fn test_parse_validate_command() {
-        let matches = Command::new("prompt")
-            .subcommand(Command::new("validate"))
-            .try_get_matches_from(["prompt", "validate"])
-            .unwrap();
-
-        let parsed = parse_prompt_command(&matches).unwrap();
-
-        match parsed {
-            PromptCommand::Validate(_) => (),
-            _ => panic!("Expected Validate command"),
-        }
-    }
 
     #[test]
     fn test_command_debug_display() {
@@ -349,9 +319,7 @@ mod tests {
         assert!(debug_str.contains("test"));
         assert!(debug_str.contains("key=value"));
 
-        let validate_cmd = ValidateCommand {};
-        let debug_str = format!("{:?}", validate_cmd);
-        assert!(debug_str.contains("ValidateCommand"));
+
 
         let prompt_cmd = PromptCommand::List(list_cmd);
         let debug_str = format!("{:?}", prompt_cmd);

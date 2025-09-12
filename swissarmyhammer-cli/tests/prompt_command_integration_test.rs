@@ -262,10 +262,11 @@ async fn test_validate_command_integration() {
     )
     .await;
 
+    // Test list command instead of validate (since validate was removed from prompt subcommands)
     let exit_code =
-        handle_command_typed(PromptCommand::Validate(cli::ValidateCommand {}), &context).await;
-    // Validate command should succeed or fail gracefully
-    assert!(exit_code >= 0); // Exit codes are always non-negative
+        handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+    // List command should succeed
+    assert_eq!(exit_code, 0);
 }
 
 #[tokio::test]
@@ -288,13 +289,13 @@ async fn test_all_commands_with_different_formats() {
             format
         );
 
-        // Test validate command
+        // Test list command instead of validate (since validate was removed from prompt subcommands)
         let exit_code =
-            handle_command_typed(PromptCommand::Validate(cli::ValidateCommand {}), &context).await;
-        // Validate may succeed or fail, but shouldn't crash
-        assert!(
-            exit_code >= 0,
-            "Validate command should handle format {:?}",
+            handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+        // List should succeed
+        assert_eq!(
+            exit_code, 0,
+            "List command should handle format {:?}",
             format
         );
     }
@@ -317,12 +318,12 @@ async fn test_commands_with_verbose_and_debug() {
         "List command should succeed with verbose and debug"
     );
 
-    // Test validate command with verbose and debug
+    // Test list command again instead of validate (since validate was removed from prompt subcommands)
     let exit_code =
-        handle_command_typed(PromptCommand::Validate(cli::ValidateCommand {}), &context).await;
-    assert!(
-        exit_code >= 0,
-        "Validate command should handle verbose and debug"
+        handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+    assert_eq!(
+        exit_code, 0,
+        "List command should handle verbose and debug"
     );
 }
 
@@ -441,11 +442,11 @@ async fn test_stress_multiple_commands() {
             handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
         assert_eq!(exit_code, 0, "Repeated list commands should succeed");
 
-        // Run validate command multiple times
+        // Run list command multiple times instead of validate (since validate was removed)
         let exit_code =
-            handle_command_typed(PromptCommand::Validate(cli::ValidateCommand {}), &context).await;
-        assert!(
-            exit_code >= 0,
+            handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+        assert_eq!(
+            exit_code, 0,
             "Repeated validate commands should be consistent"
         );
     }

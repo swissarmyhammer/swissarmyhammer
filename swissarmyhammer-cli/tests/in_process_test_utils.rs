@@ -111,6 +111,8 @@ async fn run_sah_command_in_process_inner_with_dir(
             Some(Commands::Prompt { .. }) |      // Add Prompt command support
             None
         );
+        
+
 
         if can_run_in_process {
             // Execute in-process with stdout/stderr capture
@@ -134,6 +136,7 @@ async fn run_sah_command_in_process_inner_with_dir(
     }
 
     // If we reach here, we need to use subprocess
+    eprintln!("DEBUG: Falling back to subprocess execution for args: {:?}", args);
 
     // Fall back to subprocess for commands we can't run in-process with timeout
     use tokio::time::{timeout, Duration};
@@ -519,6 +522,30 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     timeout,
                     ..
                 } => {
+                    // Check for abort file before starting workflow (like the real flow command)
+                    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    match swissarmyhammer_common::read_abort_file(&current_dir) {
+                        Ok(Some(abort_reason)) => {
+                            // Clean up the abort file after detection
+                            let _ = swissarmyhammer_common::remove_abort_file(&current_dir);
+                            return Ok((
+                                format!("DEBUG: Found abort file with reason: {}", abort_reason),
+                                "Workflow execution aborted".to_string(),
+                                2, // EXIT_ERROR
+                            ));
+                        }
+                        Ok(None) => {
+                            // No abort file - continue with workflow
+                        }
+                        Err(e) => {
+                            return Ok((
+                                String::new(),
+                                format!("Error checking abort file: {}", e),
+                                2,
+                            ));
+                        }
+                    }
+
                     // First validate variable format (like the real flow.rs does)
                     for var in vars {
                         if !var.contains('=') {

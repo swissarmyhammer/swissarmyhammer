@@ -171,7 +171,7 @@ async fn test_abort_performance_with_checking_overhead() -> Result<()> {
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
     let start_time = Instant::now();
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     let abort_duration = start_time.elapsed();
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
@@ -202,7 +202,7 @@ async fn test_concurrent_workflow_abort_handling() -> Result<()> {
     std::env::set_current_dir(env.temp_path())?;
 
     // Use existing hello-world workflow instead of creating custom ones
-    let workflow_files = vec!["hello-world".to_string()];
+    let workflow_files = ["hello-world".to_string()];
 
     // Create abort file first to ensure it's detected
     env.create_abort_file(&format!("Concurrent test abort {test_id}"))?;
@@ -343,7 +343,7 @@ async fn test_large_abort_reasons() -> Result<()> {
 
     // Create large abort reason (10KB) with unique content
     let large_reason = format!(
-        "Large abort reason for test {test_id}: {}",
+        "Large abort reason for test: {}",
         "X".repeat(10200)
     );
     env.create_abort_file(&large_reason)?;
@@ -352,7 +352,9 @@ async fn test_large_abort_reasons() -> Result<()> {
     env.verify_abort_file(&large_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    eprintln!("DEBUG: About to call run_sah_command_in_process with args: flow run {}", workflow_file);
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
+    eprintln!("DEBUG: Result from run_sah_command_in_process: exit_code={}, stdout len={}, stderr len={}", result.exit_code, result.stdout.len(), result.stderr.len());
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     let stderr = &result.stderr;
@@ -416,7 +418,7 @@ async fn test_unicode_abort_reasons() -> Result<()> {
     env.verify_abort_file(unicode_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     assert!(
@@ -445,8 +447,12 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
     let abort_reason = "User initiated cancellation for testing UX";
     env.create_abort_file(abort_reason)?;
 
+    // Verify abort file was created
+    let abort_file_path = env.temp_path().join(".swissarmyhammer").join(".abort");
+    assert!(abort_file_path.exists(), "Abort file should exist");
+
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Should exit with proper exit code
@@ -485,12 +491,12 @@ async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     env.create_abort_file("First run abort")?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    let result1 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result1 = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
 
     assert!(result1.exit_code != 0, "First run should fail due to abort");
 
     // Second run without abort file - should clean up and succeed
-    let result2 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let result2 = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Second run should succeed (abort file should be cleaned up)

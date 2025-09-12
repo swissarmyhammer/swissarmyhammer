@@ -477,7 +477,7 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 
             cli::PromptCommand::Test(test_cmd)
         }
-        Some(("validate", _sub_matches)) => cli::PromptCommand::Validate(cli::ValidateCommand {}),
+
         _ => {
             // Default to list command when no subcommand is provided
             cli::PromptCommand::List(cli::ListCommand {})

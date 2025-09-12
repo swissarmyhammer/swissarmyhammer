@@ -41,38 +41,11 @@ async fn run_prompt_command_typed(
         PromptCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context)
             .await
             .map_err(|e| CliError::new(e.to_string(), 1)),
-        PromptCommand::Validate(_) => {
-            // For now, just delegate to the root validate command
-            // This provides basic validation functionality
-            run_validate_command()
-                .await
-                .map_err(|e| CliError::new(e.to_string(), 1))
-        }
+
     }
 }
 
-/// Run the validate command - delegates to root validate functionality
-async fn run_validate_command() -> Result<(), anyhow::Error> {
-    // For now, delegate to the main validate command functionality
-    // This uses the validate command implementation from the main CLI
-    let exit_code = crate::validate::run_validate_command_with_dirs(
-        false,
-        crate::cli::OutputFormat::Table,
-        vec![],
-        false,
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("Validation failed: {}", e))?;
 
-    if exit_code == 0 {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!(
-            "Validation failed with exit code {}",
-            exit_code
-        ))
-    }
-}
 
 #[cfg(test)]
 mod tests {

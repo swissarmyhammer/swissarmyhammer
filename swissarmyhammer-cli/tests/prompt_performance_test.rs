@@ -254,8 +254,9 @@ async fn test_validate_command_performance() {
     let context =
         create_performance_test_context(swissarmyhammer_cli::cli::OutputFormat::Table).await;
 
+    // Test list command instead of validate (since validate was removed from prompt subcommands)
     let exit_code =
-        handle_command_typed(PromptCommand::Validate(cli::ValidateCommand {}), &context).await;
+        handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
 
     let duration = start.elapsed();
 
@@ -286,9 +287,9 @@ async fn test_memory_usage_stress() {
             let _exit_code =
                 handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
         } else if i % 3 == 1 {
+            // Use list command instead of validate (since validate was removed from prompt subcommands)
             let _exit_code =
-                handle_command_typed(PromptCommand::Validate(cli::ValidateCommand {}), &context)
-                    .await;
+                handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
         } else {
             // Test command with nonexistent prompt (should fail quickly)
             let test_cmd = cli::TestCommand {
