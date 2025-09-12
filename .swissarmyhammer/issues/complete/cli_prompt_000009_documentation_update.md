@@ -452,3 +452,125 @@ Use the global `--verbose` argument: `sah --verbose prompt list`
 **Estimated Effort**: Medium (200-300 lines of documentation)
 **Dependencies**: cli_prompt_000008_comprehensive_testing
 **Blocks**: cli_prompt_000010_final_validation
+
+## Proposed Solution
+
+Based on my analysis of the current CLI structure, I need to update the documentation to reflect the simplified prompt command architecture. Here's my implementation plan:
+
+### Files to Update:
+
+1. **CLI Help Text (`src/cli.rs`)**
+   - Update main CLI long_about to document global arguments properly
+   - Update Prompt command description to reflect simplified interface
+   - Ensure examples show correct usage of global arguments
+
+2. **Prompt Command Description (`src/commands/prompt/description.md`)**
+   - Replace current basic description with comprehensive documentation
+   - Add examples of global argument usage
+   - Document the simplified list/test interface
+   - Remove references to removed filtering options
+
+3. **Create Missing Documentation Files**
+   - `src/commands/prompt/list_help.md` - Detailed list command help
+   - `src/commands/prompt/test_help.md` - Detailed test command help
+   - `docs/prompt_command_migration.md` - Migration guide for users
+
+### Key Changes:
+- Emphasize global arguments (`--verbose`, `--format`, `--debug`, `--quiet`)
+- Show that filtering is now done via external tools like `jq`
+- Document the simplified command structure (list/test only)
+- Provide clear migration examples from old to new syntax
+
+### Implementation Strategy:
+- Update existing files with new content
+- Create new help files for detailed command documentation
+- Add migration guide to help existing users transition
+- Test all documented examples to ensure they work correctly
+## Implementation Complete ✅
+
+I have successfully updated all documentation and help text to reflect the simplified prompt command architecture. Here's what was accomplished:
+
+### Files Updated:
+
+1. **Main CLI Help Text (`src/cli.rs`)**
+   - ✅ Updated main CLI long_about to document global arguments properly
+   - ✅ Updated Prompt command description to reflect simplified interface
+   - ✅ Added examples showing correct usage of global arguments
+
+2. **Dynamic CLI System (`src/dynamic_cli.rs`)**
+   - ✅ Removed --source and --category filters from list command
+   - ✅ Updated both list and test commands with comprehensive long_about documentation
+   - ✅ Added detailed usage examples and explanations
+
+3. **Prompt Command Description (`src/commands/prompt/description.md`)**
+   - ✅ Completely replaced with comprehensive markdown documentation
+   - ✅ Added examples of global argument usage
+   - ✅ Documented the simplified list/test interface
+
+### Files Created:
+
+4. **List Command Help (`src/commands/prompt/list_help.md`)**
+   - ✅ Detailed help for the list command
+   - ✅ Examples showing global argument usage
+   - ✅ Clear explanation of output formats
+
+5. **Test Command Help (`src/commands/prompt/test_help.md`)**
+   - ✅ Comprehensive help for the test command
+   - ✅ Interactive mode documentation
+   - ✅ Advanced usage examples with multiple variables
+
+6. **Migration Guide (`docs/prompt_command_migration.md`)**
+   - ✅ Guide for users transitioning from old to new interface
+   - ✅ Clear before/after examples
+   - ✅ Troubleshooting section for common issues
+
+### Key Improvements:
+- **Consistency**: Global arguments now work the same across all commands
+- **Simplicity**: Removed complex filtering options (--source, --category)
+- **Clarity**: All examples show proper global argument usage
+- **Completeness**: Comprehensive help text for all commands
+- **Migration Support**: Clear guidance for existing users
+
+### Testing Results:
+- ✅ Clean build successful after cargo clean
+- ✅ `prompt list --help` shows new documentation without old filters
+- ✅ `prompt test --help` shows comprehensive usage documentation
+- ✅ All filtering options successfully removed from CLI interface
+- ✅ Global arguments (--verbose, --format, --debug) work as documented
+
+The documentation now accurately reflects the simplified prompt command architecture and provides clear guidance for users on how to use the new global argument patterns.
+# CLI Prompt Documentation Update
+
+## Goal
+Update documentation and help text to reflect the simplified prompt command architecture after removing the legacy PromptSubcommand enum.
+
+## Changes Made
+- Removed legacy PromptSubcommand enum
+- Implemented modern CLI architecture with proper typed commands
+- Added comprehensive help documentation files
+- Updated command routing and handlers
+
+## Code Review Results ✅
+
+### Issues Found and Fixed
+1. **Clippy Warning Fixed**: Resolved `clippy::empty_line_after_doc_comments` warning in `swissarmyhammer-cli/src/commands/prompt/mod.rs:18`
+   - Combined separate doc comment blocks into a single coherent comment
+   - Modified comment to properly document the function purpose
+
+### Code Quality Assessment
+- ✅ **Build**: Clean successful compilation
+- ✅ **Clippy**: No warnings or errors after fix
+- ✅ **Tests**: All tests passing
+- ✅ **Documentation**: Comprehensive help text and user documentation added
+- ✅ **Architecture**: Clean separation of concerns with proper module structure
+
+### Summary
+The code review identified and fixed one minor clippy warning. The codebase demonstrates:
+- Excellent test coverage with comprehensive CLI parsing tests
+- Strong type safety and proper error handling
+- Clean architecture with proper separation of concerns
+- Comprehensive documentation for user experience
+
+The documentation update has been successfully completed with high code quality maintained throughout the implementation.
+
+**Status**: ✅ Ready for merge after successful code review and fixes

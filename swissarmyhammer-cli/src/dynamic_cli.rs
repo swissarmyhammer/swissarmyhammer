@@ -741,38 +741,145 @@ Examples:
     fn build_prompt_command() -> Command {
         Command::new("prompt")
             .about("Manage and test prompts")
+            .long_about("
+Manage and test prompts with a clean, simplified interface.
+
+The prompt system provides two main commands:
+• list - Display all available prompts from all sources  
+• test - Test prompts interactively with sample data
+
+Use global arguments to control output:
+  --verbose         Show detailed information
+  --format FORMAT   Output format: table, json, yaml
+  --debug           Enable debug mode
+  --quiet           Suppress output except errors
+
+Examples:
+  sah prompt list                           # List all prompts
+  sah --verbose prompt list                 # Show detailed information
+  sah --format=json prompt list             # Output as JSON
+  sah prompt test code-review               # Interactive testing
+  sah prompt test help --var topic=git      # Test with parameters  
+  sah --debug prompt test plan              # Test with debug output
+")
             .subcommand(
                 Command::new("list")
-                    .about("List all available prompts")
-                    .arg(
-                        Arg::new("format")
-                            .long("format")
-                            .help("Output format")
-                            .value_parser(["table", "json", "yaml"])
-                            .default_value("table"),
-                    )
-                    .arg(
-                        Arg::new("verbose")
-                            .short('v')
-                            .long("verbose")
-                            .help("Show verbose output including arguments")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("source")
-                            .long("source")
-                            .help("Filter by source")
-                            .value_parser(["builtin", "user", "local", "dynamic"]),
-                    )
-                    .arg(
-                        Arg::new("category")
-                            .long("category")
-                            .help("Filter by category"),
-                    ),
+                    .about("Display all available prompts from all sources")
+                    .long_about("
+Display all available prompts from all sources (built-in, user, local).
+
+## Global Options
+
+Control output using global arguments:
+
+  sah --verbose prompt list           # Show detailed information including descriptions
+  sah --format=json prompt list       # Output as JSON for scripting
+  sah --format=yaml prompt list       # Output as YAML for scripting  
+
+## Output
+
+### Standard Output (default)
+Shows prompt names and titles in a clean table format.
+
+### Verbose Output (--verbose)
+Shows additional information including:
+- Full descriptions
+- Source information (builtin, user, local)
+- Categories and tags
+- Parameter counts
+
+### Structured Output (--format=json|yaml)
+Machine-readable output suitable for scripting and automation.
+
+## Examples
+
+  # Basic list
+  sah prompt list
+
+  # Detailed information  
+  sah --verbose prompt list
+
+  # JSON output for scripts
+  sah --format=json prompt list | jq '.[] | .name'
+
+  # Save YAML output
+  sah --format=yaml prompt list > prompts.yaml
+
+## Notes
+
+- Partial templates (internal templates used by other prompts) are automatically filtered out
+- All available prompt sources are included automatically
+- Use global --quiet to suppress output except errors
+"),
             )
             .subcommand(
                 Command::new("test")
                     .about("Test prompts interactively with sample arguments")
+                    .long_about("
+Test prompts interactively to see how they render with different arguments.
+Perfect for debugging template issues and previewing prompt output.
+
+## Usage
+  sah prompt test <PROMPT_NAME> [OPTIONS]
+  sah prompt test --file <FILE> [OPTIONS]
+
+## Arguments
+
+- <PROMPT_NAME> - Name of the prompt to test
+- --file <FILE> - Path to a local prompt file to test
+
+## Options
+
+- --var <KEY=VALUE> - Set template variables (can be used multiple times)
+- --raw - Output raw prompt without additional formatting
+- --copy - Copy rendered prompt to clipboard (if supported)
+- --save <FILE> - Save rendered prompt to file
+- --debug - Show debug information during processing
+
+## Global Options
+
+- --verbose - Show detailed execution information
+- --debug - Enable comprehensive debug output
+- --quiet - Suppress all output except the rendered prompt
+
+## Interactive Mode
+
+When variables are not provided via --var, the command prompts interactively:
+
+- Shows parameter descriptions and default values
+- Validates input according to parameter types
+- Supports boolean (true/false, yes/no, 1/0), numbers, choices
+- Detects non-interactive environments (CI/CD) and uses defaults
+
+## Examples
+
+### Basic Testing
+  # Interactive mode - prompts for all parameters
+  sah prompt test code-review
+
+  # Non-interactive with all parameters provided  
+  sah prompt test help --var topic=git --var format=markdown
+
+  # Test from file
+  sah prompt test --file ./my-prompt.md --var name=John
+
+### Advanced Usage
+  # Verbose output with debug information
+  sah --verbose --debug prompt test plan --var project=myapp
+
+  # Save output to file
+  sah prompt test help --var topic=testing --save help-output.md
+
+  # Raw output (no extra formatting)
+  sah prompt test summary --var title=\"Project Status\" --raw
+
+  # Multiple variables
+  sah prompt test code-review \\
+    --var author=Jane \\
+    --var version=2.1 \\
+    --var language=Python \\
+    --var files=src/main.py,tests/test_main.py
+")
                     .arg(
                         Arg::new("prompt_name")
                             .help("Prompt name to test")

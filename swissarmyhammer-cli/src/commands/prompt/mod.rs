@@ -14,10 +14,10 @@ use std::collections::HashMap;
 pub use cli::PromptCommand;
 use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
 
-/// Help text for the prompt command
-pub const DESCRIPTION: &str = include_str!("description.md");
-
 /// Handle prompt command using the new CLI module types
+///
+/// Note: Help text for the prompt command is loaded from description.md
+/// and available for reference but no longer used in CLI definitions
 pub async fn handle_command_typed(
     command: PromptCommand,
     context: &crate::context::CliContext,

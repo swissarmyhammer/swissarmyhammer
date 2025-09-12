@@ -60,10 +60,18 @@ swissarmyhammer is an MCP (Model Context Protocol) server that manages
 prompts as markdown files. It supports file watching, template substitution,
 and seamless integration with Claude Code.
 
+Global arguments can be used with any command to control output and behavior:
+  --verbose     Show detailed information and debug output
+  --format      Set output format (table, json, yaml) for commands that support it  
+  --debug       Enable debug mode with comprehensive tracing
+  --quiet       Suppress all output except errors
+
 Example usage:
-  swissarmyhammer serve     # Run as MCP server
-  swissarmyhammer doctor    # Check configuration and setup
-  swissarmyhammer completion bash > ~/.bashrc.d/swissarmyhammer  # Generate bash completions
+  swissarmyhammer serve                           # Run as MCP server
+  swissarmyhammer doctor                          # Check configuration
+  swissarmyhammer --verbose prompt list          # List prompts with details
+  swissarmyhammer --format=json prompt list      # List prompts as JSON
+  swissarmyhammer --debug prompt test help       # Test prompt with debug info
 ")]
 pub struct Cli {
     #[command(subcommand)]
@@ -111,7 +119,27 @@ Example:
     #[command(long_about = commands::doctor::DESCRIPTION)]
     Doctor {},
     /// Manage and test prompts
-    #[command(long_about = commands::prompt::DESCRIPTION)]
+    #[command(long_about = "
+Manage and test prompts with a clean, simplified interface.
+
+The prompt system provides two main commands:
+• list - Display all available prompts from all sources  
+• test - Test prompts interactively with sample data
+
+Use global arguments to control output:
+  --verbose         Show detailed information
+  --format FORMAT   Output format: table, json, yaml
+  --debug           Enable debug mode
+  --quiet           Suppress output except errors
+
+Examples:
+  sah prompt list                           # List all prompts
+  sah --verbose prompt list                 # Show detailed information
+  sah --format=json prompt list             # Output as JSON
+  sah prompt test code-review               # Interactive testing
+  sah prompt test help --var topic=git      # Test with parameters  
+  sah --debug prompt test plan              # Test with debug output
+")]
     #[command(trailing_var_arg = true)]
     Prompt {
         /// Subcommand and arguments for prompt (handled dynamically)
