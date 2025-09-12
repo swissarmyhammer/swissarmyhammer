@@ -4,7 +4,6 @@ use std::time::Duration;
 #[test]
 #[ignore = "slow test - run with --ignored to enable"]
 fn test_mcp_server_exits_on_client_disconnect() {
-
     use std::io::Write;
 
     // This test verifies that the MCP server properly exits when the client disconnects.
@@ -60,7 +59,6 @@ fn test_mcp_server_exits_on_client_disconnect() {
 }
 
 #[test]
-
 #[ignore = "slow test - run with --ignored to enable"]
 fn test_mcp_server_responds_to_ctrl_c() {
     use nix::sys::signal::{kill, Signal};

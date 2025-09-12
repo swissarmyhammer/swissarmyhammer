@@ -379,7 +379,6 @@ async fn test_resource_exhaustion() -> Result<()> {
 #[tokio::test]
 #[ignore = "slow test - run with --ignored to enable"]
 async fn test_malformed_input_handling() -> Result<()> {
-
     let (_home_guard, _temp_dir, temp_path) = setup_error_test_environment()?;
 
     // Test with special characters in issue names

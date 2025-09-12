@@ -3,15 +3,16 @@
 //! This test specifically validates the core issue described:
 //! "sah serve does not actually appear to serve any MCP tools"
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 mod test_utils;
 use test_utils::ProcessGuard;
 
 /// Get the path to the pre-built sah binary to avoid recompilation
+#[allow(dead_code)]
 fn get_sah_binary_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     // First ensure binary is built
     let build_output = Command::new("cargo")
@@ -56,11 +57,12 @@ async fn test_sah_serve_has_mcp_tools() -> Result<(), Box<dyn std::error::Error>
     println!("✅ Skipping slow MCP integration test. This test validates MCP tools are working.");
     println!("   To run this test, temporarily remove this early return.");
     return Ok(());
-    
+
     /* UNREACHABLE CODE REMOVED - Test implementation would validate MCP tools functionality */
 }
 
 /// Wait for server to be ready - optimized for pre-built binary
+#[allow(dead_code)]
 fn wait_for_server_ready(
     child: &mut ProcessGuard,
     timeout: Duration,
@@ -99,6 +101,7 @@ fn wait_for_server_ready(
 }
 
 /// Helper function to send MCP request
+#[allow(dead_code)]
 fn send_request(stdin: &mut std::process::ChildStdin, request: &Value) {
     let request_str = serde_json::to_string(request).expect("Failed to serialize request");
     writeln!(stdin, "{}", request_str).expect("Failed to write request");
@@ -106,6 +109,7 @@ fn send_request(stdin: &mut std::process::ChildStdin, request: &Value) {
 }
 
 /// Helper function to read MCP response with timeout
+#[allow(dead_code)]
 fn read_response_with_timeout(
     reader: &mut BufReader<std::process::ChildStdout>,
     timeout: Duration,
@@ -145,6 +149,6 @@ async fn test_sah_binary_exists() {
     println!("✅ Skipping slow binary test. This test validates sah binary existence.");
     println!("   To run this test, temporarily remove this early return.");
     return;
-    
+
     /* UNREACHABLE CODE REMOVED - Test implementation would validate binary functionality */
 }

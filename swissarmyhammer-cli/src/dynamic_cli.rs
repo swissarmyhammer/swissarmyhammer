@@ -741,7 +741,8 @@ Examples:
     fn build_prompt_command() -> Command {
         Command::new("prompt")
             .about("Manage and test prompts")
-            .long_about("
+            .long_about(
+                "
 Manage and test prompts with a clean, simplified interface.
 
 The prompt system provides two main commands:
@@ -761,11 +762,13 @@ Examples:
   sah prompt test code-review               # Interactive testing
   sah prompt test help --var topic=git      # Test with parameters  
   sah --debug prompt test plan              # Test with debug output
-")
+",
+            )
             .subcommand(
                 Command::new("list")
                     .about("Display all available prompts from all sources")
-                    .long_about("
+                    .long_about(
+                        "
 Display all available prompts from all sources (built-in, user, local).
 
 ## Global Options
@@ -810,12 +813,14 @@ Machine-readable output suitable for scripting and automation.
 - Partial templates (internal templates used by other prompts) are automatically filtered out
 - All available prompt sources are included automatically
 - Use global --quiet to suppress output except errors
-"),
+",
+                    ),
             )
             .subcommand(
                 Command::new("test")
                     .about("Test prompts interactively with sample arguments")
-                    .long_about("
+                    .long_about(
+                        "
 Test prompts interactively to see how they render with different arguments.
 Perfect for debugging template issues and previewing prompt output.
 
@@ -879,7 +884,8 @@ When variables are not provided via --var, the command prompts interactively:
     --var version=2.1 \\
     --var language=Python \\
     --var files=src/main.py,tests/test_main.py
-")
+",
+                    )
                     .arg(
                         Arg::new("prompt_name")
                             .help("Prompt name to test")

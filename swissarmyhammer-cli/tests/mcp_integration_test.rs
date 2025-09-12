@@ -251,7 +251,6 @@ async fn test_mcp_server_prompt_loading() {
 
 /// Test that MCP server loads built-in prompts
 #[tokio::test]
-
 #[ignore = "slow test - run with --ignored to enable"]
 async fn test_mcp_server_builtin_prompts() {
     // Start MCP server
