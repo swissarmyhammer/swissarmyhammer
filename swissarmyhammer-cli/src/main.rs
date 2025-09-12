@@ -254,7 +254,7 @@ async fn handle_dynamic_matches(
         Some(("serve", sub_matches)) => {
             commands::serve::handle_command(sub_matches, &template_context).await
         }
-        Some(("doctor", _)) => handle_doctor_command(&template_context).await,
+        Some(("doctor", _)) => handle_doctor_command(&context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => {
@@ -417,8 +417,8 @@ fn extract_clap_value(
     }
 }
 
-async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
-    commands::doctor::handle_command(template_context).await
+async fn handle_doctor_command(cli_context: &CliContext) -> i32 {
+    commands::doctor::handle_command(cli_context).await
 }
 
 /// Handle prompt command routing using the new CliContext-based architecture.

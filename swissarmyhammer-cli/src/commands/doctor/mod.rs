@@ -23,30 +23,12 @@ use colored::*;
 pub use types::*;
 
 pub mod checks;
+pub mod display;
 pub mod types;
 pub mod utils;
 
 /// Help text for the doctor command
 pub const DESCRIPTION: &str = include_str!("description.md");
-
-/// Count of checks by status for summary display
-#[derive(Debug)]
-pub struct CheckCounts {
-    /// Number of checks that passed
-    pub ok_count: usize,
-    /// Number of checks with warnings
-    pub warning_count: usize,
-    /// Number of checks with errors
-    pub error_count: usize,
-}
-
-/// Groups of checks organized by category
-struct CheckGroups<'a> {
-    pub system_checks: Vec<&'a Check>,
-    pub config_checks: Vec<&'a Check>,
-    pub prompt_checks: Vec<&'a Check>,
-    pub workflow_checks: Vec<&'a Check>,
-}
 
 /// Main diagnostic tool for SwissArmyHammer system health checks
 ///
@@ -62,15 +44,8 @@ impl Doctor {
         Self { checks: Vec::new() }
     }
 
-    /// Run diagnostic checks with specific options
-    ///
-    /// # Returns
-    ///
-    /// Returns an exit code:
-    /// - 0: All checks passed
-    /// - 1: Warnings detected
-    /// - 2: Errors detected
-    pub fn run_diagnostics_with_options(&mut self) -> Result<i32> {
+    /// Run diagnostic checks without printing results (for CliContext integration)
+    pub fn run_diagnostics_without_output(&mut self) -> Result<i32> {
         println!("{}", "🔨 SwissArmyHammer Doctor".bold().blue());
         println!("{}", "Running diagnostics...".dimmed());
         println!();
@@ -101,10 +76,7 @@ impl Doctor {
         self.run_prompt_checks()?;
         self.run_workflow_checks()?;
 
-        // Print results
-        self.print_results();
-
-        // Return exit code
+        // Return exit code without printing results
         Ok(self.get_exit_code())
     }
 
@@ -228,156 +200,6 @@ impl Doctor {
         Ok(())
     }
 
-    /// Print the results
-    ///
-    /// Displays all diagnostic results grouped by category:
-    /// - System checks
-    /// - Configuration
-    /// - Prompts
-    /// - Workflows
-    ///
-    /// Results are color-coded based on status (OK, Warning, Error).
-    pub fn print_results(&self) {
-        let use_color = crate::cli::Cli::should_use_color();
-
-        // Group and print checks by category
-        let check_groups = self.group_checks_by_category();
-
-        self.print_check_category(&check_groups.system_checks, "System Checks:", use_color);
-        self.print_check_category(&check_groups.config_checks, "Configuration:", use_color);
-        self.print_check_category(&check_groups.prompt_checks, "Prompts:", use_color);
-        self.print_check_category(&check_groups.workflow_checks, "Workflows:", use_color);
-
-        // Print summary
-        self.print_summary(use_color);
-    }
-
-    /// Group checks by category
-    fn group_checks_by_category(&self) -> CheckGroups<'_> {
-        let mut system_checks = Vec::new();
-        let mut config_checks = Vec::new();
-        let mut prompt_checks = Vec::new();
-        let mut workflow_checks = Vec::new();
-
-        for check in &self.checks {
-            if check.name.contains("Installation")
-                || check.name.contains("PATH")
-                || check.name.contains("Permission")
-                || check.name.contains("Binary")
-            {
-                system_checks.push(check);
-            } else if check.name.contains("Claude")
-                || check.name.contains("Config")
-                || check.name.contains("MCP")
-            {
-                config_checks.push(check);
-            } else if check.name.contains("Prompt")
-                || check.name.contains("YAML")
-                || check.name.contains("Template")
-            {
-                prompt_checks.push(check);
-            } else if check.name.contains("Workflow") || check.name.contains("workflow") {
-                workflow_checks.push(check);
-            } else {
-                // Default to system checks
-                system_checks.push(check);
-            }
-        }
-
-        CheckGroups {
-            system_checks,
-            config_checks,
-            prompt_checks,
-            workflow_checks,
-        }
-    }
-
-    /// Print a category of checks
-    fn print_check_category(&self, checks: &[&Check], category_name: &str, use_color: bool) {
-        if !checks.is_empty() {
-            if use_color {
-                println!("{}", category_name.bold().yellow());
-            } else {
-                println!("{category_name}");
-            }
-            for check in checks {
-                print_check(check, use_color);
-            }
-            println!();
-        }
-    }
-
-    /// Print the summary of check results
-    fn print_summary(&self, use_color: bool) {
-        let counts = self.count_check_statuses();
-
-        if use_color {
-            println!("{}", "Summary:".bold().green());
-        } else {
-            println!("Summary:");
-        }
-
-        match (counts.error_count, counts.warning_count) {
-            (0, 0) => {
-                if use_color {
-                    println!("  ✨ All checks passed!");
-                } else {
-                    println!("  All checks passed!");
-                }
-            }
-            (0, _) => {
-                if use_color {
-                    println!(
-                        "  {} checks passed, {} warnings",
-                        counts.ok_count.to_string().green(),
-                        counts.warning_count.to_string().yellow()
-                    );
-                } else {
-                    println!(
-                        "  {} checks passed, {} warnings",
-                        counts.ok_count, counts.warning_count
-                    );
-                }
-            }
-            _ => {
-                if use_color {
-                    println!(
-                        "  {} checks passed, {} warnings, {} errors",
-                        counts.ok_count.to_string().green(),
-                        counts.warning_count.to_string().yellow(),
-                        counts.error_count.to_string().red()
-                    );
-                } else {
-                    println!(
-                        "  {} checks passed, {} warnings, {} errors",
-                        counts.ok_count, counts.warning_count, counts.error_count
-                    );
-                }
-            }
-        }
-    }
-
-    /// Count checks by status
-    fn count_check_statuses(&self) -> CheckCounts {
-        CheckCounts {
-            ok_count: self
-                .checks
-                .iter()
-                .filter(|c| c.status == CheckStatus::Ok)
-                .count(),
-            warning_count: self
-                .checks
-                .iter()
-                .filter(|c| c.status == CheckStatus::Warning)
-                .count(),
-            error_count: self
-                .checks
-                .iter()
-                .filter(|c| c.status == CheckStatus::Error)
-                .count(),
-        }
-    }
-
     /// Get exit code based on check results
     ///
     /// # Returns
@@ -407,48 +229,45 @@ impl Default for Doctor {
     }
 }
 
-/// Print a single check result
-fn print_check(check: &Check, use_color: bool) {
-    let (symbol, color_fn): (&str, fn(&str) -> ColoredString) = match check.status {
-        CheckStatus::Ok => ("✓", |s: &str| s.green()),
-        CheckStatus::Warning => ("⚠", |s: &str| s.yellow()),
-        CheckStatus::Error => ("✗", |s: &str| s.red()),
-    };
-
-    if use_color {
-        print!(
-            "  {} {} - {}",
-            color_fn(symbol),
-            check.name.bold(),
-            check.message
-        );
-    } else {
-        print!("  {} {} - {}", symbol, check.name, check.message);
-    }
-
-    if let Some(fix) = &check.fix {
-        println!();
-        if use_color {
-            println!("    {} {}", "→".dimmed(), fix.dimmed());
-        } else {
-            println!("    → {fix}");
-        }
-    } else {
-        println!();
-    }
-}
-
 /// Handle the doctor command
-pub async fn handle_command(_template_context: &swissarmyhammer_config::TemplateContext) -> i32 {
+pub async fn handle_command(cli_context: &crate::context::CliContext) -> i32 {
     let mut doctor = Doctor::new();
 
-    match doctor.run_diagnostics_with_options() {
+    match run_doctor_diagnostics(&mut doctor, cli_context).await {
         Ok(exit_code) => exit_code,
         Err(e) => {
             eprintln!("Doctor command failed: {}", e);
             EXIT_ERROR
         }
     }
+}
+
+/// Run diagnostic checks and display results using CliContext
+async fn run_doctor_diagnostics(
+    doctor: &mut Doctor,
+    cli_context: &crate::context::CliContext,
+) -> Result<i32> {
+    // Run all diagnostics without output
+    let exit_code = doctor.run_diagnostics_without_output()?;
+
+    // Format and display results using CliContext
+    if cli_context.verbose {
+        let verbose_results: Vec<display::VerboseCheckResult> = doctor
+            .checks
+            .iter()
+            .map(display::VerboseCheckResult::from)
+            .collect();
+        cli_context.display(verbose_results)?;
+    } else {
+        let results: Vec<display::CheckResult> = doctor
+            .checks
+            .iter()
+            .map(display::CheckResult::from)
+            .collect();
+        cli_context.display(results)?;
+    }
+
+    Ok(exit_code)
 }
 
 #[cfg(test)]
@@ -496,7 +315,7 @@ mod tests {
     #[test]
     fn test_run_diagnostics() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_with_options();
+        let result = doctor.run_diagnostics_without_output();
         assert!(result.is_ok());
 
         // Should have at least some checks
@@ -508,9 +327,9 @@ mod tests {
     }
 
     #[test]
-    fn test_workflow_diagnostics_in_run_diagnostics_with_options() {
+    fn test_workflow_diagnostics_in_run_diagnostics_without_output() {
         let mut doctor = Doctor::new();
-        let result = doctor.run_diagnostics_with_options();
+        let result = doctor.run_diagnostics_without_output();
         assert!(result.is_ok());
 
         // Should have workflow-related checks in the full diagnostics
@@ -521,7 +340,7 @@ mod tests {
             .collect();
         assert!(
             !workflow_checks.is_empty(),
-            "run_diagnostics_with_options should include workflow checks"
+            "run_diagnostics_without_output should include workflow checks"
         );
     }
 
@@ -530,46 +349,5 @@ mod tests {
         assert_eq!(i32::from(ExitCode::Success), 0);
         assert_eq!(i32::from(ExitCode::Warning), 1);
         assert_eq!(i32::from(ExitCode::Error), 2);
-    }
-
-    #[test]
-    fn test_warning_checks_are_categorized() {
-        let mut doctor = Doctor::new();
-
-        // Add a warning check that should be categorized
-        doctor.checks.push(Check {
-            name: "Binary Name".to_string(),
-            status: CheckStatus::Warning,
-            message: "Test warning message".to_string(),
-            fix: Some("Test fix".to_string()),
-        });
-
-        let check_groups = doctor.group_checks_by_category();
-
-        // Verify that warning checks are included in appropriate categories
-        let all_categorized_checks: Vec<_> = check_groups
-            .system_checks
-            .iter()
-            .chain(check_groups.config_checks.iter())
-            .chain(check_groups.prompt_checks.iter())
-            .chain(check_groups.workflow_checks.iter())
-            .collect();
-
-        // All warning checks should be categorized
-        let warning_checks: Vec<_> = doctor
-            .checks
-            .iter()
-            .filter(|c| c.status == CheckStatus::Warning)
-            .collect();
-
-        for warning_check in &warning_checks {
-            assert!(
-                all_categorized_checks
-                    .iter()
-                    .any(|&&c| std::ptr::eq(c, *warning_check)),
-                "Warning check '{}' should be categorized but was not found in any category",
-                warning_check.name
-            );
-        }
     }
 }

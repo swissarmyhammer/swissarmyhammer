@@ -107,27 +107,11 @@ mod tests {
                 Command::new("test")
                     .arg(Arg::new("prompt_name").index(1))
                     .arg(Arg::new("file").short('f').long("file"))
-                    .arg(
-                        Arg::new("vars")
-                            .long("var")
-                            .action(ArgAction::Append),
-                    )
-                    .arg(
-                        Arg::new("raw")
-                            .long("raw")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("copy")
-                            .long("copy")
-                            .action(ArgAction::SetTrue),
-                    )
+                    .arg(Arg::new("vars").long("var").action(ArgAction::Append))
+                    .arg(Arg::new("raw").long("raw").action(ArgAction::SetTrue))
+                    .arg(Arg::new("copy").long("copy").action(ArgAction::SetTrue))
                     .arg(Arg::new("save").long("save"))
-                    .arg(
-                        Arg::new("debug")
-                            .long("debug")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("debug").long("debug").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from(["prompt", "test", "help"])
             .unwrap()
@@ -139,27 +123,11 @@ mod tests {
                 Command::new("test")
                     .arg(Arg::new("prompt_name").index(1))
                     .arg(Arg::new("file").short('f').long("file"))
-                    .arg(
-                        Arg::new("vars")
-                            .long("var")
-                            .action(ArgAction::Append),
-                    )
-                    .arg(
-                        Arg::new("raw")
-                            .long("raw")
-                            .action(ArgAction::SetTrue),
-                    )
-                    .arg(
-                        Arg::new("copy")
-                            .long("copy")
-                            .action(ArgAction::SetTrue),
-                    )
+                    .arg(Arg::new("vars").long("var").action(ArgAction::Append))
+                    .arg(Arg::new("raw").long("raw").action(ArgAction::SetTrue))
+                    .arg(Arg::new("copy").long("copy").action(ArgAction::SetTrue))
                     .arg(Arg::new("save").long("save"))
-                    .arg(
-                        Arg::new("debug")
-                            .long("debug")
-                            .action(ArgAction::SetTrue),
-                    ),
+                    .arg(Arg::new("debug").long("debug").action(ArgAction::SetTrue)),
             )
             .try_get_matches_from([
                 "prompt",

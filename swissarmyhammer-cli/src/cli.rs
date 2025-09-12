@@ -431,12 +431,6 @@ impl Cli {
     {
         <Self as Parser>::try_parse_from(args)
     }
-
-    /// Determine if color output should be used
-    pub fn should_use_color() -> bool {
-        use is_terminal::IsTerminal;
-        std::io::stderr().is_terminal()
-    }
 }
 
 #[cfg(test)]

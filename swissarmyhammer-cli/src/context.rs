@@ -139,7 +139,10 @@ impl CliContext {
                 if items.is_empty() {
                     println!("No items to display");
                 } else {
-                    println!("{}", tabled::Table::new(&items));
+                    println!(
+                        "{}",
+                        tabled::Table::new(&items).with(tabled::settings::Style::modern())
+                    );
                 }
             }
             OutputFormat::Json => {
