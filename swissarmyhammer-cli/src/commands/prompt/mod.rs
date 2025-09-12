@@ -9,10 +9,8 @@ pub mod test;
 
 use crate::error::{CliError, CliResult};
 use crate::exit_codes::EXIT_SUCCESS;
-use std::collections::HashMap;
 
 pub use cli::PromptCommand;
-use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
 
 /// Handle prompt command using the new CLI module types
 ///
@@ -37,10 +35,9 @@ async fn run_prompt_command_typed(
     context: &crate::context::CliContext,
 ) -> CliResult<()> {
     match command {
-        PromptCommand::List(_) => {
-            // Simplified list command - no source/category filtering
-            run_list_command(context, None, None).map_err(|e| CliError::new(e.to_string(), 1))
-        }
+        PromptCommand::List(_) => list::execute_list_command(context)
+            .await
+            .map_err(|e| CliError::new(e.to_string(), 1)),
         PromptCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context)
             .await
             .map_err(|e| CliError::new(e.to_string(), 1)),
@@ -52,46 +49,6 @@ async fn run_prompt_command_typed(
                 .map_err(|e| CliError::new(e.to_string(), 1))
         }
     }
-}
-
-/// Run the list command
-fn run_list_command(
-    context: &crate::context::CliContext,
-    source_filter: Option<crate::cli::PromptSourceArg>,
-    category_filter: Option<String>,
-) -> Result<(), anyhow::Error> {
-    // Load all prompts from all sources
-    let mut library = PromptLibrary::new();
-    let mut resolver = PromptResolver::new();
-    resolver.load_all_prompts(&mut library)?;
-
-    // Build the filter
-    let mut filter = PromptFilter::new();
-
-    if let Some(ref source) = source_filter {
-        let lib_source: swissarmyhammer::PromptSource = source.clone().into();
-        filter = filter.with_sources(vec![lib_source.into()]);
-    }
-
-    if let Some(ref category) = category_filter {
-        filter = filter.with_category(category);
-    }
-
-    // Apply filter and get prompts - pass empty file sources since we're using all sources
-    let file_sources = HashMap::new();
-    let all_prompts = library.list_filtered(&filter, &file_sources)?;
-
-    // Filter out partial templates
-    let prompts: Vec<_> = all_prompts
-        .into_iter()
-        .filter(|prompt| !prompt.is_partial_template())
-        .collect();
-
-    // Convert to display objects and use context's display_prompts method
-    let display_rows = display::prompts_to_display_rows(prompts, context.verbose);
-    context.display_prompts(display_rows)?;
-
-    Ok(())
 }
 
 /// Run the validate command - delegates to root validate functionality

@@ -438,9 +438,7 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 
     // Handle subcommands directly instead of parsing raw args
     let command = match matches.subcommand() {
-        Some(("list", _sub_matches)) => {
-            cli::PromptCommand::List(cli::ListCommand {})
-        }
+        Some(("list", _sub_matches)) => cli::PromptCommand::List(cli::ListCommand {}),
         Some(("test", sub_matches)) => {
             // Parse test command arguments
             let mut test_cmd = cli::TestCommand {
@@ -479,9 +477,7 @@ async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext)
 
             cli::PromptCommand::Test(test_cmd)
         }
-        Some(("validate", _sub_matches)) => {
-            cli::PromptCommand::Validate(cli::ValidateCommand {})
-        }
+        Some(("validate", _sub_matches)) => cli::PromptCommand::Validate(cli::ValidateCommand {}),
         _ => {
             // Default to list command when no subcommand is provided
             cli::PromptCommand::List(cli::ListCommand {})

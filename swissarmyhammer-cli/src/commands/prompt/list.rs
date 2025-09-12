@@ -1,8 +1,39 @@
-//! Simplified list command handler
+//! List command handler for prompts
 //!
-//! This module previously contained list command handlers that have been
-//! replaced by the unified implementation in mod.rs. The tests remain
-//! to verify the display functionality.
+//! Handles listing all available prompts with filtering and display options.
+//! Filters out partial templates and provides both standard and verbose output modes.
+
+use crate::context::CliContext;
+use anyhow::Result;
+use std::collections::HashMap;
+use swissarmyhammer::{PromptFilter, PromptLibrary, PromptResolver};
+
+/// Execute the list command - shows all available prompts
+pub async fn execute_list_command(cli_context: &CliContext) -> Result<()> {
+    // Load all prompts from all sources
+    let mut library = PromptLibrary::new();
+    let mut resolver = PromptResolver::new();
+    resolver.load_all_prompts(&mut library)?;
+
+    // Build a basic filter - no source or category filtering for simplified list command
+    let filter = PromptFilter::new();
+
+    // Apply filter and get prompts - pass empty file sources since we're using all sources
+    let file_sources = HashMap::new();
+    let all_prompts = library.list_filtered(&filter, &file_sources)?;
+
+    // Filter out partial templates
+    let prompts: Vec<_> = all_prompts
+        .into_iter()
+        .filter(|prompt| !prompt.is_partial_template())
+        .collect();
+
+    // Convert to display objects and use context's display_prompts method
+    let display_rows = super::display::prompts_to_display_rows(prompts, cli_context.verbose);
+    cli_context.display_prompts(display_rows)?;
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

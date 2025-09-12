@@ -20,6 +20,7 @@
 //! concurrently due to shared test state and directory cleanup timing.
 
 use anyhow::Result;
+use serial_test::serial;
 use std::fs;
 use std::path::{Path, PathBuf};
 // use std::thread; // Not needed for async version
@@ -117,7 +118,7 @@ stateDiagram-v2
 
 /// Test performance impact of abort checking system
 #[tokio::test]
-
+#[serial]
 async fn test_abort_performance_impact_baseline() -> Result<()> {
     let env = TestEnvironment::new()?;
     let workflow_file = "hello-world"; // Use built-in workflow instead
@@ -156,10 +157,10 @@ async fn test_abort_performance_impact_baseline() -> Result<()> {
 
 /// Test performance with abort file checking overhead
 #[tokio::test]
-
+#[serial]
 async fn test_abort_performance_with_checking_overhead() -> Result<()> {
     let env = TestEnvironment::new()?;
-    let workflow_file = env.create_test_workflow("Performance With Checking")?;
+    let workflow_file = "hello-world";
 
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
@@ -190,7 +191,7 @@ async fn test_abort_performance_with_checking_overhead() -> Result<()> {
 
 /// Test concurrent workflow execution with abort
 #[tokio::test]
-
+#[serial]
 async fn test_concurrent_workflow_abort_handling() -> Result<()> {
     // Use unique identifier to avoid conflicts between test runs
     let test_id = std::process::id();
@@ -200,11 +201,8 @@ async fn test_concurrent_workflow_abort_handling() -> Result<()> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
 
-    // Create fewer workflows to reduce resource contention
-    let num_workflows = 1; // Reduced to 1 for performance
-    let workflow_files: Vec<String> = (0..num_workflows)
-        .map(|i| env.create_test_workflow(&format!("ConcurrentTest{test_id}_{i}")))
-        .collect::<Result<Vec<_>>>()?;
+    // Use existing hello-world workflow instead of creating custom ones
+    let workflow_files = vec!["hello-world".to_string()];
 
     // Create abort file first to ensure it's detected
     env.create_abort_file(&format!("Concurrent test abort {test_id}"))?;
@@ -333,16 +331,15 @@ async fn test_rapid_abort_invocations() -> Result<()> {
 
 /// Test abort system with large abort reasons
 #[tokio::test]
+#[serial]
 async fn test_large_abort_reasons() -> Result<()> {
-    // Use unique identifier to avoid conflicts between test runs
-    let test_id = std::process::id();
     let env = TestEnvironment::new()?;
 
     // Change to temp directory for test
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
 
-    let workflow_file = env.create_test_workflow(&format!("LargeReasonTest{test_id}"))?;
+    let workflow_file = "hello-world";
 
     // Create large abort reason (10KB) with unique content
     let large_reason = format!(
@@ -404,6 +401,7 @@ async fn test_large_abort_reasons() -> Result<()> {
 
 /// Test abort system with unicode and special characters
 #[tokio::test]
+#[serial]
 async fn test_unicode_abort_reasons() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -411,7 +409,7 @@ async fn test_unicode_abort_reasons() -> Result<()> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
 
-    let workflow_file = env.create_test_workflow("Unicode Test")?;
+    let workflow_file = "hello-world";
 
     let unicode_reason = "Abort with émojis 🚫 and ñoñ-ASCII characters 中文测试";
     env.create_abort_file(unicode_reason)?;
@@ -434,7 +432,7 @@ async fn test_unicode_abort_reasons() -> Result<()> {
 
 /// Test abort system error messages and user experience
 #[tokio::test]
-
+#[serial]
 async fn test_abort_error_messages_user_experience() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -442,7 +440,7 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
 
-    let workflow_file = env.create_test_workflow("UX Test")?;
+    let workflow_file = "hello-world";
 
     let abort_reason = "User initiated cancellation for testing UX";
     env.create_abort_file(abort_reason)?;
@@ -473,7 +471,7 @@ async fn test_abort_error_messages_user_experience() -> Result<()> {
 
 /// Test abort file cleanup between workflow runs
 #[tokio::test]
-
+#[serial]
 async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -481,7 +479,7 @@ async fn test_abort_file_cleanup_between_runs() -> Result<()> {
     let original_dir = std::env::current_dir()?;
     std::env::set_current_dir(env.temp_path())?;
 
-    let workflow_file = env.create_test_workflow("Cleanup Test")?;
+    let workflow_file = "hello-world";
 
     // First run with abort file
     env.create_abort_file("First run abort")?;
@@ -513,6 +511,7 @@ async fn test_abort_file_cleanup_between_runs() -> Result<()> {
 
 /// Test abort system with various CLI commands
 #[tokio::test]
+#[serial]
 async fn test_abort_with_different_cli_commands() -> Result<()> {
     let env = TestEnvironment::new()?;
 
@@ -534,8 +533,8 @@ async fn test_abort_with_different_cli_commands() -> Result<()> {
     );
 
     // Test flow command with actual workflow - should be affected by abort file
-    let workflow_file = env.create_test_workflow("CLI Test")?;
-    let result2 = run_sah_command_in_process(&["flow", "run", &workflow_file]).await?;
+    let workflow_file = "hello-world";
+    let result2 = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     // Flow command should detect abort and fail appropriately
@@ -570,7 +569,7 @@ async fn test_abort_with_different_cli_commands() -> Result<()> {
 
 /// Regression test to ensure existing functionality works
 #[tokio::test]
-
+#[serial]
 async fn test_regression_normal_workflow_execution() -> Result<()> {
     let env = TestEnvironment::new()?;
 

@@ -13,7 +13,6 @@ pub enum ParseError {
     UnknownSubcommand,
 }
 
-
 /// Simplified list command structure - no filtering options
 /// Uses global verbose/format from CliContext
 #[derive(Debug)]
@@ -71,7 +70,6 @@ pub fn parse_prompt_command(matches: &ArgMatches) -> Result<PromptCommand, Parse
         _ => Err(ParseError::UnknownSubcommand),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -330,7 +328,6 @@ mod tests {
             _ => panic!("Expected Validate command"),
         }
     }
-
 
     #[test]
     fn test_command_debug_display() {
