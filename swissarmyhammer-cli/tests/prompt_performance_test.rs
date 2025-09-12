@@ -255,8 +255,7 @@ async fn test_validate_command_performance() {
         create_performance_test_context(swissarmyhammer_cli::cli::OutputFormat::Table).await;
 
     // Test list command instead of validate (since validate was removed from prompt subcommands)
-    let exit_code =
-        handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+    let exit_code = handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
 
     let duration = start.elapsed();
 

@@ -342,19 +342,24 @@ async fn test_large_abort_reasons() -> Result<()> {
     let workflow_file = "hello-world";
 
     // Create large abort reason (10KB) with unique content
-    let large_reason = format!(
-        "Large abort reason for test: {}",
-        "X".repeat(10200)
-    );
+    let large_reason = format!("Large abort reason for test: {}", "X".repeat(10200));
     env.create_abort_file(&large_reason)?;
 
     // Verify abort file was created correctly before testing
     env.verify_abort_file(&large_reason)?;
 
     std::env::set_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP", "1");
-    eprintln!("DEBUG: About to call run_sah_command_in_process with args: flow run {}", workflow_file);
+    eprintln!(
+        "DEBUG: About to call run_sah_command_in_process with args: flow run {}",
+        workflow_file
+    );
     let result = run_sah_command_in_process(&["flow", "run", workflow_file]).await?;
-    eprintln!("DEBUG: Result from run_sah_command_in_process: exit_code={}, stdout len={}, stderr len={}", result.exit_code, result.stdout.len(), result.stderr.len());
+    eprintln!(
+        "DEBUG: Result from run_sah_command_in_process: exit_code={}, stdout len={}, stderr len={}",
+        result.exit_code,
+        result.stdout.len(),
+        result.stderr.len()
+    );
     std::env::remove_var("SWISSARMYHAMMER_SKIP_MCP_STARTUP");
 
     let stderr = &result.stderr;

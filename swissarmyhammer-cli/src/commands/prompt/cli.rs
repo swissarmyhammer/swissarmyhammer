@@ -5,8 +5,6 @@
 
 use clap::ArgMatches;
 
-
-
 /// List command for displaying available prompts.
 ///
 /// This command lists all available prompts in the system. It uses global
@@ -72,7 +70,7 @@ pub fn parse_prompt_command(matches: &ArgMatches) -> PromptCommand {
                 prompt_name: sub_matches.get_one::<String>("prompt_name").cloned(),
                 file: sub_matches.get_one::<String>("file").cloned(),
                 vars: sub_matches
-                    .get_many::<String>("var")
+                    .get_many::<String>("vars")
                     .map(|vals| vals.cloned().collect())
                     .unwrap_or_default(),
                 raw: sub_matches.get_flag("raw"),
@@ -93,7 +91,7 @@ pub fn parse_prompt_command(matches: &ArgMatches) -> PromptCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::{ArgMatches, Command};
+    use clap::{Arg, ArgAction, ArgMatches, Command};
 
     // Helper function to create mock ArgMatches for testing
     fn create_mock_list_matches() -> ArgMatches {
@@ -107,28 +105,28 @@ mod tests {
         Command::new("prompt")
             .subcommand(
                 Command::new("test")
-                    .arg(clap::Arg::new("prompt_name").index(1))
-                    .arg(clap::Arg::new("file").short('f').long("file"))
+                    .arg(Arg::new("prompt_name").index(1))
+                    .arg(Arg::new("file").short('f').long("file"))
                     .arg(
-                        clap::Arg::new("var")
+                        Arg::new("vars")
                             .long("var")
-                            .action(clap::ArgAction::Append),
+                            .action(ArgAction::Append),
                     )
                     .arg(
-                        clap::Arg::new("raw")
+                        Arg::new("raw")
                             .long("raw")
-                            .action(clap::ArgAction::SetTrue),
+                            .action(ArgAction::SetTrue),
                     )
                     .arg(
-                        clap::Arg::new("copy")
+                        Arg::new("copy")
                             .long("copy")
-                            .action(clap::ArgAction::SetTrue),
+                            .action(ArgAction::SetTrue),
                     )
-                    .arg(clap::Arg::new("save").long("save"))
+                    .arg(Arg::new("save").long("save"))
                     .arg(
-                        clap::Arg::new("debug")
+                        Arg::new("debug")
                             .long("debug")
-                            .action(clap::ArgAction::SetTrue),
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from(["prompt", "test", "help"])
@@ -139,28 +137,28 @@ mod tests {
         Command::new("prompt")
             .subcommand(
                 Command::new("test")
-                    .arg(clap::Arg::new("prompt_name").index(1))
-                    .arg(clap::Arg::new("file").short('f').long("file"))
+                    .arg(Arg::new("prompt_name").index(1))
+                    .arg(Arg::new("file").short('f').long("file"))
                     .arg(
-                        clap::Arg::new("var")
+                        Arg::new("vars")
                             .long("var")
-                            .action(clap::ArgAction::Append),
+                            .action(ArgAction::Append),
                     )
                     .arg(
-                        clap::Arg::new("raw")
+                        Arg::new("raw")
                             .long("raw")
-                            .action(clap::ArgAction::SetTrue),
+                            .action(ArgAction::SetTrue),
                     )
                     .arg(
-                        clap::Arg::new("copy")
+                        Arg::new("copy")
                             .long("copy")
-                            .action(clap::ArgAction::SetTrue),
+                            .action(ArgAction::SetTrue),
                     )
-                    .arg(clap::Arg::new("save").long("save"))
+                    .arg(Arg::new("save").long("save"))
                     .arg(
-                        clap::Arg::new("debug")
+                        Arg::new("debug")
                             .long("debug")
-                            .action(clap::ArgAction::SetTrue),
+                            .action(ArgAction::SetTrue),
                     ),
             )
             .try_get_matches_from([
@@ -323,8 +321,6 @@ mod tests {
         }
     }
 
-
-
     #[test]
     fn test_command_debug_display() {
         let list_cmd = ListCommand {};
@@ -344,8 +340,6 @@ mod tests {
         assert!(debug_str.contains("TestCommand"));
         assert!(debug_str.contains("test"));
         assert!(debug_str.contains("key=value"));
-
-
 
         let prompt_cmd = PromptCommand::List(list_cmd);
         let debug_str = format!("{:?}", prompt_cmd);

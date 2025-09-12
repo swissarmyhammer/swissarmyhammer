@@ -111,8 +111,6 @@ async fn run_sah_command_in_process_inner_with_dir(
             Some(Commands::Prompt { .. }) |      // Add Prompt command support
             None
         );
-        
-
 
         if can_run_in_process {
             // Execute in-process with stdout/stderr capture
@@ -136,7 +134,10 @@ async fn run_sah_command_in_process_inner_with_dir(
     }
 
     // If we reach here, we need to use subprocess
-    eprintln!("DEBUG: Falling back to subprocess execution for args: {:?}", args);
+    eprintln!(
+        "DEBUG: Falling back to subprocess execution for args: {:?}",
+        args
+    );
 
     // Fall back to subprocess for commands we can't run in-process with timeout
     use tokio::time::{timeout, Duration};
@@ -523,7 +524,8 @@ async fn execute_cli_command_with_capture(cli: Cli) -> Result<(String, String, i
                     ..
                 } => {
                     // Check for abort file before starting workflow (like the real flow command)
-                    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let current_dir =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                     match swissarmyhammer_common::read_abort_file(&current_dir) {
                         Ok(Some(abort_reason)) => {
                             // Clean up the abort file after detection

@@ -41,11 +41,8 @@ async fn run_prompt_command_typed(
         PromptCommand::Test(test_cmd) => test::execute_test_command(test_cmd, context)
             .await
             .map_err(|e| CliError::new(e.to_string(), 1)),
-
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

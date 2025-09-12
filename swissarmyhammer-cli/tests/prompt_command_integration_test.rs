@@ -263,8 +263,7 @@ async fn test_validate_command_integration() {
     .await;
 
     // Test list command instead of validate (since validate was removed from prompt subcommands)
-    let exit_code =
-        handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+    let exit_code = handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
     // List command should succeed
     assert_eq!(exit_code, 0);
 }
@@ -319,12 +318,8 @@ async fn test_commands_with_verbose_and_debug() {
     );
 
     // Test list command again instead of validate (since validate was removed from prompt subcommands)
-    let exit_code =
-        handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
-    assert_eq!(
-        exit_code, 0,
-        "List command should handle verbose and debug"
-    );
+    let exit_code = handle_command_typed(PromptCommand::List(cli::ListCommand {}), &context).await;
+    assert_eq!(exit_code, 0, "List command should handle verbose and debug");
 }
 
 #[tokio::test]

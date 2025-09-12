@@ -214,9 +214,11 @@ pub async fn run_workflow_command(
     let current_dir = std::env::current_dir().map_err(|e| SwissArmyHammerError::Other {
         message: format!("Failed to get current directory: {}", e),
     })?;
-    if let Some(abort_reason) = read_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
-        message: e.to_string(),
-    })? {
+    if let Some(abort_reason) =
+        read_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
+            message: e.to_string(),
+        })?
+    {
         // Clean up the abort file after detection
         let _ = remove_abort_file(&current_dir).map_err(|e| SwissArmyHammerError::Other {
             message: e.to_string(),
