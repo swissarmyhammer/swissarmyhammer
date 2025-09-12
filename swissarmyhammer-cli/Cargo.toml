@@ -77,7 +77,7 @@ derive_builder = "0.20"
 git2 = { workspace = true }
 
 [dev-dependencies]
-
+assert_cmd = "2.0"
 predicates = { workspace = true }
 tempfile = { workspace = true }
 serial_test = "3.1"

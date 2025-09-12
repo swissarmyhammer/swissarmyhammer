@@ -693,7 +693,7 @@ mod tests {
             ("0", 0.0),
             ("42", 42.0),
             ("-17", -17.0),
-            ("3.14159", 3.14159_f64), // Parse the actual string value
+            ("3.14159", 3.14159), // Parse the actual string value
             ("1e6", 1000000.0),
             ("1.5e-3", 0.0015),
         ];

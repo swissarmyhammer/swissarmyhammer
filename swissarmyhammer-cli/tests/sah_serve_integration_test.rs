@@ -79,29 +79,6 @@ const EXPECTED_SAMPLE_TOOLS: &[&str] = &[
 ];
 
 /// Comprehensive integration test for sah serve MCP tools
-/// This is a slow integration test - run with `SLOW_TESTS=1 cargo test` to include it
-#[tokio::test]
-async fn test_sah_serve_tools_integration() -> Result<(), Box<dyn std::error::Error>> {
-    // Always skip this slow test for now - it can be enabled when needed
-    println!("✅ Skipping slow MCP integration test. This test validates comprehensive MCP functionality.");
-    println!("   To run this test, temporarily remove this early return.");
-    return Ok(());
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-}
-
 /// Initialize MCP connection and return the initialize response
 #[allow(dead_code)]
 async fn initialize_mcp_connection(
@@ -425,24 +402,4 @@ fn read_mcp_response(
 
     let response: Value = serde_json::from_str(line.trim())?;
     Ok(response)
-}
-
-/// Test that validates the server properly shuts down
-/// This is a slow integration test - run with `SLOW_TESTS=1 cargo test` to include it
-#[tokio::test]
-async fn test_sah_serve_shutdown() {
-    // Always skip this slow test for now - it can be enabled when needed
-    println!("✅ Skipping slow server shutdown test. This test validates server cleanup.");
-    println!("   To run this test, temporarily remove this early return.");
-    return;
-}
-
-/// Test that validates server can handle multiple concurrent connections
-/// This is a slow integration test - run with `SLOW_TESTS=1 cargo test` to include it
-#[tokio::test]
-async fn test_sah_serve_concurrent_requests() {
-    // Always skip this slow test for now - it can be enabled when needed
-    println!("✅ Skipping slow concurrent requests test. This test validates server concurrency.");
-    println!("   To run this test, temporarily remove this early return.");
-    return;
 }
