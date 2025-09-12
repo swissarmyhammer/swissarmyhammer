@@ -436,53 +436,8 @@ async fn handle_doctor_command(template_context: &TemplateContext) -> i32 {
 async fn handle_prompt_command(matches: &clap::ArgMatches, context: &CliContext) -> i32 {
     use crate::commands::prompt::cli;
 
-    // Handle subcommands directly instead of parsing raw args
-    let command = match matches.subcommand() {
-        Some(("list", _sub_matches)) => cli::PromptCommand::List(cli::ListCommand {}),
-        Some(("test", sub_matches)) => {
-            // Parse test command arguments
-            let mut test_cmd = cli::TestCommand {
-                prompt_name: None,
-                file: None,
-                vars: Vec::new(),
-                raw: false,
-                copy: false,
-                save: None,
-                debug: false,
-            };
-
-            // Extract prompt name from positional argument if provided
-            if let Some(prompt_name) = sub_matches.get_one::<String>("prompt") {
-                test_cmd.prompt_name = Some(prompt_name.clone());
-            }
-
-            // Extract other options if available
-            if let Some(file) = sub_matches.get_one::<String>("file") {
-                test_cmd.file = Some(file.clone());
-            }
-
-            test_cmd.raw = sub_matches.get_flag("raw");
-            test_cmd.copy = sub_matches.get_flag("copy");
-            test_cmd.debug = sub_matches.get_flag("debug");
-
-            // Extract variables if provided
-            if let Some(vars) = sub_matches.get_many::<String>("var") {
-                test_cmd.vars = vars.cloned().collect();
-            }
-
-            // Extract save option if provided
-            if let Some(save) = sub_matches.get_one::<String>("save") {
-                test_cmd.save = Some(save.clone());
-            }
-
-            cli::PromptCommand::Test(test_cmd)
-        }
-
-        _ => {
-            // Default to list command when no subcommand is provided
-            cli::PromptCommand::List(cli::ListCommand {})
-        }
-    };
+    // Parse using the proper CLI parsing function
+    let command = cli::parse_prompt_command(matches);
 
     // Use the new typed handler
     commands::prompt::handle_command_typed(command, context).await
