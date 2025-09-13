@@ -2,21 +2,21 @@
 //!
 //! Executes and manages workflows with support for starting new runs and resuming existing ones
 
+mod display;
+
 use crate::cli::{
     FlowSubcommand, OutputFormat, PromptSource, PromptSourceArg, VisualizationFormat,
 };
 use crate::context::CliContext;
+use display::{VerboseWorkflowInfo, WorkflowInfo};
 use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 use crate::parameter_cli;
-use colored::*;
-use is_terminal::IsTerminal;
 use std::collections::HashMap;
 use std::future;
-use std::io::{self, Write};
 use std::time::Duration;
 use swissarmyhammer::{Result, SwissArmyHammerError, WorkflowName};
 use swissarmyhammer::{
-    Workflow, WorkflowExecutor, WorkflowResolver, WorkflowRunId, WorkflowRunStatus,
+    WorkflowExecutor, WorkflowResolver, WorkflowRunId, WorkflowRunStatus,
     WorkflowRunStorageBackend, WorkflowStorage, WorkflowStorageBackend,
 };
 use swissarmyhammer_common::{read_abort_file, remove_abort_file};
@@ -75,12 +75,12 @@ pub async fn run_flow_command(subcommand: FlowSubcommand, context: &CliContext) 
             format,
             verbose,
             source,
-        } => list_workflows_command(format, verbose, source).await,
+        } => list_workflows_command(format, verbose, source, context).await,
         FlowSubcommand::Status {
             run_id,
             format,
             watch,
-        } => status_workflow_command(run_id, format, watch).await,
+        } => status_workflow_command(run_id, format, watch, context).await,
         FlowSubcommand::Logs {
             run_id,
             follow,
@@ -92,7 +92,7 @@ pub async fn run_flow_command(subcommand: FlowSubcommand, context: &CliContext) 
             workflow,
             format,
             global,
-        } => metrics_workflow_command(run_id, workflow, format, global).await,
+        } => metrics_workflow_command(run_id, workflow, format, global, context).await,
         FlowSubcommand::Visualize {
             run_id,
             format,
@@ -174,8 +174,6 @@ pub async fn run_workflow_command(
         }
     }
 
-    // Template variables are now passed through the regular workflow variables system
-
     // Parse timeout
     let timeout_duration = if let Some(timeout_str) = config.timeout_str {
         Some(parse_duration(&timeout_str)?)
@@ -246,8 +244,7 @@ pub async fn run_workflow_command(
     let agent_config = context.template_context.get_agent_config(None);
     run.context.set_agent_config(agent_config);
 
-    // Store variables in context for liquid template rendering - this will now include config values
-    // The template context agent config is now properly transferred to workflow context
+
 
     // Set quiet mode in context for actions to use
     if config.quiet {
@@ -460,9 +457,10 @@ async fn resume_workflow_command(
 
 /// List available workflows
 async fn list_workflows_command(
-    format: OutputFormat,
+    _format: OutputFormat,
     verbose: bool,
     source_filter: Option<PromptSourceArg>,
+    context: &CliContext,
 ) -> Result<()> {
     // Load all workflows from all sources using resolver (same pattern as prompts)
     let mut storage = MemoryWorkflowStorage::new();
@@ -499,139 +497,33 @@ async fn list_workflows_command(
     // Sort by name for consistent output
     workflow_infos.sort_by(|a, b| a.0.name.as_str().cmp(b.0.name.as_str()));
 
-    match format {
-        OutputFormat::Table => {
-            display_workflows_table(&workflow_infos, verbose)?;
-        }
-        OutputFormat::Json => {
-            let workflows: Vec<_> = workflow_infos.into_iter().map(|(w, _)| w).collect();
-            let json_output = serde_json::to_string_pretty(&workflows)?;
-            println!("{json_output}");
-        }
-        OutputFormat::Yaml => {
-            let workflows: Vec<_> = workflow_infos.into_iter().map(|(w, _)| w).collect();
-            let yaml_output = serde_yaml::to_string(&workflows)?;
-            println!("{yaml_output}");
-        }
+    // Convert to display objects based on verbose flag
+    if verbose {
+        let verbose_workflows: Vec<VerboseWorkflowInfo> = workflow_infos
+            .iter()
+            .map(|(w, _)| w.into())
+            .collect();
+        context.display(verbose_workflows)?;
+    } else {
+        let workflow_info: Vec<WorkflowInfo> = workflow_infos
+            .iter()
+            .map(|(w, _)| w.into())
+            .collect();
+        context.display(workflow_info)?;
     }
 
     Ok(())
 }
 
-/// Display workflows in table format with color coding
-fn display_workflows_table(
-    workflow_infos: &[(Workflow, PromptSource)],
-    verbose: bool,
-) -> Result<()> {
-    let mut stdout = io::stdout();
-    let is_tty = stdout.is_terminal();
-    display_workflows_to_writer(workflow_infos, verbose, &mut stdout, is_tty)
-}
 
-fn display_workflows_to_writer<W: Write>(
-    workflow_infos: &[(Workflow, PromptSource)],
-    verbose: bool,
-    writer: &mut W,
-    is_tty: bool,
-) -> Result<()> {
-    if workflow_infos.is_empty() {
-        writeln!(writer, "No workflows found matching the criteria.")?;
-        return Ok(());
-    }
-
-    // Use 2-line format similar to prompt list with color coding
-    for (workflow, source) in workflow_infos {
-        let name = workflow.name.as_str();
-        let description = &workflow.description;
-
-        // Extract title from metadata, or use a formatted version of the name
-        let title = workflow
-            .metadata
-            .get("title")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                // Fallback: convert workflow name to a readable title
-                name.replace(['-', '_'], " ")
-                    .split_whitespace()
-                    .map(|word| {
-                        let mut chars = word.chars();
-                        match chars.next() {
-                            None => String::new(),
-                            Some(first) => {
-                                first.to_uppercase().collect::<String>() + chars.as_str()
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            });
-
-        // Color code based on source, matching prompt list
-        let first_line = if is_tty {
-            let (name_colored, title_colored) = match source {
-                PromptSource::Builtin => {
-                    (name.green().bold().to_string(), title.green().to_string())
-                }
-                PromptSource::User => (name.blue().bold().to_string(), title.blue().to_string()),
-                PromptSource::Local => {
-                    (name.yellow().bold().to_string(), title.yellow().to_string())
-                }
-                PromptSource::Dynamic => (
-                    name.magenta().bold().to_string(),
-                    title.magenta().to_string(),
-                ),
-            };
-            format!("{name_colored} | {title_colored}")
-        } else {
-            format!("{name} | {title}")
-        };
-
-        writeln!(writer, "{first_line}")?;
-
-        // Second line: Full description (indented)
-        if !description.is_empty() {
-            writeln!(writer, "  {description}")?;
-        } else {
-            writeln!(writer, "  (no description)")?;
-        }
-
-        // Add verbose information if requested
-        if verbose {
-            let terminal_count = workflow.states.values().filter(|s| s.is_terminal).count();
-            writeln!(
-                writer,
-                "  States: {}, Terminal: {}, Transitions: {}",
-                workflow.states.len(),
-                terminal_count,
-                workflow.transitions.len()
-            )?;
-        }
-
-        writeln!(writer)?; // Empty line between entries
-    }
-
-    // Add legend similar to prompt list
-    if is_tty && !workflow_infos.is_empty() {
-        writeln!(writer, "{}", "Legend:".bright_white())?;
-        writeln!(writer, "  {} Built-in workflows", "●".green())?;
-        writeln!(
-            writer,
-            "  {} User workflows (~/.swissarmyhammer/workflows/)",
-            "●".blue()
-        )?;
-        writeln!(
-            writer,
-            "  {} Local workflows (./.swissarmyhammer/workflows/)",
-            "●".yellow()
-        )?;
-        writeln!(writer, "  {} Dynamic workflows", "●".magenta())?;
-    }
-
-    Ok(())
-}
 
 /// Check workflow run status
-async fn status_workflow_command(run_id: String, format: OutputFormat, watch: bool) -> Result<()> {
+async fn status_workflow_command(
+    run_id: String,
+    _format: OutputFormat,
+    watch: bool,
+    context: &CliContext,
+) -> Result<()> {
     let storage = WorkflowStorage::file_system()?;
 
     // Parse run ID
@@ -643,7 +535,7 @@ async fn status_workflow_command(run_id: String, format: OutputFormat, watch: bo
         loop {
             match storage.get_run(&run_id_typed) {
                 Ok(run) => {
-                    print_run_status(&run, &format)?;
+                    print_run_status(&run, context)?;
 
                     // Exit if workflow is completed
                     if run.status == WorkflowRunStatus::Completed
@@ -667,7 +559,7 @@ async fn status_workflow_command(run_id: String, format: OutputFormat, watch: bo
         }
     } else {
         let run = storage.get_run(&run_id_typed)?;
-        print_run_status(&run, &format)?;
+        print_run_status(&run, context)?;
     }
 
     Ok(())
@@ -775,13 +667,14 @@ async fn execute_workflow_with_progress(
     Ok(())
 }
 
-/// Print run status
+/// Print run status using CliContext display
 fn print_run_status(
     run: &swissarmyhammer_workflow::WorkflowRun,
-    format: &OutputFormat,
+    context: &CliContext,
 ) -> Result<()> {
-    match format {
-        OutputFormat::Table => {
+    // For now, use simple serialization since WorkflowRun doesn't implement Tabled
+    match context.format {
+        crate::cli::OutputFormat::Table => {
             println!("🆔 Run ID: {}", workflow_run_id_to_string(&run.id));
             println!("📋 Workflow: {}", run.workflow.name);
             println!("📊 Status: {:?}", run.status);
@@ -799,16 +692,15 @@ fn print_run_status(
             println!("📈 History: {} transitions", run.history.len());
             println!("🔧 Variables: {} items", run.context.workflow_vars().len());
         }
-        OutputFormat::Json => {
+        crate::cli::OutputFormat::Json => {
             let json_output = serde_json::to_string_pretty(&run)?;
             println!("{json_output}");
         }
-        OutputFormat::Yaml => {
+        crate::cli::OutputFormat::Yaml => {
             let yaml_output = serde_yaml::to_string(&run)?;
             println!("{yaml_output}");
         }
     }
-
     Ok(())
 }
 
@@ -915,8 +807,9 @@ fn workflow_run_id_to_string(id: &WorkflowRunId) -> String {
 async fn metrics_workflow_command(
     run_id: Option<String>,
     workflow: Option<String>,
-    format: OutputFormat,
+    _format: OutputFormat,
     global: bool,
+    context: &CliContext,
 ) -> Result<()> {
     let _storage = WorkflowStorage::file_system()?;
     let executor = WorkflowExecutor::new();
@@ -925,9 +818,8 @@ async fn metrics_workflow_command(
     if global {
         // Show global metrics summary
         let global_metrics = metrics.get_global_metrics();
-
-        match format {
-            OutputFormat::Table => {
+        match context.format {
+            crate::cli::OutputFormat::Table => {
                 println!("📊 Global Workflow Metrics");
                 println!("========================");
                 println!("Total runs: {}", global_metrics.total_runs);
@@ -943,11 +835,11 @@ async fn metrics_workflow_command(
                 println!("Active workflows: {}", global_metrics.active_workflows);
                 println!("Unique workflows: {}", global_metrics.unique_workflows);
             }
-            OutputFormat::Json => {
+            crate::cli::OutputFormat::Json => {
                 let json_output = serde_json::to_string_pretty(&global_metrics)?;
                 println!("{json_output}");
             }
-            OutputFormat::Yaml => {
+            crate::cli::OutputFormat::Yaml => {
                 let yaml_output = serde_yaml::to_string(&global_metrics)?;
                 println!("{yaml_output}");
             }
@@ -957,8 +849,8 @@ async fn metrics_workflow_command(
         let run_id_typed = parse_workflow_run_id(&run_id_str)?;
 
         if let Some(run_metrics) = metrics.get_run_metrics(&run_id_typed) {
-            match format {
-                OutputFormat::Table => {
+            match context.format {
+                crate::cli::OutputFormat::Table => {
                     println!("📊 Run Metrics: {run_id_str}");
                     println!("Workflow: {}", run_metrics.workflow_name);
                     println!("Status: {:?}", run_metrics.status);
@@ -978,11 +870,11 @@ async fn metrics_workflow_command(
                         println!("  {}: {:.2}s", state_id, duration.as_secs_f64());
                     }
                 }
-                OutputFormat::Json => {
+                crate::cli::OutputFormat::Json => {
                     let json_output = serde_json::to_string_pretty(&run_metrics)?;
                     println!("{json_output}");
                 }
-                OutputFormat::Yaml => {
+                crate::cli::OutputFormat::Yaml => {
                     let yaml_output = serde_yaml::to_string(&run_metrics)?;
                     println!("{yaml_output}");
                 }
@@ -995,8 +887,8 @@ async fn metrics_workflow_command(
         let workflow_name_typed = WorkflowName::new(&workflow_name);
 
         if let Some(workflow_metrics) = metrics.get_workflow_summary(&workflow_name_typed) {
-            match format {
-                OutputFormat::Table => {
+            match context.format {
+                crate::cli::OutputFormat::Table => {
                     println!("📊 Workflow Metrics: {workflow_name}");
                     println!("Total runs: {}", workflow_metrics.total_runs);
                     println!("Successful runs: {}", workflow_metrics.successful_runs);
@@ -1031,11 +923,11 @@ async fn metrics_workflow_command(
                         }
                     }
                 }
-                OutputFormat::Json => {
+                crate::cli::OutputFormat::Json => {
                     let json_output = serde_json::to_string_pretty(&workflow_metrics)?;
                     println!("{json_output}");
                 }
-                OutputFormat::Yaml => {
+                crate::cli::OutputFormat::Yaml => {
                     let yaml_output = serde_yaml::to_string(&workflow_metrics)?;
                     println!("{yaml_output}");
                 }
@@ -1045,8 +937,8 @@ async fn metrics_workflow_command(
         }
     } else {
         // Show all run metrics
-        match format {
-            OutputFormat::Table => {
+        match context.format {
+            crate::cli::OutputFormat::Table => {
                 println!("📊 All Run Metrics");
                 println!("==================");
                 for (run_id, run_metrics) in &metrics.run_metrics {
@@ -1060,11 +952,11 @@ async fn metrics_workflow_command(
                     println!();
                 }
             }
-            OutputFormat::Json => {
+            crate::cli::OutputFormat::Json => {
                 let json_output = serde_json::to_string_pretty(&metrics.run_metrics)?;
                 println!("{json_output}");
             }
-            OutputFormat::Yaml => {
+            crate::cli::OutputFormat::Yaml => {
                 let yaml_output = serde_yaml::to_string(&metrics.run_metrics)?;
                 println!("{yaml_output}");
             }
@@ -1251,7 +1143,7 @@ mod tests {
 
         // Verify that we call get_agent_config from template context
         assert!(
-            source_code.contains("let agent_config = _template_context.get_agent_config(None);")
+            source_code.contains("let agent_config = context.template_context.get_agent_config(None);")
         );
 
         // Verify that we set the agent config on the run context
