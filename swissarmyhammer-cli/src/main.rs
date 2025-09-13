@@ -258,7 +258,7 @@ async fn handle_dynamic_matches(
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
-        Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &template_context).await,
+        Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &context).await,
         Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
             Some((tool_name, tool_matches)) => {
@@ -607,10 +607,10 @@ async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliCo
 
 async fn handle_plan_command(
     matches: &clap::ArgMatches,
-    template_context: &TemplateContext,
+    context: &CliContext,
 ) -> i32 {
     let plan_filename = matches.get_one::<String>("plan_filename").cloned().unwrap();
-    commands::plan::handle_command(plan_filename, template_context).await
+    commands::plan::handle_command(plan_filename, context).await
 }
 
 async fn handle_implement_command(context: &CliContext) -> i32 {

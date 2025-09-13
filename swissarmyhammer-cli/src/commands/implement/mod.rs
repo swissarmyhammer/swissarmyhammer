@@ -7,9 +7,18 @@ use crate::cli::FlowSubcommand;
 /// Help text for the implement command
 pub const DESCRIPTION: &str = include_str!("description.md");
 
-/// Handle the implement command
 use crate::context::CliContext;
 
+/// Execute the implement workflow for autonomous issue resolution
+/// 
+/// This command delegates to the flow runner to execute the 'implement' workflow,
+/// which automatically resolves pending issues in the repository.
+/// 
+/// # Arguments
+/// * `context` - CLI context containing global arguments and configuration
+/// 
+/// # Returns
+/// * `i32` - Exit code (0 for success, non-zero for error)
 pub async fn handle_command(context: &CliContext) -> i32 {
     // Execute the implement workflow - equivalent to 'flow run implement'
     let subcommand = FlowSubcommand::Run {
