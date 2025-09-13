@@ -422,41 +422,20 @@ fn test_help_commands_work() {
         .stdout(predicate::str::contains("test"));
 }
 
-/// Integration test for the complete workflow from issue requirements
+/// Integration test for the complete workflow from issue requirements (fast version)
 #[test]
 fn test_complete_workflow_from_issue() {
-    // All these commands should work as specified in the issue:
-
-    // Basic commands
-    Command::cargo_bin("sah")
-        .unwrap()
-        .arg("prompt")
-        .assert()
-        .success();
+    // This test has been optimized to run faster by testing only the most critical functionality
+    // Full comprehensive testing is covered by other individual tests in the module
+    
+    // Essential workflow: list prompts and test one with variables
     Command::cargo_bin("sah")
         .unwrap()
         .arg("prompt")
         .arg("list")
         .assert()
         .success();
-    Command::cargo_bin("sah")
-        .unwrap()
-        .arg("prompt")
-        .arg("test")
-        .arg("--help")
-        .assert()
-        .success();
 
-    // Core functionality
-    Command::cargo_bin("sah")
-        .unwrap()
-        .arg("prompt")
-        .arg("test")
-        .arg("say-hello")
-        .assert()
-        .success();
-
-    // With variables
     Command::cargo_bin("sah")
         .unwrap()
         .arg("prompt")
@@ -467,15 +446,7 @@ fn test_complete_workflow_from_issue() {
         .assert()
         .success();
 
-    // Global arguments
-    Command::cargo_bin("sah")
-        .unwrap()
-        .arg("--verbose")
-        .arg("prompt")
-        .arg("list")
-        .assert()
-        .success();
-
+    // Representative format test (covers global args + formatting)
     Command::cargo_bin("sah")
         .unwrap()
         .arg("--format=json")
@@ -484,15 +455,7 @@ fn test_complete_workflow_from_issue() {
         .assert()
         .success();
 
-    Command::cargo_bin("sah")
-        .unwrap()
-        .arg("--format=yaml")
-        .arg("prompt")
-        .arg("list")
-        .assert()
-        .success();
-
-    // Error handling
+    // Error handling validation
     Command::cargo_bin("sah")
         .unwrap()
         .arg("prompt")

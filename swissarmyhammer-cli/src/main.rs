@@ -258,7 +258,7 @@ async fn handle_dynamic_matches(
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
         Some(("validate", sub_matches)) => {
-            handle_validate_command(sub_matches, &template_context).await
+            handle_validate_command(sub_matches, &context).await
         }
         Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &template_context).await,
         Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
@@ -599,30 +599,15 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
 
 async fn handle_validate_command(
     matches: &clap::ArgMatches,
-    template_context: &TemplateContext,
+    cli_context: &CliContext,
 ) -> i32 {
-    use crate::cli::OutputFormat;
-
-    let quiet = matches.get_flag("quiet");
-    let format = match matches.get_one::<String>("format").map(|s| s.as_str()) {
-        Some("json") => OutputFormat::Json,
-        Some("yaml") => OutputFormat::Yaml,
-        _ => OutputFormat::Table,
-    };
     let workflow_dirs = matches
         .get_many::<String>("workflow-dirs")
         .map(|vals| vals.cloned().collect())
         .unwrap_or_default();
     let validate_tools = matches.get_flag("validate-tools");
 
-    commands::validate::handle_command(
-        quiet,
-        format,
-        workflow_dirs,
-        validate_tools,
-        template_context,
-    )
-    .await
+    commands::validate::handle_command(workflow_dirs, validate_tools, cli_context).await
 }
 
 async fn handle_plan_command(

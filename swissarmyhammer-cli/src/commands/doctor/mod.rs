@@ -17,7 +17,6 @@
 
 use crate::exit_codes::EXIT_ERROR;
 use anyhow::Result;
-use colored::*;
 
 // Re-export types from submodules
 pub use types::*;
@@ -46,23 +45,26 @@ impl Doctor {
 
     /// Run diagnostic checks without printing results (for CliContext integration)
     pub fn run_diagnostics_without_output(&mut self) -> Result<i32> {
-        println!("{}", "🔨 SwissArmyHammer Doctor".bold().blue());
-        println!("{}", "Running diagnostics...".dimmed());
-        println!();
-
         // First, ensure we're in a Git repository
         use swissarmyhammer_common::utils::find_git_repository_root;
 
         let git_root = match find_git_repository_root() {
             Some(path) => {
-                println!("✅ Git repository detected at: {}", path.display());
+                self.checks.push(Check {
+                    name: "Git Repository".to_string(),
+                    status: CheckStatus::Ok,
+                    message: format!("Detected at {}", path.display()),
+                    fix: None,
+                });
                 path
             }
             None => {
-                println!("❌ SwissArmyHammer requires a Git repository");
-                println!();
-                println!("Please run this command from within a Git repository.");
-                println!("You can create a Git repository with: git init");
+                self.checks.push(Check {
+                    name: "Git Repository".to_string(),
+                    status: CheckStatus::Error,
+                    message: "SwissArmyHammer requires a Git repository".to_string(),
+                    fix: Some("Run this command from within a Git repository or create one with: git init".to_string()),
+                });
                 return Ok(ExitCode::Error.into());
             }
         };
@@ -116,38 +118,70 @@ impl Doctor {
         let swissarmyhammer_dir = git_root.join(".swissarmyhammer");
 
         if !swissarmyhammer_dir.exists() {
-            println!("⚠️  .swissarmyhammer directory does not exist (will be created when needed)");
+            self.checks.push(Check {
+                name: "SwissArmyHammer Directory".to_string(),
+                status: CheckStatus::Warning,
+                message: "Directory does not exist (will be created when needed)".to_string(),
+                fix: Some("Directory will be created automatically when first needed".to_string()),
+            });
             return Ok(());
         }
 
-        println!(
-            "✅ .swissarmyhammer directory found: {}",
-            swissarmyhammer_dir.display()
-        );
+        self.checks.push(Check {
+            name: "SwissArmyHammer Directory".to_string(),
+            status: CheckStatus::Ok,
+            message: format!("Found at {}", swissarmyhammer_dir.display()),
+            fix: None,
+        });
 
         // Check directory permissions
         match std::fs::metadata(&swissarmyhammer_dir) {
             Ok(metadata) => {
                 if metadata.is_dir() {
-                    println!("  ✅ Directory is accessible");
+                    self.checks.push(Check {
+                        name: "Directory Access".to_string(),
+                        status: CheckStatus::Ok,
+                        message: "Directory is accessible".to_string(),
+                        fix: None,
+                    });
 
                     // Check if directory is writable by trying to create a test file
                     let test_file = swissarmyhammer_dir.join(".doctor_test");
                     match std::fs::write(&test_file, "test") {
                         Ok(_) => {
                             let _ = std::fs::remove_file(&test_file); // Clean up
-                            println!("  ✅ Directory is writable");
+                            self.checks.push(Check {
+                                name: "Directory Write Access".to_string(),
+                                status: CheckStatus::Ok,
+                                message: "Directory is writable".to_string(),
+                                fix: None,
+                            });
                         }
                         Err(_) => {
-                            println!("  ⚠️  Directory may not be writable");
+                            self.checks.push(Check {
+                                name: "Directory Write Access".to_string(),
+                                status: CheckStatus::Warning,
+                                message: "Directory may not be writable".to_string(),
+                                fix: Some("Check directory permissions".to_string()),
+                            });
                         }
                     }
                 } else {
-                    println!("  ❌ .swissarmyhammer exists but is not a directory");
+                    self.checks.push(Check {
+                        name: "Directory Type".to_string(),
+                        status: CheckStatus::Error,
+                        message: ".swissarmyhammer exists but is not a directory".to_string(),
+                        fix: Some("Remove the file and let SwissArmyHammer recreate it as a directory".to_string()),
+                    });
                 }
             }
             Err(e) => {
-                println!("  ❌ Cannot access .swissarmyhammer directory: {}", e);
+                self.checks.push(Check {
+                    name: "Directory Access".to_string(),
+                    status: CheckStatus::Error,
+                    message: format!("Cannot access .swissarmyhammer directory: {}", e),
+                    fix: Some("Check file permissions and ownership".to_string()),
+                });
             }
         }
 
@@ -161,12 +195,27 @@ impl Doctor {
                         Ok(entries) => entries.count(),
                         Err(_) => 0,
                     };
-                    println!("  ✅ {}/ ({} items)", subdir, file_count);
+                    self.checks.push(Check {
+                        name: format!("{} Directory", capitalize_first(subdir)),
+                        status: CheckStatus::Ok,
+                        message: format!("{} items", file_count),
+                        fix: None,
+                    });
                 } else {
-                    println!("  ⚠️  {} exists but is not a directory", subdir);
+                    self.checks.push(Check {
+                        name: format!("{} Directory", capitalize_first(subdir)),
+                        status: CheckStatus::Warning,
+                        message: "Exists but is not a directory".to_string(),
+                        fix: Some(format!("Remove {} and let SwissArmyHammer recreate it", subdir)),
+                    });
                 }
             } else {
-                println!("  ⚠️  {}/ (will be created when needed)", subdir);
+                self.checks.push(Check {
+                    name: format!("{} Directory", capitalize_first(subdir)),
+                    status: CheckStatus::Warning,
+                    message: "Will be created when needed".to_string(),
+                    fix: None,
+                });
             }
         }
 
@@ -177,26 +226,50 @@ impl Doctor {
                 Ok(metadata) => {
                     let size = metadata.len();
                     if size > 0 {
-                        println!("  ✅ semantic.db ({} bytes)", size);
+                        self.checks.push(Check {
+                            name: "Semantic Database".to_string(),
+                            status: CheckStatus::Ok,
+                            message: format!("{} bytes", size),
+                            fix: None,
+                        });
                     } else {
-                        println!("  ⚠️  semantic.db (empty file)");
+                        self.checks.push(Check {
+                            name: "Semantic Database".to_string(),
+                            status: CheckStatus::Warning,
+                            message: "Empty file".to_string(),
+                            fix: Some("Run search index command to populate database".to_string()),
+                        });
                     }
                 }
                 Err(_) => {
-                    println!("  ⚠️  semantic.db (cannot read metadata)");
+                    self.checks.push(Check {
+                        name: "Semantic Database".to_string(),
+                        status: CheckStatus::Warning,
+                        message: "Cannot read metadata".to_string(),
+                        fix: Some("Check file permissions".to_string()),
+                    });
                 }
             }
         } else {
-            println!("  ⚠️  semantic.db (will be created when needed)");
+            self.checks.push(Check {
+                name: "Semantic Database".to_string(),
+                status: CheckStatus::Warning,
+                message: "Will be created when needed".to_string(),
+                fix: None,
+            });
         }
 
         // Check for potential issues
         let abort_file = swissarmyhammer_dir.join(".abort");
         if abort_file.exists() {
-            println!("  ⚠️  .abort file exists (previous workflow may have been aborted)");
+            self.checks.push(Check {
+                name: "Abort File".to_string(),
+                status: CheckStatus::Warning,
+                message: "Previous workflow may have been aborted".to_string(),
+                fix: Some("Remove .abort file if workflows are working correctly".to_string()),
+            });
         }
 
-        println!();
         Ok(())
     }
 
@@ -220,6 +293,15 @@ impl Doctor {
         };
 
         exit_code.into()
+    }
+}
+
+/// Helper function to capitalize first letter of a string
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }
 

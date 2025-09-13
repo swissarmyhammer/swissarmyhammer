@@ -386,19 +386,7 @@ impl Validator {
         }
     }
 
-    pub fn print_results(&self, result: &ValidationResult, format: OutputFormat) -> Result<()> {
-        match format {
-            OutputFormat::Table => {
-                self.print_text_results(result);
-                Ok(())
-            }
-            OutputFormat::Json => self.print_json_results(result),
-            OutputFormat::Yaml => {
-                // For validate command, YAML output is not implemented, fall back to JSON
-                self.print_json_results(result)
-            }
-        }
-    }
+
 
     /// Format results as a string instead of printing them
     #[allow(dead_code)] // Used by validation but may appear unused due to conditional compilation
@@ -417,12 +405,7 @@ impl Validator {
         }
     }
 
-    fn print_text_results(&self, result: &ValidationResult) {
-        let output = self.format_text_results(result);
-        if !output.is_empty() {
-            print!("{}", output);
-        }
-    }
+
 
     fn format_text_results(&self, result: &ValidationResult) -> String {
         use std::fmt::Write;
@@ -544,11 +527,7 @@ impl Validator {
         output
     }
 
-    fn print_json_results(&self, result: &ValidationResult) -> Result<()> {
-        let output = self.format_json_results(result)?;
-        println!("{}", output);
-        Ok(())
-    }
+
 
     fn format_json_results(&self, result: &ValidationResult) -> Result<String> {
         let json_issues: Vec<JsonValidationIssue> = result
@@ -870,35 +849,6 @@ impl Validator {
     }
 }
 
-pub async fn run_validate_command_with_dirs(
-    quiet: bool,
-    format: OutputFormat,
-    workflow_dirs: Vec<String>,
-    validate_tools: bool,
-) -> Result<i32> {
-    let mut validator = Validator::new(quiet);
-
-    // Validate with custom workflow directories if provided
-    let result = if workflow_dirs.is_empty() {
-        validator.validate_all_with_options(validate_tools).await?
-    } else {
-        validator
-            .validate_with_custom_dirs(workflow_dirs, validate_tools)
-            .await?
-    };
-
-    validator.print_results(&result, format)?;
-
-    // Return appropriate exit code
-    if result.has_errors() {
-        Ok(EXIT_ERROR) // Errors
-    } else if result.has_warnings() {
-        Ok(EXIT_WARNING) // Warnings
-    } else {
-        Ok(EXIT_SUCCESS) // Success
-    }
-}
-
 /// Run validation command and return the output as a string and exit code
 /// This is used for in-process testing where we need to capture the output
 #[allow(dead_code)] // Used by test infrastructure
@@ -931,6 +881,35 @@ pub async fn run_validate_command_with_dirs_captured(
     };
 
     Ok((output, exit_code))
+}
+
+/// Run validation command and return structured results for CliContext integration
+pub async fn run_validate_command_structured(
+    quiet: bool,
+    workflow_dirs: Vec<String>,
+    validate_tools: bool,
+) -> Result<(ValidationResult, i32)> {
+    let mut validator = Validator::new(quiet);
+
+    // Run validation with custom workflow directories if provided
+    let result = if workflow_dirs.is_empty() {
+        validator.validate_all_with_options(validate_tools).await?
+    } else {
+        validator
+            .validate_with_custom_dirs(workflow_dirs, validate_tools)
+            .await?
+    };
+
+    // Determine exit code
+    let exit_code = if result.has_errors() {
+        EXIT_ERROR
+    } else if result.has_warnings() {
+        EXIT_WARNING
+    } else {
+        EXIT_SUCCESS
+    };
+
+    Ok((result, exit_code))
 }
 
 #[cfg(test)]
