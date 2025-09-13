@@ -14,8 +14,8 @@
 //! - Comprehensive logging and error handling
 //! - Integration with SwissArmyHammer tool ecosystem
 
-use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 use crate::context::CliContext;
+use crate::exit_codes::{EXIT_ERROR, EXIT_SUCCESS, EXIT_WARNING};
 
 pub mod display;
 
@@ -39,10 +39,7 @@ pub const DESCRIPTION: &str = include_str!("description.md");
 /// - 0: Server started and stopped successfully
 /// - 1: Server encountered warnings or stopped unexpectedly
 /// - 2: Server failed to start or encountered critical errors
-pub async fn handle_command(
-    matches: &clap::ArgMatches,
-    cli_context: &CliContext,
-) -> i32 {
+pub async fn handle_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
     // Check for HTTP subcommand
     match matches.subcommand() {
         Some(("http", http_matches)) => handle_http_serve(http_matches, cli_context).await,
@@ -89,14 +86,17 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
             let running_message = if port == 0 {
                 format!("✅ MCP HTTP server running on {} (bound to random port: {}). 💡 Use Ctrl+C to stop.", handle.url(), actual_port)
             } else {
-                format!("✅ MCP HTTP server running on {}. 💡 Use Ctrl+C to stop.", handle.url())
+                format!(
+                    "✅ MCP HTTP server running on {}. 💡 Use Ctrl+C to stop.",
+                    handle.url()
+                )
             };
-            
+
             display_server_status(
                 cli_context,
                 "HTTP",
                 "Running",
-                &handle.url(),
+                handle.url(),
                 Some(actual_port),
                 0, // Will be updated when we use CliContext for prompt library
                 &running_message,
@@ -125,26 +125,26 @@ async fn handle_http_serve(matches: &clap::ArgMatches, cli_context: &CliContext)
         cli_context,
         "HTTP",
         "Stopping",
-        &server_handle.url(),
+        server_handle.url(),
         Some(server_handle.port()),
         0,
         "🛑 Shutting down server...",
     );
-    
+
     if let Err(e) = server_handle.shutdown().await {
         tracing::error!("Failed to shutdown server gracefully: {}", e);
         display_server_status(
             cli_context,
             "HTTP",
             "Error",
-            &server_handle.url(),
+            server_handle.url(),
             Some(server_handle.port()),
             0,
             &format!("Warning: Server shutdown error: {}", e),
         );
         return EXIT_WARNING;
     }
-    
+
     display_server_status(
         cli_context,
         "HTTP",
@@ -186,7 +186,7 @@ async fn handle_stdio_serve(cli_context: &CliContext) -> i32 {
 
     let prompt_count = library.list().map(|p| p.len()).unwrap_or(0);
     tracing::debug!("Loaded {} prompts for MCP server", prompt_count);
-    
+
     // Display starting status for stdio mode (only in verbose mode)
     if cli_context.verbose {
         display_server_status(
@@ -262,12 +262,14 @@ fn display_server_status(
     message: &str,
 ) {
     if cli_context.verbose {
-        let health_url = if let Some(p) = port {
-            Some(format!("http://{}:{}/health", address.split(':').next().unwrap_or("127.0.0.1"), p))
-        } else {
-            None
-        };
-        
+        let health_url = port.map(|p| {
+            format!(
+                "http://{}:{}/health",
+                address.split(':').next().unwrap_or("127.0.0.1"),
+                p
+            )
+        });
+
         let verbose_status = vec![display::VerboseServerStatus::new(
             server_type.to_string(),
             status.to_string(),
@@ -277,7 +279,7 @@ fn display_server_status(
             prompt_count,
             message.to_string(),
         )];
-        
+
         if let Err(e) = cli_context.display(verbose_status) {
             eprintln!("Failed to display status: {}", e);
         }
@@ -288,7 +290,7 @@ fn display_server_status(
             address.to_string(),
             message.to_string(),
         )];
-        
+
         if let Err(e) = cli_context.display(basic_status) {
             eprintln!("Failed to display status: {}", e);
         }
@@ -329,7 +331,9 @@ mod tests {
             false,
             false,
             matches.clone(),
-        ).await.expect("Failed to create CliContext");
+        )
+        .await
+        .expect("Failed to create CliContext");
 
         // We can verify the signature compiles and matches expected pattern
         let _result: std::pin::Pin<Box<dyn std::future::Future<Output = i32>>> =

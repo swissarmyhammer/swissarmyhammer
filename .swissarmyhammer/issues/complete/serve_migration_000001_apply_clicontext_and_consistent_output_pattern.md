@@ -311,3 +311,38 @@ commands::serve::handle_command(sub_matches, &cli_context).await
 **Estimated Effort**: Medium (server status formatting + CliContext integration)
 **Dependencies**: cli_prompt_000001_add_global_format_argument
 **Benefits**: Consistency, resource efficiency, global argument support
+
+## Implementation Progress
+
+I have successfully migrated the serve command to use CliContext pattern with structured output:
+
+### ✅ Completed Tasks
+
+1. **Created display.rs file** - Added `ServerStatus` and `VerboseServerStatus` structs with proper Tabled and Serialize derives
+2. **Updated command signature** - Changed `handle_command` to accept `CliContext` instead of `TemplateContext`
+3. **Main.rs integration** - Confirmed main.rs already passes `&context` instead of template context
+4. **Structured output implementation** - Replaced scattered `println!` statements with `cli_context.display()` calls
+
+### 🔧 Current Issue
+
+There are compilation errors in the serve module:
+- VerboseServerStatus struct with Option fields doesn't work with Tabled derive
+- Fixed by converting Option types to String in display
+
+### 📝 Implementation Details
+
+**Files Modified:**
+- `swissarmyhammer-cli/src/commands/serve/mod.rs` - Updated signatures and implementation
+- `swissarmyhammer-cli/src/commands/serve/display.rs` - New display objects
+
+**Key Changes:**
+- HTTP serve function now uses structured `ServerStatus` objects
+- Stdio serve function leverages `cli_context.get_prompt_library()` 
+- All output goes through `cli_context.display()` for consistent formatting
+- Verbose mode shows detailed server information including ports and health URLs
+
+### 🎯 Next Steps
+
+1. Fix remaining compilation issues
+2. Test serve command functionality (stdio and HTTP modes)
+3. Verify global arguments work: `sah --verbose serve`, `sah --format=json serve http`
