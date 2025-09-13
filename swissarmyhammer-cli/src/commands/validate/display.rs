@@ -4,8 +4,8 @@
 //! output formatting across table, JSON, and YAML formats.
 
 use serde::{Deserialize, Serialize};
-use tabled::Tabled;
 use swissarmyhammer::validation::{ValidationIssue, ValidationLevel};
+use tabled::Tabled;
 
 /// Basic validation result for standard output
 #[derive(Tabled, Serialize, Deserialize, Debug, Clone)]
@@ -67,17 +67,14 @@ impl From<&ValidationIssue> for VerboseValidationResult {
 /// Format validation status as a symbol
 fn format_validation_status(level: &ValidationLevel) -> String {
     match level {
-        ValidationLevel::Info => "✓".to_string(),
-        ValidationLevel::Warning => "⚠".to_string(),
-        ValidationLevel::Error => "✗".to_string(),
+        ValidationLevel::Info => "✅".to_string(),
+        ValidationLevel::Warning => "⚠️".to_string(),
+        ValidationLevel::Error => "❌".to_string(),
     }
 }
 
 /// Format file display name, preferring content title over file path
-fn format_file_display(
-    file_path: &std::path::Path,
-    content_title: &Option<String>,
-) -> String {
+fn format_file_display(file_path: &std::path::Path, content_title: &Option<String>) -> String {
     if let Some(title) = content_title {
         if !title.is_empty() {
             return title.clone();
@@ -93,10 +90,7 @@ fn format_file_display(
 }
 
 /// Determine file type based on path and content
-fn determine_file_type(
-    file_path: &std::path::Path,
-    content_title: &Option<String>,
-) -> String {
+fn determine_file_type(file_path: &std::path::Path, content_title: &Option<String>) -> String {
     let path_str = file_path.to_string_lossy();
 
     if path_str.starts_with("workflow:") {
@@ -105,7 +99,9 @@ fn determine_file_type(
         "Prompt".to_string()
     } else if path_str.ends_with(".toml") {
         "Config".to_string()
-    } else if path_str.contains("MCP Tools") || content_title.as_ref().is_some_and(|t| t.contains("Tool")) {
+    } else if path_str.contains("MCP Tools")
+        || content_title.as_ref().is_some_and(|t| t.contains("Tool"))
+    {
         "Tool".to_string()
     } else {
         "Other".to_string()
@@ -134,7 +130,7 @@ mod tests {
         let issue = create_test_issue();
         let result = ValidationResult::from(&issue);
 
-        assert_eq!(result.status, "⚠");
+        assert_eq!(result.status, "⚠️");
         assert_eq!(result.file, "Test Prompt");
         assert_eq!(result.result, "Test warning message");
     }
@@ -144,7 +140,7 @@ mod tests {
         let issue = create_test_issue();
         let result = VerboseValidationResult::from(&issue);
 
-        assert_eq!(result.status, "⚠");
+        assert_eq!(result.status, "⚠️");
         assert_eq!(result.file, "Test Prompt");
         assert_eq!(result.result, "Test warning message");
         assert_eq!(result.fix, "Test fix suggestion");
@@ -153,9 +149,9 @@ mod tests {
 
     #[test]
     fn test_format_validation_status() {
-        assert_eq!(format_validation_status(&ValidationLevel::Info), "✓");
-        assert_eq!(format_validation_status(&ValidationLevel::Warning), "⚠");
-        assert_eq!(format_validation_status(&ValidationLevel::Error), "✗");
+        assert_eq!(format_validation_status(&ValidationLevel::Info), "✅");
+        assert_eq!(format_validation_status(&ValidationLevel::Warning), "⚠️");
+        assert_eq!(format_validation_status(&ValidationLevel::Error), "❌");
     }
 
     #[test]
@@ -233,19 +229,19 @@ mod tests {
     #[test]
     fn test_serialization() {
         let result = ValidationResult {
-            status: "✓".to_string(),
+            status: "✅".to_string(),
             file: "test.md".to_string(),
             result: "All good".to_string(),
         };
 
         let json = serde_json::to_string(&result).expect("Should serialize to JSON");
-        assert!(json.contains("✓"));
+        assert!(json.contains("✅"));
         assert!(json.contains("test.md"));
         assert!(json.contains("All good"));
 
         let deserialized: ValidationResult =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
-        assert_eq!(deserialized.status, "✓");
+        assert_eq!(deserialized.status, "✅");
         assert_eq!(deserialized.file, "test.md");
         assert_eq!(deserialized.result, "All good");
     }

@@ -427,7 +427,7 @@ fn test_help_commands_work() {
 fn test_complete_workflow_from_issue() {
     // This test has been optimized to run faster by testing only the most critical functionality
     // Full comprehensive testing is covered by other individual tests in the module
-    
+
     // Essential workflow: list prompts and test one with variables
     Command::cargo_bin("sah")
         .unwrap()

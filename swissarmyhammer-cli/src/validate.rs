@@ -386,8 +386,6 @@ impl Validator {
         }
     }
 
-
-
     /// Format results as a string instead of printing them
     #[allow(dead_code)] // Used by validation but may appear unused due to conditional compilation
     pub fn format_results(
@@ -405,8 +403,6 @@ impl Validator {
         }
     }
 
-
-
     fn format_text_results(&self, result: &ValidationResult) -> String {
         use std::fmt::Write;
         let mut output = String::new();
@@ -416,7 +412,7 @@ impl Validator {
                 writeln!(
                     output,
                     "{} All {} files validated successfully!",
-                    "✓".green(),
+                    "✅".green(),
                     result.files_checked
                 )
                 .unwrap();
@@ -503,16 +499,16 @@ impl Validator {
             }
 
             if result.has_errors() {
-                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
+                writeln!(output, "\n{} Validation failed with errors.", "❌".red()).unwrap();
             } else if result.has_warnings() {
                 writeln!(
                     output,
                     "\n{} Validation completed with warnings.",
-                    "⚠".yellow()
+                    "⚠️".yellow()
                 )
                 .unwrap();
             } else {
-                writeln!(output, "\n{} Validation passed!", "✓".green()).unwrap();
+                writeln!(output, "\n{} Validation passed!", "✅".green()).unwrap();
             }
         } else {
             // In quiet mode, only show summary for errors
@@ -520,14 +516,12 @@ impl Validator {
                 writeln!(output, "\n{}", "Summary:".bold()).unwrap();
                 writeln!(output, "  Files checked: {}", result.files_checked).unwrap();
                 writeln!(output, "  Errors: {}", result.errors.to_string().red()).unwrap();
-                writeln!(output, "\n{} Validation failed with errors.", "✗".red()).unwrap();
+                writeln!(output, "\n{} Validation failed with errors.", "❌".red()).unwrap();
             }
         }
 
         output
     }
-
-
 
     fn format_json_results(&self, result: &ValidationResult) -> Result<String> {
         let json_issues: Vec<JsonValidationIssue> = result

@@ -192,7 +192,10 @@ async fn create_and_validate_issue(working_dir: &std::path::Path) -> Result<()> 
 
     // Reduce debug output in optimized version
     if create_result.exit_code != 0 {
-        eprintln!("DEBUG: create_result.exit_code = {}", create_result.exit_code);
+        eprintln!(
+            "DEBUG: create_result.exit_code = {}",
+            create_result.exit_code
+        );
         eprintln!("DEBUG: create_result.stderr = {}", create_result.stderr);
     }
 

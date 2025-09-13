@@ -257,9 +257,7 @@ async fn handle_dynamic_matches(
         Some(("doctor", _)) => handle_doctor_command(&context).await,
         Some(("prompt", sub_matches)) => handle_prompt_command(sub_matches, &context).await,
         Some(("flow", sub_matches)) => handle_flow_command(sub_matches, &context).await,
-        Some(("validate", sub_matches)) => {
-            handle_validate_command(sub_matches, &context).await
-        }
+        Some(("validate", sub_matches)) => handle_validate_command(sub_matches, &context).await,
         Some(("plan", sub_matches)) => handle_plan_command(sub_matches, &template_context).await,
         Some(("implement", _sub_matches)) => handle_implement_command(&context).await,
         Some((category, sub_matches)) => match sub_matches.subcommand() {
@@ -597,10 +595,7 @@ async fn handle_flow_command(sub_matches: &clap::ArgMatches, context: &CliContex
     commands::flow::handle_command(subcommand, context).await
 }
 
-async fn handle_validate_command(
-    matches: &clap::ArgMatches,
-    cli_context: &CliContext,
-) -> i32 {
+async fn handle_validate_command(matches: &clap::ArgMatches, cli_context: &CliContext) -> i32 {
     let workflow_dirs = matches
         .get_many::<String>("workflow-dirs")
         .map(|vals| vals.cloned().collect())

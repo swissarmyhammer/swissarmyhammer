@@ -34,12 +34,9 @@ async fn run_validate_with_context(
     cli_context: &CliContext,
 ) -> Result<i32> {
     // Run validation to get structured results
-    let (validation_result, exit_code) = validate::run_validate_command_structured(
-        cli_context.quiet,
-        workflow_dirs,
-        validate_tools,
-    )
-    .await?;
+    let (validation_result, exit_code) =
+        validate::run_validate_command_structured(cli_context.quiet, workflow_dirs, validate_tools)
+            .await?;
 
     // Convert to display objects and output using CliContext
     if cli_context.verbose {

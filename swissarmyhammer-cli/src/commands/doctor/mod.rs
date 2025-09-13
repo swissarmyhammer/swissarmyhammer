@@ -171,7 +171,10 @@ impl Doctor {
                         name: "Directory Type".to_string(),
                         status: CheckStatus::Error,
                         message: ".swissarmyhammer exists but is not a directory".to_string(),
-                        fix: Some("Remove the file and let SwissArmyHammer recreate it as a directory".to_string()),
+                        fix: Some(
+                            "Remove the file and let SwissArmyHammer recreate it as a directory"
+                                .to_string(),
+                        ),
                     });
                 }
             }
@@ -206,7 +209,10 @@ impl Doctor {
                         name: format!("{} Directory", capitalize_first(subdir)),
                         status: CheckStatus::Warning,
                         message: "Exists but is not a directory".to_string(),
-                        fix: Some(format!("Remove {} and let SwissArmyHammer recreate it", subdir)),
+                        fix: Some(format!(
+                            "Remove {} and let SwissArmyHammer recreate it",
+                            subdir
+                        )),
                     });
                 }
             } else {

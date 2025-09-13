@@ -67,9 +67,9 @@ impl From<&Check> for VerboseCheckResult {
 /// Format check status as a symbol
 fn format_check_status(status: &CheckStatus) -> String {
     match status {
-        CheckStatus::Ok => "✓".to_string(),
-        CheckStatus::Warning => "⚠".to_string(),
-        CheckStatus::Error => "✗".to_string(),
+        CheckStatus::Ok => "✅".to_string(),
+        CheckStatus::Warning => "⚠️".to_string(),
+        CheckStatus::Error => "❌".to_string(),
     }
 }
 
@@ -133,7 +133,7 @@ mod tests {
     fn test_check_result_conversion() {
         let check = create_test_check();
         let result = CheckResult::from(&check);
-        assert_eq!(result.status, "✓");
+        assert_eq!(result.status, "✅");
         assert_eq!(result.name, "Test Check");
         assert_eq!(result.message, "Everything is working");
     }
@@ -142,7 +142,7 @@ mod tests {
     fn test_verbose_check_result_conversion() {
         let check = create_test_check();
         let result = VerboseCheckResult::from(&check);
-        assert_eq!(result.status, "✓");
+        assert_eq!(result.status, "✅");
         assert_eq!(result.name, "Test Check");
         assert_eq!(result.message, "Everything is working");
         assert_eq!(result.fix, "No fix needed");
@@ -151,9 +151,9 @@ mod tests {
 
     #[test]
     fn test_format_check_status() {
-        assert_eq!(format_check_status(&CheckStatus::Ok), "✓");
-        assert_eq!(format_check_status(&CheckStatus::Warning), "⚠");
-        assert_eq!(format_check_status(&CheckStatus::Error), "✗");
+        assert_eq!(format_check_status(&CheckStatus::Ok), "✅");
+        assert_eq!(format_check_status(&CheckStatus::Warning), "⚠️");
+        assert_eq!(format_check_status(&CheckStatus::Error), "❌");
     }
 
     #[test]
@@ -243,19 +243,19 @@ mod tests {
     #[test]
     fn test_serialization_check_result() {
         let result = CheckResult {
-            status: "✓".to_string(),
+            status: "✅".to_string(),
             name: "Test".to_string(),
             message: "Test message".to_string(),
         };
 
         let json = serde_json::to_string(&result).expect("Should serialize to JSON");
-        assert!(json.contains("✓"));
+        assert!(json.contains("✅"));
         assert!(json.contains("Test"));
         assert!(json.contains("Test message"));
 
         let deserialized: CheckResult =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
-        assert_eq!(deserialized.status, "✓");
+        assert_eq!(deserialized.status, "✅");
         assert_eq!(deserialized.name, "Test");
         assert_eq!(deserialized.message, "Test message");
     }
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn test_serialization_verbose_check_result() {
         let result = VerboseCheckResult {
-            status: "⚠".to_string(),
+            status: "⚠️".to_string(),
             name: "Test".to_string(),
             message: "Test message".to_string(),
             fix: "Test fix".to_string(),
@@ -271,7 +271,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&result).expect("Should serialize to JSON");
-        assert!(json.contains("⚠"));
+        assert!(json.contains("⚠️"));
         assert!(json.contains("Test"));
         assert!(json.contains("Test message"));
         assert!(json.contains("Test fix"));
@@ -279,7 +279,7 @@ mod tests {
 
         let deserialized: VerboseCheckResult =
             serde_json::from_str(&json).expect("Should deserialize from JSON");
-        assert_eq!(deserialized.status, "⚠");
+        assert_eq!(deserialized.status, "⚠️");
         assert_eq!(deserialized.name, "Test");
         assert_eq!(deserialized.message, "Test message");
         assert_eq!(deserialized.fix, "Test fix");
