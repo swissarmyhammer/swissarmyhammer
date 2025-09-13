@@ -44,6 +44,8 @@ impl From<&Workflow> for WorkflowInfo {
     }
 }
 
+
+
 impl From<&Workflow> for VerboseWorkflowInfo {
     fn from(workflow: &Workflow) -> Self {
         let title = workflow
